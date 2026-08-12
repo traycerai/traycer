@@ -5,7 +5,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 
 import type { HostRpcRegistry } from "@/lib/host";
 import type { MentionFlowStep } from "@/lib/composer/mentions/providers";
-import { useGithubMentionCatalogStore } from "@/stores/composer/github-mention-catalog-store";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
 /**
@@ -191,14 +190,12 @@ function prNumbers(rows: ReadonlyArray<GithubMentionRow>): number[] {
 
 beforeEach(() => {
   mocks.reset();
-  useGithubMentionCatalogStore.getState().resetForTests();
   useGithubMentionFilterStore.getState().resetForTests();
 });
 
 afterEach(() => {
   cleanup();
   mocks.reset();
-  useGithubMentionCatalogStore.getState().resetForTests();
   useGithubMentionFilterStore.getState().resetForTests();
 });
 

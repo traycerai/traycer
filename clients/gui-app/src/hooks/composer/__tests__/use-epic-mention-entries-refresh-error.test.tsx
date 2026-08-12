@@ -1,4 +1,4 @@
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -21,6 +21,9 @@ const refetches = vi.hoisted(
   () => [] as Array<() => Promise<{ readonly error: HostRpcError | null }>>,
 );
 
+/** Mutable so a test can rebind the host mid-refresh without remounting. */
+const readiness = vi.hoisted(() => ({ hostId: "host-1" }));
+
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: (error: HostRpcError, fallback: string) => {
     toastFromHostError(error, fallback);
@@ -28,6 +31,14 @@ vi.mock("@/lib/host-error-toast", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({ useHostBinding: () => null }));
+
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: readiness.hostId,
+    requestContextUserId: "user-1",
+    isReady: true,
+  }),
+}));
 
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: () =>
@@ -62,6 +73,41 @@ function settling(
   return errors.map((error) => () => Promise.resolve({ error }));
 }
 
+/**
+ * A refetch whose failure the test controls, so the host can be rebound
+ * BETWEEN the request being issued and its rejection settling. `issued` must
+ * be awaited before rebinding - `refetch()` does not reach the returned
+ * promise's executor synchronously - and `settle` THROWS if the request never
+ * arrived, so a mis-ordered harness fails as itself rather than as a wrong
+ * verdict.
+ */
+function pendingRefetch(): {
+  readonly issued: Promise<void>;
+  readonly settle: (error: HostRpcError | null) => void;
+  readonly refetch: () => Promise<{ readonly error: HostRpcError | null }>;
+} {
+  let markIssued: () => void = () => undefined;
+  let resolvePending:
+    ((result: { readonly error: HostRpcError | null }) => void) | null = null;
+  const issued = new Promise<void>((resolve) => {
+    markIssued = resolve;
+  });
+  return {
+    issued,
+    settle: (error) => {
+      if (resolvePending === null) {
+        throw new Error("the refetch was never issued");
+      }
+      resolvePending({ error });
+    },
+    refetch: () =>
+      new Promise<{ readonly error: HostRpcError | null }>((resolve) => {
+        resolvePending = resolve;
+        markIssued();
+      }),
+  };
+}
+
 function renderEntries() {
   return renderHook(() => useEpicMentionEntries({ requests: [] }));
 }
@@ -70,6 +116,7 @@ afterEach(() => {
   cleanup();
   toastFromHostError.mockReset();
   refetches.length = 0;
+  readiness.hostId = "host-1";
 });
 
 describe("useEpicMentionEntries refresh reporting", () => {
@@ -108,6 +155,59 @@ describe("useEpicMentionEntries refresh reporting", () => {
 
     const { result } = renderEntries();
     await result.current.refetch();
+
+    expect(toastFromHostError).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the failure toast when the host was rebound mid-refresh", async () => {
+    const pending = pendingRefetch();
+    refetches.push(pending.refetch);
+
+    const { result, rerender } = renderEntries();
+
+    let refreshed: Promise<void> = Promise.resolve();
+    act(() => {
+      refreshed = result.current.refetch();
+    });
+    await act(async () => {
+      await pending.issued;
+    });
+
+    // The composer rebinds to another host while the round-trip is still
+    // open. Rerendering is what makes the effect re-sync `boundHostIdRef` -
+    // the ref the settling `.then` compares against, not this render's
+    // `readiness.hostId` closure.
+    readiness.hostId = "host-2";
+    rerender();
+
+    await act(async () => {
+      pending.settle(hostError("epic.mentionArtifacts"));
+      await refreshed;
+    });
+
+    expect(toastFromHostError).not.toHaveBeenCalled();
+  });
+
+  it("still toasts a same-host failure", async () => {
+    // The control for the case above: without the host-swap check, this
+    // would also toast - the fix must not become "never toast".
+    const pending = pendingRefetch();
+    refetches.push(pending.refetch);
+
+    const { result } = renderEntries();
+
+    let refreshed: Promise<void> = Promise.resolve();
+    act(() => {
+      refreshed = result.current.refetch();
+    });
+    await act(async () => {
+      await pending.issued;
+    });
+
+    await act(async () => {
+      pending.settle(hostError("epic.mentionArtifacts"));
+      await refreshed;
+    });
 
     expect(toastFromHostError).toHaveBeenCalledTimes(1);
   });

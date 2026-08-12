@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  artifactsRefreshTargetKey,
   buildCurrentEpicArtifactMentionEntries,
   epicAgentMentionEntriesFromEpic,
   mentionNoMatchDismissVerdict,
@@ -780,5 +781,25 @@ describe("mentionNoMatchDismissVerdict", () => {
         workspaceError: new Error("search failed"),
       }),
     ).toBe(false);
+  });
+});
+
+describe("artifactsRefreshTargetKey", () => {
+  it("differs across hosts even when the epic id is empty - the landing composer's host-swap case", () => {
+    expect(artifactsRefreshTargetKey("host-1", "")).not.toBe(
+      artifactsRefreshTargetKey("host-2", ""),
+    );
+  });
+
+  it("differs between a null host and a named host", () => {
+    expect(artifactsRefreshTargetKey(null, "epic-1")).not.toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
+  });
+
+  it("is equal for identical host and epic pairs", () => {
+    expect(artifactsRefreshTargetKey("host-1", "epic-1")).toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
   });
 });

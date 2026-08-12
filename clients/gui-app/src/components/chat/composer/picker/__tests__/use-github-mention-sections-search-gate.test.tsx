@@ -5,7 +5,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import type { MentionFlowStep } from "@/lib/composer/mentions";
 import { DEFAULT_PULL_REQUEST_MENTION_FILTER } from "@/lib/composer/mentions/github-mention-rows";
-import { useGithubMentionCatalogStore } from "@/stores/composer/github-mention-catalog-store";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
 /**
@@ -108,10 +107,6 @@ function searchWasEnabled(): boolean {
 beforeEach(() => {
   searchCalls.enabled = [];
   catalog.scopeResolved = false;
-  useGithubMentionCatalogStore.setState(
-    useGithubMentionCatalogStore.getInitialState(),
-    true,
-  );
   useGithubMentionFilterStore.setState(
     useGithubMentionFilterStore.getInitialState(),
     true,

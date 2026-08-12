@@ -7,7 +7,6 @@ import type {
   MentionFlowStep,
   MentionStepChrome,
 } from "@/lib/composer/mentions";
-import { useGithubMentionCatalogStore } from "@/stores/composer/github-mention-catalog-store";
 import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
 
 /**
@@ -112,10 +111,6 @@ beforeEach(() => {
   refreshes.catalog = 0;
   refreshes.search = 0;
   support.github = true;
-  useGithubMentionCatalogStore.setState(
-    useGithubMentionCatalogStore.getInitialState(),
-    true,
-  );
   useGithubMentionFilterStore.setState(
     useGithubMentionFilterStore.getInitialState(),
     true,

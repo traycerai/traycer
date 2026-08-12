@@ -4,19 +4,17 @@ import type { GithubMentionRow } from "@traycer/protocol/host/mention-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 
 import type { HostRpcRegistry } from "@/lib/host";
-import { githubMentionScopeKey } from "@/lib/composer/mentions/github-mention-rows";
 import { ROOT_MENTION_STEP } from "@/lib/composer/mentions/providers";
-import { useGithubMentionCatalogStore } from "@/stores/composer/github-mention-catalog-store";
 
 /**
  * Rows must not outlive their repository's membership in the scope.
  *
  * The repository set is a property of the freshest RESOLVED answer, but two
- * carriers keep serving rows written under an OLDER resolution: the sibling
- * section's catalog entry inside its `staleTime`, and the session store. When
- * one section's refresh discovers a repository left the scope, the other
- * section used to keep showing - and inserting - that repository's references
- * until its own cache expired.
+ * carriers still keep serving rows written under an OLDER resolution: the
+ * sibling section's catalog entry inside its `staleTime`, and a held search
+ * response predating the change. When one section's refresh discovers a
+ * repository left the scope, the other carrier used to keep showing - and
+ * inserting - that repository's references until its own cache expired.
  */
 
 type CatalogResult = {
@@ -62,8 +60,8 @@ const catalogMocks = vi.hoisted(() => {
 });
 
 vi.mock("@/hooks/composer/use-github-mention-catalog", () => ({
-  // A shallow copy per call, same as the catalog-write suite: the real hook
-  // builds its result fresh on every render.
+  // A shallow copy per call, same as the production hook: it builds its
+  // result fresh on every render.
   useGithubMentionCatalog: (args: { readonly section: string }) => ({
     ...(args.section === "issues"
       ? catalogMocks.issues
@@ -71,20 +69,41 @@ vi.mock("@/hooks/composer/use-github-mention-catalog", () => ({
   }),
 }));
 
-vi.mock("@/hooks/composer/use-github-mention-search", () => {
-  // ONE stable result object. The real hook's `rows` is identity-stable
-  // across unrelated re-renders; a fresh array per render would break the
-  // `localRows` memo every pass and turn the render-time held-rows adjuster
-  // into an infinite loop - a harness artifact, not the production behaviour
-  // under test.
-  const result = {
-    rows: [] as ReadonlyArray<GithubMentionRow>,
+type SearchMockState = {
+  rows: ReadonlyArray<GithubMentionRow>;
+  sourceStatus: null;
+  notice: null;
+  isSearching: boolean;
+  errored: boolean;
+  refresh: () => Promise<void>;
+};
+
+const searchMock = vi.hoisted(() => {
+  const defaults = (): SearchMockState => ({
+    rows: [],
     sourceStatus: null,
     notice: null,
     isSearching: false,
+    errored: false,
+    refresh: () => Promise.resolve(),
+  });
+  const state = defaults();
+  return {
+    state,
+    reset(): void {
+      Object.assign(this.state, defaults());
+    },
   };
-  return { useGithubMentionSearch: () => result };
 });
+
+vi.mock("@/hooks/composer/use-github-mention-search", () => ({
+  // ONE stable object, mutated in place rather than recreated. The real
+  // hook's `rows` is identity-stable across unrelated re-renders; a fresh
+  // array per render would break the `localRows` memo every pass and turn
+  // the render-time held-rows adjuster into an infinite loop - a harness
+  // artifact, not the production behaviour under test.
+  useGithubMentionSearch: () => searchMock.state,
+}));
 
 vi.mock("@/lib/relative-time", () => ({
   useSampledNow: () => 0,
@@ -121,11 +140,6 @@ function issue(
 }
 
 const ROOTS = ["/repo"] as const;
-const SCOPE_KEY = githubMentionScopeKey({
-  hostId: "host-1",
-  epicId: "epic-1",
-  workspacePaths: ROOTS,
-});
 const KEPT_REPO = {
   githubHost: "github.com",
   owner: "traycerai",
@@ -159,6 +173,13 @@ const ISSUES_STEP = {
 } as const;
 
 function renderIssuesSection() {
+  return renderIssuesSectionWithQuery({ query: "", debouncedQuery: "" });
+}
+
+function renderIssuesSectionWithQuery(input: {
+  readonly query: string;
+  readonly debouncedQuery: string;
+}) {
   return renderHook(() =>
     useGithubMentionSections({
       client: fakeClient,
@@ -166,8 +187,8 @@ function renderIssuesSection() {
       step: ISSUES_STEP,
       currentEpicId: "epic-1",
       mentionRoots: ROOTS,
-      query: "",
-      debouncedQuery: "",
+      query: input.query,
+      debouncedQuery: input.debouncedQuery,
       limit: 20,
     }),
   );
@@ -206,12 +227,12 @@ function freshPullRequestsUnderNarrowScope(): void {
 
 beforeEach(() => {
   catalogMocks.reset();
-  useGithubMentionCatalogStore.getState().resetForTests();
+  searchMock.reset();
 });
 
 afterEach(() => {
   catalogMocks.reset();
-  useGithubMentionCatalogStore.getState().resetForTests();
+  searchMock.reset();
 });
 
 describe("useGithubMentionSections repository scope boundary", () => {
@@ -265,25 +286,126 @@ describe("useGithubMentionSections repository scope boundary", () => {
     expect(result.current.errored).toBe(true);
   });
 
+  it("surfaces a failed live search through the result", () => {
+    // The other lane `errored` folds in: the OPEN section's live search. A
+    // rejected search carries no rows, so without this a failed remote search
+    // reads exactly like "settled, no extra hits", and the zero-match verdict
+    // closes the picker over hits the request never returned.
+    Object.assign(searchMock.state, { errored: true });
+
+    const { result } = renderIssuesSection();
+
+    expect(result.current.errored).toBe(true);
+  });
+
   it("reports no error when both catalogs are healthy", () => {
     const { result } = renderRoot("fix");
 
     expect(result.current.errored).toBe(false);
   });
 
-  it("serves the warm store unfiltered while nothing has resolved", () => {
-    // The cold-open guard: with no resolved answer there is no authority to
-    // filter against, and blanking the store here would be a new defect.
-    useGithubMentionCatalogStore.getState().setRows({
-      scopeKey: SCOPE_KEY,
-      section: "issues",
-      rows: [KEPT_ISSUE, DEPARTED_ISSUE],
+  it("projects the debounce gap as searching, not as a settled answer", () => {
+    // `query` filters the visible rows immediately; the search still holds
+    // the previous debouncedQuery for up to 250ms. Reporting that window as
+    // settled rendered the authoritative "No matching…" before the remote
+    // request had even started.
+    staleIssuesUnderWiderScope();
+
+    const { result } = renderIssuesSectionWithQuery({
+      query: "fix",
+      debouncedQuery: "",
     });
+
+    expect(result.current.chrome?.appendedStatus).not.toBeNull();
+  });
+
+  it("does not claim searching once the debounce has flushed", () => {
+    // The control: with query and debouncedQuery agreeing and no search in
+    // flight, the section's answer really is settled.
+    staleIssuesUnderWiderScope();
+
+    const { result } = renderIssuesSectionWithQuery({
+      query: "fix",
+      debouncedQuery: "fix",
+    });
+
+    expect(result.current.chrome?.appendedStatus).toBeNull();
+  });
+
+  it("hides root hydration behind an empty query", () => {
+    // Root's category list is complete without a query; the cache-only
+    // hydration reads must not put up a Loading row and header spinner for
+    // work that cannot change what is on screen.
+    catalogMocks.pullRequests.isLoading = true;
+    catalogMocks.pullRequests.isChecking = true;
+
+    const { result } = renderRoot("");
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.checking).toBe(false);
+  });
+
+  it("reports root hydration once a query needs it", () => {
+    // The control: a typed root query is answered from these reads, so their
+    // pending state gates the zero-match dismissal and the Loading row.
+    catalogMocks.pullRequests.isLoading = true;
 
     const { result } = renderRoot("fix");
 
-    const rows = result.current.context.issues.rows;
-    expect(rows).toContainEqual(KEPT_ISSUE);
-    expect(rows).toContainEqual(DEPARTED_ISSUE);
+    expect(result.current.loading).toBe(true);
+  });
+
+  it("withholds root rows while nothing has resolved", () => {
+    // The cold-open case: with neither catalog resolved there is no
+    // authority to serve rows from - root rows must be empty rather than
+    // some carrier filling the gap with a stale answer.
+    const { result } = renderRoot("fix");
+
+    expect(result.current.context.issues.rows).toEqual([]);
+  });
+
+  it("does not serve another scope's placeholder at root", () => {
+    // `isPlaceholder` marks the PREVIOUS scope's answer, held on screen by
+    // `keepPreviousData` while the current scope's read lands. Root offers
+    // rows as insertable mentions, so serving a placeholder there would offer
+    // a repository this scope has not actually resolved.
+    catalogMocks.issues.rows = [KEPT_ISSUE];
+    catalogMocks.issues.repositories = [KEPT_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.isPlaceholder = true;
+
+    const { result } = renderRoot("fix");
+
+    expect(result.current.context.issues.rows).toEqual([]);
+  });
+
+  it("ranks root rows from the catalog on the render they resolve", () => {
+    // Root rows are a plain `useMemo` off the catalog's own props, with no
+    // publishing effect sitting between a resolving render and these rows -
+    // so the FIRST render already carries them. Recorded per render, not off
+    // `result.current`: `renderHook` is act-wrapped, so by the time it
+    // returns any such effect would already have run, which is exactly the
+    // gap this guards against a future regression reopening.
+    catalogMocks.issues.rows = [KEPT_ISSUE];
+    catalogMocks.issues.repositories = [KEPT_REPO];
+    catalogMocks.issues.scopeResolved = true;
+
+    const perRender: number[][] = [];
+    renderHook(() => {
+      const sections = useGithubMentionSections({
+        client: fakeClient,
+        active: true,
+        step: ROOT_MENTION_STEP,
+        currentEpicId: "epic-1",
+        mentionRoots: ROOTS,
+        query: "fix",
+        debouncedQuery: "fix",
+        limit: 20,
+      });
+      perRender.push(sections.context.issues.rows.map((row) => row.number));
+      return sections;
+    });
+
+    expect(perRender[0]).toEqual([7]);
   });
 });

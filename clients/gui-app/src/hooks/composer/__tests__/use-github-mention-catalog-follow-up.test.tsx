@@ -21,7 +21,7 @@ import type { HostRpcRegistry } from "@/lib/host";
  * The narrower flags cannot own that lifetime. `allowStaleFollowUp` goes false
  * every time the user steps back to the picker's root, and `enabled` goes false
  * while the OTHER section is open - so resetting on either turned one sweep per
- * session into one per re-entry, against a cache the host is still answering
+ * session into one per re-entry - against a cache the host is still answering
  * `stale: true` for.
  */
 
@@ -87,6 +87,11 @@ function autoSweepCount(): number {
 const SCOPE: GithubMentionScope = {
   epicId: "epic-1",
   workspacePaths: ["/repo-a"],
+};
+
+const SCOPE_B: GithubMentionScope = {
+  epicId: "epic-1",
+  workspacePaths: ["/repo-b"],
 };
 
 interface CatalogProps {
@@ -215,5 +220,24 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
     rerender(IN_SECTION);
 
     await waitFor(() => expect(autoSweepCount()).toBe(2));
+  });
+
+  it("pays each scope's follow-up once across an A-B-A walk", async () => {
+    // A single-value ref (rather than a set of every followed key) forgets A
+    // the moment B follows: coming back to A then re-spends the sweep A
+    // already paid for on the way out.
+    alwaysStale();
+
+    const { rerender } = renderCatalog(IN_SECTION);
+    await waitFor(() => expect(autoSweepCount()).toBe(1));
+
+    rerender({ ...IN_SECTION, scope: SCOPE_B });
+    await waitFor(() => expect(autoSweepCount()).toBe(2));
+
+    rerender(IN_SECTION);
+    await waitFor(() => expect(request).toHaveBeenCalled());
+
+    // Still 2, not 3: A's follow-up was already paid on the way out.
+    expect(autoSweepCount()).toBe(2);
   });
 });

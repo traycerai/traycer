@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { useCallback, useMemo, useState } from "react";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -34,11 +33,6 @@ import {
   type MentionStepChrome,
 } from "@/lib/composer/mentions";
 import {
-  selectGithubMentionCatalogRows,
-  selectGithubMentionScopeRepositories,
-  useGithubMentionCatalogStore,
-} from "@/stores/composer/github-mention-catalog-store";
-import {
   reconcileRepositorySelection,
   selectGithubMentionFilter,
   useGithubMentionFilterStore,
@@ -54,6 +48,7 @@ import {
  */
 
 const EMPTY_ROWS: ReadonlyArray<GithubMentionRow> = [];
+const EMPTY_REPOSITORIES: ReadonlyArray<GithubMentionRepository> = [];
 
 export interface UseGithubMentionSectionsParams {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -75,12 +70,12 @@ export interface GithubMentionSectionsResult {
   /** True while something is in flight BEHIND rows already on screen. */
   readonly checking: boolean;
   /**
-   * A REQUESTED catalog read failed outright - no answer, not a degraded one.
-   * Each catalog reports this only while its own read is enabled, so a section
-   * nobody asked contributes nothing. The zero-match dismissal folds this in
-   * beside the workspace, epic and terminal errors: without it, a failed
-   * GitHub source read as "settled and empty" and closed the picker over rows
-   * it never saw.
+   * A REQUESTED GitHub read failed outright - no answer, not a degraded one.
+   * Covers both catalog lanes and the open section's live search; each source
+   * reports only while its own read is enabled, so a section nobody asked
+   * contributes nothing. The zero-match dismissal folds this in beside the
+   * workspace, epic and terminal errors: without it, a failed GitHub source
+   * read as "settled and empty" and closed the picker over rows it never saw.
    */
   readonly errored: boolean;
 }
@@ -153,89 +148,19 @@ export function useGithubMentionSections(
     pickerActive,
   });
 
-  const catalogStore = useGithubMentionCatalogStore(
-    useShallow((state) => ({
-      setRows: state.setRows,
-      setRepositories: state.setRepositories,
-      pullRequests: selectGithubMentionCatalogRows(
-        state,
-        scopeKey,
-        "pull-requests",
-      ),
-      issues: selectGithubMentionCatalogRows(state, scopeKey, "issues"),
-      repositories: selectGithubMentionScopeRepositories(state, scopeKey),
-    })),
-  );
-  const { setRows, setRepositories } = catalogStore;
-
-  // Root search reads the store, not these queries: the section unmounts its
-  // observers when the menu closes, and a warm host cache must still serve the
-  // flat root list on the next open.
-  //
-  // Two guards on every write, and both are the same rule as the `openRows`
-  // merge:
-  //
-  // - `isPlaceholder` - render stale, do not RECORD stale. A placeholder is the
-  //   previous scope's answer; writing it under the current `scopeKey` would
-  //   persist it past the window the placeholder covers.
-  // - `githubMentionRowsForSection` - the root path reaches insertable rows
-  //   WITHOUT passing through `openRows`, so a boundary enforced only there is
-  //   a boundary this path walks around. It costs one `every` over an
-  //   already-correct array.
-  // The third guard is `scopeResolved`, and it is why the empty case is a
-  // WRITE rather than a skip. An empty list has two completely different
-  // meanings here:
-  //
-  // - the host has not answered yet - `rows` is `[]` only because there is no
-  //   response, and writing it would blank a warm store that is currently the
-  //   only thing serving root search;
-  // - the host answered and this scope genuinely has no open items - which is
-  //   as authoritative as any other answer. Skipping it strands the previous
-  //   non-empty result in a session-lived store, so root search keeps offering
-  //   PRs that were closed hours ago, indefinitely and invisibly.
-  //
-  // `scopeResolved` is exactly "the host answered", so it separates the two.
-  useCatalogRowPublication({
-    catalog: pullRequestCatalog,
-    section: "pull-requests",
-    scopeKey,
-    setRows,
-  });
-  useCatalogRowPublication({
-    catalog: issueCatalog,
-    section: "issues",
-    scopeKey,
-    setRows,
-  });
-
-  // The scope's repositories persist beside the rows because the two are read
-  // together by a root-search row and must share ONE lifetime. The query
-  // entries carry TanStack's default 5-minute `gcTime`; this store is
-  // session-lived. Without this, reopening the menu past that window serves
-  // rows from the warm store while the query answers `undefined`, and a
-  // single-repo scope starts labelling its chips `repo#123`.
+  // The query entries are the ONLY copy of the catalog rows - root search
+  // ranks these two reads' answers directly. Their entries stay warm across
+  // menu sessions (`gcTime` is set for exactly that in the catalog hook), so
+  // there is no session store to publish into, keep synchronized, or catch
+  // serving rows a fresher resolution already invalidated: a scope that
+  // drifts re-keys the read instead.
   const scopeAnswer = preferredScopeAnswer(
     openSection,
     pullRequestCatalog,
     issueCatalog,
   );
-  // Read the three FIELDS out before the effect. `useGithubMentionCatalog`
-  // builds its result fresh on every render, so depending on the whole object
-  // re-runs this effect every pass; the fields are the stable values the two
-  // row effects above already depend on.
   const scopeResolved = scopeAnswer.scopeResolved;
-  const scopeAnswerIsPlaceholder = scopeAnswer.isPlaceholder;
   const queryRepositories = scopeAnswer.repositories;
-  useEffect(() => {
-    if (!scopeResolved || scopeAnswerIsPlaceholder) return;
-    setRepositories({ scopeKey, repositories: queryRepositories });
-  }, [
-    queryRepositories,
-    scopeAnswerIsPlaceholder,
-    scopeKey,
-    scopeResolved,
-    setRepositories,
-  ]);
 
   const openCatalog =
     openSection === "issues" ? issueCatalog : pullRequestCatalog;
@@ -252,30 +177,30 @@ export function useGithubMentionSections(
   // then the same PR would insert `repo#4917` when picked from root search and
   // `#4917` when picked inside the section, which is the entry point changing
   // the chip.
-  // Live query answer first (`queryRepositories`, resolved above); the
-  // persisted one when neither query has answered for this scope yet (a warm
-  // store outliving a garbage-collected query entry is exactly the case that
-  // mislabels a chip at root).
+  // Empty until a query answers, and that is safe for the chip label because
+  // the ROWS come from the same answers: while nothing has resolved there are
+  // no rows to pick a chip from, so the two facts cannot disagree the way a
+  // warm row store outliving a garbage-collected repository answer once let
+  // them.
   const scopeRepositories = scopeResolved
     ? queryRepositories
-    : catalogStore.repositories;
+    : EMPTY_REPOSITORIES;
 
   // The row boundary the resolved scope implies, or `null` while no answer
   // exists to imply one. `scopeResolved` already names the freshest RESOLVED
   // answer across BOTH sections, and that answer's repository set is
   // authoritative for every row surface - including rows that arrived under an
-  // OLDER resolution. Two carriers hold such rows: the sibling section's
-  // catalog entry inside its `staleTime`, and the session store. A repository
-  // removed (or a remote changed) is discovered by whichever section refreshes
-  // first; without this, the other section keeps showing - and inserting -
-  // references from the departed repository until its own cache expires.
+  // OLDER resolution. Two carriers still hold such rows: the sibling section's
+  // catalog entry inside its `staleTime`, and a held search response predating
+  // the change. A repository removed (or a remote changed) is discovered by
+  // whichever section refreshes first; without this, the other carrier keeps
+  // showing - and inserting - references from the departed repository until
+  // its own cache expires.
   //
-  // `null` (not `[]`) while unresolved, because the store fallback above
-  // cannot distinguish "no repositories" from "never answered", and filtering
-  // a cold open's warm store against an unknown would blank it. An empty
-  // RESOLVED set stays a filter: "these folders hold no GitHub repo" is
-  // authoritative, and rows surviving it would be exactly the leak this
-  // boundary exists to stop.
+  // `null` (not `[]`) while unresolved: no authority exists yet, and the row
+  // surfaces below serve nothing in that window anyway. An empty RESOLVED set
+  // stays a filter: "these folders hold no GitHub repo" is authoritative, and
+  // rows surviving it would be exactly the leak this boundary exists to stop.
   const resolvedScopeRepositories = scopeResolved ? queryRepositories : null;
 
   const storedFilter = useGithubMentionFilterStore((state) =>
@@ -335,6 +260,24 @@ export function useGithubMentionSections(
       (scopeResolved || filter.repository === null),
   });
 
+  // The debounce gap is PENDING, not settled: `query` filters the visible
+  // rows immediately, but the search above still holds the previous
+  // `debouncedQuery` for up to 250ms - so a query with no cached match would
+  // otherwise render the authoritative "No matching…" answer before the
+  // remote request it is owed has even started. Scoped to the search's own
+  // conditions: a query no search will ever run for (unsupported host,
+  // withheld selection, no section open) really is settled.
+  const searching = searchActivity({
+    isSearching: search.isSearching,
+    supported,
+    active,
+    openSection,
+    scopeResolved,
+    repositorySelected: filter.repository !== null,
+    query,
+    debouncedQuery,
+  });
+
   // The section's list: cached rows first (identity preserved), remote hits
   // appended, the funnel applied, then ranked. Filtering AFTER the merge is
   // deliberate - a remote hit that the filter excludes was fetched under those
@@ -390,7 +333,7 @@ export function useGithubMentionSections(
   // funnel is actually applied.
   const openRows = useHeldRowsDuringSearch({
     rows: localRows,
-    searching: search.isSearching,
+    searching,
     // Keyed so the hold is only ever a FILTER swap. A new query, a different
     // section, or a different SCOPE is a different question, and answering it
     // with the previous question's rows would be the lie this exists to avoid.
@@ -405,7 +348,6 @@ export function useGithubMentionSections(
   // flat cross-source list the user gets by typing at `@`.
   const rootPullRequestRows = useRootRows({
     catalog: pullRequestCatalog,
-    stored: catalogStore.pullRequests,
     section: "pull-requests",
     atRoot,
     query,
@@ -414,7 +356,6 @@ export function useGithubMentionSections(
   });
   const rootIssueRows = useRootRows({
     catalog: issueCatalog,
-    stored: catalogStore.issues,
     section: "issues",
     atRoot,
     query,
@@ -492,7 +433,7 @@ export function useGithubMentionSections(
       searchSourceStatus: search.sourceStatus,
       freshnessAt: openCatalog.freshnessAt,
       checking: openCatalog.isChecking,
-      searching: search.isSearching,
+      searching,
       onRefresh,
     });
   }, [
@@ -506,7 +447,7 @@ export function useGithubMentionSections(
     openCatalog.sourceStatus,
     openSection,
     scopeRepositories,
-    search.isSearching,
+    searching,
     scope.workspacePaths,
     search.notice,
     search.sourceStatus,
@@ -517,7 +458,7 @@ export function useGithubMentionSections(
   return {
     context,
     chrome,
-    errored: anyCatalogErrored(pullRequestCatalog, issueCatalog),
+    errored: anyGithubSourceErrored(pullRequestCatalog, issueCatalog, search),
     ...sectionActivity({
       atRoot,
       openSection,
@@ -525,6 +466,7 @@ export function useGithubMentionSections(
       pullRequests: pullRequestCatalog,
       issues: issueCatalog,
       openRowCount: openRows.length,
+      query,
     }),
   };
 }
@@ -532,12 +474,12 @@ export function useGithubMentionSections(
 /**
  * What the picker should report as in-flight, which differs by step.
  *
- * At ROOT both catalogs are read cache-only to warm the row store, and those
- * reads gate the zero-match dismissal too: root search reads the STORE, which
- * stays empty until they land. Reporting nothing there let a title query whose
- * 250 ms debounce settled first see zero matches with nothing loading, and the
+ * At ROOT both catalogs are read cache-only, and those reads gate the
+ * zero-match dismissal too: root search ranks their ANSWERS, which are empty
+ * until they land. Reporting nothing there let a title query whose 250 ms
+ * debounce settled first see zero matches with nothing loading, and the
  * zero-match rule closed the picker moments before the cached PRs and issues
- * it was about to match were published.
+ * it was about to match arrived.
  *
  * Inside a section only that section's catalog matters - and `checking` covers
  * a background refetch behind rows already on screen, which core flows asks to
@@ -550,11 +492,23 @@ function sectionActivity(input: {
   readonly pullRequests: GithubMentionCatalogResult;
   readonly issues: GithubMentionCatalogResult;
   readonly openRowCount: number;
+  readonly query: string;
 }): { readonly loading: boolean; readonly checking: boolean } {
   if (input.atRoot) {
+    // Root renders no catalog rows until the user types - its category list
+    // is complete on its own. So the hydration reads only count once a query
+    // exists for them to answer: on a cold open with an empty query they
+    // would put up a Loading row and a header spinner for work that cannot
+    // change what is on screen. The live query, not the debounced one, so
+    // the gate arms with the first keystroke.
+    const rootSearchPending = input.query.trim().length > 0;
     return {
-      loading: input.pullRequests.isLoading || input.issues.isLoading,
-      checking: input.pullRequests.isChecking || input.issues.isChecking,
+      loading:
+        rootSearchPending &&
+        (input.pullRequests.isLoading || input.issues.isLoading),
+      checking:
+        rootSearchPending &&
+        (input.pullRequests.isChecking || input.issues.isChecking),
     };
   }
   if (input.openSection === null) return { loading: false, checking: false };
@@ -571,12 +525,44 @@ function sectionContext(
   return { rows, repositories };
 }
 
-/** Each catalog is already requested-gated; an idle read cannot report. */
-function anyCatalogErrored(
+/**
+ * The search's in-flight projection, INCLUDING the debounce window. True for
+ * a query the search WILL run but has not started: same conditions as the
+ * search read's own `enabled`, plus a non-empty live query (clearing the
+ * query needs no search - the cached rows are already the answer).
+ */
+function searchActivity(input: {
+  readonly isSearching: boolean;
+  readonly supported: boolean;
+  readonly active: boolean;
+  readonly openSection: GithubMentionSection | null;
+  readonly scopeResolved: boolean;
+  readonly repositorySelected: boolean;
+  readonly query: string;
+  readonly debouncedQuery: string;
+}): boolean {
+  if (input.isSearching) return true;
+  if (!input.supported || !input.active || input.openSection === null) {
+    return false;
+  }
+  if (!input.scopeResolved && input.repositorySelected) return false;
+  return input.query.trim().length > 0 && input.query !== input.debouncedQuery;
+}
+
+/**
+ * Every GitHub read that can fail outright, in one place: both catalog lanes
+ * AND the open section's live search. Each source is already requested-gated
+ * (an idle read cannot report), so this is a plain union. The search belongs
+ * here because its rejection has the same downstream lie as a catalog's: no
+ * rows, `isSearching` false, and a zero-match verdict that closes the picker
+ * over hits the request never returned.
+ */
+function anyGithubSourceErrored(
   pullRequests: GithubMentionCatalogResult,
   issues: GithubMentionCatalogResult,
+  search: { readonly errored: boolean },
 ): boolean {
-  return pullRequests.errored || issues.errored;
+  return pullRequests.errored || issues.errored || search.errored;
 }
 
 /**
@@ -632,8 +618,8 @@ function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
  *
  * Which section is open only breaks the TIE. Preferring the open one outright
  * has the same failure in a different place - refresh Pull requests, step
- * straight into Issues, and the older Issues answer wins on being open and is
- * written back over the store, with nothing to correct it because a 60s
+ * straight into Issues, and the older Issues answer wins on being open and
+ * drives every scope surface, with nothing to correct it because a 60s
  * `staleTime` covers exactly that window and suppresses the refetch.
  *
  * The unresolved cases come first because an answer that does not exist cannot
@@ -659,41 +645,8 @@ function preferredScopeAnswer(
     : preferred;
 }
 
-/**
- * Publishes one section's resolved rows into the session store that root
- * search reads.
- *
- * A hook rather than two inline effects so the two sections cannot drift, and
- * so the guards are stated once. See the note at the call site for why an
- * authoritative empty is a WRITE and an unanswered one is not.
- */
-function useCatalogRowPublication(input: {
-  readonly catalog: GithubMentionCatalogResult;
-  readonly section: GithubMentionSection;
-  readonly scopeKey: string;
-  readonly setRows: (write: {
-    readonly scopeKey: string;
-    readonly section: GithubMentionSection;
-    readonly rows: ReadonlyArray<GithubMentionRow>;
-  }) => void;
-}): void {
-  const { catalog, section, scopeKey, setRows } = input;
-  const { isPlaceholder, scopeResolved, rows } = catalog;
-  useEffect(() => {
-    if (isPlaceholder) return;
-    if (!scopeResolved) return;
-    setRows({
-      scopeKey,
-      section,
-      rows: githubMentionRowsForSection(rows, section),
-    });
-  }, [isPlaceholder, rows, scopeKey, scopeResolved, section, setRows]);
-}
-
 interface RootRowsInput {
   readonly catalog: GithubMentionCatalogResult;
-  /** The session store's rows: what `useCatalogRowPublication` last wrote. */
-  readonly stored: ReadonlyArray<GithubMentionRow>;
   readonly section: GithubMentionSection;
   readonly atRoot: boolean;
   readonly query: string;
@@ -702,52 +655,33 @@ interface RootRowsInput {
    * The freshest resolved answer's repositories across BOTH sections, or
    * `null` while neither has resolved. Root reaches insertable rows without
    * passing through the open section's merge, so the repository boundary is
-   * enforced here too - on the catalog arm AND the stored arm, because the
-   * store outlives the resolution that wrote it.
+   * enforced here too - this section's entry can still be inside `staleTime`
+   * while its sibling already learned a repository left.
    */
   readonly resolvedScopeRepositories: ReadonlyArray<GithubMentionRepository> | null;
 }
 
 /**
- * Root's rows for one section: the catalog's own answer as soon as it has one,
- * and the session store until then.
+ * Root's rows for one section: what THIS scope's catalog has answered, or
+ * nothing.
  *
- * The store is written by `useCatalogRowPublication`, a passive effect, so on
- * the render where the catalog resolves the store still holds the PREVIOUS
- * answer. Reading only the store made that render rank the old rows, and if
- * the catalog was the last source to settle the same render also has
- * `loading` and `fetching` false - an authoritative zero-match verdict built
- * on rows that had already arrived. The publication effect runs first and
- * schedules the right rows, but React does not re-render between passive
- * effects, so the dismissal effect in that same commit closes the picker on
- * the stale verdict anyway.
- *
- * The three guards below are the publication effect's, restated: same
- * `isPlaceholder`, same `scopeResolved`, same section narrowing. That is the
- * point - this render ranks exactly what that effect is about to store, so the
- * store stays the warm fallback for the cold case (menu reopened after the
- * observers unmounted) rather than a second source of truth.
+ * Nothing, deliberately, in both unanswered windows. A placeholder is the
+ * PREVIOUS scope's answer, and serving it would offer rows the current scope
+ * cannot resolve as insertable mentions; an unresolved read has said nothing
+ * at all. Neither window renders a false zero-match verdict, because the
+ * hydration reads gate `loading` for exactly as long as they are unanswered
+ * (see `sectionActivity`'s root branch) - a brief Loading row where a
+ * session-lived row store used to serve whatever an older resolution left
+ * behind.
  */
 function useRootRows(input: RootRowsInput): ReadonlyArray<GithubMentionRow> {
-  const {
-    catalog,
-    stored,
-    section,
-    atRoot,
-    query,
-    limit,
-    resolvedScopeRepositories,
-  } = input;
+  const { catalog, section, atRoot, query, limit, resolvedScopeRepositories } =
+    input;
   const { rows: catalogRows, isPlaceholder, scopeResolved } = catalog;
   return useMemo(() => {
     if (!atRoot || query.trim().length === 0) return EMPTY_ROWS;
-    const rows =
-      isPlaceholder || !scopeResolved
-        ? stored
-        : githubMentionRowsForSection(catalogRows, section);
-    // Applied to BOTH arms above. The stored arm can predate the current
-    // resolution, and the catalog arm can be the section whose entry is still
-    // inside `staleTime` while its sibling already learned a repository left.
+    if (isPlaceholder || !scopeResolved) return EMPTY_ROWS;
+    const rows = githubMentionRowsForSection(catalogRows, section);
     const scoped =
       resolvedScopeRepositories === null
         ? rows
@@ -762,6 +696,5 @@ function useRootRows(input: RootRowsInput): ReadonlyArray<GithubMentionRow> {
     resolvedScopeRepositories,
     scopeResolved,
     section,
-    stored,
   ]);
 }

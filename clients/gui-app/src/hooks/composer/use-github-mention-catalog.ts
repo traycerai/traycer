@@ -47,6 +47,15 @@ import { mentionQueryKeys } from "@/lib/query-keys";
 // is being opened and closed. A cache-only call is cheap but not free.
 const CATALOG_STALE_TIME_MS = 60_000;
 
+// Session warmth lives in the QUERY ENTRY, not in a parallel store. The menu's
+// observers unmount when the picker closes, and TanStack's default 5-minute
+// `gcTime` would evict the rows root search ranks before the next open - the
+// gap a session-lived row store used to paper over, at the price of being a
+// second copy of server data that outlived the resolution that wrote it. A
+// long-lived entry keeps one copy, still keyed by (host, scope, section), so a
+// scope that drifts re-keys instead of serving another scope's rows.
+const CATALOG_GC_TIME_MS = 30 * 60_000;
+
 export interface GithubMentionScope {
   /** Null in the landing composer, which the host authorizes by paths instead. */
   readonly epicId: string | null;
@@ -164,6 +173,7 @@ export function useGithubMentionCatalog(
     options: {
       enabled: enabled && scope.workspacePaths.length > 0,
       staleTime: CATALOG_STALE_TIME_MS,
+      gcTime: CATALOG_GC_TIME_MS,
       // Rows stay on screen while a newer read lands, so re-opening the menu
       // never blanks a list the user was reading.
       placeholderData: keepPreviousData,
@@ -290,21 +300,25 @@ export function useGithubMentionCatalog(
   // very request the follow-up would otherwise spend (see the note there).
   //
   // It is CLEARED on exactly one edge - the picker closing - and the host,
-  // scope and section live in the stored value instead, so a change to any of
-  // them fails the comparison below without anything having to notice the
-  // transition. See `pickerActive` for why the two narrower flags cannot own
-  // this lifetime.
+  // scope and section live in the stored KEYS instead, so a change to any of
+  // them misses the set below without anything having to notice the
+  // transition. A set of every followed key, not the latest key alone: one
+  // menu session can walk scope A → B → back to A (folders detached and
+  // re-attached, an app-wide host swapped and swapped back), and A's
+  // follow-up was already paid on the way out - remembering only the most
+  // recent key re-spent it on every return trip. See `pickerActive` for why
+  // the two narrower flags cannot own this lifetime.
   //
   // The host is in the key for the same reason it is in `cacheKey` above: it
   // changes under an app-wide composer, and two hosts can advertise the same
   // epic and the same workspace paths. Keyed without it, the second host's
   // `stale: true` catalog reads as a sweep that already ran, and that host
   // never gets the one refresh a session owes it.
-  const autoFollowedRef = useRef<string | null>(null);
+  const autoFollowedRef = useRef<Set<string>>(new Set());
   const followKey = `${readiness.hostId ?? ""}\x1f${scope.epicId ?? ""}\x1f${[...scope.workspacePaths].toSorted().join("\x1f")}\x1f${section}`;
   useEffect(() => {
     if (!pickerActive) {
-      autoFollowedRef.current = null;
+      autoFollowedRef.current.clear();
       return;
     }
     if (!enabled || !allowStaleFollowUp) return;
@@ -315,8 +329,8 @@ export function useGithubMentionCatalog(
     if (catalogQuery.isPlaceholderData) return;
     const data = catalogQuery.data;
     if (data === undefined || !data.stale) return;
-    if (autoFollowedRef.current === followKey) return;
-    autoFollowedRef.current = followKey;
+    if (autoFollowedRef.current.has(followKey)) return;
+    autoFollowedRef.current.add(followKey);
     void mutateAsync({
       epicId: scope.epicId,
       workspacePaths: [...scope.workspacePaths],
@@ -350,7 +364,7 @@ export function useGithubMentionCatalog(
     // manual attempt that fails was already reported by `onError`, and a
     // silent automatic retry right behind a refresh that just failed is budget
     // spent on the same outcome.
-    autoFollowedRef.current = followKey;
+    autoFollowedRef.current.add(followKey);
     try {
       await mutateAsync({
         epicId: scope.epicId,

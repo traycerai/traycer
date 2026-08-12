@@ -231,7 +231,29 @@ describe("reconcileRepositorySelection", () => {
     expect(reconciled.involvement).toBe("everyone");
   });
 
-  it("keeps the selection when the repository is still present", () => {
+  it("keeps the selection when the repository is still one of several", () => {
+    const repository = {
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+    };
+    const filter = {
+      ...DEFAULT_PULL_REQUEST_MENTION_FILTER,
+      repository,
+    };
+    const reconciled = reconcileRepositorySelection("pull-requests", filter, [
+      repository,
+      { githubHost: "github.com", owner: "traycerai", repo: "other" },
+    ]);
+    expect(reconciled).toBe(filter);
+  });
+
+  it("normalizes a selection that has become the whole scope", () => {
+    // The popover only renders the Repository group for a multi-repository
+    // scope, so a scope shrinking onto the selected repository would strand a
+    // lit funnel dot no visible control can clear - and the stored selection
+    // would start excluding rows again the moment another repository is
+    // attached.
     const repository = {
       githubHost: "github.com",
       owner: "traycerai",
@@ -244,7 +266,8 @@ describe("reconcileRepositorySelection", () => {
     const reconciled = reconcileRepositorySelection("pull-requests", filter, [
       repository,
     ]);
-    expect(reconciled).toBe(filter);
+    expect(reconciled.repository).toBeNull();
+    expect(reconciled.state).toBe("open");
   });
 
   it("leaves an already-null repository selection alone", () => {

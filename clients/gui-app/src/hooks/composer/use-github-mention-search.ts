@@ -62,6 +62,16 @@ export interface GithubMentionSearchResult {
   /** True while a remote search is in flight - the appended row's condition. */
   readonly isSearching: boolean;
   /**
+   * The requested search itself FAILED - retries exhausted, no response at
+   * all. Not a degraded answer (`sourceStatus` reports those): a rejection
+   * carries no rows, so without this a failed remote search reads exactly
+   * like "settled, no extra hits", and the zero-match dismissal closes the
+   * picker over rows the search never saw. The same fact the catalog read
+   * reports for its lane, gated on `wanted` like every projected field - a
+   * disabled observer can still HOLD an error from when it was live.
+   */
+  readonly errored: boolean;
+  /**
    * Re-runs the live search, for the section's refresh button.
    *
    * The button is one control over a list that is two reads merged, so
@@ -153,6 +163,7 @@ export function useGithubMentionSearch(
     sourceStatus: answer?.sourceStatus ?? null,
     notice: answer?.notice ?? null,
     isSearching: wanted && searchQuery.isFetching,
+    errored: wanted && searchQuery.isError,
     refresh,
   };
 }

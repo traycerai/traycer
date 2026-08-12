@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
@@ -458,12 +459,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       githubPending: github.checking,
     });
 
+  const readiness = useReactiveHostReadiness(hostClient);
   const stepChrome = useMentionStepChrome({
     active,
     step,
     githubChrome: github.chrome,
     artifactRefetch: refetchEpicMentions,
     artifactFetching: epicFetching,
+    hostId: readiness.hostId,
     epicId: epicIdOrEmpty,
   });
 
@@ -578,6 +581,14 @@ interface MentionStepChromeInput {
   readonly githubChrome: MentionStepChrome | null;
   readonly artifactRefetch: () => Promise<void>;
   readonly artifactFetching: boolean;
+  /**
+   * The bound host, part of the refresh button's target identity beside the
+   * epic. The landing composer's `epicId` is empty on EVERY host, so without
+   * the host in the key an app-wide host swap mid-refresh keeps the same
+   * control mounted - its component-local spinner then holds the NEW host's
+   * Refresh disabled until the DEPARTED host's promise settles or times out.
+   */
+  readonly hostId: string | null;
   /** Artifacts are per-epic, so the epic is this refresh button's target. */
   readonly epicId: string;
 }
@@ -601,6 +612,7 @@ function useMentionStepChrome(
     githubChrome,
     artifactRefetch,
     artifactFetching,
+    hostId,
     epicId,
   } = input;
   // `refetch` is rebuilt every render (it closes over the current query array),
@@ -622,9 +634,11 @@ function useMentionStepChrome(
         refreshing: artifactFetching,
         label: "Refresh artifacts",
         timeoutMs: ARTIFACT_REFRESH_TIMEOUT_MS,
-        // Artifacts are per-epic and answer from local state, so the epic is
-        // the whole of this button's target identity.
-        targetKey: `artifacts\x1f${epicId}`,
+        // Answered BY the bound host FOR the current epic, so both name the
+        // target - same identity rule as the GitHub sections' key, whose
+        // `scopeKey` already carries the host. See `hostId` above for the
+        // landing-composer swap this remounts across.
+        targetKey: artifactsRefreshTargetKey(hostId, epicId),
       },
       freshness: null,
       notice: null,
@@ -633,7 +647,28 @@ function useMentionStepChrome(
       appendedStatus: null,
       emptyLabel: null,
     };
-  }, [active, artifactFetching, epicId, githubChrome, refreshArtifacts, step]);
+  }, [
+    active,
+    artifactFetching,
+    epicId,
+    githubChrome,
+    hostId,
+    refreshArtifacts,
+    step,
+  ]);
+}
+
+/**
+ * The artifact refresh button's remount identity: host AND epic. The two
+ * landing composers of two hosts share the empty epic, so an epic-only key
+ * survives an app-wide host swap and strands the new host's control behind
+ * the departed host's in-flight spinner.
+ */
+export function artifactsRefreshTargetKey(
+  hostId: string | null,
+  epicId: string,
+): string {
+  return `artifacts\x1f${hostId ?? ""}\x1f${epicId}`;
 }
 
 interface MentionNoMatchVerdictInput {

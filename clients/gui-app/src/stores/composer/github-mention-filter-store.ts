@@ -145,6 +145,16 @@ export function reconcileRepositorySelection(
       repository.owner === selected.owner &&
       repository.repo === selected.repo,
   );
-  if (present) return filter;
+  if (present) {
+    // A selection that IS the whole scope filters nothing, and the popover
+    // only renders the Repository group for a multi-repository scope - so a
+    // scope shrinking onto the selected repository would otherwise leave the
+    // funnel dot lit with no control able to clear it, and the stored
+    // selection lying in wait to exclude the next repository attached.
+    if (repositories.length === 1) {
+      return withGithubMentionRepository(section, filter, null);
+    }
+    return filter;
+  }
   return withGithubMentionRepository(section, filter, null);
 }
