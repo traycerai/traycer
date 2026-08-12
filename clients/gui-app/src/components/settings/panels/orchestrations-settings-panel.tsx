@@ -1918,13 +1918,18 @@ function BlockedProvidersSection() {
 
   const blocks = blocksQuery.data?.blocks ?? [];
 
-  const harnessOptions = useMemo(() => {
+  const catalogHarnesses = useMemo(() => {
     const list = catalog.harnesses
       .filter((h) => h.id.trim().length > 0)
       .slice()
       .sort((a, b) => a.label.localeCompare(b.label));
     return list;
   }, [catalog.harnesses]);
+
+  const harnessOptions = useMemo(
+    () => catalogHarnesses.filter((h) => h.available),
+    [catalogHarnesses],
+  );
 
   const selectedHarness = useMemo(
     () => harnessOptions.find((h) => h.id === harnessId) ?? null,
@@ -2026,7 +2031,7 @@ function BlockedProvidersSection() {
         <div className="mt-3 flex flex-col gap-1.5">
           {blocks.map((b) => {
             const harnessLabel =
-              harnessOptions.find((h) => h.id === b.harnessId)?.label ??
+              catalogHarnesses.find((h) => h.id === b.harnessId)?.label ??
               b.harnessId;
             const label =
               b.model === null || b.model === ""
@@ -2097,7 +2102,6 @@ function BlockedProvidersSection() {
               harnessOptions.map((h) => (
                 <option key={h.id} value={h.id}>
                   {h.label}
-                  {!h.available ? " (unavailable)" : ""}
                 </option>
               ))
             )}
