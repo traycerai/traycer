@@ -15,13 +15,15 @@ const ORCHESTRATIONS_DIR = join(TRAYCER_HOME, "orchestrations");
 const MODEL_GROUPS_DIR = join(TRAYCER_HOME, "model-groups");
 
 /** Primary full roster — protected from delete; UI default chip. */
-export const PRIMARY_MODEL_GROUP = "roster-full";
+export const PRIMARY_MODEL_GROUP = "default";
 
 /** Legacy on-disk group names → current names. */
 const LEGACY_MODEL_GROUP_RENAMES: Readonly<Record<string, string>> = {
-  default: "roster-full",
-  cheap: "roster-budget",
-  premium: "roster-top",
+  "roster-full": "default",
+  "roster-budget": "budget",
+  "roster-top": "top",
+  cheap: "budget",
+  premium: "top",
 };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -419,7 +421,7 @@ export async function createOrchestration(
       name,
       description,
       version: "1.0.0",
-      defaultModelGroup: "roster-full",
+      defaultModelGroup: "default",
       roles: [],
       artifactChain: [],
       globalRules: [],
