@@ -14,6 +14,7 @@ import {
   RELAUNCH_BACKOFF_MS,
   resolveHostStartTarget,
   SUSTAINED_UPTIME_RESET_MS,
+  MAX_IMMEDIATE_RESTARTS,
   runHostStart,
   type HostStartTarget,
   type RunHostStartDeps,
@@ -1876,6 +1877,84 @@ describe("runHostStart - crash relaunch loop", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("stops respawning a host that requests a restart faster than it can start", async () => {
+    // Exit 87 deliberately skips the crash budget AND the backoff - it is a
+    // hand-off, not a failure. But "skips the budget" must not mean unbounded:
+    // a host whose restart handshake fires during startup would otherwise
+    // spawn / exit 87 / respawn with no delay for the supervisor's lifetime.
+    // Exiting with the child's own 87 hands the decision up to the service
+    // supervisor, which is the only layer that can space the attempts.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.restart-storm",
+          },
+          {
+            ...deps,
+            maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
+            sleep: async () => undefined,
+            spawn: (command, args, options) => {
+              const child = makeStubChildWithStderr();
+              const status = new PassThrough();
+              Object.assign(child, { stdio: [null, null, null, status] });
+              originalSpawn(command, args, options);
+              // Never runs long enough to clear the immediate-restart floor.
+              setImmediate(() => {
+                status.end();
+                child.stderr?.end();
+                child.emit("exit", RESTART_EXIT_CODE, null);
+              });
+              return asChildProcess(child);
+            },
+            readLiveProbeContextForServiceLabel: async () => ({
+              kind: "authorised" as const,
+              context: {
+                transitionId: "storm-transition",
+                probeNonce: "storm-nonce",
+                serviceLabel: "ai.traycer.host.restart-storm",
+              },
+            }),
+            readLayer0Frame: async (): Promise<Layer0FrameRead> => {
+              const attemptId = recorded.markers
+                .filter((marker) => marker.phase === "starting")
+                .at(-1)?.fields.attemptId;
+              if (typeof attemptId !== "string") {
+                return { kind: "indeterminate", reason: "missing-attempt" };
+              }
+              return {
+                kind: "frame",
+                frame: { attemptId, layer0: "acquired" },
+              };
+            },
+            attestProbeSupervisor: async (serviceLabel, supervisorPid) => ({
+              serviceLabel,
+              supervisorPid,
+              capturedAt: "2026-08-12T00:00:00.000Z",
+            }),
+            writeProbeMarker: async () => undefined,
+          },
+        ),
+      recorded,
+    );
+
+    // Bounded, not infinite - and bounded by the RESTART cap rather than the
+    // crash budget, which this path must never consume.
+    expect(recorded.spawnCalls).toHaveLength(MAX_IMMEDIATE_RESTARTS);
+    expect(recorded.exited).toBe(RESTART_EXIT_CODE);
+    expect(
+      recorded.markers.filter((marker) => marker.phase === "crashed"),
+    ).toHaveLength(0);
   });
 
   it("does not relaunch a host that exits cleanly", async () => {

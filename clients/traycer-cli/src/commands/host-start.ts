@@ -178,6 +178,25 @@ export const RELAUNCH_BACKOFF_MS: readonly number[] = [
 export const SUSTAINED_UPTIME_RESET_MS = 300_000;
 
 /**
+ * How briefly a child must have run for its REQUESTED restart to count as
+ * pathological rather than operator intent.
+ *
+ * An intentional restart deliberately skips the crash budget and the backoff -
+ * it is a hand-off, not a failure - but "skips the budget" cannot mean
+ * "unbounded". A host whose restart handshake fires during startup (a config
+ * it rejects, a migration that re-triggers `host.restart`) would otherwise
+ * spawn, exit 87, and respawn with no delay for the life of the supervisor.
+ *
+ * Deliberately far shorter than `SUSTAINED_UPTIME_RESET_MS`: a real operator
+ * restart follows a host that at least finished starting, so this floor bounds
+ * the pathological case without spending an allowance on ordinary use.
+ */
+export const IMMEDIATE_RESTART_FLOOR_MS = 10_000;
+
+/** How many restarts inside {@link IMMEDIATE_RESTART_FLOOR_MS} end the loop. */
+export const MAX_IMMEDIATE_RESTARTS = 5;
+
+/**
  * How long a child gets to honour a raced deliberate SIGTERM before the
  * supervisor escalates to SIGKILL.
  *
@@ -678,6 +697,9 @@ export async function runHostStart(
   // should exist at all. Everything below is per-attempt.
   let attemptNumber = 0;
   let consecutiveRelaunches = 0;
+  // Separate from the crash budget on purpose: a requested restart is not a
+  // crash and must not consume crash allowance, but it still needs a bound.
+  let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
@@ -1527,8 +1549,30 @@ export async function runHostStart(
       // an operator-requested restart would silently shorten the next real
       // crash allowance. Only real uptime forgives; the restart itself is not a
       // crash and neither consumes nor forgives anything on its own.
-      if (childEndedAtMs - childSpawnedAtMs >= SUSTAINED_UPTIME_RESET_MS) {
+      const restartRanForMs = childEndedAtMs - childSpawnedAtMs;
+      if (restartRanForMs >= SUSTAINED_UPTIME_RESET_MS) {
         consecutiveRelaunches = 0;
+      }
+      // The bound this branch would otherwise lack. Exiting with the child's
+      // own 87 hands the decision to the service supervisor, which relaunches
+      // under ITS throttle - the same shape as the crash budget exiting with
+      // the child's code, and the only layer here that can space the attempts.
+      if (restartRanForMs >= IMMEDIATE_RESTART_FLOOR_MS) {
+        consecutiveImmediateRestarts = 0;
+      } else {
+        consecutiveImmediateRestarts += 1;
+        if (consecutiveImmediateRestarts >= MAX_IMMEDIATE_RESTARTS) {
+          logger.error(
+            "Host child requested restarts faster than it can start",
+            {
+              environment: opts.environment,
+              attemptId,
+              consecutiveImmediateRestarts,
+            },
+            null,
+          );
+          return exitSupervisor(RESTART_EXIT_CODE);
+        }
       }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
