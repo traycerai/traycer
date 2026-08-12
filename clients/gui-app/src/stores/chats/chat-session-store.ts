@@ -23,6 +23,15 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
+  chatStreamErrorNotification,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  liveChatCompletionAcknowledgementMatches,
+  liveChatCompletionAcknowledgements,
+  type LiveChatCompletionAcknowledgementTransport,
+} from "@/lib/notifications/live-chat-completion-acknowledgements";
+import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
   stagedWorktreeIntentIsSuspended,
@@ -566,6 +575,7 @@ export interface ChatSessionState {
 }
 
 export interface ChatSessionStoreOptions {
+  readonly hostId: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
@@ -738,12 +748,38 @@ function restoreStagedWorktreeIntentForPending(
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
+  return createChatSessionStoreWithNotificationDependencies(options, {
+    completionAcknowledgements: liveChatCompletionAcknowledgements,
+    appLocalNotifications: useAppLocalNotificationsStore,
+  });
+}
+
+export interface ChatSessionNotificationDependencies {
+  readonly completionAcknowledgements: LiveChatCompletionAcknowledgementTransport;
+  readonly appLocalNotifications: Pick<
+    typeof useAppLocalNotificationsStore,
+    "getState"
+  >;
+}
+
+export function createChatSessionStoreWithNotificationDependencies(
+  options: ChatSessionStoreOptions,
+  notificationDependencies: ChatSessionNotificationDependencies,
+): ChatSessionStoreHandle {
+  const notificationUserId = options.userId;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
+  let fatalCloseNotificationGeneration: number | null = null;
+  // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
+  // turn that produced that close so another renderer's later live completion
+  // can still acknowledge this renderer's matching failure. A subsequent
+  // active turn or fatal close supersedes this slot.
+  let fatalCloseTurnId: string | null = null;
+  let unsubscribeLiveCompletionAcknowledgements = (): void => undefined;
   // Bumped whenever the connection the pendings were dispatched on is gone: a
   // transport `reconnecting`/`closed` status, or a stream-client replacement
   // (`retry`). Pending actions are stamped with this at dispatch, and the
@@ -1321,6 +1357,44 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The chat stream is the only source that can prove a success happened
+        // after a renderer-local transport failure. Notification-feed rows
+        // arrive on an independent replicated stream, so their arrival order
+        // cannot establish lifecycle order. A live terminal completion can:
+        // acknowledge only this host-bound chat's earlier local failure.
+        // Matching the active turn also keeps a late terminal delta from an
+        // older turn from consuming a failure that belongs to the current
+        // one. If the connection closes after this event, the recurring
+        // failure write below flips the row unread again.
+        if (
+          frame.event.type === "turn.completed" &&
+          get().activeTurn?.turnId === frame.event.turnId &&
+          notificationUserId !== null &&
+          notificationDependencies.appLocalNotifications.getState()
+            .activeUserId === notificationUserId
+        ) {
+          const observedAt = Date.now();
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .markEntityAsRead(
+              options.hostId,
+              { epicId: options.epicId, chatId: options.chatId },
+              observedAt,
+            );
+          // Every renderer has its own app-local Zustand store. Broadcast the
+          // same live, causally-qualified proof so a sibling window whose
+          // stream died can acknowledge its copy of the earlier failure too.
+          // This is deliberately ephemeral: replaying a retained completion
+          // could consume a failure from a later connection lifecycle.
+          notificationDependencies.completionAcknowledgements.publish({
+            userId: notificationUserId,
+            originHostId: options.hostId,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            turnId: frame.event.turnId,
+            observedAt,
+          });
+        }
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
         // The `code: "auth"` error frame is the one live push that flips the
@@ -1583,6 +1657,10 @@ export function createChatSessionStore(
       onSnapshot: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onSnapshot(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onWorktreeStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1607,6 +1685,10 @@ export function createChatSessionStore(
       onTurnStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onTurnStateChanged(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onBlockDelta: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1662,6 +1744,24 @@ export function createChatSessionStore(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrentStream(streamGeneration)) return;
+        if (
+          status === "closed" &&
+          reason?.kind === "fatalError" &&
+          fatalCloseNotificationGeneration !== streamGeneration
+        ) {
+          fatalCloseNotificationGeneration = streamGeneration;
+          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .upsertRecurringFailure(
+              chatStreamErrorNotification({
+                hostId: options.hostId,
+                epicId: options.epicId,
+                chatId: options.chatId,
+                details: reason.details,
+              }),
+            );
+        }
         callbacks.onConnectionStatus(status, reason);
       },
     });
@@ -2564,12 +2664,47 @@ export function createChatSessionStore(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
         closeStreamClient();
       },
     };
   });
+
+  if (notificationUserId !== null) {
+    unsubscribeLiveCompletionAcknowledgements =
+      notificationDependencies.completionAcknowledgements.subscribe(
+        (acknowledgement) => {
+          const activeTurnId = store.getState().activeTurn?.turnId ?? null;
+          const recoverableTurnId = activeTurnId ?? fatalCloseTurnId;
+          if (
+            !liveChatCompletionAcknowledgementMatches(acknowledgement, {
+              userId: notificationUserId,
+              originHostId: options.hostId,
+              epicId: options.epicId,
+              chatId: options.chatId,
+              recoverableTurnId,
+            })
+          ) {
+            return;
+          }
+          const notifications =
+            notificationDependencies.appLocalNotifications.getState();
+          if (notifications.activeUserId !== notificationUserId) return;
+          // Renderer clocks share one machine clock. Preserve timestamp ties
+          // and anything later so an ambiguous or genuinely newer disconnect
+          // remains red; only clearly older failures are superseded.
+          notifications.markEntityAsReadBefore(
+            options.hostId,
+            { epicId: options.epicId, chatId: options.chatId },
+            Date.now(),
+            acknowledgement.observedAt,
+          );
+          if (activeTurnId === null) fatalCloseTurnId = null;
+        },
+      );
+  }
 
   return {
     epicId: options.epicId,

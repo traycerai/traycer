@@ -61,6 +61,10 @@ import {
 } from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -236,6 +240,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -269,6 +274,7 @@ function createProtocolChainHarness(
   const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
   const created: { client: ChatStreamClient | null } = { client: null };
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -557,6 +563,7 @@ describe("createChatSessionStore", () => {
   afterEach(() => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useInterviewDraftStore.setState({ draftsByChat: {} });
+    __resetAppLocalNotificationsStoreForTests();
     window.localStorage.clear();
   });
 
@@ -595,11 +602,107 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
   });
 
+  it("emits each actual fatal close once and resurfaces a later close", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
+
+    harness.callbacks().onConnectionStatus("closed", reason);
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead(notificationId, Date.now());
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    harness.handle.store.getState().retry();
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+  });
+
+  it("acknowledges an earlier stream failure only on a live completed turn", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
+    const fatalClose = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    callbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    harness.handle.store.getState().retry();
+    const recoveredCallbacks = harness.callbacks();
+    startRunningTurn(recoveredCallbacks);
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-0",
+        timestamp: 4,
+        turnId: "turn-0",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-1",
+        timestamp: 4,
+        turnId: "turn-1",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    recoveredCallbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+  });
+
   it("retry re-subscribes and clears the fatal close", () => {
     let factoryCalls = 0;
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -651,6 +754,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -4849,6 +4953,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -5077,6 +5182,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -5527,6 +5633,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     let nudges = 0;
     let callbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,

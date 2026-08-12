@@ -95,6 +95,36 @@ export const appLocalNotificationDisplayReceiptKey = (input: {
 }): string =>
   `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
 
+export const appLocalNotificationCompletionReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationCompletionReceiptHostPrefix = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+  );
+
+export const appLocalNotificationCompletionReceiptKey = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+  readonly occurrenceKey: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+    encodeURIComponent(input.occurrenceKey),
+  );
+
 // Interview answer drafts persist ONE localStorage key per (chatId, blockId)
 // instead of a single full-snapshot Zustand blob. Separate keys prevent a
 // full-map write from one window (or a stale store context) from erasing an
@@ -183,6 +213,13 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+
+  // ── Scoped non-zustand key families (1) ──────────────────────────────────
+  {
+    camelName: "appLocalNotificationCompletionReceipt",
+    leaf: "app-local-notification-completion-receipt",
+    kind: "scoped",
+  },
 
   // ── Static zustand stores (26) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
@@ -277,6 +314,12 @@ export const PERSIST_STORES = [
   {
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
+    kind: "channel",
+  },
+  // Ephemeral exact-turn completion acks shared across renderer windows.
+  {
+    camelName: "liveChatCompletionAcknowledgementsChannel",
+    leaf: "live-chat-completion-acknowledgements:v1",
     kind: "channel",
   },
   // One monotonic key per displayed app-local notification version. Separate
