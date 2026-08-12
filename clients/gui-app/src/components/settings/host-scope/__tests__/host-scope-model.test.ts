@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  HostListItem,
-  HostPresenceHealth,
-} from "@traycer/protocol/host/host-status";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
 import {
   buildHostScopeOptions,
   resolveScopedHost,
@@ -26,8 +23,6 @@ import { dialableHostEndpoint } from "@/lib/host/transport-key";
  * `unavailable` — a stale address left behind by a host that went away.
  */
 
-const HEALTHY: HostPresenceHealth = { status: "healthy", reason: null };
-
 function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   return {
     hostId: "host-a",
@@ -49,7 +44,6 @@ function buildOne(input: {
   const [option] = buildHostScopeOptions({
     directory: input.entry === null ? [] : [input.entry],
     registry: input.item === null ? [] : [input.item],
-    presenceHealth: HEALTHY,
     localHostId: input.localHostId,
     activeHostId: null,
     localService: undefined,
@@ -80,12 +74,9 @@ function registryItem(displayName: string | null): HostListItem {
     createdAt: "2026-01-01T00:00:00Z",
     updatePolicy: "manual",
     status: {
-      presenceLease: "fresh",
-      hostRelayAttached: true,
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: "1.4.2",
       lastSeenAt: "2026-01-01T00:00:00Z",

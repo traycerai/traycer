@@ -81,12 +81,9 @@ describe("hostAppVersionFromDirectoryEntry", () => {
       status: "available",
       publicKey: "pk",
       remoteStatus: {
-        presenceLease: "fresh",
-        hostRelayAttached: true,
+        connectivity: "connectable",
         viewerReachability: "unknown",
         clientCloud: "ok",
-        busy: false,
-        busySessionCount: 0,
         updateState: "current",
         appVersion: "1.4.2",
         lastSeenAt: null,

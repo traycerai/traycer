@@ -481,12 +481,9 @@ function directoryEntry(
     version: null,
     publicKey: "public-key-a",
     remoteStatus: {
-      presenceLease: "fresh",
-      hostRelayAttached: true,
+      connectivity: "connectable",
       viewerReachability: "ok",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: null,
       lastSeenAt: null,

@@ -305,12 +305,9 @@ function ownerIdentityRemoteTarget(
     status: "available",
     publicKey,
     remoteStatus: {
-      presenceLease: "fresh",
-      hostRelayAttached: true,
+      connectivity: "connectable",
       viewerReachability: "ok",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: null,
       lastSeenAt: null,

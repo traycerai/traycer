@@ -297,11 +297,11 @@ invariants are tested and load-bearing: no green dot without live evidence;
 upgrade prompt, not an outage.
 
 Two things a reader of this file will look for and not find in the DTO:
-`busy` and `busySessionCount`. They describe a *right now* the cloud's lease
+`busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
 cannot carry, so they come from `host.status@1.1` over a live connection (or
 the notification room's `hostRuntimeStatus` awareness field). No live source
-means the drain UI renders NOTHING - never a zero, which would claim "Apply now
-- ends 0 sessions" about a host that never said so.
+means the drain UI renders NOTHING - never a zero, which would offer to end
+"0 sessions" on a host that never told us how many it had.
 
 ## Sections
 

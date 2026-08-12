@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type {
+  HostConnectivity,
+  HostListItem,
+} from "@traycer/protocol/host/host-status";
 import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
 
 /**
@@ -7,16 +10,16 @@ import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
  * ACT on — Start, or Install — and for a long time nothing could produce
  * them: `useHostScope` passed `undefined` for the installed record, so
  * `deriveStatus` could only answer `running` or nothing, and a stopped local
- * host fell through to its registry lease and read "Offline · last seen 3h
- * ago". True about the lease, useless to someone whose host is sitting right
- * there with a Start button one click away.
+ * host fell through to its registry connectivity and read "Offline · last
+ * seen 3h ago". True about the cloud's answer, useless to someone whose host
+ * is sitting right there with a Start button one click away.
  *
  * Nothing covered `deriveHostHealth` at all, which is how that shipped.
  */
 
-const STALE_LEASE_MS = 3 * 60 * 60 * 1000;
+const NOW_MS = 3 * 60 * 60 * 1000;
 
-function registryItem(overrides: Partial<HostListItem>): HostListItem {
+function registryItem(connectivity: HostConnectivity): HostListItem {
   return {
     hostId: "host-a",
     displayName: "host-a",
@@ -26,28 +29,21 @@ function registryItem(overrides: Partial<HostListItem>): HostListItem {
     createdAt: new Date(0).toISOString(),
     updatePolicy: "manual",
     status: {
-      // A long-expired lease: the registry's answer for this host is "Offline,
-      // last seen 3h ago", which is what the local snapshot must outrank.
-      presenceLease: "expired",
-      hostRelayAttached: false,
+      connectivity,
       viewerReachability: "unknown",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: "1.4.2",
       lastSeenAt: new Date(0).toISOString(),
     },
-    ...overrides,
   };
 }
 
 const BASE = {
-  item: registryItem({}),
-  presenceHealth: { status: "healthy", reason: null } as const,
+  item: registryItem("offline"),
   hasLiveSession: false,
   viewerCheck: null,
-  nowMs: STALE_LEASE_MS,
+  nowMs: NOW_MS,
 };
 
 describe("deriveHostHealth — the two actionable local states", () => {
@@ -65,8 +61,8 @@ describe("deriveHostHealth — the two actionable local states", () => {
 
     expect(health.state).toBe("stopped");
     expect(health.label).toBe("Stopped");
-    // The distinction that matters: an expired lease would have said "Offline"
-    // and left the reader with nothing to do about it.
+    // The distinction that matters: an offline registry row would have said
+    // "Offline" and left the reader with nothing to do about it.
     expect(health.label).not.toBe("Offline");
     expect(health.live).toBe(false);
   });
@@ -87,9 +83,9 @@ describe("deriveHostHealth — the two actionable local states", () => {
     expect(health.label).toBe("Not installed");
   });
 
-  it("lets the local service snapshot outrank a stale registry lease", () => {
-    // Firsthand read of the process on this box beats hearsay about a
-    // heartbeat that reached the cloud three hours ago.
+  it("lets the local service snapshot outrank a registry saying offline", () => {
+    // Firsthand read of the process on this box beats the cloud's connectivity
+    // read, even when the cloud thinks the host is offline.
     const health = deriveHostHealth({
       ...BASE,
       isLocalMachine: true,
@@ -118,7 +114,7 @@ describe("deriveHostHealth — the two actionable local states", () => {
     expect(health.state).not.toBe("stopped");
   });
 
-  it("never claims a local-only state for a remote host", () => {
+  it("never claims a local-only-machine state for a remote host", () => {
     // `stopped` / `not-installed` describe a service on THIS computer. A
     // remote host has none to inspect, so the snapshot must be ignored.
     const health = deriveHostHealth({
@@ -134,5 +130,75 @@ describe("deriveHostHealth — the two actionable local states", () => {
 
     expect(health.state).not.toBe("stopped");
     expect(health.state).not.toBe("not-installed");
+  });
+});
+
+describe("deriveHostHealth — connectivity mapping for a remote row", () => {
+  it("maps connectable to Online, live", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("connectable"),
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("online");
+    expect(health.label).toBe("Online");
+    expect(health.live).toBe(true);
+  });
+
+  it("maps local-only to its own state, labelled Local only, and never Offline", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("local-only"),
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("local-only");
+    expect(health.label).toBe("Local only");
+    expect(health.label).not.toBe("Offline");
+    expect(health.live).toBe(false);
+    // Not a fault: idle tone, not warn.
+    expect(health.tone).toBe("idle");
+  });
+
+  it("maps unknown to Status unknown, and never Offline", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("unknown"),
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("unknown");
+    expect(health.label).toBe("Status unknown");
+    expect(health.label).not.toBe("Offline");
+  });
+
+  it("maps offline to Offline, with last-seen in the detail", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("offline"),
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("offline");
+    expect(health.label).toBe("Offline");
+    expect(health.live).toBe(false);
+  });
+
+  it("lets live-session evidence outrank a connectivity of offline", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("offline"),
+      isLocalMachine: false,
+      hasLiveSession: true,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("online");
+    expect(health.live).toBe(true);
   });
 });

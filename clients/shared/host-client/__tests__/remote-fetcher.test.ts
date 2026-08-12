@@ -21,12 +21,9 @@ function onlineItem(): HostListItem {
     publicKey: "pk-1",
     createdAt: "2026-07-01T12:00:00.000Z",
     status: {
-      presenceLease: "fresh",
-      hostRelayAttached: false,
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
-      busy: true,
-      busySessionCount: 1,
       updateState: "current",
       appVersion: "1.4.2",
       lastSeenAt: "2026-07-03T11:59:50.000Z",
@@ -38,7 +35,6 @@ function onlineItem(): HostListItem {
 function envelope(): HostListResponse {
   return {
     hosts: [onlineItem()],
-    presenceHealth: { status: "healthy", reason: null },
   };
 }
 
@@ -66,7 +62,6 @@ describe("fetchRegisteredHostsViaHttp", () => {
     if (result.kind === "ok") {
       expect(result.response.hosts).toHaveLength(1);
       expect(result.response.hosts[0].hostId).toBe("host-1");
-      expect(result.response.presenceHealth.status).toBe("healthy");
     }
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://authn.example.test/api/v3/hosts");
@@ -109,15 +104,14 @@ describe("fetchRegisteredHostsViaHttp", () => {
   });
 
   it("fails closed on a contract-violating 2xx body", async () => {
-    // `presenceLease` is not a valid enum member — the mirror's schema rejects.
+    // `connectivity` is not a valid enum member — the mirror's schema rejects.
     const bad = {
       hosts: [
         {
           ...onlineItem(),
-          status: { ...onlineItem().status, presenceLease: "nope" },
+          status: { ...onlineItem().status, connectivity: "nope" },
         },
       ],
-      presenceHealth: { status: "healthy", reason: null },
     };
     vi.stubGlobal(
       "fetch",
@@ -139,20 +133,31 @@ describe("hostListItemToDirectoryEntry", () => {
     expect(entry.status).toBe("available");
     expect(entry.version).toBe("1.4.2");
     expect(entry.label).toBe("prod-devbox");
-    expect(entry.remoteStatus.presenceLease).toBe("fresh");
-    expect(entry.remoteStatus.busy).toBe(true);
+    expect(entry.remoteStatus.connectivity).toBe("connectable");
   });
 
-  it("reads unavailable from an expired presence lease", () => {
+  it("reads unavailable when the host is not connectable", () => {
     const item: HostListItem = {
       ...onlineItem(),
-      status: { ...onlineItem().status, presenceLease: "expired" },
+      status: { ...onlineItem().status, connectivity: "offline" },
     };
     const entry = hostListItemToDirectoryEntry(item, RELAY_BASE_URL);
     expect(entry.status).toBe("unavailable");
     // Still connectable — the reachability probe at tab-open time is the real
     // gate, not this coarse directory snapshot.
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
+  });
+
+  it("reads unavailable for local-only and unknown connectivity alike", () => {
+    for (const connectivity of ["local-only", "unknown"] as const) {
+      const item: HostListItem = {
+        ...onlineItem(),
+        status: { ...onlineItem().status, connectivity },
+      };
+      expect(hostListItemToDirectoryEntry(item, RELAY_BASE_URL).status).toBe(
+        "unavailable",
+      );
+    }
   });
 
   it("falls back to the hostId when the host has no display name", () => {

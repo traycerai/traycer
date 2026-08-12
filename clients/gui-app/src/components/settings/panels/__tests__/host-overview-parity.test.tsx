@@ -61,12 +61,9 @@ function registryItemFor(hostId: string): HostListItem {
     createdAt: "2026-01-01T00:00:00Z",
     updatePolicy: "manual",
     status: {
-      presenceLease: "fresh",
-      hostRelayAttached: true,
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: "1.4.2",
       lastSeenAt: "2026-01-01T00:00:00Z",

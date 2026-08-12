@@ -191,7 +191,8 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         // Says what is true and what the remedy is, without claiming a fault.
         // The plan gate is also what makes the row non-`connectable`, so the
         // surfaces that disable remote actions and this line agree.
-        detail: "Reachable from this computer. Remote access needs a paid plan.",
+        detail:
+          "Reachable from this computer. Remote access needs a paid plan.",
         tone: HOST_HEALTH_TONE["local-only"],
         live: false,
       };

@@ -160,12 +160,9 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   version: "1.2.3",
   status: "available",
   remoteStatus: {
-    presenceLease: "fresh",
-    hostRelayAttached: true,
+    connectivity: "connectable",
     viewerReachability: "ok",
     clientCloud: "ok",
-    busy: false,
-    busySessionCount: 0,
     updateState: "current",
     appVersion: null,
     lastSeenAt: null,
