@@ -199,6 +199,10 @@ describe("<SettingsSidebar /> leader hints", () => {
       expect(link.className).not.toContain("text-foreground/40");
       expect(link.className).toContain("text-foreground/70");
     }
-    expect(shellLink.className).toBe(diagnosticsLink.className);
+    // Deliberately NOT `expect(shellLink.className).toBe(diagnosticsLink
+    // .className)`. The two assertions above already pin the property under
+    // test; whole-class-string equality additionally demands the two rows stay
+    // byte-identical forever, so any row-specific class either gains later
+    // would fail this test for a reason it does not care about.
   });
 });

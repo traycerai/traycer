@@ -116,6 +116,30 @@ describe("hostIdentitySetRequestSchema", () => {
       hostIdentitySetRequestSchema.safeParse({ customName: 12 }).success,
     ).toBe(false);
   });
+
+  // The set request and `hostIdentitySchema` deliberately disagree about `""`,
+  // and it is worth pinning which way: the RESPONSE requires `min(1)` or
+  // null, while the request accepts an empty string and lets the host's
+  // `normalizeCustomHostName` trim it to `null` - the same clear that `null`
+  // asks for. Rejecting it at the wire would make a client that binds an
+  // empty text input fail its request instead of clearing the override.
+  it("accepts an empty customName on the set request, which the host normalizes to a clear", () => {
+    expect(
+      hostIdentitySetRequestSchema.safeParse({ customName: "" }).success,
+    ).toBe(true);
+    expect(
+      hostIdentitySetRequestSchema.safeParse({ customName: "   " }).success,
+    ).toBe(true);
+    // ...but an empty override can never come BACK, so the two are not
+    // symmetric and a resolver that skipped normalization would be caught.
+    expect(
+      hostIdentitySchema.safeParse({
+        systemName: "box",
+        customName: "",
+        effectiveName: "box",
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("host.identity registry surface", () => {

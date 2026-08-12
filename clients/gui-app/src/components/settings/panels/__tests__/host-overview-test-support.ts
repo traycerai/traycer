@@ -183,10 +183,7 @@ const NOT_INSTALLED_CONTROLLER_STATUS: HostControllerStatus = {
  * tell "stopped" (a record exists) from "not installed" (`null`).
  */
 export function buildOverviewManagement(
-  overrides: Partial<{
-    readonly installedRecord: IHostManagement["installedRecord"];
-    readonly restartHost: IHostManagement["restartHost"];
-  }>,
+  overrides: Partial<IHostManagement>,
 ): IHostManagement {
   const notImplemented = (method: string) => (): Promise<never> =>
     Promise.reject(new Error(`${method} not implemented in mock`));
@@ -202,9 +199,7 @@ export function buildOverviewManagement(
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),
-    restartHost:
-      overrides.restartHost ??
-      vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
     runDoctor: vi.fn(() =>
       Promise.resolve({ issues: [], ranAt: "2026-08-12T00:00:00Z" }),
@@ -218,8 +213,7 @@ export function buildOverviewManagement(
         versions: [],
       }),
     ),
-    installedRecord:
-      overrides.installedRecord ?? vi.fn(() => Promise.resolve(null)),
+    installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
     deregisterService: vi.fn(() => Promise.resolve()),
     registryCheck: vi.fn(() =>
@@ -248,6 +242,11 @@ export function buildOverviewManagement(
         effectiveName: input.customName ?? "recovery-host",
       }),
     ),
+    // Spread LAST, over the whole interface rather than field by field. The
+    // old shape admitted exactly two overridable methods, so a test needing a
+    // third had to edit this shared fixture - which every other suite then
+    // inherits.
+    ...overrides,
   };
 }
 

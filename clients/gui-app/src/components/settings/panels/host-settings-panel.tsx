@@ -353,9 +353,23 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
  * describe the same CLI diagnostics, and `runFixAction` reads only `fixAction`
  * and `details`, so the bridge runner serves both.
  */
+/**
+ * What the bridge fix actually did, carried out of `mutationFn` so the
+ * callbacks can tell "applied" from "the host declined to restart". A
+ * discriminated pair rather than a bare boolean, because the declined arm is
+ * the only one with a message and the applied arm must never carry one.
+ */
+type LocalDoctorFixOutcome =
+  | { readonly applied: true; readonly declinedMessage: null }
+  | { readonly applied: false; readonly declinedMessage: string };
+
 function useLocalDoctorFixMutation(management: IHostManagement | null) {
   const queryClient = useQueryClient();
-  return useMutation<void, Error, RpcDoctorIssue>({
+  // `mutationFn` REPORTS the outcome; it does not announce it. Raising the
+  // toasts inside it also collapsed "declined" into a resolved promise, so
+  // `onSuccess` invalidated the installed-record query after a fix that never
+  // ran - a re-read charged to a change that did not happen.
+  return useMutation<LocalDoctorFixOutcome, Error, RpcDoctorIssue>({
     mutationKey: runnerMutationKeys.hostRunDoctor(),
     mutationFn: async (issue) => {
       if (management === null) {
@@ -367,13 +381,16 @@ function useLocalDoctorFixMutation(management: IHostManagement | null) {
       // bridge. `runFixAction` reads only `fixAction` and `details`.
       const issueForBridge: BridgeDoctorIssue = issue;
       const result = await runFixAction(management, issueForBridge);
-      if (result.kind === "declined") {
-        toastHostRestartDeclined(result.message);
+      return result.kind === "declined"
+        ? { applied: false, declinedMessage: result.message }
+        : { applied: true, declinedMessage: null };
+    },
+    onSuccess: (outcome) => {
+      if (!outcome.applied) {
+        toastHostRestartDeclined(outcome.declinedMessage);
         return;
       }
       toast.success("Fix applied");
-    },
-    onSuccess: () => {
       if (management === null) return;
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),

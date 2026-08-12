@@ -584,6 +584,19 @@ export class RemoteSession<
     if (this.isClosed()) {
       return Promise.reject(this.notReadyRejection(requestId, method));
     }
+    // A parked waiter carries NO timer of its own, so it is settled only by a
+    // later transition reaching `settleReadyWaiters` - `handleOpenAck`,
+    // `dropConnection`, `goTerminalFatal` or `close`. `sendUnary` calls
+    // `start()` before parking, so an attempt always owns the loop.
+    //
+    // The one path worth naming: `handleUnauthorizedSessionFatal` calls
+    // `dropConnection` and then `revalidateThenReconnect`, which can return
+    // without calling `scheduleReconnect` when `phase !== "reconnecting"` or
+    // `connection !== null`. Both conditions mean another attempt already owns
+    // the loop, so a waiter created in that window is still settled by that
+    // attempt - safety that lives in a guard in a different method, exactly
+    // like the incidental case documented on `beginConnectGuarded`. An edit
+    // that relaxes either condition has to re-check this.
     return new Promise<void>((resolve, reject) => {
       const waiter = {
         requestId,
@@ -1728,6 +1741,14 @@ export class RemoteSession<
     // `beginConnect` allocates its generation SYNCHRONOUSLY, before its first
     // await, so reading the counter immediately after the call names the
     // generation this attempt owns - not the one it superseded.
+    //
+    // With ONE exception: the `phase === "closed"` early return never reaches
+    // the increment, so this captures the PREVIOUS generation. That is inert
+    // today because the same early return resolves rather than rejects, so
+    // the `catch` below never runs for it - a stale value nothing reads. If
+    // `beginConnect` ever learns to reject before incrementing, this capture
+    // stops naming this attempt and the guard silently compares against
+    // someone else's generation.
     const attempt = this.beginConnect();
     const generation = this.connectGeneration;
     void attempt.catch((cause: unknown) => {

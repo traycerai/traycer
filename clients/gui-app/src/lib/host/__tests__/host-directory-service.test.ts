@@ -19,11 +19,17 @@ const toastInfo = vi.hoisted(() => vi.fn());
 
 // Failover / re-adopt announce through sonner. The mock must not throw for any
 // other path that imports the service - existing suites never assert on toast.
+// `error` and `warning` are stubbed too, not just `info`: this suite reaches
+// `reportable-error-toast.ts`, which calls both, and a whole-module factory
+// replaces sonner entirely - so an exercised failure path would die on
+// `toast.error is not a function` rather than on its own assertion.
 vi.mock("sonner", () => ({
   toast: {
     info: (...args: unknown[]) => {
       toastInfo(...args);
     },
+    error: () => undefined,
+    warning: () => undefined,
   },
 }));
 

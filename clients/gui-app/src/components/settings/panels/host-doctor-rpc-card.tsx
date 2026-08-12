@@ -101,7 +101,7 @@ export function HostDoctorRpcCard(props: {
   const logsMutation = useHostMutation<
     HostRpcRegistry,
     "diagnostics.logs.tail",
-    { readonly hostId: string | null },
+    undefined,
     void
   >({
     client,
@@ -111,8 +111,13 @@ export function HostDoctorRpcCard(props: {
       tailLines: DOCTOR_LOG_TAIL_LINES,
     }),
     options: {
-      mutationKey: hostMaintenanceMutationKeys.doctorRun(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      mutationKey: hostMaintenanceMutationKeys.logsTail(),
+      // No arm-time capture: the host-swap rule exists so `onSuccess` /
+      // `onError` act on the host the request was ARMED against, and this
+      // mutation's callbacks are supplied per `mutate` call and read only the
+      // response. A context nothing consumes reads as a guarantee that isn't
+      // there.
+      onMutate: () => undefined,
     },
   });
 

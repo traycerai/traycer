@@ -68,7 +68,14 @@ vi.mock("../../installer/download-stage", () => ({
 
 // Keep `host update`'s commander parse assertion on the real command wiring
 // while making its no-op backfill deterministic and side-effect free.
-vi.mock("../../manifest/host-install", () => ({
+//
+// Spread the real module rather than replacing it: a bare factory drops every
+// OTHER export, and `writeHostInstallRecordAt`, `writeHostInstallRecord` and
+// `deleteHostInstallRecord` are imported by command paths this suite also
+// registers. Those would resolve to `undefined` and fail as "not a function",
+// which reads as a broken command rather than a truncated mock.
+vi.mock("../../manifest/host-install", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../manifest/host-install")>()),
   readHostInstallRecord: async () => ({
     installId: "install-test",
     version: "1.0.0",

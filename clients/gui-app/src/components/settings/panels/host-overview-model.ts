@@ -140,25 +140,15 @@ export function splitDoctorIssuesByVantage(
   };
 }
 
-/**
- * The three doctor fix actions that repair a host which is DOWN or BROKEN.
- *
- * They stay local-only by design, and not for want of an RPC: every one of them
- * runs on the machine to get a host back up, and a host that needs them cannot
- * generally answer an RPC to be told so. Over a remote connection they degrade
- * to the terminal command, which is the honest affordance — someone with shell
- * access on that box can run it.
- */
-const LOCAL_ONLY_FIX_ACTIONS: ReadonlySet<string> = new Set([
-  "service-install",
-  "free-port-and-restart",
-  "host-free-port-and-restart",
-  "host-install-latest",
-]);
-
-export function isLocalOnlyFixAction(fixAction: string): boolean {
-  return LOCAL_ONLY_FIX_ACTIONS.has(fixAction);
-}
+// `LOCAL_ONLY_FIX_ACTIONS` / `isLocalOnlyFixAction` lived here and are gone.
+//
+// They named the inverse of `doctorFixRoute`'s RPC set while importing
+// nothing from it, so the two partitions drifted independently - and had
+// already drifted: the set still listed a bare `free-port-and-restart` that
+// `runFixAction` does not handle, and its doc said "three" over four entries.
+// Nothing consumed the predicate, so the fix is subtraction rather than
+// reconciliation. `doctorFixRoute` in `host-doctor-actions.ts` is the single
+// source of truth for which mechanism can carry out a fix.
 
 /**
  * One meta line, sourced honestly per host kind.

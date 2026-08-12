@@ -1139,9 +1139,14 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.nonDialableSelectionStreak = null;
       return;
     }
-    const count = nextStreakCount(
-      this.nonDialableSelectionStreak,
-      fresh.hostId,
+    // Clamped, because the streak is a STATE MARKER ("confirmed dead") and not
+    // a census. Left uncapped it gained one per 15s poll for as long as a host
+    // stayed dead with nothing to fail over to, so the `reads:` value below
+    // grew into the thousands and stopped meaning "reads before we act" -
+    // which is the only thing anyone reading that line wants from it.
+    const count = Math.min(
+      nextStreakCount(this.nonDialableSelectionStreak, fresh.hostId),
+      CONSECUTIVE_DIALABILITY_READS,
     );
     this.nonDialableSelectionStreak = { hostId: fresh.hostId, count };
     if (count < CONSECUTIVE_DIALABILITY_READS) {

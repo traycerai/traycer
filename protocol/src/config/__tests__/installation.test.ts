@@ -78,6 +78,30 @@ describe("shared installation readers", () => {
       JSON.stringify(stagedRecord({ version: "not-semver" })),
     );
     await expect(readHostStagedRecordAt(dir)).resolves.toBeNull();
+
+    // The leading-zero rules are the part `isValidHostStagedVersion` hand-rolls
+    // rather than inheriting from the pattern, so `"not-semver"` above proves
+    // nothing about them - the regex alone already rejects it. These are the
+    // cases that actually reach those branches.
+    for (const version of ["01.0.0", "1.02.0", "1.0.03", "1.0.0-01"]) {
+      await writeFile(
+        join(dir, "staged.json"),
+        JSON.stringify(stagedRecord({ version })),
+      );
+      await expect(readHostStagedRecordAt(dir)).resolves.toBeNull();
+    }
+
+    // ...and the neighbouring shapes that must still PASS, so the rejection
+    // above is not just a parser that dislikes anything unusual: a zero
+    // identifier is legal, and a leading zero in an ALPHANUMERIC pre-release
+    // identifier is not a numeric identifier at all.
+    for (const version of ["0.0.0", "1.0.0-0", "1.0.0-0a", "1.0.0-01a"]) {
+      await writeFile(
+        join(dir, "staged.json"),
+        JSON.stringify(stagedRecord({ version })),
+      );
+      await expect(readHostStagedRecordAt(dir)).resolves.not.toBeNull();
+    }
   });
 
   it("makes the stored-manifest parser authoritative at an explicit path", async () => {

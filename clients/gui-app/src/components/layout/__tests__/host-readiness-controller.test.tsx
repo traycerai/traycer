@@ -418,26 +418,31 @@ describe("<SurfaceReadinessBoundary />", () => {
     // One exhaustive map, shared by the gate and the strip: a new kind must
     // land here or the gate and strip will disagree about whether it is a
     // splash, an amber strip, a red strip, or the app alone.
-    const table: ReadonlyArray<
-      readonly [
-        SurfaceReadiness["kind"],
-        "app" | "switching" | "error" | "splash",
-      ]
-    > = [
-      ["ready", "app"],
-      ["compatibility-checking", "switching"],
-      ["loading-host", "switching"],
-      ["provisioning-host", "switching"],
-      ["unavailable-host", "switching"],
-      ["restoring-request-context", "switching"],
-      ["compatibility-error", "error"],
-      ["incompatible-host", "error"],
-      ["provisioning-error", "error"],
-      ["removed-host", "error"],
-      ["mobile-no-host", "splash"],
-    ];
-    for (const [kind, surface] of table) {
-      expect(postLatchSurfaceFor(kind)).toBe(surface);
+    //
+    // A `Record` keyed by the union, NOT a list of pairs. As a list, adding a
+    // kind and forgetting it here still compiled and still passed - the loop
+    // only visits what is written down, so the "must land here" above was a
+    // request rather than a rule. Missing an entry is now a type error.
+    const table: Record<
+      SurfaceReadiness["kind"],
+      "app" | "switching" | "error" | "splash"
+    > = {
+      ready: "app",
+      "compatibility-checking": "switching",
+      "loading-host": "switching",
+      "provisioning-host": "switching",
+      "unavailable-host": "switching",
+      "restoring-request-context": "switching",
+      "compatibility-error": "error",
+      "incompatible-host": "error",
+      "provisioning-error": "error",
+      "removed-host": "error",
+      "mobile-no-host": "splash",
+    };
+    for (const [kind, surface] of Object.entries(table)) {
+      expect(postLatchSurfaceFor(kind as SurfaceReadiness["kind"])).toBe(
+        surface,
+      );
     }
   });
 

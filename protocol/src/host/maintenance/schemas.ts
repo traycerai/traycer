@@ -71,16 +71,62 @@ export function doctorTriviallyGreenIssueCodesForVantage(
     : RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES;
 }
 
-const hostPlatformAssetSchema = z.object({
-  available: z.boolean(),
-  unavailableReason: z.string().nullable(),
-  url: z.string(),
-  sizeBytes: z.number().finite(),
-  sha256: z.string(),
-  signatureUrl: z.string(),
-  signatureAlgorithm: z.literal("minisign"),
-  publicKeyId: z.string(),
-});
+/**
+ * Only `https:` and `http:`. A download URL is fetched, so leaving it a bare
+ * string let a manifest name a `file:` or `javascript:` target that no
+ * signature check would ever get to weigh in on.
+ */
+const httpAssetUrlSchema = z
+  .string()
+  .refine(
+    (value) =>
+      URL.canParse(value) &&
+      (new URL(value).protocol === "https:" ||
+        new URL(value).protocol === "http:"),
+    { message: "must be an http(s) URL" },
+  );
+
+/**
+ * The two arms are genuinely different records, not one record with optional
+ * fields.
+ *
+ * This mirrors what `parsePlatformAsset` in the CLI's own registry parser
+ * already enforces: for `available: true` every artifact field must be
+ * present and usable - non-empty http(s) URLs, a positive `sizeBytes`, a
+ * lowercase 64-char digest - because a partial entry must be published as
+ * unavailable rather than half-filled. As one flat object the wire schema
+ * accepted exactly the partial entries that parser refuses.
+ *
+ * That matters here and not only there: this schema validates what a REMOTE
+ * host answered, and a remote host is not necessarily running a CLI whose
+ * parser is this strict. Both arms keep `unavailableReason` nullable, since
+ * an available asset may still carry a note.
+ */
+const hostPlatformAssetSchema = z.discriminatedUnion("available", [
+  z.object({
+    available: z.literal(true),
+    unavailableReason: z.string().nullable(),
+    url: httpAssetUrlSchema,
+    sizeBytes: z.number().int().positive(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    signatureUrl: httpAssetUrlSchema,
+    signatureAlgorithm: z.literal("minisign"),
+    publicKeyId: z.string().min(1),
+  }),
+  z.object({
+    available: z.literal(false),
+    unavailableReason: z.string().nullable(),
+    // Left wide on purpose: an unavailable platform is published with empty
+    // strings and `sizeBytes: 0`, and tightening these would reject the very
+    // shape that says "there is no artifact here".
+    url: z.string(),
+    sizeBytes: z.number().finite(),
+    sha256: z.string(),
+    signatureUrl: z.string(),
+    signatureAlgorithm: z.literal("minisign"),
+    publicKeyId: z.string(),
+  }),
+]);
 
 export const hostAvailableManifestSchema = z.object({
   schemaVersion: z.literal(1),

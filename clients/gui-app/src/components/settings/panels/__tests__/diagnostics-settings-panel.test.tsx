@@ -1,8 +1,16 @@
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+
 // The panel is host-scoped now (log levels / logs are fields of the selected
 // host's own config), so it reads `useHostScope`. Mock at that boundary:
 // these suites render the panel bare, without the host runtime and query
 // providers the real hook needs.
-const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
+// `Partial<HostScope>`, not `Record<string, unknown>`: the keys these helpers
+// set (`host`, `hostId`, `hostLabel`, `status`, `client`) have to stay checked
+// against the real scope. Untyped, a renamed `HostScope` field would leave
+// these suites compiling and quietly asserting against fixture defaults
+// instead of the scope they meant to install. The `import type` is erased, so
+// it is safe inside a hoisted factory.
+const scopeOverrides = vi.hoisted((): { current: Partial<HostScope> } => ({
   current: {},
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
