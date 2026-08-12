@@ -240,6 +240,26 @@ describe("<ImageDiffView />", () => {
     expect(actualButton.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("uses the neutral pressed baseline when both diff sides are non-image", () => {
+    renderDiff({
+      filePath: "assets/new.txt",
+      previousPath: "assets/old.txt",
+    });
+
+    const toolbar = screen.getByRole("toolbar", {
+      name: "Image diff controls",
+    });
+    const fitButton = within(toolbar).getByRole("button", {
+      name: "Fit to screen",
+    });
+    const actualButton = within(toolbar).getByRole("button", {
+      name: "Actual size",
+    });
+
+    expect(fitButton.getAttribute("aria-pressed")).toBe("true");
+    expect(actualButton.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("falls back only the side whose image fails to decode", () => {
     renderDiff({});
 

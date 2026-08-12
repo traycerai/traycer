@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -68,11 +68,18 @@ const META: ImageAssetMeta = {
   height: 480,
 };
 
+beforeEach(() => {
+  vi.useFakeTimers({
+    toFake: ["requestAnimationFrame", "Date", "performance"],
+  });
+});
+
 afterEach(() => {
   cleanup();
   observers.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
@@ -169,5 +176,52 @@ describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
 
     expect(reports).toHaveLength(reportCountBeforeResize);
     expect(reports.at(-1)?.state.scale).toBe(reportBeforeResize.state.scale);
+  });
+
+  it("standalone Zoom In settles at an increased scale and stays there", () => {
+    vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.classList.contains("image-preview-checkerboard")) {
+          return new DOMRect(0, 0, 800, 600);
+        }
+        return new DOMRect();
+      },
+    );
+
+    const reports: Array<ImagePreviewTransformReport> = [];
+    render(
+      <ImagePreview
+        status="ready"
+        url="blob:animated"
+        meta={META}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={200}
+        transformRef={null}
+        onTransformChange={(report) => reports.push(report)}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    const initialScale = reports.at(-1)?.state.scale;
+    if (initialScale === undefined) {
+      throw new Error("initial transform was not reported");
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    const finalScale = reports.at(-1)?.state.scale;
+    expect(finalScale).toBeGreaterThan(initialScale);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(reports.at(-1)?.state.scale).toBe(finalScale);
   });
 });
