@@ -78,6 +78,11 @@ export function GithubMentionFilterPopover(
   // Not state: this is a handoff between one event and the close that follows
   // it in the same interaction, and re-rendering on it would be noise.
   const resumeTypingRef = useRef<string | null>(null);
+  // Whether the close now in progress came from an OUTSIDE interaction. Same
+  // event-to-close handoff shape as `resumeTypingRef`: `onInteractOutside`
+  // fires before Radix closes, `onCloseAutoFocus` consumes and resets it.
+  const closedByOutsideInteractionRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const setFilter = useGithubMentionFilterStore((state) => state.setFilter);
   // The STORED repository selection, read only so writes made through the
   // reconciled projection can keep an out-of-scope one alive (see
@@ -130,6 +135,7 @@ export function GithubMentionFilterPopover(
       >
         <PopoverTrigger asChild>
           <Button
+            ref={triggerRef}
             type="button"
             variant="ghost"
             size="icon-xs"
@@ -156,10 +162,30 @@ export function GithubMentionFilterPopover(
         side="bottom"
         className="w-[min(90vw,14rem)] gap-0 p-0"
         onOpenAutoFocus={undefined}
+        onInteractOutside={(event) => {
+          // An outside interaction moves focus where the user POINTED, and
+          // returning the caret to the composer over it would steal focus
+          // from the control they just chose - the next keystrokes would land
+          // in the mention query instead of their target. The trigger is
+          // exempt: closing from the funnel button is a return-to-composer
+          // path, like Escape and the typing handoff.
+          const target = event.target;
+          if (target instanceof Node && triggerRef.current?.contains(target)) {
+            return;
+          }
+          closedByOutsideInteractionRef.current = true;
+        }}
         onCloseAutoFocus={(event) => {
+          // Always prevented: Radix's default would focus the TRIGGER, which
+          // is right for neither path - a return-to-composer close wants the
+          // caret, and an outside click already focused its own target.
           event.preventDefault();
           const typed = resumeTypingRef.current;
           resumeTypingRef.current = null;
+          if (closedByOutsideInteractionRef.current) {
+            closedByOutsideInteractionRef.current = false;
+            return;
+          }
           queueMicrotask(() => {
             onReturnFocus(typed);
           });

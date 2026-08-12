@@ -363,6 +363,100 @@ describe("mergeGithubMentionRows", () => {
     const cached = [pullRequest({ number: 1, title: "Only" })];
     expect(mergeGithubMentionRows(cached, [])).toBe(cached);
   });
+
+  // The identity key folds host/owner/repo casing (see `githubMentionRowKey`),
+  // because a cached sweep and a live search can spell the same repository
+  // differently. Compared verbatim, the remote hit would append as a second
+  // row instead of refreshing the stale one, and either copy could then be
+  // committed as a mention.
+  it("merges a cached row and a remote hit naming the same artifact with different casing", () => {
+    const cached = pullRequest({
+      number: 4917,
+      title: "Stop the busy-loop",
+      owner: "acme",
+      repo: "api",
+      buckets: ["epic"],
+    });
+    const remoteTwin = pullRequest({
+      number: 4917,
+      title: "Stop the busy-loop (remote title)",
+      owner: "Acme",
+      repo: "API",
+      buckets: ["search"],
+    });
+
+    const merged = mergeGithubMentionRows([cached], [remoteTwin]);
+
+    // One row, at the cached position, carrying the remote's fresh payload -
+    // the same split the same-casing merge test above asserts.
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toBe(remoteTwin);
+    expect(merged[0].title).toBe("Stop the busy-loop (remote title)");
+  });
+
+  it("still appends a remote row naming a genuinely different repository", () => {
+    // The control. Without it, folding the merge key could quietly widen into
+    // treating any two rows that merely share a number as the same artifact.
+    const cached = pullRequest({
+      number: 4917,
+      title: "Stop the busy-loop",
+      owner: "acme",
+      repo: "api",
+      buckets: ["epic"],
+    });
+    const differentRepo = pullRequest({
+      number: 4917,
+      title: "Unrelated PR with the same number",
+      owner: "acme",
+      repo: "widgets",
+      buckets: ["search"],
+    });
+
+    const merged = mergeGithubMentionRows([cached], [differentRepo]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toBe(cached);
+    expect(merged[1]).toBe(differentRepo);
+  });
+});
+
+describe("githubMentionRowKey", () => {
+  it("folds host/owner/repo casing so the two spellings key identically", () => {
+    const lower = pullRequest({
+      number: 1,
+      title: "a",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "api",
+    });
+    const upper = pullRequest({
+      number: 1,
+      title: "b",
+      githubHost: "GitHub.com",
+      owner: "Acme",
+      repo: "API",
+    });
+
+    expect(githubMentionRowKey(lower)).toBe(githubMentionRowKey(upper));
+  });
+
+  it("still differs when the number differs", () => {
+    // The control: casing folds, but the number is compared as-is.
+    const first = pullRequest({
+      number: 1,
+      title: "a",
+      owner: "acme",
+      repo: "api",
+    });
+    const second = pullRequest({
+      number: 2,
+      title: "b",
+      owner: "acme",
+      repo: "api",
+    });
+
+    expect(githubMentionRowKey(first)).not.toBe(githubMentionRowKey(second));
+  });
 });
 
 describe("parseGithubReferenceQuery", () => {

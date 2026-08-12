@@ -319,7 +319,16 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
         className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
-        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5">
+        <div
+          // The marker Shift+Tab's explicit focus move targets (see
+          // `focusMentionStepChrome` in suggestion-render.ts): the chrome's
+          // buttons live in this portal AFTER the editor in DOM order, so no
+          // native traversal direction can reach them from the composer.
+          // Present only when a step actually published chrome, so the query
+          // cannot land on a button-less header.
+          data-mention-step-chrome={chrome === null ? undefined : true}
+          className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5"
+        >
           <div className="flex min-w-0 shrink items-center gap-1.5">
             <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
               {headerLabel}

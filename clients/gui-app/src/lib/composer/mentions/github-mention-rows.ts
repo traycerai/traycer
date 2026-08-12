@@ -150,11 +150,22 @@ export function withGithubMentionRepository(
  * number. The de-duplication, the preview lookup, and the picker row key all
  * read through this, so a cached row and its remote-search duplicate can never
  * be treated as two different things.
+ *
+ * Folded like every identity comparison in this file: GitHub treats these
+ * segments case-insensitively, and a repository whose casing was renamed
+ * between the cached sweep and the live search would otherwise arrive as two
+ * spellings of one artifact - the merge would append a duplicate row instead
+ * of replacing the stale payload, and either copy could be committed.
  */
 export function githubMentionRowKey(
   row: Pick<GithubMentionRow, "githubHost" | "owner" | "repo" | "number">,
 ): string {
-  return [row.githubHost, row.owner, row.repo, row.number].join("\x1f");
+  return [
+    foldGithubIdentitySegment(row.githubHost),
+    foldGithubIdentitySegment(row.owner),
+    foldGithubIdentitySegment(row.repo),
+    row.number,
+  ].join("\x1f");
 }
 
 /** Stable picker-entry id. Section-scoped so a PR and an issue never collide. */

@@ -101,6 +101,89 @@ describe("GithubMentionFilterPopover", () => {
     });
   });
 
+  it("returns focus to the composer when Escape closes the popover", async () => {
+    // The control for the outside-interaction test below: an ordinary close
+    // (the "closes its own layer on Escape" test above pins that Radix's own
+    // layer unmounts) must still hand focus back, or the outside-interaction
+    // skip added to `onInteractOutside`/`onCloseAutoFocus` would be dead code
+    // that never fires either way.
+    const onReturnFocus = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <GithubMentionFilterPopover
+        filter={{
+          section: "pull-requests",
+          epicId: "epic-1",
+          repositories: [],
+          selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
+        }}
+        onReturnFocus={onReturnFocus}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    expect(
+      await screen.findByRole("radiogroup", { name: "State" }),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    await flush();
+
+    await waitFor(() => {
+      expect(screen.queryByRole("radiogroup", { name: "State" })).toBeNull();
+    });
+    expect(onReturnFocus).toHaveBeenCalledWith(null);
+  });
+
+  it("does not return focus to the composer when the close came from an outside interaction", async () => {
+    // An outside interaction moves focus where the user POINTED (a target
+    // rendered outside the popover). Returning the caret to the composer over
+    // it would steal focus back from the control the user just chose - the
+    // next keystrokes would land in the mention query instead of their target.
+    const onReturnFocus = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <>
+        <button type="button">Outside target</button>
+        <GithubMentionFilterPopover
+          filter={{
+            section: "pull-requests",
+            epicId: "epic-1",
+            repositories: [],
+            selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
+          }}
+          onReturnFocus={onReturnFocus}
+        />
+      </>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    expect(
+      await screen.findByRole("radiogroup", { name: "State" }),
+    ).toBeTruthy();
+
+    const outside = screen.getByRole("button", { name: "Outside target" });
+    fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+    fireEvent.mouseDown(outside, { button: 0 });
+    fireEvent.pointerUp(outside, { button: 0, pointerType: "mouse" });
+    fireEvent.click(outside);
+    await flush();
+
+    // The popover actually closed from the outside click - otherwise the
+    // assertion below would be vacuously true regardless of what
+    // `onInteractOutside`/`onCloseAutoFocus` do.
+    await waitFor(() => {
+      expect(screen.queryByRole("radiogroup", { name: "State" })).toBeNull();
+    });
+    expect(onReturnFocus).not.toHaveBeenCalled();
+  });
+
   it("tracks the dot to the PUBLISHED selection, not the raw store", () => {
     // The store holds a repository the scope no longer contains, so the
     // section reconciles it away and its list is unfiltered. The dot has to

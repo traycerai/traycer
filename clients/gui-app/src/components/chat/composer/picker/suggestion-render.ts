@@ -40,6 +40,25 @@ interface SuggestionRender<TItem extends ComposerPickerItem> {
   onKeyDown(props: { event: KeyboardEvent }): boolean;
 }
 
+/**
+ * Moves focus into the open step's chrome (the Filter/Refresh bar), or
+ * reports that there is nothing to move to. A global query is sound here:
+ * one picker menu exists at a time, and `data-mention-step-chrome` is only
+ * rendered on a header whose step actually published chrome. Returning
+ * whether focus actually moved lets the caller fall through to the browser
+ * default when it did not.
+ */
+function focusMentionStepChrome(): boolean {
+  const chrome = document.querySelector("[data-mention-step-chrome]");
+  if (chrome === null) return false;
+  const control = chrome.querySelector<HTMLButtonElement>(
+    "button:not(:disabled)",
+  );
+  if (control === null) return false;
+  control.focus();
+  return document.activeElement === control;
+}
+
 export function createComposerSuggestionRender<
   TItem extends ComposerPickerItem,
 >(args: ComposerSuggestionRenderArgs): () => SuggestionRender<TItem> {
@@ -288,21 +307,18 @@ export function createComposerSuggestionRender<
           return true;
         }
         if (event.key === "Tab") {
-          // Shift+Tab is FOCUS, not commit: the backward direction is the only
-          // keyboard route to the picker's own chrome, and nothing else in the
-          // menu claims it.
-          //
-          // Defensive rather than a verified repair. A review flagged this
-          // branch as swallowing Shift+Tab, and by inspection it did - it
-          // matched `Tab` without reading `shiftKey`, and a section always has
-          // a Back row so `items` is never empty. But instrumenting the handler
-          // (throw on `Tab`) shows it is never REACHED with Shift held: plain
-          // Tab arrives, Shift+Tab does not, so something upstream already
-          // discriminates. That was measured under jsdom, which cannot be
-          // trusted for ProseMirror key handling, so this stays as the correct
-          // behaviour for the case if it ever does arrive. It is deliberately
-          // untested: a test here passes identically with and without the line.
-          if (event.shiftKey) return false;
+          // Shift+Tab is FOCUS, not commit: it is the keyboard route to the
+          // picker's own chrome. The Filter and Refresh buttons render
+          // through a portal into `document.body` AFTER the editor, so no
+          // native traversal direction can reach them from the composer -
+          // backward traversal lands on an earlier composer control, and
+          // plain Tab commits the highlighted row. The move is therefore
+          // explicit; with no chrome on this step the browser default stands.
+          // (Under jsdom this handler was once measured as never receiving
+          // Shift+Tab, but jsdom cannot be trusted for ProseMirror key
+          // handling - the behaviour is implemented for the event actually
+          // arriving and tested by invoking the handler directly.)
+          if (event.shiftKey) return focusMentionStepChrome();
           if (state.items.length === 0) return false;
           if (activePickerItemDisabledReason(state) !== null) return true;
           return state.commitActiveItem();
