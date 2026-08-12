@@ -4,6 +4,7 @@ import type {
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   deriveHostHealth,
   type HostHealth,
@@ -155,17 +156,35 @@ function isAdministrableRoute(
 
 /**
  * The one case where `connectable: false` is a BILLING fact rather than a
- * connectivity one: the route is present and live, and only the plan gate
- * refuses it. Recorded separately because the boolean alone erased the
- * distinction — the deleted My Hosts notice said "requires a paid plan —
- * Upgrade", and rendering these rows as generically "unreachable" replaced
- * that remedy with a retry that can never work.
+ * connectivity one: only the plan gate refuses this route. Recorded separately
+ * because the boolean alone erased the distinction — the deleted My Hosts
+ * notice said "requires a paid plan — Upgrade", and rendering these rows as
+ * generically "unreachable" replaced that remedy with a retry that can never
+ * work.
+ *
+ * There are now TWO ways to learn it, and requiring only the first is what
+ * lost the reason:
+ *
+ *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
+ *     live and the server would refuse the attach;
+ *   - the CLOUD's verdict (`connectivity: "local-only"` ⇒ `plan-restricted`) —
+ *     the host never attaches to a relay at all, because the owner's plan does
+ *     not include remote hosts.
+ *
+ * The old body demanded `status === "available"`, which the second case can
+ * never satisfy: a `local-only` host is exactly the one the mapper marks
+ * unavailable. So a free-tier user's own host came back non-connectable AND
+ * non-plan-restricted, and every surface downstream fell through to its
+ * generic connection-failure copy — the upgrade path invisible precisely to
+ * the person who needed it.
  */
 function isPlanRestrictedRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
 ): boolean {
-  if (entry === null || entry.websocketUrl === null) return false;
+  if (entry === null) return false;
+  if (hostUnavailability(entry) === "plan-restricted") return true;
+  if (entry.websocketUrl === null) return false;
   if (!isHostReachable(entry.status)) return false;
   return remoteHostsPlanRestricted && entry.kind === "remote";
 }

@@ -312,6 +312,12 @@ export class AuthService {
    * runtime consumers must NEVER read this - they thread the context.
    */
   private currentBearer: string | null = null;
+  /**
+   * The `GET /api/v3/hosts` request currently in flight, shared by every
+   * caller that arrives while it is running. See `fetchRegisteredHosts`.
+   */
+  private registeredHostsInFlight: Promise<HostListResponse | null> | null =
+    null;
   private currentProfile: AuthProfile | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
@@ -1486,9 +1492,38 @@ export class AuthService {
     if (this.currentBearer === null) {
       return null;
     }
-    const result = await this.runnerHost.listRegisteredHosts(
-      this.currentBearer,
-    );
+    // Two independent callers reach this endpoint: the globally-mounted
+    // `HostDirectoryService` poll and the Settings liveness query, plus their
+    // event triggers (focus refetch, picker open, context change). They are
+    // on different sides of the TanStack cache, so nothing above this point
+    // can deduplicate them, and their triggers genuinely coincide — a window
+    // regaining focus fires both at once.
+    //
+    // In-flight coalescing only, deliberately: callers that arrive together
+    // share one request, and a caller that arrives after it settles gets a
+    // real fetch. A result memo would have been the way to halve the steady
+    // rate too, but `directory.refresh()` on picker-open is a correctness
+    // path — it exists to be current at that instant — and handing it a
+    // seconds-old answer to save a request is the wrong trade.
+    const inFlight = this.registeredHostsInFlight;
+    if (inFlight !== null) {
+      return inFlight;
+    }
+    const request = this.performFetchRegisteredHosts(this.currentBearer);
+    this.registeredHostsInFlight = request;
+    try {
+      return await request;
+    } finally {
+      // Cleared whether it resolved or threw: a failed read must not pin a
+      // rejected promise that every later caller re-awaits.
+      this.registeredHostsInFlight = null;
+    }
+  }
+
+  private async performFetchRegisteredHosts(
+    bearer: string,
+  ): Promise<HostListResponse | null> {
+    const result = await this.runnerHost.listRegisteredHosts(bearer);
     if (result.kind === "unauthorized") {
       return null;
     }

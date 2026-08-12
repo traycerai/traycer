@@ -127,6 +127,93 @@ export function isRemoteHostDirectoryEntry(
 }
 
 /**
+ * WHY a directory entry cannot be dialed — the distinction `status` erases.
+ *
+ * `HostAvailability` answers one question ("can this client dial it?") and that
+ * is the right question for the transport. It is the wrong question for the UI,
+ * because three very different situations collapse into `unavailable`:
+ *
+ *  - `offline`         — the host is positively not attached. Saying so is
+ *                        honest, and this is the only one that may render as
+ *                        "offline" or count as evidence a host is dead.
+ *  - `plan-restricted` — the account's plan has no remote hosts, so this host
+ *                        never attaches by design. The remedy is an upgrade,
+ *                        not a retry, and calling it "offline" sends a person
+ *                        to restart a machine that is working fine.
+ *  - `indeterminate`   — the cloud could not read liveness. We learned NOTHING.
+ *                        Rendering it as dead is the false-Offline-when-blind
+ *                        bug, one layer below where that rule is usually
+ *                        stated: a single degraded Redis read must not replace
+ *                        a live chat with a "host is offline" banner.
+ *
+ * Derived in ONE place on purpose. The previous shape had each consumer read
+ * the coarse boolean and reach its own conclusion, which is how the presenter
+ * and the tiles ended up disagreeing about the same host. A consumer may
+ * legitimately treat two of these the same — but it has to say so against the
+ * named verdict, not by never learning the difference.
+ */
+export type HostUnavailability = "offline" | "plan-restricted" | "indeterminate";
+
+/**
+ * The reason an entry is not dialable, or `null` when it is.
+ *
+ * A `remote` entry carries the cloud's verdict on itself (`remoteStatus`), and
+ * that is what this reads. Anything else — a local host, a mock, or the
+ * non-dialable twin the directory substitutes for this machine while its
+ * process is down — has no relay verdict to consult and reports `offline`,
+ * which is correct for it: locality is decided by a direct read of the process,
+ * never by this.
+ */
+export function hostUnavailability(
+  entry: HostDirectoryEntry,
+): HostUnavailability | null {
+  if (entry.status === "available") {
+    return null;
+  }
+  if (!isRemoteHostDirectoryEntry(entry)) {
+    return "offline";
+  }
+  switch (entry.remoteStatus.connectivity) {
+    case "local-only":
+      return "plan-restricted";
+    case "unknown":
+      return "indeterminate";
+    case "offline":
+      return "offline";
+    case "connectable":
+      // Unreachable in practice (`connectable` is exactly what makes `status`
+      // `available` above). Reported as indeterminate rather than offline so a
+      // future mapper change that breaks that correspondence degrades into
+      // "we don't know" instead of into a false death claim.
+      return "indeterminate";
+  }
+}
+
+/**
+ * Whether an entry is positive evidence that the host is DEAD — the gate for
+ * anything destructive or hard to undo: dead-tile banners, "permanently
+ * closed" notifications, and re-homing the app-wide selection.
+ *
+ * Deliberately narrower than "not dialable". `indeterminate` fails this gate
+ * because a failed liveness read is not evidence about the host, and
+ * `plan-restricted` fails it because the host is not dead at all — it is
+ * working exactly as the account's plan says it should.
+ *
+ * `hasLiveSession` outranks everything: a client holding an open E2E session
+ * has firsthand proof the host is up, which beats any verdict the cloud
+ * reaches about it minutes later and through a different leg.
+ */
+export function isConfirmedHostDeath(
+  entry: HostDirectoryEntry,
+  hasLiveSession: boolean,
+): boolean {
+  if (hasLiveSession) {
+    return false;
+  }
+  return hostUnavailability(entry) === "offline";
+}
+
+/**
  * Projects a registry row to a directory entry. `websocketUrl` is the relay's
  * fixed WS attach endpoint (S2/T14) — every remote host shares the same
  * endpoint; the relay routes by the opaque `rendezvousId` inside the

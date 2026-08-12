@@ -188,11 +188,20 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
       return {
         state: "local-only",
         label: "Local only",
-        // Says what is true and what the remedy is, without claiming a fault.
-        // The plan gate is also what makes the row non-`connectable`, so the
-        // surfaces that disable remote actions and this line agree.
-        detail:
-          "Reachable from this computer. Remote access needs a paid plan.",
+        // The copy has to depend on WHOSE machine this is, because the claim
+        // "reachable from this computer" is only true for one of them.
+        //
+        // It said that unconditionally, and for a remote row it was a
+        // fabrication twice over: the machine is somewhere else, and the plan
+        // is the reason no route to it exists. A free-tier user inspecting
+        // their other laptop was told it was reachable right here.
+        //
+        // Both arms state the remedy — an upgrade — because that is the one
+        // thing a person can act on, and it is what the generic
+        // connection-failure copy downstream used to replace with a retry.
+        detail: isLocalMachine
+          ? "Reachable on this computer. Remote access needs a paid plan."
+          : "Not reachable from here — remote access needs a paid plan.",
         tone: HOST_HEALTH_TONE["local-only"],
         live: false,
       };

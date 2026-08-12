@@ -2,10 +2,12 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
+  isConfirmedHostDeath,
   isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type {
   IRunnerHost,
   LocalHostSnapshot,
@@ -25,7 +27,27 @@ import {
 } from "@/lib/host/host-switch-toast";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
-const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
+/**
+ * The app's ONE background cadence for `GET /api/v3/hosts`.
+ *
+ * This service is mounted globally, so its interval — not the Settings query's
+ * — is what sets the app's steady-state load against that endpoint. It ran at
+ * 15s, which meant the Settings poll's move to 60s changed nothing about the
+ * real shape: an open GUI still issued ~5.8k liveness reads a day from here.
+ *
+ * 60s matches the Settings observer deliberately. Liveness is relay attachment
+ * now: a clean detach is pushed to the cloud in seconds and a dirty one is
+ * bounded by the lease TTL regardless of how often anyone asks, so polling
+ * faster than the lease buys a fresher answer to nothing. What actually keeps
+ * the directory current is the event set around this interval — a picker
+ * opening, the request context changing, the local host publishing, a
+ * deregister — all of which refresh immediately.
+ *
+ * Keep this in step with `REGISTERED_HOSTS_POLL_MS`. Two independent 60s
+ * timers against one endpoint is not the goal either; they are separate only
+ * because this one predates TanStack and lives outside its cache.
+ */
+const HOST_DIRECTORY_REFRESH_POLL_MS = 60_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
@@ -1189,6 +1211,22 @@ export class HostDirectoryService implements IHostDirectoryService {
     // next selection from intent. This path is only about a row that is still
     // listed and no longer usable.
     if (fresh === null || isEntryDialable(fresh)) {
+      this.nonDialableSelectionStreak = null;
+      return;
+    }
+    // Re-homing the app-wide selection is the most disruptive thing in this
+    // file: it moves every new piece of work to a different MACHINE. So it
+    // demands positive evidence the host is dead, not merely the absence of
+    // evidence that it is alive.
+    //
+    // `isConfirmedHostDeath` withholds exactly the two cases that are not
+    // evidence — a failed liveness read (`indeterminate`) and a plan-gated
+    // host that never attaches by design — and honours a live E2E session as
+    // firsthand proof. Without it, one degraded Redis read on the cloud side
+    // moved the user's window off a host they were actively working on, and
+    // the debounce below did not help: the poll re-reads the same degraded
+    // answer, so two consecutive reads agree and the streak completes.
+    if (!isConfirmedHostDeath(fresh, hasReadyRemoteSession(fresh.hostId))) {
       this.nonDialableSelectionStreak = null;
       return;
     }

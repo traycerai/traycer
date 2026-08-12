@@ -146,6 +146,7 @@ export function HostRegistryUpdates(props: {
             hostId={item.hostId}
             label={affordance.applyNowLabel}
             mutation={mutation}
+            liveBusySessionCount={props.liveBusySessionCount}
           />
         </div>
       )}
@@ -274,6 +275,8 @@ function ApplyNowControl(props: {
   readonly hostId: string;
   readonly label: string;
   readonly mutation: UpdateHostVersionPolicyMutation;
+  /** The count the label is promising, live at this render. */
+  readonly liveBusySessionCount: number | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
   // The TARGET is captured when the dialog is armed, not read when it is
@@ -286,8 +289,23 @@ function ApplyNowControl(props: {
   // confirming then ended the sessions of a host the dialog never named. The
   // copy says "this host"; this is what makes that true.
   const [armedHostId, setArmedHostId] = useState<string | null>(null);
+  // The COUNT is captured with the target, for the same reason and against a
+  // sharper failure. This dialog names a number and then destroys that many
+  // sessions, and it can stand open while the number moves underneath it — a
+  // session opens, or the live read is lost and the count becomes unknown.
+  // Confirming then ends a quantity nobody was shown. Re-checking at confirm
+  // time against what was ARMED is what makes "ends 2 sessions" a promise
+  // rather than an estimate.
+  const [armedCount, setArmedCount] = useState<number | null>(null);
   const open = armedHostId !== null;
   const targetMoved = armedHostId !== null && armedHostId !== hostId;
+  // `null` covers both "the live source is gone" and "it never reported",
+  // which are the same answer here: we can no longer stand behind the number.
+  const countMoved =
+    open &&
+    (props.liveBusySessionCount === null ||
+      props.liveBusySessionCount !== armedCount);
+  const refuse = targetMoved || countMoved;
 
   return (
     <>
@@ -295,7 +313,10 @@ function ApplyNowControl(props: {
         type="button"
         variant="destructive"
         size="sm"
-        onClick={() => setArmedHostId(hostId)}
+        onClick={() => {
+          setArmedHostId(hostId);
+          setArmedCount(props.liveBusySessionCount);
+        }}
         disabled={mutation.isPending}
         data-testid={`host-apply-now-trigger-${hostId}`}
       >
@@ -307,18 +328,20 @@ function ApplyNowControl(props: {
           if (!next) setArmedHostId(null);
         }}
         title="Apply the update now?"
-        description={
-          targetMoved
-            ? "The host this was aimed at is no longer the one selected. Close this and try again on the host you mean."
-            : "This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back."
-        }
+        description={describeApplyNowConfirmation({
+          targetMoved,
+          countMoved,
+          armedCount,
+        })}
         cascadeSummary={null}
         actionLabel="Apply now"
         isPending={mutation.isPending}
         onConfirm={() => {
-          // Refuse rather than retarget. A destructive action whose subject
-          // changed after it was armed has no safe interpretation.
-          if (targetMoved) return;
+          // Refuse rather than retarget. A destructive action whose subject OR
+          // magnitude changed after it was armed has no safe interpretation:
+          // the person agreed to end a named number of sessions on a named
+          // host, and we no longer have both.
+          if (refuse) return;
           mutation.mutate(
             { updatePolicy: undefined, desiredVersion: undefined, force: true },
             { onSuccess: () => setArmedHostId(null) },
@@ -327,4 +350,29 @@ function ApplyNowControl(props: {
       />
     </>
   );
+}
+
+/**
+ * What the confirmation says, given what may have shifted while it stood open.
+ *
+ * Both refusals are stated as a REASON plus a next step rather than a disabled
+ * button, because the person already decided to do this and deserves to know
+ * why it did not happen. The count case is the subtler one: nothing looks
+ * broken, the number on the button simply stopped being something we can
+ * stand behind.
+ */
+function describeApplyNowConfirmation(input: {
+  readonly targetMoved: boolean;
+  readonly countMoved: boolean;
+  readonly armedCount: number | null;
+}): string {
+  if (input.targetMoved) {
+    return "The host this was aimed at is no longer the one selected. Close this and try again on the host you mean.";
+  }
+  if (input.countMoved) {
+    return input.armedCount === null
+      ? "We can't currently see how many sessions are open on this host, so we can't say what applying now would end. Close this and try again once the host is reachable."
+      : `The number of open sessions changed since you opened this — it is no longer ${input.armedCount}. Close this and try again so you can see what applying now would end.`;
+  }
+  return "This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back.";
 }

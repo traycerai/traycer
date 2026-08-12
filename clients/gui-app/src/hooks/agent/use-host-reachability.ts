@@ -1,5 +1,9 @@
 import { useMemo } from "react";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  hostUnavailability,
+  type HostUnavailability,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { isUnknownHost } from "@/lib/host/constants";
 
@@ -9,6 +13,12 @@ export type HostReachabilityStatus =
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
   readonly hostLabel: string;
+  /**
+   * Why, when `status` is `unreachable`. `plan-restricted` is not an outage —
+   * a surface that renders "this host is offline" for it is wrong about the
+   * machine AND about the remedy. `null` for every other status.
+   */
+  readonly unavailability: HostUnavailability | null;
 }
 
 /**
@@ -47,12 +57,12 @@ export function useHostReachability(hostId: string): HostReachability {
       // provider). With no source of truth we cannot gate the tile;
       // fall through to "reachable" so the live render path proceeds.
       if (list.fetchStatus === "idle") {
-        return { status: "reachable", hostLabel: hostId };
+        return { status: "reachable", hostLabel: hostId, unavailability: null };
       }
-      return { status: "checking", hostLabel: hostId };
+      return { status: "checking", hostLabel: hostId, unavailability: null };
     }
     if (isUnknownHost(hostId)) {
-      return { status: "reachable", hostLabel: hostId };
+      return { status: "reachable", hostLabel: hostId, unavailability: null };
     }
     // An EMPTY directory means this machine's own host has not published
     // yet (boot, ensure/respawn in progress, post-wake re-probe) - the
@@ -62,11 +72,11 @@ export function useHostReachability(hostId: string): HostReachability {
     // rendered every chat as "Bound host is offline" + Clone CTA (and
     // terminals as "permanently closed") from exactly this window.
     if (list.data.length === 0) {
-      return { status: "host-starting", hostLabel: hostId };
+      return { status: "host-starting", hostLabel: hostId, unavailability: null };
     }
     const entry = list.data.find((e) => e.hostId === hostId);
     if (entry === undefined) {
-      return { status: "unreachable", hostLabel: hostId };
+      return { status: "unreachable", hostLabel: hostId, unavailability: "offline" };
     }
     // The same "not published yet" state as the empty-directory arm above,
     // wearing a different shape. When this machine's local snapshot is absent,
@@ -94,29 +104,53 @@ export function useHostReachability(hostId: string): HostReachability {
       return {
         status: "host-starting",
         hostLabel: entry.label.length > 0 ? entry.label : hostId,
+        unavailability: null,
       };
     }
-    // Remote entries answer from their directory STATUS, same as local ones.
+    // Remote entries answer from their directory status, same as local ones.
     // This used to hardwire "reachable" for any remote entry, on the theory
     // that presence leases are My-Hosts evidence rather than tab-death proof.
     // The two-slot live check (2026-08-08) showed where that lie lands: an
     // UNAVAILABLE owner's rows carried no lock, the unified sidebar routed
     // them to a LIVE tab, and the tile dialed a dead host forever - an
-    // eternal spinner instead of the locked published copy. A populated
-    // directory explicitly marking a host unavailable is high-confidence
-    // evidence, and every consumer of "unreachable" degrades recoverably
-    // (lock badge and copy routing flip back on the next refresh; the
-    // dead-tile banner is reactive, not a tab kill). The 2026-07-14
+    // eternal spinner instead of the locked published copy. The 2026-07-14
     // incident's protection is untouched: it lives in the EMPTY-directory
     // arm above ("host-starting"), never here.
     //
-    // `busy` counts as reachable. The lock and the clone CTA follow from
-    // "unreachable" alone, and a busy host is one this tab can still dial,
-    // stream from, and write to - only its badge should soften.
-    const reachable = isHostReachable(entry.status);
-    return {
-      status: reachable ? "reachable" : "unreachable",
-      hostLabel: entry.label.length > 0 ? entry.label : hostId,
-    };
+    // A `busy` host is still reachable here, and stays reachable through the
+    // reason: the shell publishes it as dialable, so `hostUnavailability`
+    // answers `null` and only the badge softens. The lock and the clone CTA
+    // follow from "unreachable" alone.
+    //
+    // But "not dialable" is not one fact, and this hook is what turns it into
+    // a dead tile — a banner, and for terminals a "permanently closed"
+    // notification. So it gates on the REASON, and only the reason that is
+    // actually evidence about the host.
+    const hostLabel = entry.label.length > 0 ? entry.label : hostId;
+    const unavailability = hostUnavailability(entry);
+    if (unavailability === null) {
+      return { status: "reachable", hostLabel, unavailability: null };
+    }
+    // A live E2E session is firsthand proof the host is up, and it outranks a
+    // cloud verdict reached minutes ago through a different leg. Without this
+    // the directory could kill the surfaces of a host this client is actively
+    // talking to.
+    if (hasReadyRemoteSession(hostId)) {
+      return { status: "reachable", hostLabel, unavailability: null };
+    }
+    if (unavailability === "indeterminate") {
+      // The cloud could not read liveness. That is not evidence, and the cost
+      // of guessing is asymmetric: guessing "dead" replaces a working chat
+      // with a Clone offer and fires a terminal-closed notification, while
+      // guessing "alive" costs a dial that fails recoverably. Fall through to
+      // the live render path, exactly as the no-directory arm above does for
+      // the same reason.
+      return { status: "reachable", hostLabel, unavailability: null };
+    }
+    // `offline` and `plan-restricted` both mean this client cannot open a
+    // session, which is what the tab-open gate exists to decide. They read
+    // differently to a person, though, so the reason travels with the verdict
+    // and the banners branch on it rather than all saying "offline".
+    return { status: "unreachable", hostLabel, unavailability };
   }, [hostId, list.data, list.fetchStatus]);
 }

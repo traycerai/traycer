@@ -191,6 +191,59 @@ export interface HostUpdateAffordanceView {
   readonly applyNowLabel: string | null;
 }
 
+export interface LiveBusySessionCountOptions {
+  /** `host.status`'s count, or `null` when the peer did not report one. */
+  readonly reportedCount: number | null;
+  /** The read failed. TanStack keeps serving the last success regardless. */
+  readonly isError: boolean;
+  /** TanStack's fetch state; `paused` means offline and unable to refresh. */
+  readonly fetchStatus: "fetching" | "paused" | "idle";
+  /**
+   * The cached value has aged past its `staleTime`.
+   *
+   * This is the AGE check, expressed in TanStack's own terms rather than as
+   * wall-clock arithmetic — which is why the query's `staleTime` is set LONGER
+   * than its poll interval. A healthy poll refreshes well before the window
+   * expires, so `isStale` stays false; if the interval stops firing or every
+   * refetch fails, the data ages out and this flips. Reading a clock here
+   * instead would be an impure call during render AND would need its own
+   * ticker to notice the passage of time.
+   */
+  readonly isStale: boolean;
+}
+
+/**
+ * The drain count, but only when it is actually a LIVE reading.
+ *
+ * TanStack retains the last successful `data` after a refetch error, which is
+ * the right default for almost everything and exactly wrong here. `host.status`
+ * has no subscription, so a panel can sit open, lose the host, and keep
+ * rendering the count it saw minutes ago — the same stale-count failure the
+ * move off the cloud DTO was meant to end, reintroduced by the cache instead of
+ * by the wire. The failure is concrete: the page promises "ends 2 sessions"
+ * while five are open, and the force ends five.
+ *
+ * So three things demote a retained value to `null` — no live source:
+ *
+ *   - the last read ERRORED (retained ≠ current);
+ *   - fetching is PAUSED (offline; nothing will correct it);
+ *   - the value has gone STALE (the poll stopped keeping it current).
+ *
+ * The staleness check is the one that catches the quiet case, where nothing
+ * failed loudly and the data simply stopped being refreshed.
+ */
+export function liveBusySessionCount(
+  options: LiveBusySessionCountOptions,
+): number | null {
+  if (options.isError || options.fetchStatus === "paused") {
+    return null;
+  }
+  if (options.isStale && options.fetchStatus !== "fetching") {
+    return null;
+  }
+  return options.reportedCount;
+}
+
 export interface DeriveUpdateAffordanceOptions {
   /** Registry-backed, and available for an offline host. */
   readonly updateState: HostUpdateState;

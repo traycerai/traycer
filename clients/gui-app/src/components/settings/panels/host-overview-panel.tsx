@@ -31,6 +31,7 @@ import {
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { liveBusySessionCount } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import {
   managedInstallation,
@@ -154,6 +155,13 @@ export function HostOverviewPanel(props: {
     host,
     identity: identityQuery.data ?? null,
     status: statusQuery.data ?? null,
+    // The drain count is only as trustworthy as the read behind it, so the
+    // read's HEALTH travels with its value. See `liveBusySessionCount`.
+    statusHealth: {
+      isError: statusQuery.isError,
+      fetchStatus: statusQuery.fetchStatus,
+      isStale: statusQuery.isStale,
+    },
     localHost: props.localHost,
   });
   const { identity, displayName } = view;
@@ -477,11 +485,22 @@ function useOverviewDisplay(input: {
   readonly identity: HostIdentity | null;
   /** The negotiated `host.status` response, as this client's registry sees it. */
   readonly status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null;
+  /** Freshness of the read above — retained cache data is not a live read. */
+  readonly statusHealth: {
+    readonly isError: boolean;
+    readonly fetchStatus: "fetching" | "paused" | "idle";
+    readonly isStale: boolean;
+  };
   readonly localHost: LocalHostSnapshot | null;
 }): OverviewDisplay {
-  const { scope, host, identity, status, localHost } = input;
+  const { scope, host, identity, status, statusHealth, localHost } = input;
   const hostVersion = status?.hostVersion ?? null;
-  const busySessionCount = status?.busySessionCount ?? null;
+  const busySessionCount = liveBusySessionCount({
+    reportedCount: status?.busySessionCount ?? null,
+    isError: statusHealth.isError,
+    fetchStatus: statusHealth.fetchStatus,
+    isStale: statusHealth.isStale,
+  });
   const endpointParts = useMemo(
     () =>
       host === null
