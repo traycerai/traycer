@@ -221,6 +221,25 @@ describe("<ImageDiffView />", () => {
     ).toEqual([expect.objectContaining({ side: "new" })]);
   });
 
+  it("lets the surviving image side report Actual size when the other rename side is non-image", () => {
+    renderDiff({
+      filePath: "assets/new.png",
+      previousPath: "assets/old.txt",
+    });
+
+    const toolbar = screen.getByRole("toolbar", {
+      name: "Image diff controls",
+    });
+    const actualButton = within(toolbar).getByRole("button", {
+      name: "Actual size",
+    });
+
+    expect(actualButton.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(actualButton);
+
+    expect(actualButton.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("falls back only the side whose image fails to decode", () => {
     renderDiff({});
 
