@@ -1,4 +1,10 @@
-import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
@@ -28,6 +34,10 @@ interface MockTransformRef {
       readonly offsetWidth: number;
       readonly offsetHeight: number;
     };
+    readonly setup: {
+      readonly minScale: number;
+      readonly maxScale: number;
+    };
   };
 }
 
@@ -53,6 +63,7 @@ interface MockTransformWrapperProps {
     ref: MockTransformRef,
     state: ImagePreviewTransformState,
   ) => void;
+  readonly onInit?: (ref: MockTransformRef) => void;
   readonly onPanningStart?: () => void;
   readonly onPanning?: () => void;
   readonly onPanningStop?: () => void;
@@ -164,6 +175,16 @@ vi.mock("react-zoom-pan-pinch", () => {
             offsetWidth: 640,
             offsetHeight: 480,
           },
+          // Live (not a snapshot) - matches the real library keeping
+          // `instance.setup` in sync with the current props on every
+          // update, since production reads `minScale`/`maxScale` off this
+          // at both `onInit` and every `onTransform` firing.
+          get setup() {
+            return {
+              minScale: propsRef.current.minScale,
+              maxScale: propsRef.current.maxScale,
+            };
+          },
         },
       };
 
@@ -189,6 +210,16 @@ vi.mock("react-zoom-pan-pinch", () => {
     const instance = instanceRef.current;
     instance.disabled = props.disabled === true;
     useImperativeHandle(forwardedRef, () => instance.ref, [instance.ref]);
+
+    // Fires exactly once at mount, matching the real library's `onInit`
+    // (production relies on this - RZPP applies its initial transform
+    // without ever calling `onTransform`).
+    const initializedRef = useRef(false);
+    useLayoutEffect(() => {
+      if (initializedRef.current) return;
+      initializedRef.current = true;
+      propsRef.current.onInit?.(instance.ref);
+    }, [instance.ref]);
 
     return (
       <div
@@ -515,7 +546,7 @@ describe("linked image diff transforms", () => {
     expect(newInstance.setTransformCalls).toHaveLength(0);
   });
 
-  it("exposes a late peer callback that would reopen mirroring if RZPP became async", async () => {
+  it("suppresses the echo even when the peer's callback arrives on a later tick", async () => {
     state.deferNextSetTransformCallback = true;
     renderDiff({});
 
@@ -527,10 +558,14 @@ describe("linked image diff transforms", () => {
 
     await Promise.resolve();
 
-    // The delayed callback arrives after the synchronous guard closes and is
-    // therefore observable as the concrete ping-pong failure mode this
-    // harness must keep visible if the library's timing contract changes.
-    expect(oldInstance.setTransformCalls).toEqual([[12, -7, 1.75, 0]]);
+    // The mirrored side's callback was deferred past the call that
+    // triggered it - a synchronous true/then/false bracket would already
+    // have reset by now and let this late arrival read as a fresh gesture,
+    // mirroring back onto the side that originated it (a rebound/ping-pong
+    // echo). The pending count survives until THIS specific callback
+    // consumes it, so no rebound reaches the origin side no matter how
+    // late delivery arrives.
+    expect(oldInstance.setTransformCalls).toHaveLength(0);
   });
 
   it("disables both transform wrappers and all toolbars in compact mode", () => {

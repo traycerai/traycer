@@ -38,6 +38,7 @@ import {
   ZOOM_BOUNDARY_EPSILON,
   ZOOM_STEP,
   type ContainerSize,
+  type ImagePreviewTransformReport,
   type ImagePreviewTransformState,
   type TransformOrigin,
 } from "./image-preview-transform";
@@ -66,20 +67,23 @@ export interface ImagePreviewProps {
    */
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null> | null;
   /**
-   * Fired on every transform change (gesture or this instance's own
-   * toolbar) so a caller can mirror it onto a linked peer; `null` when
-   * standalone. `origin` distinguishes a genuine user GESTURE (pan/pinch/
-   * wheel, reported by the library's own event handlers) from a
-   * PROGRAMMATIC transform this instance issued itself (Fit/Actual-size/
-   * zoom, or its own autonomous resize-refit) - review finding #3: a
-   * caller linking multiple instances must never mirror a programmatic
-   * transform's raw numbers onto a differently-sized peer (each peer
-   * computes its OWN fit), and must not read it as "the user manually
-   * zoomed away".
+   * Fired once at mount and on every subsequent transform change (gesture
+   * or this instance's own toolbar) so a caller can mirror it onto a
+   * linked peer, derive shared pressed/boundary state from it, and never
+   * has to re-derive or manually track this instance's own mode - `null`
+   * when standalone. See {@link ImagePreviewTransformReport} (round-2
+   * review, findings #3/#4): `origin` distinguishes a genuine user GESTURE
+   * from a PROGRAMMATIC transform this instance issued itself (a caller
+   * must never mirror a programmatic transform's raw numbers onto a
+   * differently-sized peer, each peer computes its own fit, and must not
+   * read it as "the user manually zoomed away"); `isFitted`/`isActualSize`
+   * are this instance's OWN already-correct derivation, reported up rather
+   * than re-derived by the caller; `minScale`/`maxScale` are this
+   * instance's live interactive bounds, published at init (not only on
+   * `onTransform` - RZPP applies its initial transform without calling it).
    */
   readonly onTransformChange:
-    | ((state: ImagePreviewTransformState, origin: TransformOrigin) => void)
-    | null;
+    ((report: ImagePreviewTransformReport) => void) | null;
   /**
    * Overrides the internal double-click fit/actual toggle entirely - a
    * caller linking multiple instances (`ImageDiffView`, review finding #3)
@@ -157,14 +161,15 @@ export function ImagePreview(props: ImagePreviewProps) {
   const setImgRef = useCallback((el: HTMLImageElement | null): void => {
     imgRef.current = el;
   }, []);
-  // Set (synchronously, bracketing the imperative call) around every
-  // transform WE issue ourselves - Fit/Actual-size/zoom, or the autonomous
-  // resize-refit effect below - so `handleTransformed` can report each
-  // `onTransform` firing's true origin (review finding #3). Safe as a
-  // call-stack guard specifically because `animationTime: 0` is verified
-  // synchronous/single-fire in installed react-zoom-pan-pinch@4.0.4 (the
-  // only context that reads this origin, `ImageDiffView`, always passes 0).
-  const programmaticTransformRef = useRef(false);
+  // Incremented BEFORE every transform WE issue ourselves - Fit/Actual-
+  // size/zoom, or the autonomous resize-refit effect below - and decremented
+  // when its OWN `onTransform` callback actually arrives and is "consumed"
+  // (round-2 review finding #2). A synchronous set-true/call/set-false
+  // bracket only reports the right origin if the callback happens to fire
+  // within that exact synchronous window; a PENDING COUNT stays correct
+  // regardless of whether the library ever defers delivery (e.g. a future
+  // version), because nothing else clears it in between.
+  const pendingProgrammaticCountRef = useRef(0);
   const [isPanning, setIsPanning] = useState(false);
   // The single source of truth for "where is this image right now" -
   // `isFitted`/`isActualSize` below are DERIVED from comparing this against
@@ -277,20 +282,45 @@ export function ImagePreview(props: ImagePreviewProps) {
     setTransform(liveFit);
   }
 
-  // Re-fit on resize ONLY while still in fitted state - a manual zoom/pan
-  // is never yanked out from under the user by a pane resize. Bracketed as
-  // a programmatic transform (review finding #3) so a caller linking this
-  // instance to a peer never mirrors an autonomous refit's raw numbers or
-  // reads it as "the user manually zoomed away".
+  // Ref-mirrored (via a layout effect, never assigned during render itself
+  // - refs are for event handlers/effects, not render) so the resize
+  // effect can see the LATEST transform without re-running every time it
+  // changes - if `transform` were a reactive dependency instead, the
+  // effect's OWN `centerView` call would update it and re-trigger the
+  // effect, forever. No deps array: runs after EVERY commit, synchronously
+  // before paint, so it's always current by the time the resize effect
+  // (below, a passive effect, always flushes after) reads it.
+  const latestTransformRef = useRef(transform);
+  useLayoutEffect(() => {
+    latestTransformRef.current = transform;
+  });
+  // The stage size as of the LAST time the resize effect below ran - used
+  // to decide "was this fitted BEFORE this resize", never the new size.
+  const prevStageSizeRef = useRef<ContainerSize | null>(null);
+
+  // Re-fit on resize ONLY if the transform matched the fit for the
+  // PREVIOUS stage size (round-2 review finding #1): comparing against the
+  // NEW stage's fit here would already read "not fitted" for a transform
+  // that was never laid out against that size, so the effect would bail
+  // and a fitted preview would silently stop refitting on every resize.
+  // Bracketed as a programmatic transform (review finding #3) so a caller
+  // linking this instance to a peer never mirrors an autonomous refit's
+  // raw numbers or reads it as "the user manually zoomed away".
   useEffect(() => {
-    if (!isFitted || stageSize === null) return;
+    const prevStageSize = prevStageSizeRef.current;
+    prevStageSizeRef.current = stageSize;
+    if (stageSize === null || prevStageSize === null) return;
     const ref = transformRef.current;
     const natural = readNaturalSize();
     if (ref === null || natural === null) return;
-    programmaticTransformRef.current = true;
+    const wasFitted = transformMatchesFit(
+      latestTransformRef.current,
+      initialFitTransform(prevStageSize, natural),
+    );
+    if (!wasFitted) return;
+    pendingProgrammaticCountRef.current += 1;
     ref.centerView(fitScaleFor(stageSize, natural), 0);
-    programmaticTransformRef.current = false;
-  }, [stageSize, isFitted, readNaturalSize, transformRef]);
+  }, [stageSize, readNaturalSize, transformRef]);
 
   // Plain (not `useCallback`-wrapped) - each reads `transformRef.current` at
   // CALL time, which the React Compiler can't reconcile against a manual
@@ -310,27 +340,29 @@ export function ImagePreview(props: ImagePreviewProps) {
     const container = stageRect();
     const natural = readNaturalSize();
     if (ref === null || container === null || natural === null) return;
-    programmaticTransformRef.current = true;
+    pendingProgrammaticCountRef.current += 1;
     ref.centerView(fitScaleFor(container, natural), animationMs);
-    programmaticTransformRef.current = false;
   }
 
   function handleActualSize(): void {
-    programmaticTransformRef.current = true;
-    transformRef.current?.centerView(1, animationMs);
-    programmaticTransformRef.current = false;
+    const ref = transformRef.current;
+    if (ref === null) return;
+    pendingProgrammaticCountRef.current += 1;
+    ref.centerView(1, animationMs);
   }
 
   function handleZoomIn(): void {
-    programmaticTransformRef.current = true;
-    transformRef.current?.zoomIn(ZOOM_STEP, animationMs);
-    programmaticTransformRef.current = false;
+    const ref = transformRef.current;
+    if (ref === null) return;
+    pendingProgrammaticCountRef.current += 1;
+    ref.zoomIn(ZOOM_STEP, animationMs);
   }
 
   function handleZoomOut(): void {
-    programmaticTransformRef.current = true;
-    transformRef.current?.zoomOut(ZOOM_STEP, animationMs);
-    programmaticTransformRef.current = false;
+    const ref = transformRef.current;
+    if (ref === null) return;
+    pendingProgrammaticCountRef.current += 1;
+    ref.zoomOut(ZOOM_STEP, animationMs);
   }
 
   // Plain functions (not `useCallback`), matching `handleFit`/etc. above -
@@ -381,16 +413,51 @@ export function ImagePreview(props: ImagePreviewProps) {
     setIsPanning(false);
   }, []);
 
-  const handleTransformed = useCallback(
-    (_ref: ReactZoomPanPinchRef, state: ImagePreviewTransformState): void => {
-      setTransform(state);
-      const origin: TransformOrigin = programmaticTransformRef.current
-        ? "programmatic"
-        : "gesture";
-      onTransformChange?.(state, origin);
-    },
-    [onTransformChange],
-  );
+  // Plain function (not `useCallback`) - reads THIS render's `liveFit`
+  // directly (round-2 review findings #3/#4: the caller needs this
+  // instance's own derived mode and live bounds, not just the raw state),
+  // matching `handleFit`/etc above; the compiler auto-memoizes the whole
+  // component.
+  function buildTransformReport(
+    state: ImagePreviewTransformState,
+    origin: TransformOrigin,
+    ref: ReactZoomPanPinchRef,
+  ): ImagePreviewTransformReport {
+    const setup = ref.instance.setup;
+    return {
+      state,
+      origin,
+      isFitted: liveFit !== null && transformMatchesFit(state, liveFit),
+      isActualSize: Math.abs(state.scale - 1) < ACTUAL_SIZE_EPSILON,
+      minScale: setup.minScale,
+      maxScale: setup.maxScale,
+    };
+  }
+
+  function handleTransformed(
+    ref: ReactZoomPanPinchRef,
+    state: ImagePreviewTransformState,
+  ): void {
+    setTransform(state);
+    // "Consumed" (round-2 review finding #2): decremented exactly when a
+    // callback actually arrives, not synchronously after issuing the call -
+    // stays correct even if delivery is ever deferred past that call.
+    const origin: TransformOrigin =
+      pendingProgrammaticCountRef.current > 0 ? "programmatic" : "gesture";
+    if (pendingProgrammaticCountRef.current > 0) {
+      pendingProgrammaticCountRef.current -= 1;
+    }
+    onTransformChange?.(buildTransformReport(state, origin, ref));
+  }
+
+  // RZPP applies its initial transform without calling `onTransform`
+  // (round-2 review finding #4), so a caller relying only on that callback
+  // never learns this instance's true initial bounds - a side whose fit
+  // sits below the constant floor would leave the caller's shared zoom-out
+  // button incorrectly enabled at the old floor, no-opping on first click.
+  function handleInit(ref: ReactZoomPanPinchRef): void {
+    onTransformChange?.(buildTransformReport(transform, "programmatic", ref));
+  }
 
   const handleDecodeError = useCallback((): void => {
     onDecodeError?.();
@@ -556,6 +623,7 @@ export function ImagePreview(props: ImagePreviewProps) {
           onPanningStart: handlePanningStart,
           onPanningStop: handlePanningStop,
           onTransform: handleTransformed,
+          onInit: handleInit,
           onDecodeError: handleDecodeError,
           onNaturalSize: handleNaturalSize,
         })}
@@ -607,6 +675,8 @@ function renderImagePreviewStage(args: {
     ref: ReactZoomPanPinchRef,
     state: ImagePreviewTransformState,
   ) => void;
+  /** Review finding #4: fires once at mount with the ref RZPP never passes to `onTransform` for the initial transform. */
+  readonly onInit: (ref: ReactZoomPanPinchRef) => void;
   readonly onDecodeError: () => void;
   readonly onNaturalSize: (size: ContainerSize) => void;
 }): ReactNode {
@@ -678,6 +748,7 @@ function renderImagePreviewStage(args: {
         zoomAnimation={{ animationTime: args.animationMs }}
         autoAlignment={{ animationTime: args.animationMs }}
         onTransform={args.onTransform}
+        onInit={args.onInit}
         onPanningStart={args.onPanningStart}
         onPanningStop={args.onPanningStop}
       >

@@ -20,7 +20,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/hooks/assets/use-image-asset", () => ({
   useImageAsset: (request: ImageAssetRequest | null) => {
-    state.requests.push(request);
+    // Dedupe by reference (round-2 review finding #4: `ImageDiffView` now
+    // fires one legitimate extra render on mount, learning each side's
+    // real initial bounds from `onInit` - the SAME memoized `request`
+    // object is passed to this hook again on that render, not a new fetch)
+    // so tests keep counting distinct requests, not raw render passes.
+    if (!state.requests.includes(request)) {
+      state.requests.push(request);
+    }
     const side = request?.method === "git" ? request.side : "new";
     // Forces THIS call site's own re-render when `reportDecodeFailure` fires
     // (the real hook transitions synchronously from a callback, not a prop

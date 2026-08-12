@@ -26,11 +26,19 @@ import {
   MIN_SCALE,
   ZOOM_BOUNDARY_EPSILON,
   ZOOM_STEP,
+  type ImagePreviewTransformReport,
   type ImagePreviewTransformState,
-  type TransformOrigin,
 } from "./image-preview-transform";
 
-/** A side's own current scale and interactive bounds (review finding #3/#7) - read directly off its RZPP instance's `setup`, which its own `ImagePreview` keeps correctly in sync (including a fit below the normal `MIN_SCALE` floor for a huge image). Never derived from the OTHER side's numbers. */
+/**
+ * A side's own current scale and interactive bounds (round-1 review finding
+ * #3/#7) - populated straight from that side's OWN reported
+ * {@link ImagePreviewTransformReport}, published at init (round-2 review
+ * finding #4: RZPP applies its initial transform without firing
+ * `onTransform`, so waiting for a transform event would leave this at the
+ * default) and on every subsequent transform. Never derived from the OTHER
+ * side's numbers.
+ */
 interface SideBounds {
   readonly scale: number;
   readonly minScale: number;
@@ -43,18 +51,6 @@ const DEFAULT_SIDE_BOUNDS: SideBounds = {
   maxScale: MAX_SCALE,
 };
 
-function readSideBounds(
-  ref: RefObject<ReactZoomPanPinchRef | null>,
-  scale: number,
-): SideBounds {
-  const setup = ref.current?.instance.setup;
-  return {
-    scale,
-    minScale: setup?.minScale ?? MIN_SCALE,
-    maxScale: setup?.maxScale ?? MAX_SCALE,
-  };
-}
-
 /** Review finding #3: an EXISTING side blocks the shared zoom-out button once it's at ITS OWN floor (finding #7: that floor can be below the constant `MIN_SCALE`). */
 function sideAtMin(exists: boolean, bounds: SideBounds): boolean {
   return exists && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
@@ -62,6 +58,34 @@ function sideAtMin(exists: boolean, bounds: SideBounds): boolean {
 
 function sideAtMax(exists: boolean, bounds: SideBounds): boolean {
   return exists && bounds.scale >= bounds.maxScale - ZOOM_BOUNDARY_EPSILON;
+}
+
+/**
+ * A side's own derived Fit/Actual-size mode (round-2 review finding #3) -
+ * reported by that side's `ImagePreview` instance (which already computes
+ * this correctly for itself), never re-derived or manually toggled here.
+ */
+interface SideMode {
+  readonly isFitted: boolean;
+  readonly isActualSize: boolean;
+}
+
+const DEFAULT_SIDE_MODE: SideMode = { isFitted: true, isActualSize: false };
+
+/** The shared toolbar's pressed state (round-2 review finding #3): pressed iff every EXISTING side reports itself in that mode - a missing (Added/Deleted) side never blocks the derivation. */
+function combinedMode(
+  oldExists: boolean,
+  oldMode: SideMode,
+  newExists: boolean,
+  newMode: SideMode,
+): SideMode {
+  return {
+    isFitted:
+      (!oldExists || oldMode.isFitted) && (!newExists || newMode.isFitted),
+    isActualSize:
+      (!oldExists || oldMode.isActualSize) &&
+      (!newExists || newMode.isActualSize),
+  };
 }
 
 export interface ImageDiffViewProps {
@@ -109,27 +133,36 @@ export interface ImageDiffViewProps {
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const newTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
-  // Echo guard shared by both the gesture-mirror path and the toolbar's own
-  // dual-dispatch: a toolbar action already updates both sides correctly
-  // and independently, so the mirror below must not also overwrite the
-  // peer with the OTHER side's raw numbers while that dispatch is in flight.
-  const syncingTransformRef = useRef(false);
-  // Drives the shared toolbar's Fit/Actual-size `aria-pressed` state - the
-  // active zoom mode must be statically visible (UI polish requirements
-  // #6/#7), so a gesture on either side (which desyncs from both) also
-  // flips these, not just the toolbar's own buttons. Tracked as two
-  // EXPLICIT booleans (not `isActualSize` derived from `scale`): unlike the
-  // standalone `ImagePreview`, this component never learns either side's
-  // own initial fit scale (that's computed privately inside each instance),
-  // so a scale-derived `Math.abs(scale - 1) < epsilon` would read
-  // stale-true from `scale`'s `1` default until the first `onTransform`
-  // arrives.
-  const [isFitted, setIsFitted] = useState(true);
-  const [isActualSize, setIsActualSize] = useState(false);
-  // Per-side, never a single shared value (review finding #3): each side
-  // can have its own natural size and therefore its own fit/interactive
-  // floor (finding #7), so the shared zoom buttons must disable when
-  // EITHER side is at ITS OWN boundary, not some averaged/last-writer value.
+  // Per-side PENDING COUNT (round-2 review finding #2 - the same fix shape
+  // as `ImagePreview`'s own `pendingProgrammaticCountRef`, applied here to
+  // this component's echo guard): incremented BEFORE this side is told to
+  // change - by `dualDispatch` (a toolbar action) or `mirrorTransform` (a
+  // peer echo) - and decremented when THAT side's own `onTransform`
+  // actually arrives and is consumed. A synchronous true/then/false bracket
+  // only suppresses the echo if the callback happens to fire within that
+  // exact synchronous window; a count that survives until consumed stays
+  // correct even if delivery is ever deferred (e.g. a future RZPP version),
+  // where a synchronous bracket would already have reset and let a late
+  // callback re-trigger a mirror back onto its own origin side (a ping-
+  // pong echo).
+  const oldPendingSyncRef = useRef(0);
+  const newPendingSyncRef = useRef(0);
+  // Per-side, never a single shared value, and never manually toggled
+  // (round-2 review finding #3 - this component previously kept its OWN
+  // `isFitted`/`isActualSize` booleans, unconditionally cleared by every
+  // gesture callback, which could drift from the real transforms: a pinch
+  // that lands exactly at scale 1, or back at the fit transform, left the
+  // matching button unpressed). Each side's `ImagePreview` already derives
+  // its own mode correctly - these just mirror what it reports, and the
+  // toolbar's actual pressed state below is COMPUTED from them, never
+  // stored.
+  const [oldMode, setOldMode] = useState<SideMode>(DEFAULT_SIDE_MODE);
+  const [newMode, setNewMode] = useState<SideMode>(DEFAULT_SIDE_MODE);
+  // Per-side, never a single shared value (round-1 review finding #3): each
+  // side can have its own natural size and therefore its own fit/
+  // interactive floor (finding #7), so the shared zoom buttons must disable
+  // when EITHER side is at ITS OWN boundary, not some averaged/last-writer
+  // value.
   const [oldBounds, setOldBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
   const [newBounds, setNewBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
 
@@ -185,33 +218,56 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
 
-  // `origin` (review finding #3) distinguishes a genuine user GESTURE on
-  // THIS side from a PROGRAMMATIC transform `ImagePreview` issued itself -
-  // its own autonomous resize-refit, most importantly, which recomputes
-  // THIS side's own correct fit for its own new size and must never be
-  // read as "the user manually zoomed away" or mirrored onto the
-  // differently-sized peer (that would stomp the peer's own correct fit).
-  // Bounds tracking runs UNCONDITIONALLY though - even a programmatic
-  // refit changes this side's own current scale/floor, and the shared
-  // zoom-boundary buttons must reflect that regardless of origin.
+  // `report.origin` distinguishes a genuine user GESTURE on THIS side from
+  // a PROGRAMMATIC transform `ImagePreview` issued itself - its own
+  // autonomous resize-refit, most importantly, which recomputes THIS
+  // side's own correct fit for its own new size and must never be read as
+  // "the user manually zoomed away" or mirrored onto the differently-sized
+  // peer (that would stomp the peer's own correct fit). Bounds AND mode
+  // tracking run UNCONDITIONALLY though - even a programmatic refit
+  // changes this side's own current scale/floor/fitted-ness, and the
+  // shared toolbar/zoom-boundary state must reflect that regardless of
+  // origin. Fires once at init too (round-2 review finding #4), which is
+  // exactly how `oldBounds`/`newBounds`/`oldMode`/`newMode` learn a side's
+  // TRUE starting values instead of sitting at the defaults.
   const handleOldTransform = useCallback(
-    (state: ImagePreviewTransformState, origin: TransformOrigin): void => {
-      setOldBounds(readSideBounds(oldTransformRef, state.scale));
-      if (origin === "gesture" && !syncingTransformRef.current) {
-        setIsFitted(false);
-        setIsActualSize(false);
-        mirrorTransform(syncingTransformRef, newTransformRef, state);
+    (report: ImagePreviewTransformReport): void => {
+      setOldBounds({
+        scale: report.state.scale,
+        minScale: report.minScale,
+        maxScale: report.maxScale,
+      });
+      setOldMode({
+        isFitted: report.isFitted,
+        isActualSize: report.isActualSize,
+      });
+      if (oldPendingSyncRef.current > 0) {
+        oldPendingSyncRef.current -= 1;
+        return;
+      }
+      if (report.origin === "gesture") {
+        mirrorTransform(newPendingSyncRef, newTransformRef, report.state);
       }
     },
     [],
   );
   const handleNewTransform = useCallback(
-    (state: ImagePreviewTransformState, origin: TransformOrigin): void => {
-      setNewBounds(readSideBounds(newTransformRef, state.scale));
-      if (origin === "gesture" && !syncingTransformRef.current) {
-        setIsFitted(false);
-        setIsActualSize(false);
-        mirrorTransform(syncingTransformRef, oldTransformRef, state);
+    (report: ImagePreviewTransformReport): void => {
+      setNewBounds({
+        scale: report.state.scale,
+        minScale: report.minScale,
+        maxScale: report.maxScale,
+      });
+      setNewMode({
+        isFitted: report.isFitted,
+        isActualSize: report.isActualSize,
+      });
+      if (newPendingSyncRef.current > 0) {
+        newPendingSyncRef.current -= 1;
+        return;
+      }
+      if (report.origin === "gesture") {
+        mirrorTransform(oldPendingSyncRef, oldTransformRef, report.state);
       }
     },
     [],
@@ -220,38 +276,34 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // A toolbar action fits/zooms BOTH sides independently and instantly
   // (`animationTime: 0`) - each computes its own correct transform from its
   // own natural size, never a shared number forced onto a differently-sized
-  // peer. The echo guard is reused here (not just for gestures) so the
-  // per-side `onTransform` this triggers doesn't ALSO mirror one side's raw
-  // numbers onto the other mid-dispatch.
+  // peer. Each side's own pending count (not a shared bracket) is
+  // incremented here so the per-side `onTransform` this triggers doesn't
+  // ALSO mirror one side's raw numbers onto the other - only incremented
+  // once the ref is confirmed present, so a not-yet-mounted side can never
+  // leave a stuck count blocking a later genuine gesture. Neither handler
+  // below manually sets fit/actual-size mode (round-2 review finding #3) -
+  // each side's own `onTransform` firing synchronously as part of this call
+  // reports its TRUE resulting mode back through `handleOldTransform`/
+  // `handleNewTransform` above.
   const dualDispatch = useCallback(
-    (action: (ref: RefObject<ReactZoomPanPinchRef | null>) => void): void => {
-      syncingTransformRef.current = true;
-      action(oldTransformRef);
-      action(newTransformRef);
-      syncingTransformRef.current = false;
+    (action: (instance: ReactZoomPanPinchRef) => void): void => {
+      dispatchToSide(oldTransformRef, oldPendingSyncRef, action);
+      dispatchToSide(newTransformRef, newPendingSyncRef, action);
     },
     [],
   );
 
   const handleFit = useCallback(() => {
-    dualDispatch((ref) => fitSide(ref));
-    setIsFitted(true);
-    setIsActualSize(false);
+    dualDispatch((instance) => fitInstance(instance));
   }, [dualDispatch]);
   const handleActualSize = useCallback(() => {
-    dualDispatch((ref) => ref.current?.centerView(1, 0));
-    setIsFitted(false);
-    setIsActualSize(true);
+    dualDispatch((instance) => instance.centerView(1, 0));
   }, [dualDispatch]);
   const handleZoomIn = useCallback(() => {
-    dualDispatch((ref) => ref.current?.zoomIn(ZOOM_STEP, 0));
-    setIsFitted(false);
-    setIsActualSize(false);
+    dualDispatch((instance) => instance.zoomIn(ZOOM_STEP, 0));
   }, [dualDispatch]);
   const handleZoomOut = useCallback(() => {
-    dualDispatch((ref) => ref.current?.zoomOut(ZOOM_STEP, 0));
-    setIsFitted(false);
-    setIsActualSize(false);
+    dualDispatch((instance) => instance.zoomOut(ZOOM_STEP, 0));
   }, [dualDispatch]);
 
   // Matches the shared toolbar's own instant dual-dispatch (image-preview
@@ -259,6 +311,14 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // - review finding #3: that would mirror a raw fit/actual transform
   // computed for THIS side's size onto the differently-sized peer instead
   // of the peer computing its own.
+  // Derived, never stored (round-2 review finding #3).
+  const { isFitted, isActualSize } = combinedMode(
+    oldSideExists,
+    oldMode,
+    newSideExists,
+    newMode,
+  );
+
   const handleSideDoubleClick = useCallback((): void => {
     if (isFitted) {
       handleActualSize();
@@ -407,10 +467,26 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   );
 }
 
-/** Independently fits `ref`'s own content to its own wrapper - never a shared number forced onto a differently-sized peer (ticket 07). */
-function fitSide(ref: RefObject<ReactZoomPanPinchRef | null>): void {
+/**
+ * Calls `action` on `ref`'s resolved instance, incrementing `pendingRef`
+ * FIRST - but only once the ref is confirmed present (round-2 review
+ * finding #2), so a not-yet-mounted side can never leave a stuck pending
+ * count that would block a later genuine gesture from ever mirroring
+ * again.
+ */
+function dispatchToSide(
+  ref: RefObject<ReactZoomPanPinchRef | null>,
+  pendingRef: { current: number },
+  action: (instance: ReactZoomPanPinchRef) => void,
+): void {
   const instance = ref.current;
   if (instance === null) return;
+  pendingRef.current += 1;
+  action(instance);
+}
+
+/** Independently fits `instance`'s own content to its own wrapper - never a shared number forced onto a differently-sized peer (ticket 07). */
+function fitInstance(instance: ReactZoomPanPinchRef): void {
   const wrapper = instance.instance.wrapperComponent;
   const content = instance.instance.contentComponent;
   if (wrapper === null || content === null) return;
@@ -431,24 +507,26 @@ function fitSide(ref: RefObject<ReactZoomPanPinchRef | null>): void {
  * v4.0.4), so an unclamped mirror onto a smaller peer could push its
  * content wholly offscreen. Sane containment only, not a reimplementation
  * of the library's padding-aware bounds engine (ticket 07: "do not over-
- * engineer sub-pixel alignment for mismatched dimensions").
+ * engineer sub-pixel alignment for mismatched dimensions"). Increments the
+ * PEER's own pending count (round-2 review finding #2), never a shared
+ * synchronous bracket - the peer's `onTransform` consuming it is what
+ * suppresses the echo, correct however long delivery takes.
  */
 function mirrorTransform(
-  syncingRef: { current: boolean },
+  peerPendingRef: { current: number },
   peerRef: RefObject<ReactZoomPanPinchRef | null>,
   state: ImagePreviewTransformState,
 ): void {
-  if (syncingRef.current) return;
   const peer = peerRef.current;
   if (peer === null) return;
   const wrapper = peer.instance.wrapperComponent;
   const content = peer.instance.contentComponent;
-  syncingRef.current = true;
+  peerPendingRef.current += 1;
   if (wrapper === null || content === null) {
     peer.setTransform(state.positionX, state.positionY, state.scale, 0);
   } else {
     // `getBoundingClientRect()` for the wrapper, `offsetWidth`/`offsetHeight`
-    // for the content - the same measurement split `fitSide` above uses.
+    // for the content - the same measurement split `fitInstance` above uses.
     const wrapperRect = wrapper.getBoundingClientRect();
     const scaledWidth = content.offsetWidth * state.scale;
     const scaledHeight = content.offsetHeight * state.scale;
@@ -467,7 +545,6 @@ function mirrorTransform(
       0,
     );
   }
-  syncingRef.current = false;
 }
 
 function ImageDiffSide(props: {
@@ -480,10 +557,7 @@ function ImageDiffSide(props: {
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
-  readonly onTransformChange: (
-    state: ImagePreviewTransformState,
-    origin: TransformOrigin,
-  ) => void;
+  readonly onTransformChange: (report: ImagePreviewTransformReport) => void;
   readonly doubleClickOverride: (() => void) | null;
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;

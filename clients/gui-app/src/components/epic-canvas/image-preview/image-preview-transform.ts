@@ -23,6 +23,25 @@ export interface ImagePreviewTransformState {
  */
 export type TransformOrigin = "gesture" | "programmatic";
 
+/**
+ * Everything a caller linking multiple `ImagePreview` instances needs from
+ * one `onTransform` firing (round-2 review, findings #3/#4): the raw
+ * `state` to mirror, its `origin`, the CHILD's OWN derived fit/actual-size
+ * mode (so a caller never re-derives or manually toggles it), and the
+ * child's live interactive bounds (so a caller's shared zoom-boundary UI
+ * never has to guess). Fired once at mount (`onInit` - RZPP applies its
+ * initial transform without calling `onTransform`) and on every subsequent
+ * `onTransform`.
+ */
+export interface ImagePreviewTransformReport {
+  readonly state: ImagePreviewTransformState;
+  readonly origin: TransformOrigin;
+  readonly isFitted: boolean;
+  readonly isActualSize: boolean;
+  readonly minScale: number;
+  readonly maxScale: number;
+}
+
 export interface ContainerSize {
   readonly width: number;
   readonly height: number;
@@ -112,20 +131,26 @@ export function transformMatchesFit(
   );
 }
 
+/** Round-2 review finding #5: the endpoints themselves paint zero visible pixels (content only touching the wrapper edge), so the clamp must stay strictly inside them by at least this much. */
+const MIN_VISIBLE_OVERLAP_PX = 1;
+
 /**
  * Clamps a mirrored position so the (differently-sized) peer's content can
- * never end up wholly offscreen (review finding #5) - the loosest bound
- * that guarantees SOME overlap between the scaled content rect and the
- * wrapper rect on one axis, nothing tighter. Deliberately NOT a
- * reimplementation of the library's own padding-aware bounds engine
- * (ticket 07: "do not over-engineer sub-pixel alignment for mismatched
- * dimensions") - a same-dimension mirror (the common case) is already
- * exact and never touches this range; only a genuine mismatch can.
+ * never end up wholly (or effectively) offscreen (review finding #5) - the
+ * loosest bound that guarantees at least `MIN_VISIBLE_OVERLAP_PX` of
+ * overlap between the scaled content rect and the wrapper rect on one
+ * axis, nothing tighter. Deliberately NOT a reimplementation of the
+ * library's own padding-aware bounds engine (ticket 07: "do not over-
+ * engineer sub-pixel alignment for mismatched dimensions") - a same-
+ * dimension mirror (the common case) is already exact and never gets
+ * anywhere near this range; only a genuine mismatch can.
  */
 export function clampPositionToVisibleBounds(
   position: number,
   wrapperSize: number,
   scaledContentSize: number,
 ): number {
-  return Math.min(Math.max(position, -scaledContentSize), wrapperSize);
+  const min = MIN_VISIBLE_OVERLAP_PX - scaledContentSize;
+  const max = wrapperSize - MIN_VISIBLE_OVERLAP_PX;
+  return Math.min(Math.max(position, min), max);
 }
