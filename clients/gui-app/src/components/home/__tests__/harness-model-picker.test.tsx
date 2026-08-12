@@ -536,6 +536,18 @@ const OPENROUTER_HARNESS: HarnessOption = {
   availabilityPending: false,
 };
 
+const HERMES_HARNESS: HarnessOption = {
+  id: "hermes",
+  label: "Hermes Agent",
+  enabled: true,
+  available: true,
+  error: null,
+  modes: ["gui"],
+  requiresApiKey: true,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
+};
+
 const DROID_HARNESS: HarnessOption = {
   id: "droid",
   label: "Droid",
@@ -3802,6 +3814,93 @@ describe("<HarnessModelPicker />", () => {
       expect(
         screen.queryByRole("listbox", { name: "Subproviders" }),
       ).toBeNull();
+    });
+  });
+
+  describe("cascade Source → Provider → Model (Hermes/OMP composite groups)", () => {
+    function installHermesCompositeCatalog(): void {
+      const models: ReadonlyArray<ModelOption> = [
+        model({
+          harnessId: "hermes",
+          slug: "anthropic/claude-opus",
+          label: "Claude Opus",
+          metadata: {
+            openCodeProviderId: "openrouter:anthropic",
+            openCodeProviderLabel: "Openrouter:anthropic",
+          },
+        }),
+        model({
+          harnessId: "hermes",
+          slug: "anthropic/claude-sonnet",
+          label: "Claude Sonnet",
+          metadata: {
+            openCodeProviderId: "openrouter:anthropic",
+            openCodeProviderLabel: "Openrouter:anthropic",
+          },
+        }),
+        model({
+          harnessId: "hermes",
+          slug: "openai/gpt-5",
+          label: "GPT-5",
+          metadata: {
+            openCodeProviderId: "openrouter:openai",
+            openCodeProviderLabel: "Openrouter:openai",
+          },
+        }),
+      ];
+      queryMock.harnesses = [
+        CODEX_HARNESS,
+        CLAUDE_HARNESS,
+        HERMES_HARNESS,
+      ];
+      queryMock.catalogHarnesses = [
+        catalogHarness(CODEX_HARNESS, codexModels()),
+        catalogHarness(CLAUDE_HARNESS, claudeModels()),
+        catalogHarness(HERMES_HARNESS, models),
+      ];
+      queryMock.selectedModelsByHarness = new Map([
+        ["codex", codexModels()],
+        ["claude", claudeModels()],
+        ["hermes", models],
+      ]);
+    }
+
+    it("drills OpenRouter then Anthropic instead of a concatenated Openrouter:anthropic row", async () => {
+      installHermesCompositeCatalog();
+      const { selections } = renderPicker(undefined);
+
+      await openPicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Hermes Agent" }));
+
+      expect(screen.getByRole("listbox", { name: "Sources" })).not.toBeNull();
+      expect(screen.getByRole("option", { name: /OpenRouter/ })).not.toBeNull();
+      expect(
+        screen.queryByRole("option", { name: /Openrouter:anthropic/i }),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /OpenRouter/ }));
+
+      expect(
+        screen.getByRole("listbox", { name: "Subproviders" }),
+      ).not.toBeNull();
+      expect(screen.getByRole("option", { name: /Anthropic/ })).not.toBeNull();
+      expect(screen.getByRole("option", { name: /OpenAI/ })).not.toBeNull();
+      expect(screen.queryByRole("option", { name: /Claude Opus/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /Anthropic/ }));
+
+      expect(screen.getByRole("option", { name: /Claude Opus/ })).not.toBeNull();
+      expect(
+        screen.getByRole("option", { name: /Claude Sonnet/ }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("option", { name: /GPT-5/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /Claude Opus/ }));
+      expect(selections.at(-1)).toEqual({
+        harnessId: "hermes",
+        modelSlug: "anthropic/claude-opus",
+        profileId: null,
+      });
     });
   });
 });

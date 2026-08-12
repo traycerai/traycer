@@ -37,6 +37,8 @@ function row(modelOption: ModelOption): HarnessModelRow {
     browseLabel: modelOption.label,
     providerGroupId: null,
     providerGroupLabel: null,
+    sourceGroupId: null,
+    sourceGroupLabel: null,
     capacityLabel: null,
     deprecationNotice: modelOption.deprecationNotice ?? null,
     model: modelOption,

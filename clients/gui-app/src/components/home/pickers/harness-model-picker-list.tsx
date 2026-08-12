@@ -3,7 +3,10 @@ import {
   type IndexLocationWithAlign,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import {
+  modelRowSectionLabel,
+  type HarnessModelRow,
+} from "@/components/home/data/harness-model-search";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { HarnessModelPickerItem } from "@/components/home/pickers/harness-model-picker-item";
 import { ModelRowsState } from "@/components/home/pickers/harness-model-picker-empty";
@@ -144,7 +147,7 @@ function providerGroupHeader(
   if (previous !== null && previous.providerGroupId === row.providerGroupId) {
     return null;
   }
-  return row.providerGroupLabel;
+  return modelRowSectionLabel(row);
 }
 
 function ProviderGroupHeader(props: { readonly label: string }): ReactNode {

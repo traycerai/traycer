@@ -25,6 +25,7 @@ import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-c
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type {
   HarnessModelRow,
+  HarnessSourceEntry,
   HarnessSubproviderEntry,
 } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -44,6 +45,7 @@ import type { CascadeLevel } from "@/components/home/pickers/harness-model-picke
 import {
   CascadeLevelHeader,
   EffortList,
+  SourceList,
   SubproviderList,
 } from "@/components/home/pickers/harness-model-picker-cascade-views";
 
@@ -128,6 +130,9 @@ interface HarnessModelPickerPanelProps {
   readonly cascadePathLabels: ReadonlyArray<string>;
   readonly cascadeBackAriaLabel: string;
   readonly onCascadeBack: () => void;
+  readonly sourceEntries: ReadonlyArray<HarnessSourceEntry>;
+  readonly selectedSourceId: string | null;
+  readonly onSelectSource: (entry: HarnessSourceEntry) => void;
   readonly subproviderEntries: ReadonlyArray<HarnessSubproviderEntry>;
   readonly selectedSubproviderId: string | null;
   readonly onSelectSubprovider: (entry: HarnessSubproviderEntry) => void;
@@ -192,6 +197,9 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     cascadePathLabels,
     cascadeBackAriaLabel,
     onCascadeBack,
+    sourceEntries,
+    selectedSourceId,
+    onSelectSource,
     subproviderEntries,
     selectedSubproviderId,
     onSelectSubprovider,
@@ -346,6 +354,9 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               onActiveRow={onActiveRow}
               onSelectRow={onSelectRow}
               onOpenProviderSettings={onOpenProviderSettings}
+              sourceEntries={sourceEntries}
+              selectedSourceId={selectedSourceId}
+              onSelectSource={onSelectSource}
               subproviderEntries={subproviderEntries}
               selectedSubproviderId={selectedSubproviderId}
               onSelectSubprovider={onSelectSubprovider}
@@ -388,6 +399,9 @@ interface CascadeBodyProps {
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly onOpenProviderSettings: () => void;
+  readonly sourceEntries: ReadonlyArray<HarnessSourceEntry>;
+  readonly selectedSourceId: string | null;
+  readonly onSelectSource: (entry: HarnessSourceEntry) => void;
   readonly subproviderEntries: ReadonlyArray<HarnessSubproviderEntry>;
   readonly selectedSubproviderId: string | null;
   readonly onSelectSubprovider: (entry: HarnessSubproviderEntry) => void;
@@ -417,6 +431,9 @@ function CascadeBody(props: CascadeBodyProps): ReactNode {
     onActiveRow,
     onSelectRow,
     onOpenProviderSettings,
+    sourceEntries,
+    selectedSourceId,
+    onSelectSource,
     subproviderEntries,
     selectedSubproviderId,
     onSelectSubprovider,
@@ -438,6 +455,22 @@ function CascadeBody(props: CascadeBodyProps): ReactNode {
         onHover={onHoverRow}
         onActive={onActiveRow}
         onSelect={onSelectEffort}
+      />
+    );
+  }
+
+  if (cascadeLevel === "sources" && !hasQuery) {
+    return (
+      <SourceList
+        idPrefix={idPrefix}
+        listboxId={listboxId}
+        entries={sourceEntries}
+        selectedSourceId={selectedSourceId}
+        activeId={effectiveActiveRowId}
+        hoveredId={hoveredRowId}
+        onHover={onHoverRow}
+        onActive={onActiveRow}
+        onSelect={onSelectSource}
       />
     );
   }

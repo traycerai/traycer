@@ -1,8 +1,12 @@
-import type { HarnessSubproviderEntry } from "@/components/home/data/harness-model-search";
+import type {
+  HarnessSourceEntry,
+  HarnessSubproviderEntry,
+} from "@/components/home/data/harness-model-search";
 import type {
   ReasoningLevel,
   ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
+import { ModelProviderMark } from "@/components/home/pickers/model-provider-icons";
 import { cn } from "@/lib/utils";
 import { Check, ChevronLeft } from "lucide-react";
 import type { ReactNode } from "react";
@@ -34,6 +38,161 @@ export function CascadeLevelHeader(props: CascadeLevelHeaderProps): ReactNode {
   );
 }
 
+interface CascadeGroupRow {
+  readonly id: string;
+  readonly label: string;
+  readonly modelCount: number;
+  readonly capacityLabel: string | null;
+  readonly iconId: string;
+}
+
+interface CascadeGroupListProps {
+  readonly idPrefix: string;
+  readonly listboxId: string;
+  readonly ariaLabel: string;
+  readonly entries: ReadonlyArray<CascadeGroupRow>;
+  readonly selectedId: string | null;
+  readonly activeId: string;
+  readonly hoveredId: string;
+  readonly onHover: (id: string) => void;
+  readonly onActive: (id: string) => void;
+  readonly onSelect: (id: string) => void;
+}
+
+function CascadeGroupList(props: CascadeGroupListProps): ReactNode {
+  const {
+    idPrefix,
+    listboxId,
+    ariaLabel,
+    entries,
+    selectedId,
+    activeId,
+    hoveredId,
+    onHover,
+    onActive,
+    onSelect,
+  } = props;
+
+  return (
+    <div
+      id={listboxId}
+      role="listbox"
+      aria-label={ariaLabel}
+      className="h-full overflow-y-auto overscroll-contain p-1"
+    >
+      {entries.map((entry) => {
+        const selected = entry.id === selectedId;
+        const active = entry.id === activeId;
+        const showCapacity =
+          (active || entry.id === hoveredId) && entry.capacityLabel !== null;
+        return (
+          <div key={entry.id} className="px-0 py-0.5">
+            <button
+              id={cascadeItemElementId(idPrefix, entry.id)}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              data-active={active}
+              data-selected={selected}
+              className={cn(
+                "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ui-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+                active && "bg-accent/30",
+                selected && "bg-accent/70",
+              )}
+              onMouseEnter={() => {
+                onHover(entry.id);
+                onActive(entry.id);
+              }}
+              onFocus={() => {
+                onActive(entry.id);
+              }}
+              onClick={() => {
+                onSelect(entry.id);
+              }}
+            >
+              <ModelProviderMark
+                id={entry.iconId}
+                configDeclaredCustom={false}
+                className="size-4 shrink-0 text-muted-foreground"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium leading-5">
+                  {entry.label}
+                </span>
+                <span className="block truncate text-ui-xs text-muted-foreground">
+                  {entry.modelCount === 1
+                    ? "1 model"
+                    : `${String(entry.modelCount)} models`}
+                </span>
+              </span>
+              {showCapacity ? (
+                <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+                  {entry.capacityLabel}
+                </span>
+              ) : null}
+              {selected ? (
+                <Check className="size-4 shrink-0 text-primary" />
+              ) : (
+                <span className="size-4 shrink-0" />
+              )}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface SourceListProps {
+  readonly idPrefix: string;
+  readonly listboxId: string;
+  readonly entries: ReadonlyArray<HarnessSourceEntry>;
+  readonly selectedSourceId: string | null;
+  readonly activeId: string;
+  readonly hoveredId: string;
+  readonly onHover: (id: string) => void;
+  readonly onActive: (id: string) => void;
+  readonly onSelect: (entry: HarnessSourceEntry) => void;
+}
+
+export function SourceList(props: SourceListProps): ReactNode {
+  const {
+    idPrefix,
+    listboxId,
+    entries,
+    selectedSourceId,
+    activeId,
+    hoveredId,
+    onHover,
+    onActive,
+    onSelect,
+  } = props;
+
+  return (
+    <CascadeGroupList
+      idPrefix={idPrefix}
+      listboxId={listboxId}
+      ariaLabel="Sources"
+      entries={entries.map((entry) => ({
+        id: entry.sourceGroupId,
+        label: entry.sourceGroupLabel,
+        modelCount: entry.modelCount,
+        capacityLabel: entry.capacityLabel,
+        iconId: entry.iconId,
+      }))}
+      selectedId={selectedSourceId}
+      activeId={activeId}
+      hoveredId={hoveredId}
+      onHover={onHover}
+      onActive={onActive}
+      onSelect={(id) => {
+        const entry = entries.find((candidate) => candidate.sourceGroupId === id);
+        if (entry !== undefined) onSelect(entry);
+      }}
+    />
+  );
+}
+
 interface SubproviderListProps {
   readonly idPrefix: string;
   readonly listboxId: string;
@@ -60,68 +219,29 @@ export function SubproviderList(props: SubproviderListProps): ReactNode {
   } = props;
 
   return (
-    <div
-      id={listboxId}
-      role="listbox"
-      aria-label="Subproviders"
-      className="h-full overflow-y-auto overscroll-contain p-1"
-    >
-      {entries.map((entry) => {
-        const selected = entry.providerGroupId === selectedGroupId;
-        const active = entry.providerGroupId === activeId;
-        const showCapacity =
-          (active || entry.providerGroupId === hoveredId) &&
-          entry.capacityLabel !== null;
-        return (
-          <div key={entry.providerGroupId} className="px-0 py-0.5">
-            <button
-              id={cascadeItemElementId(idPrefix, entry.providerGroupId)}
-              type="button"
-              role="option"
-              aria-selected={selected}
-              data-active={active}
-              data-selected={selected}
-              className={cn(
-                "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ui-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
-                active && "bg-accent/30",
-                selected && "bg-accent/70",
-              )}
-              onMouseEnter={() => {
-                onHover(entry.providerGroupId);
-                onActive(entry.providerGroupId);
-              }}
-              onFocus={() => {
-                onActive(entry.providerGroupId);
-              }}
-              onClick={() => {
-                onSelect(entry);
-              }}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium leading-5">
-                  {entry.providerGroupLabel}
-                </span>
-                <span className="block truncate text-ui-xs text-muted-foreground">
-                  {entry.modelCount === 1
-                    ? "1 model"
-                    : `${String(entry.modelCount)} models`}
-                </span>
-              </span>
-              {showCapacity ? (
-                <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
-                  {entry.capacityLabel}
-                </span>
-              ) : null}
-              {selected ? (
-                <Check className="size-4 shrink-0 text-primary" />
-              ) : (
-                <span className="size-4 shrink-0" />
-              )}
-            </button>
-          </div>
+    <CascadeGroupList
+      idPrefix={idPrefix}
+      listboxId={listboxId}
+      ariaLabel="Subproviders"
+      entries={entries.map((entry) => ({
+        id: entry.providerGroupId,
+        label: entry.providerGroupLabel,
+        modelCount: entry.modelCount,
+        capacityLabel: entry.capacityLabel,
+        iconId: entry.iconId,
+      }))}
+      selectedId={selectedGroupId}
+      activeId={activeId}
+      hoveredId={hoveredId}
+      onHover={onHover}
+      onActive={onActive}
+      onSelect={(id) => {
+        const entry = entries.find(
+          (candidate) => candidate.providerGroupId === id,
         );
-      })}
-    </div>
+        if (entry !== undefined) onSelect(entry);
+      }}
+    />
   );
 }
 

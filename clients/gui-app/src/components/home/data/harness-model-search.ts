@@ -41,9 +41,22 @@ export interface HarnessModelRow {
   readonly providerGroupId: string | null;
   /**
    * Display text for the group header (the provider's name, or its id when the
-   * name is missing). `null` when `providerGroupId` is `null`.
+   * name is missing). `null` when `providerGroupId` is `null`. For composite
+   * `source:vendor` groups this is the vendor only (`Anthropic`), not the
+   * concatenated host id (`openrouter:anthropic`).
    */
   readonly providerGroupLabel: string | null;
+  /**
+   * Gateway/source id when the host groups as `source:vendor` (Hermes/OMP
+   * `openrouter:anthropic`). `null` for flat groups (OpenCode `clinepass`) and
+   * ungrouped rows.
+   */
+  readonly sourceGroupId: string | null;
+  /**
+   * Display text for the source (`OpenRouter`). `null` when `sourceGroupId` is
+   * `null`.
+   */
+  readonly sourceGroupLabel: string | null;
   readonly capacityLabel: string | null;
   /**
    * Human-readable sunset notice when the host's catalog flags this model as
@@ -74,6 +87,23 @@ export interface HarnessSubproviderEntry {
   readonly providerGroupLabel: string;
   readonly modelCount: number;
   readonly capacityLabel: string | null;
+  /** Catalog id for the vendor/group mark (`anthropic`, `clinepass`). */
+  readonly iconId: string;
+}
+
+/**
+ * One gateway/source (Hermes/OMP `openrouter`, …) for the model-picker cascade.
+ * Composite `source:vendor` catalogs land here before the vendor list.
+ */
+export interface HarnessSourceEntry {
+  readonly sourceGroupId: string;
+  readonly sourceGroupLabel: string;
+  readonly modelCount: number;
+  readonly vendorCount: number;
+  /** True when this source was rolled up from `source:vendor` group ids. */
+  readonly nested: boolean;
+  readonly capacityLabel: string | null;
+  readonly iconId: string;
 }
 
 const MODEL_ROW_FUSE_OPTIONS: IFuseOptions<HarnessModelRow> = {
@@ -107,6 +137,14 @@ const VENDOR_GROUP_LABELS: ReadonlyMap<string, string> = new Map([
   ["moonshotai", "Moonshot AI"],
   ["minimax", "MiniMax"],
   ["cline-pass", "ClinePass"],
+  ["openrouter", "OpenRouter"],
+  ["groq", "Groq"],
+  ["together", "Together"],
+  ["togetherai", "Together"],
+  ["fireworks", "Fireworks"],
+  ["cerebras", "Cerebras"],
+  ["z-ai", "Z.ai"],
+  ["zai", "Z.ai"],
 ]);
 
 /**
@@ -121,10 +159,32 @@ function deriveSlugGroup(slug: string): string | null {
   return slug.slice(0, slash).toLowerCase();
 }
 
+/**
+ * Hermes/OMP (and similar aggregators) declare groups as `source:vendor`
+ * (`openrouter:anthropic`). A leading/trailing colon is not a composite.
+ */
+function splitCompositeGroupId(
+  groupId: string,
+): { readonly sourceId: string; readonly vendorId: string } | null {
+  const colon = groupId.indexOf(":");
+  if (colon <= 0 || colon === groupId.length - 1) return null;
+  return {
+    sourceId: groupId.slice(0, colon).toLowerCase(),
+    vendorId: groupId.slice(colon + 1).toLowerCase(),
+  };
+}
+
 function derivedGroupLabel(groupId: string): string {
   const known = VENDOR_GROUP_LABELS.get(groupId);
   if (known !== undefined) return known;
   return groupId.charAt(0).toUpperCase() + groupId.slice(1);
+}
+
+/** Search/browse section header: `OpenRouter · Anthropic` for composites. */
+export function modelRowSectionLabel(row: HarnessModelRow): string | null {
+  if (row.providerGroupLabel === null) return null;
+  if (row.sourceGroupLabel === null) return row.providerGroupLabel;
+  return `${row.sourceGroupLabel} · ${row.providerGroupLabel}`;
 }
 
 interface ModelGroupIdentity {
@@ -264,29 +324,35 @@ export function flattenModelRowSections(
 }
 
 /**
- * Derives cascade level-1 entries from provider rows. Order is first-seen group
+ * Derives cascade vendor entries from provider rows. Order is first-seen group
  * order (the builder already rank-orders grouped catalogs). Rows without a
- * `providerGroupId` are ignored. Each entry's `capacityLabel` is the first
+ * `providerGroupId` are ignored. When `sourceGroupId` is set, only that
+ * gateway's vendors are included. Each entry's `capacityLabel` is the first
  * non-null capacity among its models.
  */
 export function buildSubproviderEntries(
   rows: ReadonlyArray<HarnessModelRow>,
+  sourceGroupId: string | null,
 ): ReadonlyArray<HarnessSubproviderEntry> {
   const order: string[] = [];
   const groups = new Map<
     string,
     {
       providerGroupLabel: string;
+      iconId: string;
       modelCount: number;
       capacityLabel: string | null;
     }
   >();
   for (const row of rows) {
     if (row.providerGroupId === null) continue;
+    if (sourceGroupId !== null && row.sourceGroupId !== sourceGroupId) continue;
     const existing = groups.get(row.providerGroupId);
     if (existing === undefined) {
+      const composite = splitCompositeGroupId(row.providerGroupId);
       groups.set(row.providerGroupId, {
         providerGroupLabel: row.providerGroupLabel ?? row.providerGroupId,
+        iconId: composite?.vendorId ?? row.providerGroupId,
         modelCount: 1,
         capacityLabel: row.capacityLabel,
       });
@@ -307,6 +373,62 @@ export function buildSubproviderEntries(
         providerGroupLabel: entry.providerGroupLabel,
         modelCount: entry.modelCount,
         capacityLabel: entry.capacityLabel,
+        iconId: entry.iconId,
+      },
+    ];
+  });
+}
+
+/**
+ * Rolls composite `source:vendor` rows into gateway entries for the cascade
+ * source level. Non-composite groups are omitted — those stay on the existing
+ * subprovider step. Order is first-seen source order.
+ */
+export function buildSourceEntries(
+  rows: ReadonlyArray<HarnessModelRow>,
+): ReadonlyArray<HarnessSourceEntry> {
+  const order: string[] = [];
+  const sources = new Map<
+    string,
+    {
+      sourceGroupLabel: string;
+      vendors: Set<string>;
+      modelCount: number;
+      capacityLabel: string | null;
+    }
+  >();
+  for (const row of rows) {
+    if (row.sourceGroupId === null || row.sourceGroupLabel === null) continue;
+    if (row.providerGroupId === null) continue;
+    const existing = sources.get(row.sourceGroupId);
+    if (existing === undefined) {
+      sources.set(row.sourceGroupId, {
+        sourceGroupLabel: row.sourceGroupLabel,
+        vendors: new Set([row.providerGroupId]),
+        modelCount: 1,
+        capacityLabel: row.capacityLabel,
+      });
+      order.push(row.sourceGroupId);
+    } else {
+      existing.vendors.add(row.providerGroupId);
+      existing.modelCount += 1;
+      if (existing.capacityLabel === null && row.capacityLabel !== null) {
+        existing.capacityLabel = row.capacityLabel;
+      }
+    }
+  }
+  return order.flatMap((sourceGroupId) => {
+    const entry = sources.get(sourceGroupId);
+    if (entry === undefined) return [];
+    return [
+      {
+        sourceGroupId,
+        sourceGroupLabel: entry.sourceGroupLabel,
+        modelCount: entry.modelCount,
+        vendorCount: entry.vendors.size,
+        nested: true,
+        capacityLabel: entry.capacityLabel,
+        iconId: sourceGroupId,
       },
     ];
   });
@@ -355,16 +477,32 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
   const derivedGroupId =
     metadataGroupId === null ? deriveSlugGroup(model.slug) : null;
   const providerGroupId = metadataGroupId ?? derivedGroupId;
-  const providerGroupLabel =
-    derivedGroupId === null
-      ? openCodeGroupLabel(metadataGroupId, openCodeProviderLabel)
-      : derivedGroupLabel(derivedGroupId);
+  const composite =
+    providerGroupId === null ? null : splitCompositeGroupId(providerGroupId);
+  const sourceGroupId = composite?.sourceId ?? null;
+  const sourceGroupLabel =
+    composite === null ? null : derivedGroupLabel(composite.sourceId);
+  const providerGroupLabel = compositeGroupLabel(
+    composite,
+    derivedGroupId,
+    metadataGroupId,
+    openCodeProviderLabel,
+  );
   let browseLabel = model.label;
   if (providerGroupId !== null) {
     browseLabel =
       derivedGroupId === null
         ? modelDisplayLabel(model)
         : stripDerivedGroupPrefixes(model.label, harness.label, derivedGroupId);
+    if (composite !== null && sourceGroupLabel !== null) {
+      browseLabel = stripCompositeBrowsePrefixes(
+        browseLabel,
+        sourceGroupLabel,
+        providerGroupLabel ?? composite.vendorId,
+        composite.sourceId,
+        composite.vendorId,
+      );
+    }
   }
   return {
     id: rowId(harness.id, model.slug),
@@ -375,6 +513,8 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
     browseLabel,
     providerGroupId,
     providerGroupLabel,
+    sourceGroupId,
+    sourceGroupLabel,
     capacityLabel: modelCapacityLabel(model),
     deprecationNotice: model.deprecationNotice ?? null,
     model,
@@ -419,6 +559,52 @@ function openCodeGroupLabel(
 ): string | null {
   if (providerGroupId === null) return null;
   return providerLabel.length > 0 ? providerLabel : providerGroupId;
+}
+
+function compositeGroupLabel(
+  composite: { readonly sourceId: string; readonly vendorId: string } | null,
+  derivedGroupId: string | null,
+  metadataGroupId: string | null,
+  openCodeProviderLabel: string,
+): string | null {
+  if (composite !== null) {
+    if (
+      openCodeProviderLabel.length > 0 &&
+      !openCodeProviderLabel.includes(":")
+    ) {
+      return openCodeProviderLabel;
+    }
+    return derivedGroupLabel(composite.vendorId);
+  }
+  if (derivedGroupId === null) {
+    return openCodeGroupLabel(metadataGroupId, openCodeProviderLabel);
+  }
+  return derivedGroupLabel(derivedGroupId);
+}
+
+function stripCompositeBrowsePrefixes(
+  label: string,
+  sourceLabel: string,
+  vendorLabel: string,
+  sourceId: string,
+  vendorId: string,
+): string {
+  const prefixes = [
+    `${sourceLabel}:${vendorLabel}: `,
+    `${sourceLabel}: ${vendorLabel}: `,
+    `${sourceId}:${vendorId}: `,
+    `${sourceLabel}:${vendorLabel} `,
+    `${sourceId}:${vendorId} `,
+    `${vendorLabel}: `,
+    `${vendorId}: `,
+  ];
+  for (const prefix of prefixes) {
+    if (label.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const stripped = label.slice(prefix.length);
+      return stripped.length > 0 ? stripped : label;
+    }
+  }
+  return label;
 }
 
 function modelCapacityLabel(model: ModelOption): string | null {
