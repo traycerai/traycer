@@ -8,34 +8,16 @@ import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
  * normalization step stays (it's what makes GIF/WebP/SVG copyable at all -
  * the shared native clipboard allowlist is PNG/JPEG-only by design); only
  * the WRITE layer below is shared with the rest of the app.
- *
- * `ops` is an injected seam (mirrors `ImageBlobOps` in `image-blob-cache.ts`)
- * so tests can fake canvas/clipboard without a real browser.
  */
-export interface ImageCopyOps {
-  readonly createCanvas: () => HTMLCanvasElement;
-  readonly writeClipboardPng: (blob: Blob) => Promise<void>;
-}
-
-export const browserImageCopyOps: ImageCopyOps = {
-  createCanvas: () => document.createElement("canvas"),
-  // `copyImageBlobToClipboard` (ticket 07) tries the browser Clipboard API
-  // first, same as the inline call this replaces, then falls back to the
-  // Electron `nativeImage` bridge when the renderer clipboard rejects the
-  // write - a real desktop gap the previous browser-only call bypassed.
-  writeClipboardPng: (blob) => copyImageBlobToClipboard(blob),
-};
-
 export async function copyImageToClipboard(
   image: HTMLImageElement,
-  ops: ImageCopyOps,
 ): Promise<void> {
   const width = image.naturalWidth;
   const height = image.naturalHeight;
   if (width <= 0 || height <= 0) {
     throw new Error("This image has no dimensions to copy.");
   }
-  const canvas = ops.createCanvas();
+  const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
@@ -49,5 +31,9 @@ export async function copyImageToClipboard(
   if (blob === null) {
     throw new Error("This image could not be encoded to copy it.");
   }
-  await ops.writeClipboardPng(blob);
+  // `copyImageBlobToClipboard` (ticket 07) tries the browser Clipboard API
+  // first, then falls back to the Electron `nativeImage` bridge when the
+  // renderer clipboard rejects the write - a real desktop gap a
+  // browser-only write would bypass.
+  await copyImageBlobToClipboard(blob);
 }

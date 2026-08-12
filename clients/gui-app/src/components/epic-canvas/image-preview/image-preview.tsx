@@ -22,10 +22,7 @@ import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
 import { formatImagePreviewCaption } from "./image-preview-caption";
-import {
-  browserImageCopyOps,
-  copyImageToClipboard,
-} from "./image-preview-clipboard";
+import { copyImageToClipboard } from "./image-preview-clipboard";
 import {
   ACTUAL_SIZE_EPSILON,
   DEFAULT_ANIMATION_MS,
@@ -499,7 +496,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   const handleCopy = useCallback(() => {
     const image = imgRef.current;
     if (image === null) return;
-    copyImageToClipboard(image, browserImageCopyOps).then(
+    copyImageToClipboard(image).then(
       () => {
         window.clearTimeout(copyResetTimerRef.current);
         setCopyFeedback("copied");
