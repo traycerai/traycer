@@ -511,6 +511,31 @@ describe("useImageAsset", () => {
     second.unmount();
   });
 
+  it("replays the header to a late concurrent subscriber", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "late-join-identity", 3);
+    });
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+
+    act(() => {
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(first.result.current.status).toBe("ready");
+    expect(second.result.current.status).toBe("ready");
+    expect(first.result.current.url).toBe("blob:image/1");
+    expect(second.result.current.url).toBe("blob:image/1");
+    first.unmount();
+    second.unmount();
+  });
+
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
       useImageAsset(WORKSPACE_REQUEST),
