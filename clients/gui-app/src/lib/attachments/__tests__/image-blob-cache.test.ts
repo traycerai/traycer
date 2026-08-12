@@ -155,4 +155,68 @@ describe("image-blob-cache", () => {
     expect(revoked).toEqual([url]);
     expect(cache.size()).toBe(0);
   });
+
+  it("discards a referenced entry immediately, ignoring its ref count", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const url = await cache.acquire(
+      "referenced-hash",
+      "image/png",
+      fetcher,
+      "grace",
+    );
+    cache.discard("referenced-hash");
+
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
+    cache.discard("referenced-hash");
+    cache.discard("unknown-hash");
+    expect(revoked).toEqual([url]);
+  });
+
+  it("discards session-retained entries and bypasses retention", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const url = await cache.acquire(
+      "session-discard-hash",
+      "image/png",
+      fetcher,
+      "session",
+    );
+    cache.release("session-discard-hash");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(revoked).toHaveLength(0);
+
+    cache.discard("session-discard-hash");
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("starts a fresh fetch after discarding an entry", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const { ops, created } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = await cache.acquire(
+      "refetch-hash",
+      "image/png",
+      fetcher,
+      "grace",
+    );
+    cache.discard("refetch-hash");
+    const second = await cache.acquire(
+      "refetch-hash",
+      "image/png",
+      fetcher,
+      "grace",
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(second).not.toBe(first);
+    expect(created).toHaveLength(2);
+  });
 });

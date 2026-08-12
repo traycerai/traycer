@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AssetStreamClient,
   type AssetStreamCallbacks,
@@ -40,6 +40,23 @@ export interface ImageAssetState {
   /** Byte progress ticket 04 may render; `totalBytes` is `null` until the header arrives. */
   readonly receivedBytes: number;
   readonly totalBytes: number | null;
+}
+
+export interface UseImageAssetResult extends ImageAssetState {
+  /**
+   * Call from an `<img onError>` (or equivalent decode-failure signal) once
+   * `status === "ready"`: the fetched bytes were valid enough to reach a
+   * blob URL, but the browser could not decode them as an image (magic-byte
+   * validation passed host-side; decoding is a client-only concern). Force-
+   * discards the exact cache entry this asset resolved to - bypassing grace
+   * AND session retention, since a decode failure means the URL will never
+   * be consumed again regardless of how long it would otherwise be kept -
+   * and transitions this hook's own state to `"fallback"` so callers can
+   * drop any local decode-failed flag and render straight from hook state.
+   * Safe to call more than once, or after unmount (a stale `<img>` error
+   * racing teardown): idempotent, and a no-op past the first call's effect.
+   */
+  readonly reportDecodeFailure: () => void;
 }
 
 export type ImageAssetRequest =
@@ -87,6 +104,8 @@ const FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
 function describeFailure(failure: AssetStreamFailure): string {
   return FAILURE_MESSAGES[failure.reason];
 }
+
+const DECODE_FAILURE_REASON = "This image could not be decoded.";
 
 function assetSourceFor(request: ImageAssetRequest): ImageAssetSource {
   if (request.method === "workspace") return "workspace";
@@ -175,7 +194,7 @@ function buildImageAssetRequest(fields: {
  */
 export function useImageAsset(
   request: ImageAssetRequest | null,
-): ImageAssetState {
+): UseImageAssetResult {
   const hostId = useTabHostId();
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
@@ -235,6 +254,40 @@ export function useImageAsset(
     readonly state: ImageAssetState;
   } | null>(null);
 
+  // Lets `reportDecodeFailure` - a STABLE callback that outlives any single
+  // effect invocation - reach the CURRENT fetch cycle's cache key and act
+  // safely regardless of mount state. `isMountedRef`/`requestKeyRef` are
+  // shared across invocations by design (React guarantees the OLD effect's
+  // cleanup runs before the NEW one's setup, so they always reflect the
+  // LATEST invocation once its setup has run); `cacheKeyRef` likewise, but
+  // is only ever written from inside an `onHeader` that already checked
+  // ITS OWN invocation's local `active` flag, so a superseded invocation's
+  // late header can never clobber it with a stale key.
+  const isMountedRef = useRef(false);
+  const cacheKeyRef = useRef<string | null>(null);
+  const requestKeyRef = useRef<string | null>(null);
+
+  const reportDecodeFailure = useCallback((): void => {
+    const cacheKey = cacheKeyRef.current;
+    if (cacheKey !== null) {
+      imageBlobCache.discard(cacheKey);
+    }
+    if (!isMountedRef.current) return;
+    const requestKey = requestKeyRef.current;
+    if (requestKey === null) return;
+    setResolved({
+      key: requestKey,
+      state: {
+        status: "fallback",
+        url: null,
+        meta: null,
+        reason: DECODE_FAILURE_REASON,
+        receivedBytes: 0,
+        totalBytes: null,
+      },
+    });
+  }, []);
+
   useEffect(() => {
     const normalizedRequest = buildImageAssetRequest({
       method,
@@ -246,9 +299,15 @@ export function useImageAsset(
       stage,
     });
     if (normalizedRequest === null || wsStreamClient === null) {
+      isMountedRef.current = false;
+      cacheKeyRef.current = null;
+      requestKeyRef.current = null;
       return;
     }
     const requestKey = requestKeyFor(normalizedRequest);
+    isMountedRef.current = true;
+    cacheKeyRef.current = null;
+    requestKeyRef.current = requestKey;
     const retention: ImageBlobRetention = isWorktreeBackedRequest(
       normalizedRequest,
     )
@@ -299,6 +358,7 @@ export function useImageAsset(
           contentIdentity: header.contentIdentity,
         });
         cacheKey = key;
+        cacheKeyRef.current = key;
 
         const fetcher: ImageBytesFetcher = (_key, signal) => {
           usedForFetch = true;
@@ -417,6 +477,7 @@ export function useImageAsset(
 
     return () => {
       active = false;
+      isMountedRef.current = false;
       // If this fetch is the shared cache entry's OWNER (`usedForFetch`),
       // its stream must outlive THIS unmount when other consumers still
       // hold a reference - closing it here would strand every sibling on
@@ -445,7 +506,9 @@ export function useImageAsset(
 
   const currentKey =
     currentRequest === null ? null : requestKeyFor(currentRequest);
-  return resolved !== null && resolved.key === currentKey
-    ? resolved.state
-    : LOADING_STATE;
+  const state =
+    resolved !== null && resolved.key === currentKey
+      ? resolved.state
+      : LOADING_STATE;
+  return { ...state, reportDecodeFailure };
 }

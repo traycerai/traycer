@@ -434,7 +434,9 @@ describe("useImageAsset", () => {
       emitHeader(session, "workspace-identity", 3);
     });
 
-    expect(result.current).toEqual({
+    const { reportDecodeFailure, ...headerState } = result.current;
+    expect(typeof reportDecodeFailure).toBe("function");
+    expect(headerState).toEqual({
       status: "header",
       url: null,
       meta: {
@@ -514,6 +516,124 @@ describe("useImageAsset", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
     expect(revokeObjectUrlMock).toHaveBeenCalledTimes(1);
     expect(imageBlobCache.size()).toBe(0);
+  });
+
+  it("reports a browser decode failure by discarding the ready asset", async () => {
+    const { result, unmount } = renderHook(() =>
+      useImageAsset(WORKSPACE_REQUEST),
+    );
+    const session = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(session, "decode-failure", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    const url = result.current.url;
+
+    act(() => {
+      result.current.reportDecodeFailure();
+    });
+
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith(url);
+    expect(imageBlobCache.size()).toBe(0);
+    expect(result.current).toMatchObject({
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be decoded.",
+    });
+    unmount();
+  });
+
+  it("discards an immutable git asset on browser decode failure", async () => {
+    const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
+    const session = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(session, "decode-session", 3);
+      emitBytes(session, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    act(() => {
+      result.current.reportDecodeFailure();
+    });
+
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
+    expect(imageBlobCache.size()).toBe(0);
+    expect(result.current.reason).toBe("This image could not be decoded.");
+    unmount();
+  });
+
+  it("makes repeated decode-failure reports idempotent", async () => {
+    const { result, unmount } = renderHook(() =>
+      useImageAsset(WORKSPACE_REQUEST),
+    );
+    const session = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(session, "decode-twice", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    act(() => {
+      result.current.reportDecodeFailure();
+      result.current.reportDecodeFailure();
+    });
+
+    expect(revokeObjectUrlMock).toHaveBeenCalledTimes(1);
+    expect(imageBlobCache.size()).toBe(0);
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe("This image could not be decoded.");
+    unmount();
+  });
+
+  it("discards the ready asset when a stale decode error arrives after unmount", async () => {
+    const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
+    const session = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(session, "decode-after-unmount", 3);
+      emitBytes(session, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    const reportDecodeFailure = result.current.reportDecodeFailure;
+
+    unmount();
+    expect(() => reportDecodeFailure()).not.toThrow();
+    expect(imageBlobCache.size()).toBe(0);
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
+  });
+
+  it("opens a fresh stream after a decode failure discards the old entry", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "decode-remount", 3);
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(first.result.current.status).toBe("ready");
+
+    act(() => {
+      first.result.current.reportDecodeFailure();
+    });
+    first.unmount();
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const secondSession = mockWsStreamClient.sessions[1];
+    act(() => {
+      emitHeader(secondSession, "decode-remount", 3);
+      emitBytes(secondSession, [7, 8, 9]);
+    });
+    await flushPromises();
+
+    expect(second.result.current.status).toBe("ready");
+    expect(createObjectUrlMock).toHaveBeenCalledTimes(2);
+    second.unmount();
   });
 
   it("keeps the owning stream alive when its first mount unmounts mid-fetch", async () => {

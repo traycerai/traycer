@@ -75,6 +75,17 @@ export interface ImageBlobCache {
   /** Live entry count (diagnostics/tests). */
   size: () => number;
   /**
+   * Force-drops exactly `hash` immediately - revoking its URL and aborting
+   * any in-flight fetch - bypassing grace/session retention and IGNORING
+   * `refCount`. For a genuinely undecodable-but-magic-valid asset (a decode
+   * failure downstream of a successful fetch): the bytes were never wrong,
+   * so a normal `release()` would correctly leave a still-referenced or
+   * session-retained entry alive, but nothing will ever consume that URL
+   * again. Safe to call with a hash that is not (or no longer) cached - a
+   * no-op. A later `acquire()` for the same identity starts a fresh fetch.
+   */
+  discard: (hash: string) => void;
+  /**
    * Test-only: drops every entry immediately, bypassing grace/session
    * retention and revoking every live URL. `"session"`-retention entries
    * exist precisely to outlive their own test otherwise, so a shared cache
@@ -182,16 +193,24 @@ export function createImageBlobCache(
     scheduleRevoke(hash, entry);
   };
 
-  const clear = (): void => {
-    for (const entry of entries.values()) {
-      entry.cancelRevoke?.();
-      entry.abort?.abort();
-      if (entry.url !== null) ops.revoke(entry.url);
-    }
-    entries.clear();
+  const dropEntry = (hash: string, entry: CacheEntry): void => {
+    entry.cancelRevoke?.();
+    entry.abort?.abort();
+    if (entry.url !== null) ops.revoke(entry.url);
+    entries.delete(hash);
   };
 
-  return { acquire, release, size: () => entries.size, clear };
+  const discard = (hash: string): void => {
+    const entry = entries.get(hash);
+    if (entry === undefined) return;
+    dropEntry(hash, entry);
+  };
+
+  const clear = (): void => {
+    for (const [hash, entry] of entries) dropEntry(hash, entry);
+  };
+
+  return { acquire, release, size: () => entries.size, discard, clear };
 }
 
 /**
