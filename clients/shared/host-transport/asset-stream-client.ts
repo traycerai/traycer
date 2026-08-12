@@ -186,14 +186,6 @@ export class AssetStreamClient<
           return;
         }
         if (binaryPayload === null) {
-          // The local `/stream` WS transport enforces this pairing itself
-          // (a hard socket teardown on violation, before this handler is
-          // ever called - see `StreamSession.handleTextFrame`). The remote
-          // mux transport carries the binary section as an optional part of
-          // the same frame, so a buggy or malicious host CAN send
-          // `hasBinaryPayload: true` with no binary section - this guards
-          // that path, mirroring `TerminalStreamClient`'s identical check on
-          // `binarySnapshot`/`binaryData`.
           this.fail({
             reason: "fatal",
             message: "assetChunk arrived without its paired binary payload",
@@ -281,12 +273,6 @@ export class AssetStreamClient<
   private succeed(header: AssetStreamHeader, bytes: Uint8Array): void {
     this.settled = true;
     this.callbacks.onReady(header, bytes);
-    // One-shot fetch: nothing more will ever arrive on this session, so hold
-    // it open no longer than the transfer itself. Routes through `close()`
-    // (not a bare `this.session.close()`) so a caller's own subsequent
-    // `close()` - the gui-app hook closes on unmount/refetch regardless of
-    // whether THIS settled it first - stays the idempotent no-op it already
-    // is via the `this.closed` guard.
     this.close();
   }
 

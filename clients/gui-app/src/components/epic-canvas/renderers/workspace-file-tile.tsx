@@ -150,11 +150,8 @@ function WorkspaceFileTileRouter(props: {
   readonly revealTarget: WorkspaceFileRevealTarget | null;
 }) {
   const { node } = props;
-  const isImage = useMemo(
-    () => isImageAssetPath(node.filePath),
-    [node.filePath],
-  );
-  const isSvg = useMemo(() => isSvgAssetPath(node.filePath), [node.filePath]);
+  const isImage = isImageAssetPath(node.filePath);
+  const isSvg = isSvgAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
 
   if (!isImage) {
@@ -242,7 +239,7 @@ function WorkspaceImageFileTile(props: {
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
       editorId: defaultEditor ?? "vscode",
-      paths: [absoluteWorkspaceFilePath(node.workspacePath, node.filePath)],
+      paths: [`${node.workspacePath.replace(/\/$/, "")}/${node.filePath}`],
     });
   }, [
     defaultEditor,
@@ -360,13 +357,6 @@ function WorkspaceImageFileToolbar(props: {
       ) : null}
     </div>
   );
-}
-
-function absoluteWorkspaceFilePath(
-  workspacePath: string,
-  filePath: string,
-): string {
-  return `${workspacePath.replace(/\/$/, "")}/${filePath}`;
 }
 
 function WorkspaceFileTileLive(props: {
