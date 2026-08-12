@@ -366,11 +366,13 @@ export function useGithubMentionSections(
   const context = useMemo<GithubMentionProviderContext>(
     () => ({
       pullRequests: sectionContext(
-        openSection === "pull-requests" ? openRows : rootPullRequestRows,
+        openSection === "pull-requests" ? openRows.rows : rootPullRequestRows,
+        openSection === "pull-requests" && openRows.held,
         scopeRepositories,
       ),
       issues: sectionContext(
-        openSection === "issues" ? openRows : rootIssueRows,
+        openSection === "issues" ? openRows.rows : rootIssueRows,
+        openSection === "issues" && openRows.held,
         scopeRepositories,
       ),
       supported,
@@ -470,7 +472,7 @@ export function useGithubMentionSections(
       openCatalog,
       pullRequests: pullRequestCatalog,
       issues: issueCatalog,
-      openRowCount: openRows.length,
+      openRowCount: openRows.rows.length,
       query,
     }),
   };
@@ -525,9 +527,10 @@ function sectionActivity(input: {
 
 function sectionContext(
   rows: ReadonlyArray<GithubMentionRow>,
+  rowsHeld: boolean,
   repositories: ReadonlyArray<GithubMentionRepository>,
 ): GithubMentionSectionContext {
-  return { rows, repositories };
+  return { rows, rowsHeld, repositories };
 }
 
 /**
@@ -584,7 +587,7 @@ function useHeldRowsDuringSearch(input: {
   readonly rows: ReadonlyArray<GithubMentionRow>;
   readonly searching: boolean;
   readonly key: string;
-}): ReadonlyArray<GithubMentionRow> {
+}): HeldRowsResult {
   const { rows, searching, key } = input;
   const [held, setHeld] = useState<HeldRows | null>(null);
   // A settled answer is always authoritative - INCLUDING a settled empty one,
@@ -594,14 +597,28 @@ function useHeldRowsDuringSearch(input: {
   if (answered) {
     const next = rows.length > 0 ? { key, rows } : null;
     if (!sameHeldRows(held, next)) setHeld(next);
-    return rows;
+    return { rows, held: false };
   }
-  return held !== null && held.key === key ? held.rows : rows;
+  return held !== null && held.key === key
+    ? { rows: held.rows, held: true }
+    : { rows, held: false };
 }
 
 interface HeldRows {
   readonly key: string;
   readonly rows: ReadonlyArray<GithubMentionRow>;
+}
+
+interface HeldRowsResult {
+  readonly rows: ReadonlyArray<GithubMentionRow>;
+  /**
+   * True while `rows` is the PREVIOUS question's answer standing in for the
+   * current one. The consumer must publish held rows as non-selectable: the
+   * funnel already claims the new filter, and committing a row the new filter
+   * never matched would insert a mention under a claim the list is not
+   * making.
+   */
+  readonly held: boolean;
 }
 
 /** Identity comparison; the row array is never rebuilt for an unchanged answer. */

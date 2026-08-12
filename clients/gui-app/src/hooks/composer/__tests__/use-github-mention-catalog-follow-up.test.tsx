@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,13 +27,16 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 const request = vi.fn();
 
-/** Mutable so a test can swap the bound host without remounting the hook. */
-const readiness = vi.hoisted(() => ({ hostId: "host-1" }));
+/**
+ * Mutable so a test can swap the bound host, or flip readiness, without
+ * remounting the hook.
+ */
+const readiness = vi.hoisted(() => ({ hostId: "host-1", isReady: true }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
     hostId: readiness.hostId,
-    isReady: true,
+    isReady: readiness.isReady,
   }),
 }));
 
@@ -139,6 +142,7 @@ afterEach(() => {
   request.mockReset();
   catalogRequests.length = 0;
   readiness.hostId = "host-1";
+  readiness.isReady = true;
 });
 
 describe("useGithubMentionCatalog stale follow-up guard", () => {
@@ -239,5 +243,50 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
 
     // Still 2, not 3: A's follow-up was already paid on the way out.
     expect(autoSweepCount()).toBe(2);
+  });
+
+  /**
+   * READY, not merely bound. The query cache can still serve a `stale: true`
+   * answer while the host has no authenticated request context - the window
+   * a transient auth hiccup, or an app-wide host swap, can open. The mark
+   * used to be written before this check, so a mutation issued into that
+   * window died at preflight with the session's ONE follow-up already spent,
+   * and readiness becoming ready afterward found the guard already marked and
+   * never retried - leaving the scope unrefreshed for the rest of the picker
+   * session.
+   */
+  it("does not spend the follow-up while readiness is not ready, then issues it once readiness becomes ready", async () => {
+    alwaysStale();
+
+    // Root pre-fetch: the catalog is asked cache-only, but `allowStaleFollowUp`
+    // is off, so this alone must not be the trigger for what follows. Also
+    // warms the cache the disabled window below reads from.
+    const { result, rerender } = renderCatalog(AT_ROOT);
+    await waitFor(() => expect(result.current.freshnessAt).toBe(1_000));
+    expect(autoSweepCount()).toBe(0);
+
+    // Step into the section while the host is not ready.
+    readiness.isReady = false;
+    rerender(IN_SECTION);
+
+    // The cached `stale: true` answer is still visible - the read is merely
+    // disabled, not cleared - but the follow-up must not spend itself on it.
+    // The zero is asserted only AFTER draining async work: the spend this
+    // pins is an async mutation, and a synchronous read of the counter
+    // stayed 0 even with the guard deleted, because the doomed request had
+    // not reached the mock yet.
+    expect(result.current.freshnessAt).toBe(1_000);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(autoSweepCount()).toBe(0);
+
+    // Readiness recovers with nothing else about the session changed. The
+    // follow-up was never marked, so it fires now instead of having been
+    // silently spent on a request that never reached the host.
+    readiness.isReady = true;
+    rerender(IN_SECTION);
+
+    await waitFor(() => expect(autoSweepCount()).toBe(1));
   });
 });

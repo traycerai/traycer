@@ -68,7 +68,7 @@ export type ComposerPickerItem =
 export function pickerItemDisabledReason(
   item: ComposerPickerItem,
 ): string | null {
-  if (item.kind === "mention") return null;
+  if (item.kind === "mention") return item.entry.disabledReason;
   return item.disabledReason;
 }
 

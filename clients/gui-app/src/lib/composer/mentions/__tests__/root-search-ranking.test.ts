@@ -19,6 +19,7 @@ function entry(fields: {
     detail: fields.detail ?? "",
     description: fields.description ?? "",
     searchText: null,
+    disabledReason: null,
     icon: createElement("span"),
     action: { kind: "back" },
     updatedAt: null,
@@ -56,6 +57,7 @@ function githubCandidate(fields: {
       }),
       labelPrefix: fields.labelPrefix,
       searchText: fields.searchText ?? null,
+      disabledReason: null,
     },
     providerId: "pull-requests",
   };

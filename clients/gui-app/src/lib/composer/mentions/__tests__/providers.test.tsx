@@ -7,6 +7,7 @@ import type {
 } from "../providers";
 import {
   EMPTY_GITHUB_SECTION_CONTEXT,
+  GITHUB_MENTION_HELD_ROWS_DISABLED_REASON,
   mentionProviderRegistry,
   ROOT_MENTION_STEP,
 } from "../providers";
@@ -266,6 +267,7 @@ describe("mention provider registry", () => {
         github: {
           pullRequests: {
             rows: [row],
+            rowsHeld: false,
             repositories: [
               { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
             ],
@@ -278,6 +280,113 @@ describe("mention provider registry", () => {
     );
 
     expect(searched.matchedCount).toBe(1);
+  });
+
+  /**
+   * Held rows are the PREVIOUS filter's answer kept on screen while the new
+   * filter's search runs (see `useHeldRowsDuringSearch` in
+   * `use-github-mention-sections`). They stay visible for continuity but must
+   * not be committable under the funnel's new claim, so the provider marks
+   * their entries inert with the shared, screen-reader-facing reason.
+   */
+  it("marks a held row's entry inert with the shared disabled reason", () => {
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "alice", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "pull-requests",
+      stepId: "pull-requests",
+      workspacePath: null,
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: true,
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entryByLabel(entries, "Stop the busy-loop").disabledReason).toBe(
+      GITHUB_MENTION_HELD_ROWS_DISABLED_REASON,
+    );
+  });
+
+  it("leaves the row committable when rowsHeld is false", () => {
+    // The control. Without it, a bug that disabled every GitHub row
+    // unconditionally would pass the case above too.
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "alice", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "pull-requests",
+      stepId: "pull-requests",
+      workspacePath: null,
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(
+      entryByLabel(entries, "Stop the busy-loop").disabledReason,
+    ).toBeNull();
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {

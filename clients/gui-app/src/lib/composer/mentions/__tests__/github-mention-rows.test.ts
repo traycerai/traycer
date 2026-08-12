@@ -376,9 +376,25 @@ describe("parseGithubReferenceQuery", () => {
   it("recognizes org/repo#number", () => {
     expect(parseGithubReferenceQuery("org/repo#123")).toEqual({
       kind: "repository",
+      githubHost: null,
       owner: "org",
       repo: "repo",
       number: 123,
+    });
+  });
+
+  it("recognizes host/owner/repo#number as a host-qualified repository reference", () => {
+    // Three segments parse as the host-qualified form - the exact identity
+    // the UI prints when a scope holds the same owner/repo on two hosts, so
+    // typing that displayed form back must parse into the reference it is.
+    expect(
+      parseGithubReferenceQuery("ghe.example.test/acme/widgets#7"),
+    ).toEqual({
+      kind: "repository",
+      githubHost: "ghe.example.test",
+      owner: "acme",
+      repo: "widgets",
+      number: 7,
     });
   });
 
@@ -544,6 +560,106 @@ describe("githubMentionMatchScore", () => {
         row,
         "https://GitHub.com/traycerai/traycer/pull/4917",
       ),
+    ).toBe(0);
+  });
+
+  it("matches a host-qualified query naming the row's own enterprise host", () => {
+    // The UI prints `host/owner/repo` when a scope holds the same owner/repo
+    // on two hosts (see `githubRepositoryQualification`), so a matcher that
+    // cannot re-match the identity the row DISPLAYS would drop the row the
+    // moment the user types back what they see.
+    const enterprise = pullRequest({
+      number: 1,
+      title: "Enterprise PR",
+      githubHost: "ghe.example.test",
+      owner: "acme",
+      repo: "widgets",
+    });
+
+    expect(
+      githubMentionMatchScore(enterprise, "ghe.example.test/acme/widgets"),
+    ).toBe(400);
+  });
+
+  it("does not match a different host's identical owner/repo against a host-qualified query", () => {
+    // The control. Without it, the qualified haystack could quietly widen
+    // into matching ANY host sharing the same owner/repo rather than only the
+    // host actually named in the query.
+    const githubCom = pullRequest({
+      number: 2,
+      title: "Public PR",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+    });
+
+    expect(
+      githubMentionMatchScore(githubCom, "ghe.example.test/acme/widgets"),
+    ).toBeNull();
+  });
+
+  it("still matches a host-agnostic owner/repo query on either host", () => {
+    // The other control: `owner/repo` alone must keep matching a row on
+    // EITHER host, because it names no host at all.
+    const enterprise = pullRequest({
+      number: 3,
+      title: "Enterprise PR",
+      githubHost: "ghe.example.test",
+      owner: "acme",
+      repo: "widgets",
+    });
+    const githubCom = pullRequest({
+      number: 4,
+      title: "Public PR",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+    });
+
+    expect(githubMentionMatchScore(enterprise, "acme/widgets")).toBe(400);
+    expect(githubMentionMatchScore(githubCom, "acme/widgets")).toBe(400);
+  });
+
+  it("ranks a host-qualified reference query 0 for only the row on that host", () => {
+    // A host-qualified `host/owner/repo#number` names ONE host's row, exactly
+    // like a pasted URL does - the two-segment `owner/repo#number` form stays
+    // host-agnostic, but three segments say which host.
+    const enterprise = pullRequest({
+      number: 7,
+      title: "Enterprise PR",
+      githubHost: "ghe.example.test",
+      owner: "acme",
+      repo: "widgets",
+    });
+    const githubCom = pullRequest({
+      number: 7,
+      title: "Public PR",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+    });
+
+    expect(
+      githubMentionMatchScore(enterprise, "ghe.example.test/acme/widgets#7"),
+    ).toBe(0);
+    expect(
+      githubMentionMatchScore(githubCom, "ghe.example.test/acme/widgets#7"),
+    ).not.toBe(0);
+  });
+
+  it("case-folds the host in a host-qualified reference query", () => {
+    // Hostnames are case-insensitive, and `owner`/`repo` are already compared
+    // case-folded on this path.
+    const enterprise = pullRequest({
+      number: 7,
+      title: "Enterprise PR",
+      githubHost: "ghe.example.test",
+      owner: "acme",
+      repo: "widgets",
+    });
+
+    expect(
+      githubMentionMatchScore(enterprise, "GHE.Example.TEST/Acme/Widgets#7"),
     ).toBe(0);
   });
 });

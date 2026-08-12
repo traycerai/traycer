@@ -279,4 +279,27 @@ describe("useGithubMentionSections filter swap", () => {
 
     expect(result.current.context.pullRequests.rows).toEqual([]);
   });
+
+  it("reports rowsHeld true only while held rows are standing in, and false once the search answers", () => {
+    mocks.pullRequests.rows = [pullRequest(1, "open"), pullRequest(2, "open")];
+
+    const { result, rerender } = renderSections("");
+    // Nothing is held yet - these are the live cached answer.
+    expect(result.current.context.pullRequests.rowsHeld).toBe(false);
+
+    // The funnel moves to a state the cache cannot answer, and the remote
+    // search that CAN answer it has not come back yet - the previous
+    // answer's rows are standing in, and `providers.tsx` reads this flag to
+    // render them non-committable.
+    selectMergedState();
+    mocks.search.isSearching = true;
+    rerender({ query: "" });
+    expect(result.current.context.pullRequests.rowsHeld).toBe(true);
+
+    // The search lands: the rows on screen are now the live answer again.
+    mocks.search.rows = [pullRequest(7, "merged")];
+    mocks.search.isSearching = false;
+    rerender({ query: "" });
+    expect(result.current.context.pullRequests.rowsHeld).toBe(false);
+  });
 });

@@ -355,6 +355,15 @@ export function useGithubMentionCatalog(
       return;
     }
     if (!enabled || !allowStaleFollowUp) return;
+    // READY, not merely bound: the query cache can still serve this scope's
+    // `stale: true` answer while the host has no authenticated request
+    // context, and a mutation issued then dies at preflight - after the mark
+    // below was already made. The mark is the session's ONE follow-up for
+    // this key, so spending it on a request that never reached the host left
+    // the scope unrefreshed for the rest of the picker session once the
+    // context came back. Deferring both (the mark and the send) costs
+    // nothing: this effect re-runs when readiness flips.
+    if (!readiness.isReady) return;
     // `keepPreviousData` hands over the PREVIOUS scope's response while the
     // new scope's cache-only read is in flight. Following its `stale` flag
     // would spend a GitHub request - and rate-limit budget - deciding for a
@@ -382,6 +391,7 @@ export function useGithubMentionCatalog(
     followKey,
     mutateAsync,
     pickerActive,
+    readiness.isReady,
     scope.epicId,
     scope.workspacePaths,
     section,

@@ -357,9 +357,14 @@ export function githubMentionMatchScore(
   if (title.startsWith(query)) return 200;
   if (title.includes(query)) return 300;
 
-  const repo = row.repo.toLowerCase();
-  const owner = row.owner.toLowerCase();
-  if (repo.includes(query) || `${owner}/${repo}`.includes(query)) return 400;
+  // One host-qualified haystack, because `repo` and `owner/repo` are both
+  // substrings of it. The host segment must be searchable: the UI itself
+  // prints `host/owner/repo` when a scope holds the same name on two hosts
+  // (see `githubRepositoryQualification`), and a matcher that cannot re-match
+  // the identity the row DISPLAYS drops the row the moment the user types
+  // what they see.
+  const qualified = `${row.githubHost}/${row.owner}/${row.repo}`.toLowerCase();
+  if (qualified.includes(query)) return 400;
 
   const author = row.author?.login.toLowerCase() ?? "";
   if (author.length > 0 && author.includes(query)) return 500;
@@ -500,6 +505,15 @@ export type GithubReferenceQuery =
   | { readonly kind: "number"; readonly number: number }
   | {
       readonly kind: "repository";
+      /**
+       * Null for the two-segment `owner/repo#123` form. Three segments parse
+       * as `host/owner/repo#123` - the exact identity the UI prints when a
+       * scope holds the same `owner/repo` on two hosts, so typing that
+       * displayed form back must rank as the reference it is. A repository
+       * name cannot contain `/`, which is what makes the segment count
+       * unambiguous.
+       */
+      readonly githubHost: string | null;
       readonly owner: string;
       readonly repo: string;
       readonly number: number;
@@ -515,6 +529,8 @@ export type GithubReferenceQuery =
 
 const BARE_NUMBER_REFERENCE = /^#(\d{1,7})$/;
 const REPOSITORY_REFERENCE = /^([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d{1,7})$/;
+const HOST_REPOSITORY_REFERENCE =
+  /^([\w.-]+)\/([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d{1,7})$/;
 const URL_REFERENCE =
   /^(?:https?:\/\/)([\w.-]+)\/([A-Za-z0-9][\w.-]*)\/([\w.-]+)\/(pull|issues)\/(\d{1,7})(?:[/?#].*)?$/;
 
@@ -537,8 +553,23 @@ export function parseGithubReferenceQuery(
       ? null
       : {
           kind: "repository",
+          githubHost: null,
           owner: repository[1],
           repo: repository[2],
+          number,
+        };
+  }
+
+  const hostRepository = HOST_REPOSITORY_REFERENCE.exec(query);
+  if (hostRepository !== null) {
+    const number = referenceNumber(hostRepository[4]);
+    return number === null
+      ? null
+      : {
+          kind: "repository",
+          githubHost: hostRepository[1],
+          owner: hostRepository[2],
+          repo: hostRepository[3],
           number,
         };
   }
@@ -593,6 +624,15 @@ function referenceMatchesRow(
   if (reference.kind === "number") return true;
   if (reference.owner.toLowerCase() !== row.owner.toLowerCase()) return false;
   if (reference.repo.toLowerCase() !== row.repo.toLowerCase()) return false;
+  // A host-qualified repository reference names ONE host's row, exactly like
+  // a URL's host does below; the two-segment form stays host-agnostic.
+  if (
+    reference.kind === "repository" &&
+    reference.githubHost !== null &&
+    reference.githubHost.toLowerCase() !== row.githubHost.toLowerCase()
+  ) {
+    return false;
+  }
   // Case-folded like `owner` and `repo` above: hostnames are case-insensitive,
   // so a pasted `https://GitHub.com/org/repo/pull/1` must still match the row
   // it names rather than losing its exact-reference rank to text scoring.

@@ -85,6 +85,7 @@ function mentionItem(path: string): ComposerPickerItem {
       detail: "",
       description: "",
       searchText: null,
+      disabledReason: null,
       icon: FAKE_ICON,
       action: { kind: "complete", mention: fileMention(path) },
       updatedAt: null,

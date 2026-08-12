@@ -18,6 +18,7 @@ function entry(fields: {
     detail: fields.detail,
     description: "",
     searchText: null,
+    disabledReason: null,
     icon: createElement("span"),
     action: { kind: "back" },
     updatedAt: fields.updatedAt,

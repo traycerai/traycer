@@ -347,16 +347,16 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           // The first menu (mention categories, slash commands) stays compact:
           // tall enough for the full category roster without a scrollbar,
           // while typed-query results scroll behind the cap. A provider
-          // submenu gets more room than root - a roster reads better with
-          // more of it on screen - but behind a rem ceiling, not a bare
-          // viewport fraction: several providers (files, the GitHub sections)
-          // fill their 25-row result limit routinely, and 70vh of dense rows
-          // on a large display is a menu that takes over the window rather
-          // than a menu that grew. The vh term still governs short windows.
+          // submenu gets more room than root - several providers (files, the
+          // GitHub sections) fill their 25-row result limit routinely, and a
+          // roster reads better with more of it on screen - and its cap is
+          // viewport-relative per the repo's fluid-sizing rule, so a taller
+          // display shows more of the list instead of scrolling it behind a
+          // fixed ceiling.
           className={cn(
             "overflow-y-auto py-1",
             kind === "mention" && step.kind === "provider"
-              ? "max-h-[min(70vh,24rem)]"
+              ? "max-h-[70vh]"
               : "max-h-[min(50vh,16rem)]",
           )}
         >

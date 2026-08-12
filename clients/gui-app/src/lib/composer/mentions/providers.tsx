@@ -122,6 +122,13 @@ export interface MentionMenuEntry {
    * picker over a row it was showing.
    */
   readonly searchText: string | null;
+  /**
+   * Non-null renders the row inert: visible and focusable for continuity,
+   * but not committable, with this text as the screen-reader's why. The one
+   * producer today is a held row set standing in for a changed filter's
+   * still-searching answer - see `GithubMentionSectionContext.rowsHeld`.
+   */
+  readonly disabledReason: string | null;
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
   /**
@@ -264,6 +271,15 @@ export interface ComposerMentionProviderContext {
 export interface GithubMentionSectionContext {
   readonly rows: ReadonlyArray<GithubMentionRow>;
   /**
+   * True while `rows` is a previous filter's answer held on screen so a
+   * funnel change does not flash the list away while the search for the new
+   * filter runs. Held rows render but must not be committable: the funnel
+   * already claims the NEW filter, and inserting a row that filter never
+   * matched would act on a claim the list is not making. The row entries
+   * carry a `disabledReason` while this is true.
+   */
+  readonly rowsHeld: boolean;
+  /**
    * The repositories the host resolved from this scope's folders.
    *
    * The list rather than a `singleRepositoryScope` flag, because how a row
@@ -297,6 +313,7 @@ export interface GithubMentionProviderContext {
 
 export const EMPTY_GITHUB_SECTION_CONTEXT: GithubMentionSectionContext = {
   rows: [],
+  rowsHeld: false,
   repositories: [],
 };
 
@@ -900,6 +917,14 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
  * Hiding them would make the feature undiscoverable for precisely the users
  * who need to learn why it is empty; the section explains itself inside.
  */
+/**
+ * The screen-reader's why for a held row. The visible chrome already carries
+ * the state (the `Searching GitHub…` row below the list); this is the same
+ * fact for the row itself, where "Disabled." alone would read as a mystery.
+ */
+export const GITHUB_MENTION_HELD_ROWS_DISABLED_REASON =
+  "Showing the previous filter's results while GitHub answers the current one.";
+
 class GithubMentionProvider extends ComposerMentionProvider {
   readonly id: MentionProviderId;
   readonly rootOrder: number;
@@ -998,13 +1023,20 @@ class GithubMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
     const section = this.sectionContext(context);
+    // Held rows are the PREVIOUS filter's answer kept on screen while the
+    // new filter's search runs; they stay visible for continuity but must
+    // not be committable under the funnel's new claim.
+    const disabledReason = section.rowsHeld
+      ? GITHUB_MENTION_HELD_ROWS_DISABLED_REASON
+      : null;
     return section.rows.map((row) =>
-      githubRowEntry(
+      githubRowEntry({
         row,
-        this.section,
-        section.repositories,
-        context.github.now,
-      ),
+        section: this.section,
+        repositories: section.repositories,
+        now: context.github.now,
+        disabledReason,
+      }),
     );
   }
 
@@ -1038,12 +1070,14 @@ class GithubMentionProvider extends ComposerMentionProvider {
   }
 }
 
-function githubRowEntry(
-  row: GithubMentionRow,
-  section: GithubMentionSection,
-  repositories: ReadonlyArray<GithubMentionRepository>,
-  now: number,
-): MentionMenuEntry {
+function githubRowEntry(args: {
+  readonly row: GithubMentionRow;
+  readonly section: GithubMentionSection;
+  readonly repositories: ReadonlyArray<GithubMentionRepository>;
+  readonly now: number;
+  readonly disabledReason: string | null;
+}): MentionMenuEntry {
+  const { row, section, repositories, now, disabledReason } = args;
   return {
     id: githubMentionEntryId(section, row),
     labelPrefix: `#${row.number}`,
@@ -1055,6 +1089,7 @@ function githubRowEntry(
     // `description`, title by `label`, owner/repo by `detail` - and the
     // author only here, because no rendered segment shows the login.
     searchText: row.author?.login ?? null,
+    disabledReason,
     // Null even though these rows DO have a last-activity clock: their age is
     // already composed into `detail` alongside the repository (`acme/web ·
     // 2h`), because the two only read correctly together. Filling the separate
@@ -1223,6 +1258,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     detail: args.detail,
     description: args.description,
     searchText: null,
+    disabledReason: null,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
     updatedAt: null,
@@ -1239,6 +1275,7 @@ function backEntry(description: string): MentionMenuEntry {
     detail: "",
     description,
     searchText: null,
+    disabledReason: null,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
     updatedAt: null,
@@ -1266,6 +1303,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       detail: detailForSuggestion(entry),
       description: descriptionForSuggestion(entry),
       searchText: null,
+      disabledReason: null,
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
       updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
