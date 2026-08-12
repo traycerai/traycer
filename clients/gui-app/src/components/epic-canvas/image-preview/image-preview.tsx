@@ -85,9 +85,9 @@ export interface ImagePreviewProps {
    * differently-sized peer, each peer computes its own fit, and must not
    * read it as "the user manually zoomed away"); `isFitted`/`isActualSize`
    * are this instance's OWN already-correct derivation, reported up rather
-   * than re-derived by the caller; `minScale`/`maxScale` are this
-   * instance's live interactive bounds, published at init (not only on
-   * `onTransform` - RZPP applies its initial transform without calling it).
+   * than re-derived by the caller; `minScale` is this instance's live
+   * interactive floor, published at init (not only on `onTransform` - RZPP
+   * applies its initial transform without calling it).
    */
   readonly onTransformChange:
     ((report: ImagePreviewTransformReport) => void) | null;
@@ -444,14 +444,12 @@ export function ImagePreview(props: ImagePreviewProps) {
     origin: TransformOrigin,
     ref: ReactZoomPanPinchRef,
   ): ImagePreviewTransformReport {
-    const setup = ref.instance.setup;
     return {
       state,
       origin,
       isFitted: liveFit !== null && transformMatchesFit(state, liveFit),
       isActualSize: Math.abs(state.scale - 1) < ACTUAL_SIZE_EPSILON,
-      minScale: setup.minScale,
-      maxScale: setup.maxScale,
+      minScale: ref.instance.setup.minScale,
     };
   }
 

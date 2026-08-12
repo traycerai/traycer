@@ -28,10 +28,14 @@ export type TransformOrigin = "gesture" | "programmatic";
  * one `onTransform` firing (round-2 review, findings #3/#4): the raw
  * `state` to mirror, its `origin`, the CHILD's OWN derived fit/actual-size
  * mode (so a caller never re-derives or manually toggles it), and the
- * child's live interactive bounds (so a caller's shared zoom-boundary UI
+ * child's live interactive floor (so a caller's shared zoom-boundary UI
  * never has to guess). Fired once at mount (`onInit` - RZPP applies its
  * initial transform without calling `onTransform`) and on every subsequent
- * `onTransform`.
+ * `onTransform`. No `maxScale` field: every `TransformWrapper` is configured
+ * with the same constant `MAX_SCALE` (only `minScale` varies per instance,
+ * from that instance's own image dimensions), so a ceiling check compares
+ * against `MAX_SCALE` directly rather than threading an always-identical
+ * value through every report.
  */
 export interface ImagePreviewTransformReport {
   readonly state: ImagePreviewTransformState;
@@ -39,7 +43,6 @@ export interface ImagePreviewTransformReport {
   readonly isFitted: boolean;
   readonly isActualSize: boolean;
   readonly minScale: number;
-  readonly maxScale: number;
 }
 
 export interface ContainerSize {

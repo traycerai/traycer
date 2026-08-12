@@ -42,13 +42,11 @@ import {
 interface SideBounds {
   readonly scale: number;
   readonly minScale: number;
-  readonly maxScale: number;
 }
 
 const DEFAULT_SIDE_BOUNDS: SideBounds = {
   scale: 1,
   minScale: MIN_SCALE,
-  maxScale: MAX_SCALE,
 };
 
 /**
@@ -64,8 +62,12 @@ function sideAtMin(active: boolean, bounds: SideBounds): boolean {
   return active && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
 }
 
+// `maxScale` isn't part of `SideBounds` - every side's TransformWrapper is
+// configured with the same constant MAX_SCALE (only minScale varies per
+// side's own image dimensions), so the ceiling check compares against it
+// directly rather than threading an always-identical value through state.
 function sideAtMax(active: boolean, bounds: SideBounds): boolean {
-  return active && bounds.scale >= bounds.maxScale - ZOOM_BOUNDARY_EPSILON;
+  return active && bounds.scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
 }
 
 /**
@@ -267,7 +269,6 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       setOldBounds({
         scale: report.state.scale,
         minScale: report.minScale,
-        maxScale: report.maxScale,
       });
       setOldMode({
         isFitted: report.isFitted,
@@ -288,7 +289,6 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       setNewBounds({
         scale: report.state.scale,
         minScale: report.minScale,
-        maxScale: report.maxScale,
       });
       setNewMode({
         isFitted: report.isFitted,
