@@ -218,6 +218,8 @@ function openAssetStreamClient(
 interface SharedAssetSubscription {
   readonly client: AssetStreamClient;
   refCount: number;
+  /** The one-time `assetHeader` this entry's client already delivered, if any - retained so a joiner arriving AFTER it fired (but before settle) still gets it, since the underlying client itself only ever calls `onHeader` once. */
+  readonly headerBox: { current: AssetStreamHeader | null };
   readonly headerListeners: Set<(header: AssetStreamHeader) => void>;
   readonly readyListeners: Set<
     (header: AssetStreamHeader, bytes: Uint8Array) => void
@@ -247,6 +249,18 @@ interface SharedAssetSubscription {
  * settles (`onReady`/`onFailure`) - once settled, a later mount goes
  * through the normal (post-header) `imageBlobCache` path instead, which
  * already handles that case correctly.
+ *
+ * A joiner can arrive in the window AFTER `assetHeader` already fired but
+ * BEFORE settle (sol re-review, ticket 09 follow-up #2): the underlying
+ * client only ever calls `onHeader` once, so a joiner registered after that
+ * point would otherwise never see it - never acquiring its own
+ * `imageBlobCache` lease, leaving it stuck at `"loading"` forever even
+ * though the shared fetch completes normally. `headerBox` retains that one
+ * header so `acquireSharedAssetSubscription` can hand it back to a late
+ * joiner (via `retainedHeader`) to replay - the CALLER replays it, not this
+ * function, so the replay only fires once the joiner's own `release` handle
+ * is bound (a replay-triggered synchronous loser-close must have something
+ * to call `release()` on).
  */
 const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
 
@@ -255,9 +269,15 @@ function acquireSharedAssetSubscription(
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   request: ImageAssetRequest,
   callbacks: AssetStreamCallbacks,
-): { readonly release: () => void } {
+): {
+  readonly release: () => void;
+  readonly retainedHeader: AssetStreamHeader | null;
+} {
   let entry = sharedAssetSubscriptions.get(sharedKey);
   if (entry === undefined) {
+    const headerBox: { current: AssetStreamHeader | null } = {
+      current: null,
+    };
     const headerListeners = new Set<(header: AssetStreamHeader) => void>();
     const readyListeners = new Set<
       (header: AssetStreamHeader, bytes: Uint8Array) => void
@@ -265,6 +285,7 @@ function acquireSharedAssetSubscription(
     const failureListeners = new Set<(failure: AssetStreamFailure) => void>();
     const client = openAssetStreamClient(wsStreamClient, request, {
       onHeader: (header) => {
+        headerBox.current = header;
         for (const listener of headerListeners) listener(header);
       },
       onReady: (header, bytes) => {
@@ -279,6 +300,7 @@ function acquireSharedAssetSubscription(
     entry = {
       client,
       refCount: 0,
+      headerBox,
       headerListeners,
       readyListeners,
       failureListeners,
@@ -308,6 +330,7 @@ function acquireSharedAssetSubscription(
         capturedEntry.client.close();
       }
     },
+    retainedHeader: capturedEntry.headerBox.current,
   };
 }
 
@@ -588,12 +611,22 @@ export function useImageAsset(
       },
     };
 
-    sharedSubscription = acquireSharedAssetSubscription(
+    const acquired = acquireSharedAssetSubscription(
       JSON.stringify([hostId, requestKey]),
       wsStreamClient,
       normalizedRequest,
       callbacks,
     );
+    sharedSubscription = acquired;
+    // A late joiner (the shared entry already has a header, e.g. a second
+    // mount arriving after `assetHeader` but before settle) replays it HERE,
+    // never inside `acquireSharedAssetSubscription` itself - `sharedSubscription`
+    // must already be bound first, since `callbacks.onHeader` below can
+    // synchronously call `sharedSubscription.release()` (the loser-close
+    // path) and that call needs something to run against.
+    if (acquired.retainedHeader !== null) {
+      callbacks.onHeader(acquired.retainedHeader);
+    }
 
     return () => {
       active = false;
