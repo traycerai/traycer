@@ -314,9 +314,8 @@ describe("mention provider registry", () => {
       )
       .slice(1);
 
-    // The interface label is gone from the row detail - the trailing slot
-    // shows the last-activity time (carried as `updatedAt`) instead; harness
-    // and reference-only capability keep disambiguating.
+    // The row detail carries harness and reference-only capability, never an
+    // interface label; the trailing slot's time rides `updatedAt` separately.
     expect(rows.map((row) => row.detail)).toEqual([
       "",
       "Claude Code",
@@ -354,6 +353,10 @@ describe("mention provider registry", () => {
       "chat:epic-1:chat-arch",
     ]);
     expect(rows.map((row) => row.archived)).toEqual([false, true]);
+    // Archived rows carry no time: the record clock is bumped by the archive
+    // write itself, so a label would always claim the archive action as
+    // activity. The badge alone marks them.
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, null]);
   });
 
   it("never lets archived-ness override match quality", () => {

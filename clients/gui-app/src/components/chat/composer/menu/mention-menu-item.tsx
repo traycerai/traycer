@@ -57,7 +57,11 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         </TooltipWrapper>
       ) : null}
       {entry.updatedAt !== null ? (
-        <MentionRowTime timestamp={entry.updatedAt} />
+        // Keyed by the entry, not the row position: the menu keys rows by
+        // index, so a ranked reorder reuses this component instance for a
+        // DIFFERENT Agent - without the key, the frozen label would keep the
+        // previous occupant's time.
+        <MentionRowTime key={entry.id} timestamp={entry.updatedAt} />
       ) : null}
     </div>
   );

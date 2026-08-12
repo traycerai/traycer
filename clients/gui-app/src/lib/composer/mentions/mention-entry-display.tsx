@@ -70,10 +70,10 @@ export function agentEntrySecondaryContext(
 
 /**
  * The menu ROW's trailing text for an Agent, as opposed to the preview
- * panel's `agentEntrySecondaryContext`: the interface label ("Chat",
- * "Terminal") is dropped - the row's trailing slot instead shows the Agent's
- * last-activity time, which actually helps pick between same-named rows -
- * while the harness name and the reference-only marker keep disambiguating.
+ * panel's `agentEntrySecondaryContext`: no interface label ("Chat",
+ * "Terminal") - the row's trailing slot shows the Agent's last-activity
+ * time, which is what helps pick between same-named rows - while the
+ * harness name and the reference-only marker disambiguate.
  */
 function agentEntryRowDetail(entry: EpicAgentMentionEntry): string {
   const parts: string[] = [];
@@ -95,8 +95,8 @@ export function detailForSuggestion(entry: MentionSuggestionEntry): string {
     return dirnameOfPath(entry.relPath);
   }
   // Agent rows are always current-Task, so the epic title the artifact rows use
-  // here carries no signal; harness + capability disambiguate, and the row's
-  // separately-rendered last-activity time replaces the interface label.
+  // here carries no signal; harness + capability disambiguate, and the row
+  // renders its last-activity time as a separate trailing element.
   if (isAgentEntry(entry)) return agentEntryRowDetail(entry);
   // Two shells started in the same Task routinely share a title; the working
   // directory is what tells them apart.

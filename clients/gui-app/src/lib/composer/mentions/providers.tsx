@@ -85,8 +85,11 @@ export interface MentionMenuEntry {
   /**
    * Last-activity timestamp rendered at the row's trailing edge (compact
    * relative form, static per render - menu rows do not tick). Null for rows
-   * with no meaningful activity clock (files, categories, terminals - whose
-   * `updatedAt` is really a start time).
+   * with no meaningful activity clock: files and categories, terminals
+   * (whose `updatedAt` is really a start time), and ARCHIVED Agents - the
+   * record clock is a mutation clock that the archive write itself bumps, so
+   * an archived row's time would always read as the archive action, not the
+   * Agent's real activity.
    */
   readonly updatedAt: number | null;
   /**
@@ -934,9 +937,12 @@ function backEntry(description: string): MentionMenuEntry {
 function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   const mention = mentionAttachmentFromSuggestion(entry);
   if (mention === null) return [];
-  // Agent rows are the only ones whose `updatedAt` means last activity (it
+  // Agent rows are the only ones whose `updatedAt` approximates activity (it
   // bumps on streaming ticks); a terminal's is its start time, so terminals
-  // keep a null clock and no badge semantics apply outside Agents.
+  // keep a null clock and no badge semantics apply outside Agents. Archived
+  // Agents get no time either: the record clock is bumped by the archive
+  // write itself (and other metadata writes), so it would always claim the
+  // archive action as "activity" - the badge alone tells their story.
   const isAgent =
     entry.kind === "epic-chat" || entry.kind === "epic-terminal-agent";
   return [
@@ -947,7 +953,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       description: descriptionForSuggestion(entry),
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
-      updatedAt: isAgent ? entry.updatedAt : null,
+      updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
       archived: isAgent ? entry.archived : false,
       preview: previewForSuggestion(entry),
     },
@@ -985,6 +991,14 @@ function terminalSuggestionEntries(
  * scores by input index and the prefix/substring tiers are a stable resort -
  * so the same rule carries through there: demotion applies within a match
  * tier, never across tiers.
+ *
+ * The recency tie-break reads the record's `updatedAt`, which is a MUTATION
+ * clock, not a pure activity clock: the archive write itself bumps it, as do
+ * renames and other metadata writes. Among archived rows it therefore orders
+ * by roughly "most recently archived/touched first" - accepted, since their
+ * true pre-archive activity time is unrecoverable client-side (the archive
+ * write overwrote it), and archive recency is a reasonable order for
+ * archived rows. Their menu rows show no time label for the same reason.
  */
 function rankAgentEntries(
   entries: ReadonlyArray<EpicAgentMentionEntry>,

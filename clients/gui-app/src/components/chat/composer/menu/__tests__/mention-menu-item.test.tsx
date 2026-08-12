@@ -24,6 +24,10 @@ function entry(fields: {
   };
 }
 
+function entryWithId(id: string, updatedAt: number): MentionMenuEntry {
+  return { ...entry({ updatedAt, archived: false, detail: "" }), id };
+}
+
 describe("MentionMenuItem", () => {
   it("renders the last-activity time on the compact ladder", () => {
     render(
@@ -52,6 +56,30 @@ describe("MentionMenuItem", () => {
     expect(screen.getByText("Archived")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(screen.getByText("3d")).toBeTruthy();
+  });
+
+  it("resamples the time when a ranked reorder puts a different Agent in the row", () => {
+    // The menu keys rows by index, so a query change while the picker stays
+    // open reuses this component instance for a different Agent. The frozen
+    // label must follow the entry, not the row position.
+    const { container, rerender } = render(
+      <MentionMenuItem
+        entry={entryWithId("chat:epic-1:agent-a", Date.now() - 5 * HOUR_MS)}
+      />,
+    );
+    expect(container.textContent).toContain("5h");
+
+    rerender(
+      <MentionMenuItem
+        entry={entryWithId(
+          "chat:epic-1:agent-b",
+          Date.now() - 6 * 24 * HOUR_MS,
+        )}
+      />,
+    );
+
+    expect(container.textContent).toContain("6d");
+    expect(container.textContent).not.toContain("5h");
   });
 
   it("renders no time slot for rows without an activity clock", () => {
