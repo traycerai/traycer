@@ -2391,11 +2391,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                     }
                   },
                 });
-                if (outcome.kind !== "replaced") return;
-                const touchedPaths = [
-                  outcome.removedPath,
-                  ...outcome.addedPaths,
-                ];
+                if (
+                  outcome.kind !== "replaced" &&
+                  outcome.kind !== "replaced-stale-entry"
+                ) {
+                  return;
+                }
+                // A retained path is still bound, so it is not "touched" by a
+                // commit that did not move it - the absent row stays put and
+                // stays retryable. The adds are real either way.
+                const touchedPaths =
+                  outcome.kind === "replaced"
+                    ? [outcome.removedPath, ...outcome.addedPaths]
+                    : [...outcome.addedPaths];
                 if (surface.kind === "terminal-agent") {
                   markBindingDirtyWithoutResume(touchedPaths);
                 } else {

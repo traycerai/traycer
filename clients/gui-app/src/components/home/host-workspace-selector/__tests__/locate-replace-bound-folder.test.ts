@@ -91,4 +91,40 @@ describe("locateReplaceBoundFolder", () => {
     expect(add).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
+
+  it("reports a retained entry when the old path could not be removed", async () => {
+    // The adds landed, so the binding really did change and must be committed.
+    // But answering `replaced` here would tell the caller the absent entry is
+    // gone when it is still bound - it keeps blocking owner readiness while the
+    // UI reports a finished Locate, and nothing is left to retry against.
+    const add = vi.fn(() => Promise.resolve(true));
+    const remove = vi.fn(() => Promise.resolve(false));
+    const outcome = await locateReplaceBoundFolder({
+      absentPath: ABSENT,
+      pick: { folders: [{ workspacePath: NEW_A }] },
+      add,
+      remove,
+    });
+    expect(outcome).toEqual({
+      kind: "replaced-stale-entry",
+      retainedPath: ABSENT,
+      addedPaths: [NEW_A],
+    });
+    expect(remove).toHaveBeenCalledWith(ABSENT);
+  });
+
+  it("still reports a clean replacement when the remove succeeds", async () => {
+    // Counter-pin: the failure arm must not swallow the ordinary path.
+    const outcome = await locateReplaceBoundFolder({
+      absentPath: ABSENT,
+      pick: { folders: [{ workspacePath: NEW_A }] },
+      add: () => Promise.resolve(true),
+      remove: () => Promise.resolve(true),
+    });
+    expect(outcome).toEqual({
+      kind: "replaced",
+      removedPath: ABSENT,
+      addedPaths: [NEW_A],
+    });
+  });
 });

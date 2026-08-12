@@ -15,6 +15,19 @@ export type LocateReplaceBoundOutcome =
       readonly kind: "replaced";
       readonly removedPath: string;
       readonly addedPaths: ReadonlyArray<string>;
+    }
+  /**
+   * Adds landed but the old entry could NOT be dropped. Distinct from
+   * `replaced` because the absent path is still bound: reporting it as removed
+   * would have the caller commit a replacement that only half happened, while
+   * the dead entry keeps blocking owner readiness and the UI says Locate is
+   * done. The adds are real, so the caller still commits THOSE - the absent row
+   * stays for a retry.
+   */
+  | {
+      readonly kind: "replaced-stale-entry";
+      readonly retainedPath: string;
+      readonly addedPaths: ReadonlyArray<string>;
     };
 
 export async function locateReplaceBoundFolder(args: {
@@ -49,14 +62,18 @@ export async function locateReplaceBoundFolder(args: {
   }
 
   if (addedPaths.length > 0) {
-    // Best-effort remove of the old path; adds already succeeded so the
-    // workspace is recoverable even if remove fails.
-    await args.remove(args.absentPath);
-    return {
-      kind: "replaced",
-      removedPath: args.absentPath,
-      addedPaths,
-    };
+    // The adds already succeeded, so the workspace is recoverable either way -
+    // but the OUTCOME has to say which happened. Swallowing a failed remove
+    // and still answering `replaced` reports a binding state that is not the
+    // one on disk.
+    const removed = await args.remove(args.absentPath);
+    return removed
+      ? { kind: "replaced", removedPath: args.absentPath, addedPaths }
+      : {
+          kind: "replaced-stale-entry",
+          retainedPath: args.absentPath,
+          addedPaths,
+        };
   }
 
   // Same-path re-pick only: the binding entry is already that path — do not
