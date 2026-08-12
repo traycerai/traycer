@@ -226,6 +226,14 @@ export function ImagePreview(props: ImagePreviewProps) {
   // `initialPositionX/Y` a `TransformWrapper` mounts with, so the derived
   // pressed states would otherwise read against a stale `{scale: 1, ...}`
   // default even when the real initial transform is a fit far from that.
+  //
+  // Reset on `url` change (below, alongside `decodedSize`), not just once
+  // per component lifetime: a refocus refresh (`ready` -> `header` ->
+  // `ready` with a changed image, same `ImagePreview` instance throughout)
+  // used to leave this permanently `true` from the FIRST sync, so the
+  // seed-from-`liveFit` render-time adjustment below never re-fired for the
+  // new image and every derived pressed/bounds state kept describing the
+  // old one.
   const [transformSynced, setTransformSynced] = useState(false);
   // Client-decoded fallback for `props.meta`'s width/height (review finding
   // #6): the host intentionally reports every SVG as dimensionless, so
@@ -238,6 +246,11 @@ export function ImagePreview(props: ImagePreviewProps) {
   if (decodedSizeUrl !== props.url) {
     setDecodedSizeUrl(props.url);
     setDecodedSize(null);
+    // `url` is this asset's content identity (a fresh blob URL only for
+    // genuinely new/changed bytes - a cache hit against unchanged content
+    // reuses the same URL, correctly keeping the transform) - resetting the
+    // sync flag here re-arms the seed-from-`liveFit` adjustment for it.
+    setTransformSynced(false);
   }
   const handleNaturalSize = useCallback((size: ContainerSize): void => {
     setDecodedSize(size);
@@ -494,8 +507,17 @@ export function ImagePreview(props: ImagePreviewProps) {
   // never learns this instance's true initial bounds - a side whose fit
   // sits below the constant floor would leave the caller's shared zoom-out
   // button incorrectly enabled at the old floor, no-opping on first click.
+  //
+  // Seeded from `ref.state` (the library's own just-initialized transform),
+  // not the closure's `transform` React state: a refocus refresh remounts
+  // `TransformWrapper` (it only renders in the `stage.kind === "ready"`
+  // branch, so it unmounts entirely through the intervening `header`
+  // status), and this `onInit` fires for that NEW instance before this
+  // component is guaranteed to have re-rendered with the matching new
+  // `transform` value - reading the library's ref directly is correct
+  // regardless of React's own state-update timing.
   function handleInit(ref: ReactZoomPanPinchRef): void {
-    onTransformChange?.(buildTransformReport(transform, "programmatic", ref));
+    onTransformChange?.(buildTransformReport(ref.state, "programmatic", ref));
   }
 
   const handleDecodeError = useCallback((): void => {

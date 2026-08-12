@@ -20,6 +20,8 @@ import type {
 import type { ImagePreviewTransformState } from "../image-preview-transform";
 
 interface MockTransformRef {
+  /** Mirrors the real library's `ref.state` - production's `handleInit` seeds from it directly. */
+  readonly state: ImagePreviewTransformState;
   readonly centerView: (scale: number, animationMs: number) => void;
   readonly zoomIn: (step: number, animationMs: number) => void;
   readonly zoomOut: (step: number, animationMs: number) => void;
@@ -141,6 +143,19 @@ vi.mock("react-zoom-pan-pinch", () => {
       }
 
       const ref: MockTransformRef = {
+        // Live (not a snapshot), matching the real library: `onInit` fires
+        // once transformRef.current is already seeded from the initial
+        // props, so a live getter (not a value captured at `ref` creation
+        // time) is what makes that ordering matter for the test too.
+        get state() {
+          return (
+            transformRef.current ?? {
+              positionX: props.initialPositionX,
+              positionY: props.initialPositionY,
+              scale: props.initialScale,
+            }
+          );
+        },
         centerView: (scale, animationMs) => {
           centerViewCalls.push([scale, animationMs]);
           const transform = transformRef.current;
