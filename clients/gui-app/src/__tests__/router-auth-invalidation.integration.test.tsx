@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -53,19 +62,6 @@ function createDeferred(): Deferred {
   };
 }
 
-async function waitUntil(
-  condition: () => boolean,
-  timeoutMs: number,
-): Promise<void> {
-  const start = Date.now();
-  while (!condition()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 // Trivial stand-in for a route's pending UI. router-core's `offerPending`
 // (load-client.ts) bails out WITHOUT publishing provisional matches when
 // neither the route nor the router carries a pending component - regardless
@@ -104,12 +100,13 @@ interface SpiedAdapter {
 }
 
 /**
- * `AuthInvalidationRouter.state.resolvedLocation` is required, but the real
- * router-core `RouterState.resolvedLocation` is OPTIONAL (present only once
- * something has committed). Bridge the two with an explicit adapter rather
- * than a cast: the object literal below always carries the key (even when
- * its value is `undefined`), which is exactly what the narrowed interface
- * needs and the real router's type does not itself guarantee.
+ * Bridge to the narrowed `AuthInvalidationRouter` interface via an explicit
+ * adapter (rather than passing `router` directly): the `state` getter below
+ * re-reads `router.state` on every access, which matters because the guard
+ * inspects the LATEST state at flip time, not a snapshot taken when the
+ * adapter was constructed. `resolvedLocation` is optional on both the real
+ * router-core type and this narrowed interface, so no bridging is required
+ * there - the getter just forwards it as-is.
  *
  * `load` and `invalidate` are wrapped in spies (rather than passed through
  * directly) so the test can assert not just the router's eventual state but
@@ -158,6 +155,7 @@ describe("bindAuthInvalidation (real @tanstack/react-router)", () => {
     const router = createTestRouter(beforeLoadGate);
     const { adapter, load, invalidate } = toSpiedAuthInvalidationRouter(router);
     const unsubscribe = bindAuthInvalidation(adapter);
+    onTestFinished(() => unsubscribe());
 
     // Mount the router for real. `<RouterProvider>`'s `Transitioner` kicks
     // off the initial load itself on mount (straight against the router, not
@@ -166,31 +164,34 @@ describe("bindAuthInvalidation (real @tanstack/react-router)", () => {
     // the only thing that ever assigns `resolvedLocation`. beforeLoad is
     // blocked on the deferred, so this transaction never settles on its own,
     // which keeps the first commit blocked for the assertions that follow.
-    const { unmount } = render(<RouterProvider router={router} />);
+    render(<RouterProvider router={router} />);
 
-    // Give router-core's pending-presentation timer (defaultPendingMs: 1) a
-    // chance to fire. With `defaultPendingComponent` wired up, provisional
-    // matches are now non-empty - but the router has never committed, so
+    // Wait for router-core's pending-presentation timer (defaultPendingMs: 1)
+    // to fire. With `defaultPendingComponent` wired up, provisional matches
+    // are now non-empty - but the router has never committed, so
     // `resolvedLocation` must still be undefined.
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await waitFor(() => {
+      expect(router.state.status).toBe("pending");
+      expect(router.state.matches.length).toBeGreaterThan(0);
+      expect(router.state.resolvedLocation).toBeUndefined();
+    });
 
-    expect(router.state.status).toBe("pending");
-    expect(router.state.matches.length).toBeGreaterThan(0);
-    expect(router.state.resolvedLocation).toBeUndefined();
     expect(load).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
 
     // Drive a real auth flip while the router is in that uncommitted window.
     // Without the fix this invalidate()s the in-flight load out of
     // router-core's scheduler with nothing left to reschedule it.
-    useAuthStore.setState({
-      status: "signed-in",
-      profile: {
-        userId: "user-a",
-        userName: "user-a",
-        email: "user-a@example.com",
-      },
-      contextMetadata: { userId: "user-a", username: "user-a" },
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "user-a",
+          email: "user-a@example.com",
+        },
+        contextMetadata: { userId: "user-a", username: "user-a" },
+      });
     });
 
     // zustand's `subscribe` listeners run synchronously inside `setState`,
@@ -205,23 +206,17 @@ describe("bindAuthInvalidation (real @tanstack/react-router)", () => {
     // Release the slow beforeLoad now that the recovery has had a chance to
     // route the auth change through load() instead of invalidate()ing the
     // in-flight transaction directly.
-    beforeLoadGate.resolve();
+    act(() => {
+      beforeLoadGate.resolve();
+    });
 
-    await waitUntil(
-      () =>
-        router.state.status === "idle" &&
-        router.state.resolvedLocation !== undefined,
-      2000,
-    );
-
-    expect(router.state.status).toBe("idle");
-    expect(router.state.resolvedLocation).not.toBeUndefined();
+    await waitFor(() => {
+      expect(router.state.status).toBe("idle");
+      expect(router.state.resolvedLocation).not.toBeUndefined();
+    });
 
     // The recovery's post-settle invalidate has now had a chance to run -
     // exactly once, per the coalescing guarantee in `bindAuthInvalidation`.
     expect(invalidate).toHaveBeenCalledTimes(1);
-
-    unsubscribe();
-    unmount();
   });
 });

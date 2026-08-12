@@ -9,14 +9,19 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * Regression coverage for the cold-launch initial-load race in
  * `bindAuthInvalidation`.
  *
- * On @tanstack/react-router 1.170.25, calling `router.invalidate()` while the
- * router's very first load is still in flight (`status: "pending"` with
- * `resolvedLocation: undefined` - no match set has ever committed) retires
- * that load inside router-core's scheduler with nothing left to reschedule
- * it - the app renders a permanently blank screen. `bindAuthInvalidation`
- * must detect that specific window and route the auth change through
- * `router.load()` first, invalidating only once the load settles. Any other
- * router state must invalidate directly and must never call `load()`.
+ * The orphaning behavior was observed on @tanstack/react-router 1.170.25
+ * (router-core 1.171.21, the lane-scheduler line, router-core >= 1.171.16):
+ * calling `router.invalidate()` while the router's very first load is still
+ * in flight (`status: "pending"` with `resolvedLocation: undefined` - no
+ * match set has ever committed) retires that load inside router-core's
+ * scheduler with nothing left to reschedule it - the app renders a
+ * permanently blank screen. This repo currently pins 1.170.18 (router-core
+ * 1.171.15), where an uncommitted-window invalidate was survivable. The
+ * guard keeps the pattern safe on both: `bindAuthInvalidation` detects that
+ * specific window and routes the auth change through `router.load()` first,
+ * invalidating only once the load settles. Any other router state must
+ * invalidate directly and must never call `load()`. These tests pin the
+ * guard's contract independent of the installed version.
  *
  * The guard reads `resolvedLocation`, NOT the match array. router-core
  * publishes PROVISIONAL pending matches once a cold load outlives
@@ -30,8 +35,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * all now, on purpose - the type itself makes the false signal impossible to
  * reach for.
  *
- * Recovery is COALESCED: a module-scoped `recovery` promise guarantees at
- * most one `load()` + one post-settle `invalidate()` per uncommitted window,
+ * Recovery is COALESCED: `recovery` is closure state private to each
+ * `bindAuthInvalidation` call (not module-scoped), so coalescing holds only
+ * within a single binding's lifetime - it guarantees at most one `load()` +
+ * one post-settle `invalidate()` per uncommitted window for that binding,
  * however many auth flips land inside it. `router.load()` on these
  * router-core versions ABORTS its predecessor transaction instead of joining
  * it, so issuing one `load()` per auth flip would multiply route passes.
