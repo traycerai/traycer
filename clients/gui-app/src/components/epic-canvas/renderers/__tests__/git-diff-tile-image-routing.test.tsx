@@ -509,4 +509,34 @@ describe("<GitDiffTile /> image routing", () => {
       state.assetRequests.filter((request) => request?.method === "git"),
     ).toEqual([expect.objectContaining({ side: "new" })]);
   });
+
+  // Live E2E (ticket 06) found a real conflicted binary image falling
+  // through to the old generic BinaryPlaceholder instead of ImageDiffView.
+  // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
+  // fallback for unmerged paths (unlike its single-file getFileDiff path),
+  // so `isBinary: false` is the REAL shape a two-sided binary UU conflict
+  // can carry here - this pins the dispatch against that exact shape, not
+  // an idealized isBinary: true. The existing ImageDiffView-level Conflicted
+  // badge test doesn't cover this: it never exercises the GitChangedFile ->
+  // routing dispatch this test targets.
+  it("routes a conflicted image to ImageDiffView with the Conflicted badge even when isBinary is false", () => {
+    const changed = changedFile({
+      path: "assets/conflict.png",
+      status: "conflicted",
+      stage: "conflicted",
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
+    expect(screen.getByText("Conflicted")).toBeTruthy();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toEqual([
+      expect.objectContaining({ side: "old", stage: "staged" }),
+      expect.objectContaining({ side: "new", stage: "unstaged" }),
+    ]);
+  });
 });

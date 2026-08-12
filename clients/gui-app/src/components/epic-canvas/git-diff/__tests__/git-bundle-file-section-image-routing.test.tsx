@@ -395,4 +395,30 @@ describe("<BundleFileSection /> image routing", () => {
     ).toHaveLength(2);
     expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(2);
   });
+
+  // Live E2E (ticket 06) found a real conflicted binary image falling
+  // through to the old generic bundle placeholder instead of ImageDiffView.
+  // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
+  // fallback for unmerged paths, so `isBinary: false` is the REAL shape a
+  // two-sided binary UU conflict can carry here - this pins the dispatch
+  // against that exact shape, not an idealized isBinary: true.
+  it("routes a conflicted image to compact ImageDiffView even when isBinary is false", () => {
+    const changedFile = file({
+      path: "assets/conflict.png",
+      status: "conflicted",
+      stage: "conflicted",
+      isBinary: false,
+    });
+
+    renderSection(changedFile, node([]));
+
+    expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(2);
+    expect(screen.queryByText("Binary file")).toBeNull();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([
+      expect.objectContaining({ side: "old", stage: "staged" }),
+      expect.objectContaining({ side: "new", stage: "unstaged" }),
+    ]);
+  });
 });

@@ -158,15 +158,24 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // validates against its own effective path inside `ImageDiffView`. The
   // svg text-exemption has the same shape (re-review P1): `old.svg ->
   // new.txt` is text to git, so the previous path must also OR into the
-  // svg check, not just the current one.
+  // svg check, not just the current one. A conflicted file is exempted from
+  // the `isBinary` check entirely (live E2E finding, ticket 06): the host's
+  // bulk listChangedFiles numstat pipeline has no MERGE_HEAD-aware fallback
+  // for unmerged paths, so a real binary conflict can report `isBinary:
+  // false` here even though decision #10 routes every conflicted image
+  // unconditionally.
   const isPreviousImage =
     props.file.previousPath !== null &&
     isImageAssetPath(props.file.previousPath);
   const isPreviousSvg =
     props.file.previousPath !== null && isSvgAssetPath(props.file.previousPath);
+  const isConflicted = props.file.stage === "conflicted";
   const routeToImageDiff =
     (isImageAssetPath(props.file.path) || isPreviousImage) &&
-    (props.file.isBinary || isSvgAssetPath(props.file.path) || isPreviousSvg);
+    (props.file.isBinary ||
+      isSvgAssetPath(props.file.path) ||
+      isPreviousSvg ||
+      isConflicted);
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff) return;
     bundleFindRegistration.registerCoverageState(

@@ -672,6 +672,15 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
  * (re-review P1): `old.svg -> new.txt` is a renamed diff git reports as
  * text, so `isSvg` must also OR in the previous path, not just the current
  * one, for both the routing gate and the toggle's presence.
+ *
+ * A conflicted file (`file.stage === "conflicted"`) is exempted from the
+ * `isBinary` check entirely (live E2E finding, ticket 06): the host's bulk
+ * `listChangedFiles` numstat pipeline has no `MERGE_HEAD`-aware fallback for
+ * unmerged paths the way its single-file `getFileDiff` path does, so a real
+ * two-sided binary conflict can report `isBinary: false` here even though
+ * decision #10 says every conflicted image routes to `ImageDiffView`
+ * unconditionally - the extension gate alone is the correct signal for this
+ * one state, since the host still validates via magic bytes once fetched.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
   readonly showImageDiff: boolean;
@@ -683,9 +692,10 @@ function useGitImageDiffRouting(file: GitChangedFile): {
   const isSvg =
     isSvgAssetPath(file.path) ||
     (file.previousPath !== null && isSvgAssetPath(file.previousPath));
+  const isConflicted = file.stage === "conflicted";
   const [viewAsSource, setViewAsSource] = useState(false);
   const routeToImageDiff =
-    (isImage || isPreviousImage) && (file.isBinary || isSvg);
+    (isImage || isPreviousImage) && (file.isBinary || isSvg || isConflicted);
   const showImageDiff = routeToImageDiff && !(isSvg && viewAsSource);
   const svgToggle = isSvg ? (
     <DiffTabHeaderPortal>
