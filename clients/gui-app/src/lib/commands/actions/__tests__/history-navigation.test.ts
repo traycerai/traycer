@@ -1131,6 +1131,37 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(requirePreviewTabId(tabId)).toBe(chat.instanceId);
   });
 
+  it("restores rather than discards while no active host binding has resolved", () => {
+    // The regression: `readCloudKnownChatIds` used to answer an EMPTY SET (not
+    // null) when the active host id was still null - a boot-order state, not
+    // evidence about the chat - so this path's predicate became
+    // `() => false` and the preserved payload was PERMANENTLY discarded. The
+    // unusable-request arm must read as "no answer" (restore), like the
+    // never-answered case above.
+    const chat = chatRef(mockLocalHostEntry.hostId);
+    // Signed in, but no `bindActiveHost()`: `getHostBindingSnapshot()` is null.
+    useAuthStore.setState({
+      contextMetadata: { userId: VIEWER_USER_ID, username: VIEWER_USER_ID },
+    });
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.openTileInTab(tabId, chat);
+    const paneId = requirePaneId(tabId);
+    store.closeCanvasTab(tabId, paneId, chat.instanceId);
+
+    // A live, fully loaded session without the chat - the arm that reaches the
+    // cloud-known predicate at all.
+    seedLiveEpicSession("e1", [], true);
+
+    const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+
+    goBack({ history });
+
+    expect(requirePreviewTabId(tabId)).toBe(chat.instanceId);
+  });
+
   it("leaves a NON-chat record-less tile discarded whatever the cloud list says", () => {
     const hostId = bindActiveHost();
     const store = useEpicCanvasStore.getState();

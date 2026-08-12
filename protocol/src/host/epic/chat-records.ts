@@ -288,11 +288,17 @@ export type ChatRecordRemovalReason = z.infer<
  * `epicId` / `chatId` / `revision` are the ENVELOPE - what the delta addresses
  * and where it sits in that chat's order - and every frame carries the parts it
  * can. `remove` has no row to put them in; `upsert` repeats its row's own
- * `revision` at the envelope so both frame kinds are addressed and ordered the
- * same way. INVARIANT: on an `upsert`, `revision` equals `record.revision`.
+ * `chatId` and `revision` at the envelope so both frame kinds are addressed and
+ * ordered the same way. INVARIANT, validated below rather than left as prose:
+ * on an `upsert`, `chatId` equals `record.chatId` and `revision` equals
+ * `record.revision`. A frame where they disagree is addressing one chat while
+ * carrying another's row (or ordering a row by a revision it does not hold),
+ * and whichever field a consumer happened to read would decide which chat it
+ * corrupts - so the contract refuses the combination outright (the
+ * `resolveCloudChatHeadResponseSchema` pattern).
  */
-export const hostChatRecordsSubscribeServerFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
+export const hostChatRecordsSubscribeServerFrameSchemaV10 = z
+  .discriminatedUnion("kind", [
     z.object({
       kind: z.literal("upsert"),
       ...textFrameFields,
@@ -312,7 +318,26 @@ export const hostChatRecordsSubscribeServerFrameSchemaV10 =
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
+  ])
+  .superRefine((frame, ctx) => {
+    if (frame.kind !== "upsert") return;
+    if (frame.chatId !== frame.record.chatId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["chatId"],
+        message:
+          "An upsert's envelope must address the row it carries - `chatId` must equal `record.chatId`.",
+      });
+    }
+    if (frame.revision !== frame.record.revision) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["revision"],
+        message:
+          "An upsert's envelope must order by the row it carries - `revision` must equal `record.revision`.",
+      });
+    }
+  });
 export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV10
 >;

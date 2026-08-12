@@ -324,10 +324,13 @@ export interface IpcHostLifecycle {
    * handler calls this after `waitForHostReady` resolves so the
    * renderer's host snapshot is guaranteed populated on return -
    * fs.watch coalescing on macOS occasionally drops the create event
-   * after a pid.json replacement. Returns the snapshot THIS read derived
-   * (null when no reachable, compatible host is on disk), so the
-   * host-busy surfacing can judge off the reload's own result rather than a
-   * `getSnapshot()` a concurrent reload may not have assigned yet.
+   * after a pid.json replacement. Returns the snapshot THIS read derived, so
+   * the host-busy surfacing can judge off the reload's own result rather than
+   * a `getSnapshot()` a concurrent reload may not have assigned yet. `null`
+   * means no compatible host metadata is on disk (or the host it names is
+   * confirmed dead) - NOT that the host is unreachable: a live-but-silent
+   * host still answers non-null, with a `busy` availability and its real
+   * endpoint intact (see `HostLifecycle.toPublishedSnapshot`).
    */
   reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null>;
   /**

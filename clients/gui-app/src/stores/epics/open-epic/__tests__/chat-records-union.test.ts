@@ -16,7 +16,7 @@
  * multi-host-chats record layer) into the SAME table, with its own ablations
  * named on each test.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -163,6 +163,13 @@ function signedInAs(userId: string): void {
     );
 }
 
+// The auth store is module-global, so a test that signs in must not leak that
+// identity into the next one. Owned here at the suite level rather than by
+// per-test `finally` blocks.
+afterEach(() => {
+  useAuthStore.getState().setSignedOut();
+});
+
 describe("chats.byId unions the host's records with the doc projection", () => {
   it("gives a swept chat back its record, its tree row and its parent", () => {
     const session = newSession(seedChats([]));
@@ -284,6 +291,49 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     session.handle.dispose();
   });
 
+  it("keeps the published chats identity across a doc patch the union masks", () => {
+    // A chat present in BOTH sources holds a fresh MERGED object in the union
+    // on every recompute (the row wins each field, the doc supplies settings),
+    // so a per-entry REFERENCE gate can never say "unchanged" for it.
+    // Ablation: gate `unionInto`'s publish on reference equality instead of
+    // `chatSlicesEq` and the doc mutation below - masked field-for-field by
+    // the row - hands every chat consumer a new `chats` identity carrying the
+    // same content.
+    const session = newSession(
+      seedChats([
+        [
+          "both",
+          docChatEntry({
+            id: "both",
+            title: "Frozen doc title",
+            parentId: null,
+            hostId: "host-1",
+          }),
+        ],
+      ]),
+    );
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "both", title: "Row title" })]);
+    const before = store.getState().chats;
+    expect(before.byId.both.title).toBe("Row title");
+
+    // A doc-side write to a field the row overrides anyway: the DOC slice
+    // changes, the union's content does not.
+    session.mutateDoc((chats) => {
+      const entry = chats.get("both");
+      if (!(entry instanceof Y.Map)) throw new Error("no doc entry");
+      (entry as Y.Map<unknown>).set("title", "Doc renamed underneath");
+    });
+
+    expect(store.getState().docChats.byId.both.title).toBe(
+      "Doc renamed underneath",
+    );
+    expect(store.getState().chats).toBe(before);
+    session.handle.dispose();
+  });
+
   it("keeps the doc entry's settings, which the registry row does not carry", () => {
     const withSettings = docChatEntry({
       id: "both",
@@ -349,29 +399,19 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     // wrong identity: the union applies the same display filter the doc
     // projection does, at projection time rather than at ingest, so a user
     // switch re-derives it instead of trusting an older decision.
-    useAuthStore
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    session.handle.store
       .getState()
-      .setSignedIn(
-        { userId: "user-a", userName: "A", email: "a@example.com" },
-        { userId: "user-a", username: "A" },
-        [],
-      );
-    try {
-      const session = newSession(seedChats([]));
-      session.handle.store
-        .getState()
-        .applyChatRecords([
-          record({ chatId: "mine", ownerUserId: "user-a" }),
-          record({ chatId: "theirs", ownerUserId: "user-b" }),
-        ]);
+      .applyChatRecords([
+        record({ chatId: "mine", ownerUserId: "user-a" }),
+        record({ chatId: "theirs", ownerUserId: "user-b" }),
+      ]);
 
-      const state = session.handle.store.getState();
-      expect(state.chats.allIds).toEqual(["mine"]);
-      expect(state.tree.nodeById.theirs).toBeUndefined();
-      session.handle.dispose();
-    } finally {
-      useAuthStore.getState().setSignedOut();
-    }
+    const state = session.handle.store.getState();
+    expect(state.chats.allIds).toEqual(["mine"]);
+    expect(state.tree.nodeById.theirs).toBeUndefined();
+    session.handle.dispose();
   });
 
   it("removes a chat the host stops serving, and is idempotent otherwise", () => {
@@ -436,40 +476,36 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     // the staleness guard would compare them anyway - and the bigger number
     // wins, whoever it belongs to.
     signedInAs("user-a");
-    try {
-      const session = newSession(seedChats([]));
-      const store = session.handle.store;
-      store.getState().applyChatRecordDelta({
-        kind: "upsert",
-        epicId: "epic-test",
-        record: record({
-          chatId: "c",
-          title: "Mine",
-          ownerUserId: "user-a",
-          revision: 2,
-        }),
-      });
-      store.getState().applyChatRecordDelta({
-        kind: "upsert",
-        epicId: "epic-test",
-        record: record({
-          chatId: "c",
-          title: "Theirs",
-          ownerUserId: "user-b",
-          originHostId: "host-2",
-          origin: "foreign",
-          visibility: "task",
-          revision: 99,
-        }),
-      });
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "c",
+        title: "Mine",
+        ownerUserId: "user-a",
+        revision: 2,
+      }),
+    });
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "c",
+        title: "Theirs",
+        ownerUserId: "user-b",
+        originHostId: "host-2",
+        origin: "foreign",
+        visibility: "task",
+        revision: 99,
+      }),
+    });
 
-      expect(store.getState().chats.allIds).toEqual(["c"]);
-      expect(store.getState().chats.byId.c.title).toBe("Mine");
-      expect(store.getState().chats.byId.c.userId).toBe("user-a");
-      session.handle.dispose();
-    } finally {
-      useAuthStore.getState().setSignedOut();
-    }
+    expect(store.getState().chats.allIds).toEqual(["c"]);
+    expect(store.getState().chats.byId.c.title).toBe("Mine");
+    expect(store.getState().chats.byId.c.userId).toBe("user-a");
+    session.handle.dispose();
   });
 
   it("retains a held-back row and re-derives the table when the signed-in user changes", () => {
@@ -479,25 +515,21 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     // `republishChatRecordsForCurrentUser` call from the auth subscription and
     // user-b signs in to user-a's chat list.
     signedInAs("user-a");
-    try {
-      const session = newSession(seedChats([]));
-      const store = session.handle.store;
-      store.getState().applyChatRecords([
-        record({ chatId: "mine", ownerUserId: "user-a" }),
-        record({
-          chatId: "theirs",
-          ownerUserId: "user-b",
-          origin: "foreign",
-        }),
-      ]);
-      expect(store.getState().chats.allIds).toEqual(["mine"]);
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords([
+      record({ chatId: "mine", ownerUserId: "user-a" }),
+      record({
+        chatId: "theirs",
+        ownerUserId: "user-b",
+        origin: "foreign",
+      }),
+    ]);
+    expect(store.getState().chats.allIds).toEqual(["mine"]);
 
-      signedInAs("user-b");
-      expect(store.getState().chats.allIds).toEqual(["theirs"]);
-      session.handle.dispose();
-    } finally {
-      useAuthStore.getState().setSignedOut();
-    }
+    signedInAs("user-b");
+    expect(store.getState().chats.allIds).toEqual(["theirs"]);
+    session.handle.dispose();
   });
 
   it("takes a FOREIGN row - another host's replica - into chats.byId", () => {

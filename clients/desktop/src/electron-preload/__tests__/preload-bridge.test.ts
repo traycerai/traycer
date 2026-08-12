@@ -978,6 +978,50 @@ describe("preload local-host snapshot convergence", () => {
     });
   });
 
+  it("retries the pull for a later subscriber after a rejected invoke", async () => {
+    // The repair must not consume its once-per-preload slot on failure: a
+    // boot-time rejection (main not ready yet) with the flag left set would
+    // freeze the cache at `null` - "this machine has no host" - until a
+    // `change` event a steady-state host never sends.
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    let attempts = 0;
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) => {
+        if (channel !== RunnerHostInvoke.localHostSnapshot) {
+          return Promise.resolve(undefined);
+        }
+        attempts += 1;
+        return attempts === 1
+          ? Promise.reject(new Error("main not ready"))
+          : Promise.resolve(snapshot);
+      },
+      sendSyncFn: undefined,
+    });
+
+    const first: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => first.push(next));
+    expect(attempts).toBe(1);
+    // Let the rejection SETTLE (its `.catch` is what re-arms the pull) before
+    // the next subscriber arrives; the cache still honestly holds `null`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(first).toEqual([null]);
+
+    // A later subscriber re-runs the repair, and the fan-out reaches BOTH.
+    const second: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => second.push(next));
+    await vi.waitFor(() => {
+      expect(first.at(-1)).toEqual(snapshot);
+      expect(second.at(-1)).toEqual(snapshot);
+    });
+    expect(attempts).toBe(2);
+  });
+
   it("lets a push that lands mid-flight win over the pull", async () => {
     // The pull is a floor, never an overwrite: main's answer was read before
     // the push, so applying it afterwards would move the renderer backwards.

@@ -81,13 +81,18 @@ export function cloudChatViewerIdSnapshot(): string {
  * - a SET - the list answered, or will never answer, so membership is evidence
  * - `null` - pending, never requested, or failed in a way a retry could fix
  *
- * The three arms that produce a set:
+ * The two arms that produce a set:
  * 1. success - the rows themselves, filtered to the viewer's own.
  * 2. `E_HOST_UNSUPPORTED` - an older host will keep answering that forever,
  *    there are no cloud rows to consult through it, and policing on local
  *    records alone is that host's correct pre-cloud-list behavior.
- * 3. a request that could never be made at all (no host, no viewer, no task) -
- *    the hook disables itself on exactly these, and nothing will ever answer.
+ *
+ * A request that cannot even be formed (no host, no viewer, no task) is `null`,
+ * NOT an empty set. "Nothing could ask" and "the cloud lists nothing" are
+ * different facts, and only the second is evidence: an unresolved host binding
+ * or a sign-in still settling is a boot-order state a retry fixes, exactly the
+ * `null` contract above - while an empty SET here would let a transient race
+ * authorize the caller's permanent discard.
  *
  * VIEWER-OWNED rows only, matching every other consumer of this list: `chatId`
  * is host-minted and the list carries collaborators' rows too, so an id-only set
@@ -107,7 +112,7 @@ export function readCloudKnownChatIds(
     args.viewerUserId.length === 0 ||
     args.taskId.length === 0
   ) {
-    return EMPTY_CHAT_ID_SET;
+    return null;
   }
   const state = queryClient.getQueryState<ListCloudChatsResponse, HostRpcError>(
     cloudChatListQueryKey(args),

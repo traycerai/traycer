@@ -678,6 +678,19 @@ export function chatRecordsSlice(
 }
 
 /**
+ * Whether two chat tables say the same thing, entry for entry.
+ *
+ * The record channel's change gate: a poll that re-serves an unchanged list
+ * must not re-project the epic, and reference equality cannot answer that -
+ * every response is freshly parsed objects.
+ */
+export function chatSlicesEq(a: ChatsSlice, b: ChatsSlice): boolean {
+  if (a === b) return true;
+  if (!arrayShallowEq(a.allIds, b.allIds)) return false;
+  return a.allIds.every((id) => chatProjectionsEq(a.byId[id], b.byId[id]));
+}
+
+/**
  * The renderer's chat record table: the doc projection UNIONED with the host's
  * store-backed rows.
  *
@@ -705,19 +718,6 @@ export function chatRecordsSlice(
  * without the method: the record table, `allIds`, and every downstream slice
  * keep the exact identities the projector produced.
  */
-/**
- * Whether two chat tables say the same thing, entry for entry.
- *
- * The record channel's change gate: a poll that re-serves an unchanged list
- * must not re-project the epic, and reference equality cannot answer that -
- * every response is freshly parsed objects.
- */
-export function chatSlicesEq(a: ChatsSlice, b: ChatsSlice): boolean {
-  if (a === b) return true;
-  if (!arrayShallowEq(a.allIds, b.allIds)) return false;
-  return a.allIds.every((id) => chatProjectionsEq(a.byId[id], b.byId[id]));
-}
-
 export function unionChatsSlice(
   docChats: ChatsSlice,
   records: ChatsSlice,

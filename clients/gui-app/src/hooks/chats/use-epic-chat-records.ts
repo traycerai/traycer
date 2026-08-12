@@ -43,7 +43,7 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
  * has no per-epic wire channel to this renderer - the epic Y.Doc's update stream
  * is the only one, and it is precisely what stopped carrying them.
  */
-export function useEpicChatRecordsSync(epicId: string): void {
+export function useEpicSyncChatRecords(epicId: string): void {
   // The app-wide active host, matching the epic session itself: the session is
   // acquired for `useReactiveActiveHostId()` and rebuilt when it changes, so
   // asking any other host for this epic's records would answer about a registry

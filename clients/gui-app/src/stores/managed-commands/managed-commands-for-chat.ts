@@ -80,12 +80,16 @@ export function useManagedCommandsForChat(
  * the chat's Background panel lists, since that panel is about work happening
  * at this moment rather than about the commands as durable objects.
  */
-export function useRunningManagedCommandsForChat(
-  epicId: string,
-  chatId: string,
-  hostId: string,
-): readonly ManagedCommand[] {
-  const commands = useManagedCommandsForChat(epicId, chatId, hostId);
+export function useRunningManagedCommandsForChat(options: {
+  epicId: string;
+  chatId: string;
+  hostId: string;
+}): readonly ManagedCommand[] {
+  const commands = useManagedCommandsForChat(
+    options.epicId,
+    options.chatId,
+    options.hostId,
+  );
   return useMemo(
     () => commands.filter((command) => command.status.state === "running"),
     [commands],

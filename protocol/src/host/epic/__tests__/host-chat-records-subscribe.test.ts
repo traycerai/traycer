@@ -159,6 +159,43 @@ describe("host.chatRecords.subscribe@1.0 frames", () => {
     }
   });
 
+  it("rejects an upsert whose envelope addresses a different chat than its row", () => {
+    // A mismatched envelope is addressing one chat while carrying another's
+    // row - whichever field a consumer read would decide which chat it
+    // corrupts, so the contract refuses the frame outright.
+    const result = hostChatRecordsSubscribeServerFrameSchemaV10.safeParse({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "some-other-chat",
+      revision: OWN_ROW.revision,
+      record: OWN_ROW,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ["chatId"] }),
+      ]);
+    }
+  });
+
+  it("rejects an upsert whose envelope revision disagrees with its row's", () => {
+    const result = hostChatRecordsSubscribeServerFrameSchemaV10.safeParse({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: OWN_ROW.chatId,
+      revision: OWN_ROW.revision + 1,
+      record: OWN_ROW,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ["revision"] }),
+      ]);
+    }
+  });
+
   it("names the epic on every delta, because the stream is host-scoped", () => {
     expect(
       hostChatRecordsSubscribeServerFrameSchemaV10.safeParse({

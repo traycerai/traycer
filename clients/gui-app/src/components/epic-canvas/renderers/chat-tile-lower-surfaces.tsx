@@ -289,11 +289,11 @@ export function ChatLowerInteractionSurfaces(
   // Background section and the spacing of everything below it. Scoped to the
   // tile's bound host - that is the host the tile opened the session under,
   // and a same-id chat on another machine is a different agent.
-  const runningManagedCommandCount = useRunningManagedCommandsForChat(
-    props.epicId,
-    props.chatId,
-    props.hostId,
-  ).length;
+  const runningManagedCommandCount = useRunningManagedCommandsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  }).length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,

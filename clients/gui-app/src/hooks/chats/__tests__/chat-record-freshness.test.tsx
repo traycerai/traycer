@@ -19,7 +19,7 @@
  *  - drop `invalidateEpicChatRecords` from `useEpicCreateChatForHostClient`
  *    (the explicit-client twin, ticket 43) and the create tests hang on a
  *    record list that is never re-read: the user-visible spinning new tab.
- *  - drop `poll: true` from `useEpicChatRecordsSync` and the cadence test
+ *  - drop `poll: true` from `useEpicSyncChatRecords` and the cadence test
  *    reads `false`, i.e. a list that only ever refreshes on window focus.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,7 +46,7 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicChatRecordsSync } from "@/hooks/chats/use-epic-chat-records";
+import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import {
   useEpicArchiveChat,
   useEpicCreateChatForHostClient,
@@ -58,7 +58,7 @@ const EPIC_ID = "epic-records";
 const VIEWER_ID = "viewer-1";
 const HOST_ID = mockLocalHostEntry.hostId;
 
-// `useEpicChatRecordsSync` and the rename/delete hooks read the APP-WIDE
+// `useEpicSyncChatRecords` and the rename/delete hooks read the APP-WIDE
 // client; the create-for-client hook takes one as an argument. Both must land
 // on the same host for the invalidation key to match the query key at all,
 // which is the mismatch class this suite exists to catch - so the mock hands
@@ -274,7 +274,7 @@ afterEach(() => {
 function renderChannel<T>(useMutationHook: () => T): { readonly current: T } {
   const rendered = renderHook(
     () => {
-      useEpicChatRecordsSync(EPIC_ID);
+      useEpicSyncChatRecords(EPIC_ID);
       return useMutationHook();
     },
     { wrapper: fixture.Wrapper },

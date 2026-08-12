@@ -28,6 +28,7 @@ import {
   arrayShallowEq,
   artifactProjectionsEq,
   chatProjectionsEq,
+  chatSlicesEq,
   deletedArtifactProjectionsEq,
   getArtifactEntry,
   getArtifactsMap,
@@ -931,6 +932,13 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
  * Publishes the union of a doc slice and the record slice, writing `chats` only
  * when the result differs from what the store already holds. Returns the slice
  * the tree and role-claim projections must be built from.
+ *
+ * The gate is STRUCTURAL ({@link chatSlicesEq}, reference fast path included),
+ * not per-entry reference equality: `unionChatsSlice` builds a fresh MERGED
+ * object for every chat present in both sources whose frozen doc entry differs
+ * from its row - the normal post-pivot state - so a reference gate could never
+ * say "unchanged" for those entries, and every doc-side chat patch would hand
+ * all chat consumers a new `chats` identity carrying the same content.
  */
 function unionInto(args: {
   readonly state: OpenEpicState;
@@ -941,13 +949,7 @@ function unionInto(args: {
 }): ChatsSlice {
   const { state, next, docChats, chatRecords, currentUserId } = args;
   const union = unionChatsSlice(docChats, chatRecords, currentUserId);
-  if (union === state.chats) return state.chats;
-  if (
-    arrayShallowEq(union.allIds, state.chats.allIds) &&
-    union.allIds.every((id) => state.chats.byId[id] === union.byId[id])
-  ) {
-    return state.chats;
-  }
+  if (chatSlicesEq(union, state.chats)) return state.chats;
   next.chats = union;
   return union;
 }

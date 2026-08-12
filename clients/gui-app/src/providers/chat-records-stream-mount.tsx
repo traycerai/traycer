@@ -25,7 +25,7 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
  *
  * ## Push is the trigger; the poll is the backup
  *
- * `useEpicChatRecordsSync`'s 20s `epic.listChatRecords` poll stays armed and
+ * `useEpicSyncChatRecords`'s 20s `epic.listChatRecords` poll stays armed and
  * unchanged. This only removes latency: a host that predates the method never
  * advertises it, `useStreamMethodSupport` resolves `"unsupported"`, no client
  * is constructed, and the record table refreshes exactly as it did before. The

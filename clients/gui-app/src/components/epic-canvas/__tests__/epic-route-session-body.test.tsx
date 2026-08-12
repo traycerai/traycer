@@ -5,7 +5,7 @@ import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-sessio
 
 const useInitialChatHandoffMock = vi.hoisted(() => vi.fn());
 const useEpicRouteSynchronizationMock = vi.hoisted(() => vi.fn());
-const useEpicChatRecordsSyncMock = vi.hoisted(() => vi.fn());
+const useEpicSyncChatRecordsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/epic-canvas/hooks/use-initial-chat-handoff", () => ({
   useInitialChatHandoff: useInitialChatHandoffMock,
@@ -22,7 +22,7 @@ vi.mock(
 // only what today's importer uses answers `undefined` for the rest, and the
 // next importer of this module gets a silent no-op instead of a failure.
 vi.mock("@/hooks/chats/use-epic-chat-records", () => ({
-  useEpicChatRecordsSync: useEpicChatRecordsSyncMock,
+  useEpicSyncChatRecords: useEpicSyncChatRecordsMock,
   invalidateEpicChatRecords: () => undefined,
 }));
 
@@ -66,7 +66,7 @@ describe("<EpicRouteSessionBody />", () => {
     cleanup();
     useInitialChatHandoffMock.mockReset();
     useEpicRouteSynchronizationMock.mockReset();
-    useEpicChatRecordsSyncMock.mockReset();
+    useEpicSyncChatRecordsMock.mockReset();
   });
 
   it("keeps visual state mounted but suppresses route-global effects when inactive", () => {
@@ -78,7 +78,7 @@ describe("<EpicRouteSessionBody />", () => {
     // Session-scoped, NOT route-active-scoped: the chat record channel backs
     // the sidebar tree and every open tile of a background epic, which would
     // lose their swept chats again if it stopped while another tab is in front.
-    expect(useEpicChatRecordsSyncMock).toHaveBeenCalledWith("epic-a");
+    expect(useEpicSyncChatRecordsMock).toHaveBeenCalledWith("epic-a");
     expect(screen.queryByTestId("epic-migration-modal")).toBeNull();
   });
 

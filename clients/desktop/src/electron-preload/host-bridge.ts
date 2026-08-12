@@ -73,7 +73,13 @@ function pullLocalHostOnce(): void {
     })
     .catch(() => {
       // A main process that cannot answer leaves the push channel exactly as
-      // it was; this is a repair path, not a dependency.
+      // it was; this is a repair path, not a dependency. But a failed attempt
+      // must not consume the once-per-preload slot: with the flag left set, a
+      // boot-time rejection would freeze `cachedLocalHost` at `null` - which
+      // downstream reads as "this machine has no host", not "unknown" - until
+      // a `change` event a steady-state host will never send. Clearing it lets
+      // the next subscriber run the repair again.
+      localHostPullStarted = false;
     });
 }
 

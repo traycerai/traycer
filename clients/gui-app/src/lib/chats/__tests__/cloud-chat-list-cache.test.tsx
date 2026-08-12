@@ -67,8 +67,11 @@ function createHarness(
 ): Harness {
   const queryClient = createAppQueryClient();
   queryClient.setDefaultOptions({
-    // The hook owns its own `retry` predicate, so only the DELAY is worth
-    // flattening here - two backed-off retries would otherwise outlast
+    // The hook under test sets its own `retry` predicate, and per-query
+    // options beat these defaults - so `retry: false` never reaches it and
+    // only disables retries for any OTHER query a test happens to mount.
+    // What actually matters for the hook is `retryDelay: 0`: its predicate
+    // still allows retries, and two backed-off ones would otherwise outlast
     // `waitFor`'s window and read as a hang rather than a settled failure.
     queries: {
       ...queryClient.getDefaultOptions().queries,
@@ -209,22 +212,33 @@ describe("readCloudKnownChatIds", () => {
     expect(readIds(harness)).toEqual(new Set());
   });
 
-  it("answers empty for a request that could never be made", () => {
+  it("refuses to answer for a request that could never be made", () => {
     const harness = createHarness(() => []);
 
+    // "Nothing could ask" is not "the cloud lists nothing": an unresolved host
+    // binding or a sign-in still settling is a boot-order state, and reporting
+    // it as an empty SET let a transient race authorize the caller's permanent
+    // payload discard. These arms must be `null` - no answer to act on.
     expect(
       readCloudKnownChatIds(harness.queryClient, {
         hostId: null,
         viewerUserId: VIEWER,
         taskId: TASK_ID,
       }),
-    ).toEqual(new Set());
+    ).toBeNull();
     expect(
       readCloudKnownChatIds(harness.queryClient, {
         hostId: mockLocalHostEntry.hostId,
         viewerUserId: "",
         taskId: TASK_ID,
       }),
-    ).toEqual(new Set());
+    ).toBeNull();
+    expect(
+      readCloudKnownChatIds(harness.queryClient, {
+        hostId: mockLocalHostEntry.hostId,
+        viewerUserId: VIEWER,
+        taskId: "",
+      }),
+    ).toBeNull();
   });
 });
