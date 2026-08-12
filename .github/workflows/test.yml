@@ -104,8 +104,22 @@ jobs:
       - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
         if: matrix.project == '@traycer/protocol'
         run: git fetch --depth=1 origin tag host-v1.1.5
+      # `--outputStyle=stream` sends the child's stdout/stderr straight to the
+      # step log. Nx's default buffers it into an internal stream and replays
+      # it AFTER the failure banner, capped — so a failing gui-app job printed
+      # its banner, then a truncated replay that cut off mid-line before
+      # Vitest's summary and, on three occasions, before the `×` lines naming
+      # the failed tests. That reads exactly like a killed process (no summary,
+      # log ends mid-write, exit 1) and was triaged as an OOM for a day; the
+      # tests had been failing on plain assertions the whole time. Streaming
+      # also puts the output back in causal order, which the replay scrambles.
+      #
+      # It REPLACES `--tui=false` rather than joining it: Nx rejects the two
+      # together ("Arguments tui and outputStyle are mutually exclusive") and
+      # exits 1 before running anything, which would redden every job here.
+      # `stream` is already a non-TUI style, so nothing is lost.
       - name: Test
-        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
+        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
       # Diagnostics for the gui-app shard flake: shards die with every visible
       # test passing, a log truncated mid-write, and exit 1 with no vitest
       # failure summary — the signature of the runner killing the process, not

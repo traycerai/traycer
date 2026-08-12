@@ -69,7 +69,7 @@ export interface CloudNotificationsState {
     readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): ReadonlyArray<HostNotificationsCloudFeedRow>;
+  }): ReadonlyArray<HostNotificationsCloudFeedRow> | null;
   /** Optimistic set-once marker application. A later authoritative snapshot
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
@@ -123,6 +123,7 @@ export function selectCloudEntityReadTargets(
     "rows" | "entityReadSucceeded" | "entityReadRetries"
   >,
   entity: HostNotificationsEntityRef,
+  originHostId: string | null,
 ): ReadonlyArray<string> {
   const targets: string[] = [];
   for (const row of Object.values(state.rows)) {
@@ -130,6 +131,10 @@ export function selectCloudEntityReadTargets(
     const { entry } = row;
     if (entry.severity !== "done" && entry.severity !== "failure") continue;
     if (entry.readAt !== null) continue;
+    // A focused tile supplies its bound host and must only acknowledge that
+    // exact lineage. An epic-only surface has no host binding, so it retains
+    // the existing epic-level behavior across visible origins.
+    if (originHostId !== null && row.originHostId !== originHostId) continue;
     if (state.entityReadSucceeded.has(row.entryId)) continue;
     if (Object.hasOwn(state.entityReadRetries, row.entryId)) continue;
     const matchesEntity =
@@ -178,8 +183,39 @@ function rowKey(row: Pick<HostNotificationsCloudFeedRow, "entryId">): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
+function isUnreadFailure(row: HostNotificationsCloudFeedRow): boolean {
+  return row.entry.severity === "failure" && row.entry.readAt === null;
+}
+
+function loadedBlockingAttentionCount(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+): number {
+  let count = 0;
+  for (const row of Object.values(rows)) {
+    if (
+      row !== undefined &&
+      row.entry.severity === "needs_action" &&
+      "resolvedAt" in row.entry &&
+      row.entry.resolvedAt === null
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function loadedUnreadFailureCount(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+): number {
+  let count = 0;
+  for (const row of Object.values(rows)) {
+    if (row !== undefined && isUnreadFailure(row)) count += 1;
+  }
+  return count;
+}
+
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
-  (set) => ({
+  (set, get) => ({
     rows: {},
     summary: null,
     version: null,
@@ -189,15 +225,13 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     entityReadSucceeded: new Set<string>(),
     entityReadRetries: {},
     applySnapshot: (input) => {
+      const currentVersion = get().version;
+      // Rejected frames must not escape through the return value: the caller
+      // uses accepted snapshots to drive cross-plane completion reconciliation.
+      if (currentVersion !== null && input.version < currentVersion)
+        return null;
       const arrivals: HostNotificationsCloudFeedRow[] = [];
       set((state) => {
-        // The feed version is a monotonic change sequence, so a snapshot below
-        // the one already rendered can only be a delayed frame from a
-        // superseded session. Dropping it is the whole rewind guard - there is
-        // no delta stream here whose ordering could need a richer one.
-        if (state.version !== null && input.version < state.version) {
-          return state;
-        }
         const rows: Partial<Record<string, HostNotificationsCloudFeedRow>> = {};
         for (const row of input.rows) {
           const key = rowKey(row);
@@ -221,6 +255,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const key = cloudNotificationFeedId(entryId);
         const row = state.rows[key];
         if (row === undefined || row.entry.readAt !== null) return state;
+        const attentionDelta = isUnreadFailure(row) ? 1 : 0;
         return {
           rows: {
             ...state.rows,
@@ -232,11 +267,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: Math.max(0, state.summary.unreadCount - 1),
+                  attentionCount: Math.max(
+                    0,
+                    state.summary.attentionCount - attentionDelta,
+                  ),
                 },
         };
       }),
     markAllReadLocally: (readAt) =>
       set((state) => {
+        const unreadFailureCount = loadedUnreadFailureCount(state.rows);
         const rows = { ...state.rows };
         for (const [key, row] of Object.entries(rows)) {
           if (row === undefined || row.entry.readAt !== null) continue;
@@ -247,7 +287,19 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           summary:
             state.summary === null
               ? null
-              : { ...state.summary, unreadCount: 0 },
+              : {
+                  ...state.summary,
+                  unreadCount: 0,
+                  // Summary counts include visible cloud rows this relay could
+                  // not render. Their attention may be an unresolved prompt,
+                  // which mark-all must never hide, so only subtract failures
+                  // this client can prove it marked read. The next snapshot
+                  // removes any residual summary-only failure contribution.
+                  attentionCount: Math.max(
+                    loadedBlockingAttentionCount(rows),
+                    state.summary.attentionCount - unreadFailureCount,
+                  ),
+                },
         };
       }),
     beginEntityRead: (entryIds, readAt) =>
@@ -255,6 +307,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const retries = { ...state.entityReadRetries };
         const rows = { ...state.rows };
         let flipped = 0;
+        let attentionFlipped = 0;
         for (const entryId of entryIds) {
           retries[entryId] = {
             attempts: retries[entryId]?.attempts ?? 0,
@@ -263,6 +316,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           const key = cloudNotificationFeedId(entryId);
           const row = rows[key];
           if (row === undefined || row.entry.readAt !== null) continue;
+          if (isUnreadFailure(row)) attentionFlipped += 1;
           rows[key] = { ...row, entry: { ...row.entry, readAt } };
           flipped += 1;
         }
@@ -275,6 +329,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: Math.max(0, state.summary.unreadCount - flipped),
+                  attentionCount: Math.max(
+                    0,
+                    state.summary.attentionCount - attentionFlipped,
+                  ),
                 },
         };
       }),
@@ -333,8 +391,12 @@ export function openCloudNotificationsStream(
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
-  onArrivals:
-    ((rows: ReadonlyArray<HostNotificationsCloudFeedRow>) => void) | null,
+  onSnapshot:
+    | ((input: {
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRow>;
+      }) => void)
+    | null,
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
@@ -387,7 +449,8 @@ export function openCloudNotificationsStream(
           const arrivals = useCloudNotificationsStore
             .getState()
             .applySnapshot(parsed.data);
-          if (arrivals.length > 0) onArrivals?.(arrivals);
+          if (arrivals === null) return;
+          onSnapshot?.({ rows: parsed.data.rows, arrivals });
           reopenScheduler.resetBackoff();
           return;
         }

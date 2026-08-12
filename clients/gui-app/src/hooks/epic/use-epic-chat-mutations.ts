@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequest,
+  CreateChatRequestV11,
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
@@ -19,6 +19,7 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  classifyHostRequestFailure,
   HostRpcError,
   toHostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -40,7 +41,7 @@ import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persiste
  * one place that resolves "which host owns this new chat" and exactly
  * one place that fails loudly when no host is active.
  */
-export type CreateChatMutationInput = Omit<CreateChatRequest, "hostId">;
+export type CreateChatMutationInput = Omit<CreateChatRequestV11, "hostId">;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
 }
@@ -101,11 +102,38 @@ export function useEpicCreateChat(): UseMutationResult<
       onSuccess: (_data, _params, ctx) => {
         invalidateBindingsForEpic(queryClient, ctx.hostId);
       },
-      onError: (error) => {
+      onError: (error, variables) => {
+        if (isRecoverableLatestForkFailure(error, variables)) return;
         toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
+}
+
+/**
+ * Whether `error` is one of the two failures `cloneChatOnHostSwitch` (ticket
+ * 34B1) recovers from by design - a settings-only retry is already in
+ * flight by the time this fires, so a generic "Couldn't create agent."
+ * toast here would tell the user their clone failed on the exact request
+ * that is about to quietly succeed without history.
+ *
+ * Scoped to `forkSource.boundary === "latest"` specifically, not "any
+ * `forkSource`": both failure codes are otherwise reachable in principle
+ * (`E_FORK_CHECKPOINT_UNAVAILABLE` is currently only ever produced by a
+ * `"latest"` request, but `DOWNGRADE_UNSUPPORTED` is a general transport
+ * code), and the manual fork dialog's precise-boundary requests do NOT
+ * recover from either - they must still toast on failure like every other
+ * caller of this hook.
+ */
+function isRecoverableLatestForkFailure(
+  error: HostRpcError,
+  variables: CreateChatMutationInput,
+): boolean {
+  if (variables.forkSource?.boundary !== "latest") return false;
+  return (
+    error.code === "E_FORK_CHECKPOINT_UNAVAILABLE" ||
+    classifyHostRequestFailure(error).kind === "downgrade-unsupported"
+  );
 }
 
 export function useEpicCreateChatForHost(): UseMutationResult<

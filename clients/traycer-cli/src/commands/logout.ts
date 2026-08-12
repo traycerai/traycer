@@ -1,6 +1,8 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import { clearDiskChatPartCache } from "../store/chat-part-cache";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
+import { cliChatPartCacheDir } from "../store/paths";
 
 // Runner-aware `traycer logout`. JSON mode emits exactly one terminal
 // NDJSON `result` event; human mode prints a single human line.
@@ -31,13 +33,33 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       exitCode: 1,
     });
   }
+  // Published chat bytes do not survive leaving the account.
+  //
+  // The store is shared across environments and signed-in users on purpose - an
+  // entry is named by the sha256 of its own bytes, so it cannot be stale for
+  // anyone, only absent - which is exactly why an explicit logout has to be the
+  // thing that drops it. Every entry is a copy of bytes the cloud still holds,
+  // so deleting the directory is always safe and costs one cold read.
+  //
+  // AFTER the delete is confirmed, and awaited: unlike the GUI there is no
+  // process left to finish the work, so a fire-and-forget clear here would race
+  // the command's own exit.
+  //
+  // A clear that FAILS does not fail the logout - the credential is already
+  // deleted and re-running logout could not improve on that - but it must not
+  // be silent either: the bytes it names are exactly what the clear exists to
+  // remove, so the user is told what remains and where, and `data` says so for
+  // scripts.
+  const cachePath = cliChatPartCacheDir();
+  const cacheClearError = await clearDiskChatPartCache(cachePath);
+  const loggedOutLine = hadSession ? "Logged out." : "Not logged in.";
   return {
-    data: { loggedOut: hadSession },
+    data: { loggedOut: hadSession, chatCacheCleared: cacheClearError === null },
     human: ctx.runtime.json
       ? null
-      : hadSession
-        ? "Logged out."
-        : "Not logged in.",
+      : cacheClearError === null
+        ? loggedOutLine
+        : `${loggedOutLine} The cached published-chat content at ${cachePath} could not be removed (${cacheClearError.message}); delete that directory manually to finish clearing local data.`,
     exitCode: 0,
   };
 };

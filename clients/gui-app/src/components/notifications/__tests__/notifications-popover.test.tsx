@@ -1992,6 +1992,9 @@ describe("NotificationsPopover", () => {
       throw new Error("expected dismissed row in Recent");
     }
     expect(live.dataset.notificationRead).toBe("true");
+    expect(
+      within(live).getByTestId("notification-relocation-highlight"),
+    ).not.toBeNull();
     expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
     const dismissed =
       useHostNotificationsStore.getState().byId["prompt-dismiss"];

@@ -5,38 +5,18 @@ import {
 import { config } from "../config";
 import { createCliLogger } from "../logger";
 import { cliCredentialsPath } from "./paths";
-import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
 // The on-disk shape now lives in `@traycer/protocol/config` (shared by the CLI,
 // the desktop app, and the host). Re-exported so existing CLI importers keep
 // resolving `StoredCredentials` from `../store/credentials`.
+//
+// The file carries only the session (token pair + cached identity). The authn
+// endpoint every auth call targets is `config.authnBaseUrl` - baked at build
+// time, with the dev-slot env override applied at module init (config.ts). It
+// is never read off disk: a stored URL is whichever stack happened to write
+// last (a sibling dev slot's dead port, after that slot stops), not the
+// authority this process is configured against.
 export type { StoredCredentials };
-
-// Dev credentials are shared across every `make dev-desktop` run (worktree),
-// but each run's local authn stack listens on its own allocated port. Only
-// override the serialized URL when THIS process is actually inside a
-// dev-desktop run slot (`DEV_DESKTOP_SLOT` set) - a plain from-source `dev`
-// CLI invocation outside dev-desktop has no local stack and must keep using
-// whatever authn URL is actually stored (matches the config.ts committed
-// default, or a prior explicit login), or every unrelated dev CLI call would
-// start validating tokens against the wrong backend.
-export function effectiveAuthnBaseUrl(storedAuthnBaseUrl: string): string {
-  if (devDesktopSlotForEnvironment(config.environment, process.env) !== null) {
-    return config.authnBaseUrl;
-  }
-  return storedAuthnBaseUrl;
-}
-
-export function credentialsWithEffectiveAuthnBaseUrl(
-  creds: StoredCredentials,
-): StoredCredentials {
-  const authnBaseUrl = effectiveAuthnBaseUrl(creds.authnBaseUrl);
-  if (authnBaseUrl === creds.authnBaseUrl) return creds;
-  return {
-    ...creds,
-    authnBaseUrl,
-  };
-}
 
 export async function readCredentials(): Promise<StoredCredentials | null> {
   const logger = createCliLogger(config.environment);
@@ -58,5 +38,4 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
 // no CLI writer can bypass the WAL/lock and stomp the store's floor. `login`,
 // `whoami`, and `logout` call `store.signIn`/`rotate`/`updateProfile`/`signOut`;
 // host-rpc/monitor refresh via `store.rotate`. This module keeps only the plain,
-// non-spending `readCredentials` (a fresh-process snapshot needs no lock) and the
-// dev-desktop `effectiveAuthnBaseUrl` helpers.
+// non-spending `readCredentials` (a fresh-process snapshot needs no lock).

@@ -11,6 +11,7 @@ import {
 } from "@/lib/persist/zustand-persist-lifecycle";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
+import { clearAppLocalCompletionReceipts } from "@/lib/notifications/app-local-completion-receipts";
 
 export interface AppLocalNotificationsPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -44,6 +45,7 @@ export function AppLocalNotificationsPersistLifecycleBridge(
     const activeUserId = useAppLocalNotificationsStore.getState().activeUserId;
     if (activeUserId !== null) {
       clearAppLocalDisplayReceipts(activeUserId);
+      clearAppLocalCompletionReceipts(activeUserId);
     }
     clearAndResetPersistedStore({
       store: useAppLocalNotificationsStore,

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import {
+  readFocusedHostNotificationPresence,
   readHostNotificationPresenceFrame,
   subscribeHostNotificationPresence,
 } from "@/lib/notifications/notification-presence";
@@ -45,6 +46,10 @@ describe("notification presence", () => {
       focused: true,
       entity: { epicId: "epic-1", chatId: "chat-1" },
       at: 123,
+    });
+    expect(readFocusedHostNotificationPresence()).toEqual({
+      originHostId: "host-1",
+      entity: { epicId: "epic-1", chatId: "chat-1" },
     });
   });
 

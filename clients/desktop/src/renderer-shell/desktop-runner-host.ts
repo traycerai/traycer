@@ -317,6 +317,12 @@ export interface DesktopMigrationBridge {
 }
 
 export interface DesktopPlatformBridge {
+  clipboard?: {
+    writeImage(input: {
+      readonly type: string;
+      readonly bytes: ArrayBuffer;
+    }): Promise<void>;
+  };
   recentDocuments: {
     add(path: string): Promise<void>;
   };

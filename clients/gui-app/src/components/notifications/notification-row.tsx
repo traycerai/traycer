@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { m, useReducedMotion } from "motion/react";
 import {
   Bell,
   Check,
@@ -33,6 +34,8 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
+  /** Briefly identifies a row that just moved from Attention into Recent. */
+  readonly highlightRelocation: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   /** Dismiss an unresolved `needs_action` Attention row (stamps `resolvedAt`).
@@ -80,6 +83,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   // Hooks must remain unconditional while an exact-removal frame makes this
   // row disappear between renders.
   const originHost = useHostDirectoryEntry(row?.originHostId ?? "");
+  const shouldReduceMotion = useReducedMotion() === true;
   if (row === null) return null;
   const isRead = row.readAt !== null;
   const isNavigable = row.payload !== null;
@@ -92,7 +96,16 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const Icon = glyph.icon;
 
   return (
-    <li
+    <m.li
+      layout={shouldReduceMotion ? false : "position"}
+      layoutId={
+        shouldReduceMotion ? undefined : `notification-row-${row.feedId}`
+      }
+      exit={shouldReduceMotion ? undefined : { opacity: 0 }}
+      transition={{
+        layout: { duration: 0.24, ease: "easeOut" },
+        opacity: { duration: 0.12, ease: "easeOut" },
+      }}
       // hover:/has-[:focus-visible]: give the whole row a subtle tint
       // whenever any of its interactive controls is hovered or keyboard-
       // focused, so the user can see what they're targeting - distinct from
@@ -107,6 +120,16 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         originUnavailable ? "unavailable" : "available"
       }
     >
+      {props.highlightRelocation && !shouldReduceMotion ? (
+        <m.span
+          aria-hidden
+          data-testid="notification-relocation-highlight"
+          className="pointer-events-none absolute inset-0 bg-primary/15"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      ) : null}
       {!isRead ? (
         <span
           aria-hidden
@@ -152,7 +175,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           onResolve={props.onResolve}
         />
       </div>
-    </li>
+    </m.li>
   );
 }
 

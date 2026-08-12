@@ -19,7 +19,6 @@ import {
 const CREDS: StoredCredentials = {
   token: "access-token",
   refreshToken: "refresh-token",
-  authnBaseUrl: "http://localhost:21001",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
 };
@@ -62,6 +61,17 @@ describe("credentials primitives (real filesystem)", () => {
 
     it("round-trips a valid payload", async () => {
       await writeCredentialsFile(credPath, CREDS, 0);
+      expect(await readCredentialsFile(credPath)).toEqual(CREDS);
+    });
+
+    it("parses a legacy file carrying the retired authnBaseUrl field", async () => {
+      // Files written before the authnBaseUrl removal must keep reading as
+      // valid sessions; the retired field is ignored and dropped on rewrite.
+      mkdirSync(join(workDir, "cli", "dev"), { recursive: true });
+      writeFileSync(
+        credPath,
+        JSON.stringify({ ...CREDS, authnBaseUrl: "http://localhost:21001" }),
+      );
       expect(await readCredentialsFile(credPath)).toEqual(CREDS);
     });
 

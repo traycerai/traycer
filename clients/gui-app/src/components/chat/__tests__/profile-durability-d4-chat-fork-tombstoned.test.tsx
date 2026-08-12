@@ -349,6 +349,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     expect(request).toEqual(
       expect.objectContaining({
         forkSource: {
+          boundary: "assistantMessage",
           sourceChatId: "source-chat",
           assistantMessageId: "assistant-message-1",
           interviewBlockId: "question-tool:interview",

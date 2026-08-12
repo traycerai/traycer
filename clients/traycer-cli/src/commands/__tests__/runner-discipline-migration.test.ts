@@ -1,6 +1,12 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   afterEach,
   beforeEach,
@@ -221,7 +227,6 @@ function mockLogoutStore(args: {
         ? {
             token: "t",
             refreshToken: "r",
-            authnBaseUrl: "https://authn.test",
             savedAt: "2026-01-01T00:00:00.000Z",
             user: { id: "u1", email: "a@b.c", name: "A" },
           }
@@ -290,6 +295,49 @@ describe("logoutCommand runner contract", () => {
     expect(out.terminal).toBeNull();
     expect(joined(stdoutChunks)).toContain("Not logged in.");
     expect(out.exitCode).toBe(0);
+  });
+
+  it("drops the content-addressed chat-part cache", async () => {
+    mockLogoutStore({ hadSession: true, signOut: DELETED });
+    const { cliChatPartCacheDir } = await import("../../store/paths");
+    const cacheDir = cliChatPartCacheDir();
+    const digest = "ab".padEnd(64, "c");
+    const entry = join(cacheDir, digest.slice(0, 2), digest);
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "a published shard's bytes");
+    // The injected state, OBSERVED before the act. Without this the assertion
+    // after would pass just as well against a cache directory that never
+    // existed, which is precisely the shape of a test that proves nothing.
+    expect(existsSync(entry)).toBe(true);
+
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+
+    expect(out.exitCode).toBe(0);
+    // Leaving the account means leaving the content. Every entry is a copy of
+    // bytes the cloud still holds, so this costs one cold read and nothing else.
+    expect(existsSync(entry)).toBe(false);
+  });
+
+  it("keeps the chat-part cache when the sign-out delete fails", async () => {
+    mockLogoutStore({
+      hadSession: true,
+      signOut: { outcome: "commit-failed", credentials: null },
+    });
+    const { cliChatPartCacheDir } = await import("../../store/paths");
+    const digest = "de".padEnd(64, "f");
+    const entry = join(cliChatPartCacheDir(), digest.slice(0, 2), digest);
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "a published shard's bytes");
+    expect(existsSync(entry)).toBe(true);
+
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+
+    // The credential was NOT cleared, so the session did not end and the
+    // content is still this user's. The clear rides the confirmed path.
+    expect(out.exitCode).toBe(1);
+    expect(existsSync(entry)).toBe(true);
   });
 
   it("JSON mode: emits a single error envelope (UNEXPECTED) when the sign-out delete fails", async () => {

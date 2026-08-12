@@ -20,6 +20,7 @@ function createHandle(epicId: string, chatId: string) {
   let closeCount = 0;
   return {
     handle: createChatSessionStore({
+      hostId: "host-a",
       epicId,
       chatId,
       userId: null,

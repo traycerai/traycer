@@ -92,7 +92,7 @@ function props(
     viewTabId: "tab-1",
     chatId: "chat-1",
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct },
+    access: { isViewer: false, canAct, readOnlyNotice: null },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,

@@ -821,7 +821,7 @@ describe("WorktreesList delete flow", () => {
     ).toBe(true);
   });
 
-  it("keeps an unresolved base row authoritative over a cached resolved enrichment", () => {
+  it("keeps an unresolved base authoritative for deletion while displaying its cached tier", () => {
     const unresolvedBase = entry({
       worktreePath: "/wt/regressed",
       branch: "feat-regressed",
@@ -837,6 +837,7 @@ describe("WorktreesList delete flow", () => {
       inUse: false,
       uncommittedCount: 0,
       gitRemovable: true,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
     });
     const deleteRunsBefore = streamMock.paths.length;
     renderList({
@@ -850,7 +851,12 @@ describe("WorktreesList delete flow", () => {
       taskTitlesByEpicId: undefined,
     });
 
-    screen.getByTestId("worktree-tier-pill-pending-spinner");
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+    expect(
+      screen.queryByTestId("worktree-tier-pill-pending-spinner"),
+    ).toBeNull();
     const checkbox = screen.getByRole("checkbox", {
       name: "Select worktree feat-regressed",
     });
@@ -2466,7 +2472,7 @@ describe("WorktreesList confirm-time re-check", () => {
     screen.getByRole("button", { name: "Delete worktree feat-review" });
   });
 
-  it("a stale tier filter whose tier vanishes shows all rows (no empty dead-end under 'All')", () => {
+  it("keeps a selected tier strict when its last matching row vanishes", () => {
     const queryClient = new QueryClient();
     const reviewRow = entry({
       worktreePath: "/wt/review",
@@ -2488,12 +2494,13 @@ describe("WorktreesList confirm-time re-check", () => {
     // The last Landed row is deleted out from under the filter (only review left).
     rendered.rerender(renderWith(queryClient, [reviewRow]));
 
-    // The stale "Landed" selection is no longer available, so the effective
-    // filter is empty and every row shows - matching the "All" the toolbar now
-    // reads. The list must NOT dead-end to the empty state.
-    screen.getByRole("button", { name: "Delete worktree feat-review" });
-    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
-    screen.getByRole("button", { name: "Filter: All" });
+    // The selection remains explicit and strict: it never silently broadens to
+    // All just because the selected tier currently has zero matches.
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-review" }),
+    ).toBeNull();
+    screen.getByText("No worktrees match the selected tier filters.");
+    screen.getByRole("button", { name: "Filter: Landed" });
   });
 
   it("bulk-delete copy buckets an orphaned+dirty row as orphaned, matching its pill (shared classifier)", () => {
@@ -3861,10 +3868,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     expect(screen.queryByText("Checking…")).toBeNull();
   });
 
-  it("keeps a still-pending row under an active tier filter (no dead-end)", () => {
-    // One enriched Landed row + one still-pending row. Filtering to Landed must
-    // keep the pending row visible (its tier is unknown, so it can't be excluded
-    // yet) so it can enrich, instead of dead-ending the filtered view to empty.
+  it("keeps a never-classified row outside an active tier filter", () => {
     const mergedRow = entry({
       worktreePath: "/wt/merged",
       branch: "feat-merged",
@@ -3888,13 +3892,144 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     // Landed is the only known tier, so it is the only filter option offered.
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
 
-    // The enriched Landed row stays; the still-pending row is KEPT (shown as
-    // "Checking…"), not dropped - its delete affordance is disabled, not absent.
+    // The enriched Landed row stays. The pending row is accounted for outside
+    // the strict result set and can appear later only if its classification matches.
     screen.getByRole("button", { name: "Delete worktree feat-merged" });
+    expect(
+      screen.queryByRole("button", {
+        name: "Delete worktree (status is still being checked)",
+      }),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("worktrees-filter-resolution-status").textContent,
+    ).toContain("Checking 1 worktree…");
+  });
+
+  it("uses a stale last-known tier while a refreshed base row revalidates", () => {
+    const oldLanded = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const oldReview = entry({
+      worktreePath: "/wt/review",
+      branch: "feat-review",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      resolvedAt: 10,
+    });
+    const refreshedBase = [
+      entry({
+        ...oldLanded,
+        branch: "feat-landed",
+        branchStatus: null,
+        resolvedAt: 20,
+      }),
+      entry({
+        ...oldReview,
+        branch: "feat-review",
+        branchStatus: null,
+        resolvedAt: 20,
+      }),
+    ];
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: refreshedBase,
+      enrichedByPath: new Map([
+        [oldLanded.worktreePath, oldLanded],
+        [oldReview.worktreePath, oldReview],
+      ]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+
+    screen.getByRole("button", { name: "Worktree actions for feat-landed" });
     screen.getByRole("button", {
       name: "Delete worktree (status is still being checked)",
     });
-    screen.getByText("Checking…");
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-review" }),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+  });
+
+  it("keeps the last-known tier when the refreshed base is unresolved", () => {
+    const lastKnown = entry({
+      worktreePath: "/wt/cold-base",
+      branch: "feat-cold-base",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unresolvedBase: WorktreeHostEntryV14 = {
+      ...lastKnown,
+      branch: null,
+      gitRemovable: false,
+      owners: [],
+      branchStatus: null,
+      resolvedAt: null,
+    };
+    render(
+      listElement({
+        worktrees: [unresolvedBase],
+        enrichedByPath: new Map([[lastKnown.worktreePath, lastKnown]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+  });
+
+  it("combines retained activity with authoritative refreshed base facts", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const oldIdle = entry({
+      worktreePath: "/wt/now-in-use",
+      branch: "feat-now-in-use",
+      inUse: false,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const refreshedInUseBase = entry({
+      ...oldIdle,
+      branch: "feat-now-in-use",
+      inUse: true,
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, refreshedInUseBase],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [oldIdle.worktreePath, oldIdle],
+        ]),
+        erroredPaths: new Set([oldIdle.worktreePath]),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    screen.getByText("feat-landed");
+    expect(screen.queryByText("feat-now-in-use")).toBeNull();
   });
 
   it("excludes a still-pending row's unknown tier from the filter options", () => {
@@ -3951,7 +4086,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     ).toBeNull();
   });
 
-  it("keeps an errored row out of tier filters exactly like a pending one", () => {
+  it("keeps a never-classified errored row outside a strict tier filter", () => {
     const mergedRow = entry({
       worktreePath: "/wt/merged",
       branch: "feat-merged",
@@ -3972,13 +4107,213 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
 
     // The errored row's tier is unknown, so it contributes no filter option and
-    // (like a pending row) is KEPT under an active tier filter rather than dropped.
+    // cannot enter a strict Landed result set.
     expect(screen.queryByTestId("worktrees-filter-errored")).toBeNull();
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     screen.getByRole("button", { name: "Delete worktree feat-merged" });
-    screen.getByRole("button", { name: "Delete worktree feat-errored" });
-    // Still shown as Unknown while filtered, not spinning.
-    screen.getByText("Unknown");
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-errored" }),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("worktrees-filter-resolution-status").textContent,
+    ).toContain("Status unavailable for 1 worktree.");
+  });
+
+  it("reports a failed stale refresh when its retained tier is filtered out", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const lastKnownReview = entry({
+      worktreePath: "/wt/review",
+      branch: "feat-review",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      resolvedAt: 10,
+    });
+    const refreshedReviewBase = entry({
+      ...lastKnownReview,
+      branch: "feat-review",
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, refreshedReviewBase],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [lastKnownReview.worktreePath, lastKnownReview],
+        ]),
+        erroredPaths: new Set([lastKnownReview.worktreePath]),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    screen.getByRole("button", { name: "Delete worktree feat-landed" });
+    expect(screen.queryByText("feat-review")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Status unavailable for 1 worktree.",
+    );
+  });
+
+  it("discards retained activity after the worktree branch identity changes", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const oldActivity = entry({
+      worktreePath: "/wt/reused",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      prState: "merged",
+      prNumber: 123,
+      resolvedAt: 10,
+    });
+    const reusedPath = entry({
+      ...oldActivity,
+      branch: "new-branch",
+      branchStatus: null,
+      prState: null,
+      prNumber: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, reusedPath],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [oldActivity.worktreePath, oldActivity],
+        ]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    screen.getByRole("button", { name: "Delete worktree feat-landed" });
+    expect(screen.queryByText("new-branch")).toBeNull();
+    expect(screen.queryByText("#123")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Checking 1 worktree…",
+    );
+  });
+
+  it("uses a reliable branch mismatch even while the refreshed base is unresolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/reused",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unresolvedNewBranch = entry({
+      ...oldActivity,
+      branch: "new-branch",
+      branchStatus: null,
+      resolvedAt: null,
+    });
+    render(
+      listElement({
+        worktrees: [unresolvedNewBranch],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("new-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
+    expect(screen.queryByText("Landed")).toBeNull();
+  });
+
+  it("discards retained activity for a recreated directory at the same path", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/recreated",
+      branch: "same-branch",
+      createdAt: 10,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const recreated = entry({
+      ...oldActivity,
+      branch: "same-branch",
+      createdAt: 20,
+      branchStatus: null,
+      resolvedAt: null,
+    });
+    render(
+      listElement({
+        worktrees: [recreated],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("same-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
+    expect(screen.queryByText("Landed")).toBeNull();
+  });
+
+  it("requires an exact nullable branch identity once the base is resolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/detached",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const detached: WorktreeHostEntryV14 = {
+      ...oldActivity,
+      branch: null,
+      branchStatus: null,
+      resolvedAt: 20,
+    };
+    render(
+      listElement({
+        worktrees: [detached],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getAllByText("detached HEAD").length).toBeGreaterThan(0);
+    expect(screen.getByText("Checking…")).not.toBeNull();
+  });
+
+  it("requires an exact nullable repository identity once the base is resolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/unidentified",
+      branch: "same-branch",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unidentified = entry({
+      ...oldActivity,
+      branch: "same-branch",
+      repoIdentifier: null,
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [unidentified],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("same-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
   });
 
   it("upgrades an errored row in place once a later refetch succeeds", () => {
@@ -4498,6 +4833,23 @@ describe("WorktreesList PR-number search", () => {
     expect(screen.queryByText("No worktrees match your search.")).toBeNull();
   });
 
+  it("settles an alphabetic no-match without waiting for unrelated pending rows", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: undefined,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Review" }));
+    search("definitely-not-a-repo-branch-path-or-task");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/No matches yet - still checking/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Checking 1 worktree…",
+    );
+  });
+
   it("settles to 'no matches' once every probe has landed", () => {
     renderPrList({
       enrichedByPath: enrichedExcept([]),
@@ -4507,6 +4859,29 @@ describe("WorktreesList PR-number search", () => {
 
     expect(visibleBranches()).toEqual([]);
     screen.getByText("No worktrees match your search.");
+  });
+
+  it("names the active tier filters when a settled strict filter has no matches", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    useWorktreesSettingsViewStore.setState({ tierFilters: ["review"] });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [landed],
+      enrichedByPath: new Map([[landed.worktreePath, landed]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match the selected tier filters.");
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
   });
 
   it("does not hold the 'still checking' notice open for an errored row", () => {
@@ -4524,14 +4899,7 @@ describe("WorktreesList PR-number search", () => {
     expect(screen.queryByText(/still checking/)).toBeNull();
   });
 
-  it("suppresses the 'still checking' notice while a tier filter is active", () => {
-    // A pending row bypasses the tier stage only WHILE it's pending (see
-    // `filteredWorktrees`) - once it resolves it might land in a tier the
-    // active filter excludes, and the search would never surface it despite
-    // the notice having promised to. `/wt/atbase` is enriched purely so
-    // "At base commit" is an available filter option to select; the two rows
-    // that matter, `/wt/super-pr` and `/wt/other-pending`, are left pending
-    // and irrelevant to the "4360" query either way.
+  it("accounts for still-pending rows while a tier filter is active", () => {
     const atBase = entry({
       worktreePath: "/wt/atbase",
       branch: "feat-atbase",
@@ -4561,7 +4929,49 @@ describe("WorktreesList PR-number search", () => {
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-super-pr" }),
     ).toBeNull();
-    screen.getByText("No worktrees match your search.");
-    expect(screen.queryByText(/still checking/)).toBeNull();
+    screen.getByText("No matches yet - still checking 2 worktrees.");
+    expect(
+      screen.getByTestId("worktrees-filter-resolution-status").textContent,
+    ).toContain("Checking 2 worktrees…");
+  });
+
+  it("keeps a known PR searchable while its tier-filtered row revalidates", () => {
+    const lastKnown = entry({
+      worktreePath: "/wt/pr-refresh",
+      branch: "feat-pr-refresh",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      prState: "merged",
+      prNumber: 731,
+      prUrl: "https://github.com/acme/app/pull/731",
+      resolvedAt: 10,
+    });
+    const refreshedBase = entry({
+      ...lastKnown,
+      branch: "feat-pr-refresh",
+      branchStatus: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      resolvedAt: 20,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [refreshedBase],
+      enrichedByPath: new Map([[lastKnown.worktreePath, lastKnown]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    search("#731");
+
+    screen.getByRole("button", {
+      name: "Worktree actions for feat-pr-refresh",
+    });
+    screen.getByRole("link", { name: /#731/ });
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
   });
 });

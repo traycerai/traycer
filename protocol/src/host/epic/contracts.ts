@@ -10,6 +10,7 @@ import {
   createArtifactRequestSchema,
   createArtifactResponseSchema,
   createChatRequestSchema,
+  createChatRequestSchemaV11,
   createChatResponseSchema,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
@@ -37,6 +38,8 @@ import {
   epicMentionSpecsResponseSchema,
   epicMentionStoriesResponseSchema,
   epicMentionTicketsResponseSchema,
+  finishArtifactImageRequestSchema,
+  finishArtifactImageResponseSchema,
   grantEpicAccessRequestSchema,
   grantEpicAccessResponseSchema,
   listCommentThreadsRequestSchema,
@@ -49,6 +52,8 @@ import {
   listTasksRequestSchemaV11,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
+  prepareArtifactImageRequestSchema,
+  prepareArtifactImageResponseSchema,
   removeEpicRepoRequestSchema,
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
@@ -91,6 +96,30 @@ import {
   epicSubscribeV10,
   epicSubscribeV11,
 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  listCloudChatPayloadsRequestSchema,
+  listCloudChatPayloadsResponseSchema,
+  listCloudChatsRequestSchema,
+  listCloudChatsResponseSchema,
+  readCloudChatPartRequestSchema,
+  readCloudChatPartResponseSchema,
+  readCloudChatPayloadRequestSchema,
+  readCloudChatPayloadResponseSchema,
+  resolveCloudChatHeadRequestSchema,
+  resolveCloudChatHeadResponseSchema,
+} from "@traycer/protocol/host/epic/cloud-chat";
+import {
+  listChatPublicationTargetsRequestSchema,
+  listChatPublicationTargetsResponseSchema,
+} from "@traycer/protocol/host/epic/chat-publication-identity";
+import {
+  chatBackupStatusRequestSchema,
+  chatBackupStatusResponseSchema,
+} from "@traycer/protocol/host/epic/chat-backup-status";
+import {
+  chatReplicaReadRequestSchema,
+  chatReplicaReadResponseSchema,
+} from "@traycer/protocol/host/epic/chat-replica-read";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -292,6 +321,54 @@ export const epicCreateChatV10 = defineRpcContract({
   responseSchema: createChatResponseSchema,
 });
 
+// v1.1 widens `forkSource` to a discriminated union (chat-sync-v2 ticket 34B1):
+// the existing precise-boundary shape, tagged `boundary: "assistantMessage"`,
+// beside a new `boundary: "latest"` variant that names only the source chat -
+// the host resolves the boundary itself via `buildLatestCheckpointForkSeed`.
+// This is a NEW MINOR, not an in-place edit of `epicCreateChatV10`: unlike
+// the cloud-chat-read methods introduced on this same train (whose {1,0}
+// never shipped), `epic.createChat@1.0` is already in released hosts, so its
+// shape is frozen. See `createChatForkSourceSchemaV11`'s doc in
+// `unary-schemas.ts`.
+export const epicCreateChatV11 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createChatRequestSchemaV11,
+  responseSchema: createChatResponseSchema,
+});
+
+// A v1.0 request's `forkSource` (when present) is always the precise-boundary
+// shape - it is the ONLY shape v1.0 could ever send - so the upgrade tags it
+// `boundary: "assistantMessage"` and leaves every other field untouched.
+// `null`/`undefined` pass through unchanged (no fork requested). The response
+// is identical between the two minors.
+export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateChatV10,
+  typeof epicCreateChatV11
+>({
+  from: epicCreateChatV10.schemaVersion,
+  to: epicCreateChatV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forkSource:
+      request.forkSource === null || request.forkSource === undefined
+        ? request.forkSource
+        : // Named fields, not `{boundary, ...request.forkSource}`: a spread
+          // AFTER the tag is only safe because a v1.0 request's `forkSource`
+          // never carries its own `boundary` key today, a fact that requires
+          // reading `unary-schemas.ts` to know - constructed explicitly here
+          // so it stays correct even if that stops being true.
+          {
+            boundary: "assistantMessage" as const,
+            sourceChatId: request.forkSource.sourceChatId,
+            assistantMessageId: request.forkSource.assistantMessageId,
+            interviewBlockId: request.forkSource.interviewBlockId,
+            carriedInterviews: request.forkSource.carriedInterviews,
+          },
+  }),
+  upgradeResponse: (response) => response,
+});
+
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -367,6 +444,20 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+export const epicPrepareArtifactImageV10 = defineRpcContract({
+  method: "epic.prepareArtifactImage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: prepareArtifactImageRequestSchema,
+  responseSchema: prepareArtifactImageResponseSchema,
+});
+
+export const epicFinishArtifactImageV10 = defineRpcContract({
+  method: "epic.finishArtifactImage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: finishArtifactImageRequestSchema,
+  responseSchema: finishArtifactImageResponseSchema,
 });
 
 export const epicCreateTuiAgentV10 = defineRpcContract({
@@ -510,6 +601,95 @@ export const epicSearchArtifactsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: searchArtifactsRequestSchema,
   responseSchema: searchArtifactsResponseSchema,
+});
+
+// ---- Cloud chat reads (host as byte pipe) ------------------------------ //
+//
+// Five brand-new v1.0 methods, none on `RELEASED_FLOOR_METHOD_NAMES`, all
+// registered with `degrade: { kind: "unsupported" }` in `registry.ts` - a new
+// method NAME is handshake-fatal against a released peer, so the whole surface
+// rides the optional-capability channel.
+//
+// Missing-peer behavior is a designed state rather than a backstop: a host
+// without these answers `E_HOST_UNSUPPORTED`, and the client's contract is to
+// HIDE the cloud-chat surface (an absent list section, a dialog that states the
+// refusal in place) instead of rendering a failure. "This host cannot reach
+// cloud chats" is not an error a user can act on except by updating the host,
+// which is what the surface says.
+//
+// The split into five is the read pipeline itself, and each call is one step a
+// client cannot do for itself: list the rows, get the opaque head, pull ONE part
+// by digest, learn which payloads are fetchable, pull one payload. Everything
+// between those steps - gating on the head's version, checking each part's
+// length and digest, assembling in head order, presenting - happens in the
+// client, on bytes the host moved without reading. See `cloud-chat.ts`.
+
+export const epicListCloudChatsV10 = defineRpcContract({
+  method: "epic.listCloudChats",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listCloudChatsRequestSchema,
+  responseSchema: listCloudChatsResponseSchema,
+});
+
+export const epicResolveCloudChatHeadV10 = defineRpcContract({
+  method: "epic.resolveCloudChatHead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: resolveCloudChatHeadRequestSchema,
+  responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+export const epicReadCloudChatPartV10 = defineRpcContract({
+  method: "epic.readCloudChatPart",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readCloudChatPartRequestSchema,
+  responseSchema: readCloudChatPartResponseSchema,
+});
+
+export const epicListCloudChatPayloadsV10 = defineRpcContract({
+  method: "epic.listCloudChatPayloads",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listCloudChatPayloadsRequestSchema,
+  responseSchema: listCloudChatPayloadsResponseSchema,
+});
+
+export const epicReadCloudChatPayloadV10 = defineRpcContract({
+  method: "epic.readCloudChatPayload",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readCloudChatPayloadRequestSchema,
+  responseSchema: readCloudChatPayloadResponseSchema,
+});
+
+// ---- Publication identity (a host-LOCAL read, not a cloud read) -------- //
+//
+// Deliberately not one of the five above. Those forward cloud bytes the host
+// may not interpret and are registered unconditionally; this answers from the
+// host's own fork-redirect rows and exists only where a chat-sync publisher is
+// installed, so it degrades independently. See `chat-publication-identity.ts`
+// for what the mapping is and why folding a cloud list on `chatId` equality is
+// wrong exactly once - at a fork - in both directions at the same time.
+export const epicListChatPublicationTargetsV10 = defineRpcContract({
+  method: "epic.listChatPublicationTargets",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listChatPublicationTargetsRequestSchema,
+  responseSchema: listChatPublicationTargetsResponseSchema,
+});
+
+export const epicChatBackupStatusV10 = defineRpcContract({
+  method: "epic.chatBackupStatus",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatBackupStatusRequestSchema,
+  responseSchema: chatBackupStatusResponseSchema,
+});
+
+// Doc-replica fallback for a chat with no cloud publication and an
+// unreachable owner. Optional, like the publication-identity read above: an
+// older host answers `E_HOST_UNSUPPORTED` and the client keeps today's
+// "Not published yet" notice.
+export const epicChatReplicaReadV10 = defineRpcContract({
+  method: "epic.chatReplicaRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatReplicaReadRequestSchema,
+  responseSchema: chatReplicaReadResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

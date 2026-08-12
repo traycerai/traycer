@@ -119,6 +119,7 @@ beforeEach(() => {
     // Mirrors the real reader, which now always reports the host's Layer 0
     // verdict. `null` = this fixture's host recorded no attempt.
     layer0: null,
+    layer0Slot: null,
   });
   createStoreMock.mockReturnValue(fakeStore);
 });
@@ -222,6 +223,7 @@ describe("callHostRpc", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
       processStartIdentity: null,
       layer0: null,
+      layer0Slot: null,
     });
 
     await expect(
@@ -256,7 +258,6 @@ describe("callHostRpc", () => {
       credentials: {
         token: "tok-2",
         refreshToken: "tok-2-refresh",
-        authnBaseUrl: "https://authn.test",
         savedAt: "2026-01-01T00:00:00.000Z",
         user: { id: "u1", email: "a@b.c", name: "A" },
       },
