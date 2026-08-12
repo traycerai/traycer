@@ -112,11 +112,13 @@ function classifySvgDataUrl(src: string): AssistantImageSource {
   let svgSource: string;
   try {
     if (/(?:^|;)base64(?:;|$)/i.test(metadata)) {
-      const bytes = base64ToBytes(payload);
-      if (bytes === null) return { kind: "invalid-data", src };
-      if (bytes.byteLength > MAX_SVG_SOURCE_LENGTH) {
+      const decodedByteLength = decodedBase64ByteLength(payload);
+      if (decodedByteLength === null) return { kind: "invalid-data", src };
+      if (decodedByteLength > MAX_SVG_SOURCE_LENGTH) {
         return { kind: "data-oversized", src };
       }
+      const bytes = base64ToBytes(payload);
+      if (bytes === null) return { kind: "invalid-data", src };
       svgSource = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } else {
       svgSource = decodeURIComponent(payload);

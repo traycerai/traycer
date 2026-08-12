@@ -677,6 +677,23 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
+  it("rejects oversized base64 SVGs before decoding the payload", () => {
+    const overLimitPayload = "A".repeat(
+      Math.ceil((5 * 1024 * 1024 + 1) / 3) * 4,
+    );
+    const atobSpy = vi.spyOn(globalThis, "atob");
+    renderImage({
+      src: `data:image/svg+xml;base64,${overLimitPayload}`,
+      alt: undefined,
+      context: undefined,
+    });
+
+    expect(
+      document.querySelector("[data-assistant-image-failure]")?.textContent,
+    ).toBe("This image is too large to show here.");
+    expect(atobSpy).not.toHaveBeenCalled();
+  });
+
   it("reads JPEG dimensions as big-endian before applying the pixel cap", () => {
     renderImage({
       src: JPEG_PIXEL_BOMB_DATA_URL,
