@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
-  bindAuthInvalidation,
-  type AuthInvalidationRouter,
-} from "@/router";
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { bindAuthInvalidation, type AuthInvalidationRouter } from "@/router";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**

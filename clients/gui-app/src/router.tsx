@@ -76,7 +76,9 @@ export interface AuthInvalidationRouter {
   load: () => Promise<void> | void;
 }
 
-export function bindAuthInvalidation(router: AuthInvalidationRouter): () => void {
+export function bindAuthInvalidation(
+  router: AuthInvalidationRouter,
+): () => void {
   // At most one recovery load per uncommitted window, however many auth
   // changes land inside it: `router.load()` on these router-core versions
   // ABORTS its predecessor transaction rather than joining it, so issuing one
