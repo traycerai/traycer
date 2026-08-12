@@ -1574,6 +1574,23 @@ export async function runHostStart(
           return exitSupervisor(RESTART_EXIT_CODE);
         }
       }
+      // SHUTDOWN WINS over a requested restart, and this check has to be here
+      // because the `continue` below never reaches `decideRelaunch`, which is
+      // the only other place that consults the latch.
+      //
+      // The race is narrow but its consequence is not: a SIGTERM (or a raced
+      // stop intent) can land while the child is already exiting 87 for a
+      // `host.restart` it accepted moments earlier. Relaunching then starts a
+      // replacement that the one-shot signal has already been spent on, so an
+      // explicit stop leaves the service running.
+      if (shuttingDown) {
+        logger.info("Ignoring a requested restart during shutdown", {
+          environment: opts.environment,
+          exitCode: RESTART_EXIT_CODE,
+          attemptId,
+        });
+        return exitSupervisor(0);
+      }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
         exitCode: RESTART_EXIT_CODE,
@@ -1626,6 +1643,14 @@ export async function runHostStart(
     const ranForMs = childEndedAtMs - childSpawnedAtMs;
     if (ranForMs >= SUSTAINED_UPTIME_RESET_MS) {
       consecutiveRelaunches = 0;
+      // The immediate-restart budget is forgiven by the same evidence, and by
+      // the same argument: a run that lasted this long PROVED the restart
+      // storm ended, whatever it eventually died of. Resetting only the crash
+      // counter here let a stale `consecutiveImmediateRestarts` survive a
+      // healthy run and then terminate the supervisor on the FIRST short
+      // requested restart afterwards - punishing a new episode with an old
+      // one's history.
+      consecutiveImmediateRestarts = 0;
     }
 
     const decision = await decideRelaunch({

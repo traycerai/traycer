@@ -75,6 +75,10 @@ export function HostDoctorRpcCard(props: {
   const doctorRun = useHostDoctorRun(client);
   const [report, setReport] = useState<HostDoctorResponse | null>(null);
   const [logTail, setLogTail] = useState<readonly string[] | null>(null);
+  // The id of a Doctor-fix restart whose DISPATCH OUTCOME IS UNKNOWN - the
+  // transport threw after the host may already have granted the claim. Retained
+  // so the retry can adopt that claim, cleared on every definitive answer.
+  const armedFixRestartIdRef = useRef<string | null>(null);
   // The one local fix that ENDS things — it kills the process holding the port
   // and restarts the host. The bridge Doctor has always confirmed it, and
   // routing it through this card must not quietly drop that: the RPC route
@@ -213,15 +217,23 @@ export function HostDoctorRpcCard(props: {
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
           onRestart={() => {
-            // Minted HERE, when the button is armed, and reused for nothing
-            // else: the host adopts a claim it already granted only when the id
-            // matches, so this is what makes a retry after a lost response
-            // idempotent instead of a busy refusal.
-            const transitionId = newTransitionId();
+            // Minted when the button is armed and REUSED across every attempt
+            // at that same action, including a retry after an ambiguous
+            // transport failure. The host adopts a claim it already granted
+            // only when the id matches, so a fresh id per attempt turns the
+            // idempotent retry this contract exists for into a busy refusal
+            // against a claim the host is still holding. Mirrors the Overview
+            // panel's confirm path; see `newTransitionId`.
+            const transitionId =
+              armedFixRestartIdRef.current ?? newTransitionId();
+            armedFixRestartIdRef.current = transitionId;
             restartMutation.mutate(
               { transitionId },
               {
                 onSuccess: (response) => {
+                  // Definitive either way: accepted spends the claim, busy
+                  // refuses it outright. The next click is a NEW action.
+                  armedFixRestartIdRef.current = null;
                   if (response.outcome === "busy") {
                     toast.message(
                       `Not restarted — ${response.verdict.busySessionCount} session${response.verdict.busySessionCount === 1 ? " is" : "s are"} still working.`,

@@ -128,6 +128,7 @@ export function HostOverviewPanel(props: {
 
   const {
     identity: identityDegrade,
+    identitySet: identitySetDegrade,
     restart: restartDegrade,
     doctor: doctorDegrade,
     installInfo: installInfoDegrade,
@@ -227,7 +228,12 @@ export function HostOverviewPanel(props: {
               hostName={displayName}
               restartDegrade={restartDegrade}
               doctorDegrade={doctorDegrade}
-              identityDegrade={identityDegrade}
+              // The WRITE capability gates the rename controls, not the read.
+              // "Edit name" and "Retry name" both lead to
+              // `host.identity.set`, so a host that can be read but not
+              // written must degrade them - otherwise Save calls a method the
+              // handshake already declined.
+              identityDegrade={identitySetDegrade ?? identityDegrade}
               restartPending={restart.isPending}
               anyPending={anyPending}
               // Opening a disabled editor is the other half of the same
@@ -403,12 +409,22 @@ interface OverviewCapabilities {
   readonly installInfo: OverviewDegradeReason | null;
   readonly updateCheck: OverviewDegradeReason | null;
   readonly updateInstall: OverviewDegradeReason | null;
+  /** `host.identity.set` support, negotiated apart from the read. */
+  readonly identitySet: OverviewDegradeReason | null;
 }
 
 function useOverviewCapabilities(hostId: string | null): OverviewCapabilities {
   return {
     identity: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.identity.get"),
+    ),
+    // SEPARATE from the read. `host.identity.get` and `host.identity.set` are
+    // independent registry capabilities, so a peer can advertise one without
+    // the other - and inferring write support from a readable identity opened
+    // Edit name against a host whose handshake said it cannot save, turning
+    // Save into an RPC the negotiation already ruled out.
+    identitySet: overviewMethodDegrade(
+      useHostMethodSupport(hostId, "host.identity.set"),
     ),
     restart: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.restart"),
