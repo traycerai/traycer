@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import {
   cleanup,
   fireEvent,
@@ -18,14 +19,33 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest | null): ImageAssetState => {
+  useImageAsset: (request: ImageAssetRequest | null) => {
     state.requests.push(request);
-    if (request?.method === "git" && request.side === "old") {
-      if (state.old === null) throw new Error("missing old image state");
-      return state.old;
-    }
-    if (state.new === null) throw new Error("missing new image state");
-    return state.new;
+    const side = request?.method === "git" ? request.side : "new";
+    // Forces THIS call site's own re-render when `reportDecodeFailure` fires
+    // (the real hook transitions synchronously from a callback, not a prop
+    // change) - `state.old`/`state.new` stay the module-level source of
+    // truth so a test's own direct mutations still work exactly as before.
+    const [, forceRender] = useState(0);
+    const reportDecodeFailure = () => {
+      const fallback: ImageAssetState = {
+        status: "fallback",
+        url: null,
+        meta: null,
+        reason: "This image could not be decoded.",
+        receivedBytes: 0,
+        totalBytes: null,
+      };
+      if (side === "old") {
+        state.old = fallback;
+      } else {
+        state.new = fallback;
+      }
+      forceRender((count) => count + 1);
+    };
+    const current = side === "old" ? state.old : state.new;
+    if (current === null) throw new Error(`missing ${side} image state`);
+    return { ...current, reportDecodeFailure };
   },
 }));
 
@@ -207,7 +227,7 @@ describe("<ImageDiffView />", () => {
 
     fireEvent.error(oldImage);
 
-    expect(screen.getByText("Preview could not be decoded.")).toBeTruthy();
+    expect(screen.getByText("This image could not be decoded.")).toBeTruthy();
     expect(screen.getAllByRole("img")).toHaveLength(1);
     expect(
       screen.getByRole("button", { name: "Open Externally" }),

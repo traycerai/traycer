@@ -249,18 +249,11 @@ function WorkspaceImageFileTile(props: {
   });
   // Magic-valid, header-parseable bytes can still fail to decode in the
   // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path, so this tracks it locally and falls onto the same settled
-  // BinaryPlaceholder a stream failure uses. Reset ADJUSTED DURING RENDER
-  // (not an effect - react.dev's "adjusting state when a prop changes"
-  // pattern) on every new URL, so a decode failure from a superseded fetch
-  // never sticks to the next one.
-  const [decodeFailed, setDecodeFailed] = useState(false);
-  const [trackedUrl, setTrackedUrl] = useState(assetState.url);
-  if (assetState.url !== trackedUrl) {
-    setTrackedUrl(assetState.url);
-    setDecodeFailed(false);
-  }
-  const handleDecodeError = useCallback(() => setDecodeFailed(true), []);
+  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // cache entry AND transitions the hook's own state to `fallback`, so this
+  // tile renders straight from `assetState.status` like every other
+  // failure - no local decode-failed flag to track or reset.
+  const handleDecodeError = assetState.reportDecodeFailure;
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const editorOpen = useEditorOpen("file");
   const {
@@ -294,7 +287,7 @@ function WorkspaceImageFileTile(props: {
     }
   }, [revealTarget, props.viewTabId, node.id]);
 
-  if (assetState.status === "fallback" || decodeFailed) {
+  if (assetState.status === "fallback") {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceImageFileToolbar
@@ -306,9 +299,7 @@ function WorkspaceImageFileTile(props: {
           <BinaryPlaceholder
             fileName={node.name}
             sizeBytes={assetState.totalBytes}
-            reason={
-              decodeFailed ? "Preview could not be decoded." : assetState.reason
-            }
+            reason={assetState.reason}
             onOpenExternally={handleOpenExternally}
             openExternallyOpening={openExternallyOpening}
             compact={false}

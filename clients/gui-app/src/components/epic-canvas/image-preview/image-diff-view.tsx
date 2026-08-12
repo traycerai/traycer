@@ -15,7 +15,7 @@ import { isImageAssetPath } from "@/lib/assets/image-extension-allowlist";
 import {
   useImageAsset,
   type ImageAssetRequest,
-  type ImageAssetState,
+  type UseImageAssetResult,
 } from "@/hooks/assets/use-image-asset";
 import {
   ImagePreview,
@@ -233,7 +233,7 @@ function ImageDiffSide(props: {
   /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
   readonly isImageSide: boolean;
   readonly effectivePath: string;
-  readonly asset: ImageAssetState;
+  readonly asset: UseImageAssetResult;
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
   readonly fit: ImagePreviewFit;
@@ -246,18 +246,11 @@ function ImageDiffSide(props: {
   const asset = props.asset;
   // Magic-valid, header-parseable bytes can still fail to DECODE in the
   // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path, so this side tracks it locally and falls onto the same settled
-  // placeholder a stream failure uses. Reset ADJUSTED DURING RENDER (not an
-  // effect - react.dev's "adjusting state when a prop changes" pattern) on
-  // every new URL, so a decode failure from a superseded fetch never sticks
-  // to the next one.
-  const [decodeFailed, setDecodeFailed] = useState(false);
-  const [trackedUrl, setTrackedUrl] = useState(asset.url);
-  if (asset.url !== trackedUrl) {
-    setTrackedUrl(asset.url);
-    setDecodeFailed(false);
-  }
-  const handleDecodeError = useCallback(() => setDecodeFailed(true), []);
+  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // cache entry AND transitions the hook's own state to `fallback`, so this
+  // side renders straight from `asset.status` like every other failure -
+  // no local decode-failed flag to track or reset.
+  const handleDecodeError = asset.reportDecodeFailure;
 
   if (!props.sideExists) {
     return <ImageDiffEmptyState label={props.emptyLabel} />;
@@ -274,12 +267,12 @@ function ImageDiffSide(props: {
       />
     );
   }
-  if (asset.status === "fallback" || decodeFailed) {
+  if (asset.status === "fallback") {
     return (
       <BinaryPlaceholder
         fileName={props.effectivePath}
         sizeBytes={asset.totalBytes}
-        reason={decodeFailed ? "Preview could not be decoded." : asset.reason}
+        reason={asset.reason}
         onOpenExternally={props.onOpenExternally}
         openExternallyOpening={props.openExternallyOpening}
         compact

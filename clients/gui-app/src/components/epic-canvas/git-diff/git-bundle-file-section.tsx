@@ -155,13 +155,18 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // binary image. A rename's current path alone can miss the old side
   // (pre-landing review, P0: `old.png -> new.txt` must still route) - route
   // when either the current or previous path is allowlisted; each side
-  // validates against its own effective path inside `ImageDiffView`.
+  // validates against its own effective path inside `ImageDiffView`. The
+  // svg text-exemption has the same shape (re-review P1): `old.svg ->
+  // new.txt` is text to git, so the previous path must also OR into the
+  // svg check, not just the current one.
   const isPreviousImage =
     props.file.previousPath !== null &&
     isImageAssetPath(props.file.previousPath);
+  const isPreviousSvg =
+    props.file.previousPath !== null && isSvgAssetPath(props.file.previousPath);
   const routeToImageDiff =
     (isImageAssetPath(props.file.path) || isPreviousImage) &&
-    (props.file.isBinary || isSvgAssetPath(props.file.path));
+    (props.file.isBinary || isSvgAssetPath(props.file.path) || isPreviousSvg);
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff) return;
     bundleFindRegistration.registerCoverageState(

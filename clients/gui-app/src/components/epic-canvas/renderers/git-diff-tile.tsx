@@ -667,18 +667,22 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
  * review, P0): `old.png -> new.txt` must still route to image mode for its
  * old side even though `file.path` is `.txt`. Route when EITHER the current
  * or previous path is allowlisted; each side then validates against its own
- * effective path inside `ImageDiffView`.
+ * effective path inside `ImageDiffView`. The SVG text-exemption (`isBinary`
+ * stays `false` for svg per decision #5) has the SAME either-path shape
+ * (re-review P1): `old.svg -> new.txt` is a renamed diff git reports as
+ * text, so `isSvg` must also OR in the previous path, not just the current
+ * one, for both the routing gate and the toggle's presence.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
   readonly showImageDiff: boolean;
   readonly svgToggle: ReactNode;
 } {
-  const isImage = useMemo(() => isImageAssetPath(file.path), [file.path]);
-  const isPreviousImage = useMemo(
-    () => file.previousPath !== null && isImageAssetPath(file.previousPath),
-    [file.previousPath],
-  );
-  const isSvg = useMemo(() => isSvgAssetPath(file.path), [file.path]);
+  const isImage = isImageAssetPath(file.path);
+  const isPreviousImage =
+    file.previousPath !== null && isImageAssetPath(file.previousPath);
+  const isSvg =
+    isSvgAssetPath(file.path) ||
+    (file.previousPath !== null && isSvgAssetPath(file.previousPath));
   const [viewAsSource, setViewAsSource] = useState(false);
   const routeToImageDiff =
     (isImage || isPreviousImage) && (file.isBinary || isSvg);

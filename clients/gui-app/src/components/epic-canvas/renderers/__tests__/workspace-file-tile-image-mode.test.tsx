@@ -7,7 +7,7 @@ import {
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   ImageAssetMeta,
   ImageAssetRequest,
@@ -71,7 +71,24 @@ const state = vi.hoisted(() => ({
 vi.mock("@/hooks/assets/use-image-asset", () => ({
   useImageAsset: (request: ImageAssetRequest) => {
     state.assetRequests.push(request);
-    return state.asset;
+    // `state.asset` stays the module-level source of truth (tests mutate it
+    // directly before a `rerender()`, as before); this counter exists only
+    // so `reportDecodeFailure` - which the real hook fires synchronously
+    // from a callback, not a prop change - can force ITS OWN re-render
+    // without every test needing an explicit `rerender()` call.
+    const [, forceRender] = useState(0);
+    const reportDecodeFailure = () => {
+      state.asset = {
+        status: "fallback",
+        url: null,
+        meta: null,
+        reason: "This image could not be decoded.",
+        receivedBytes: 0,
+        totalBytes: null,
+      };
+      forceRender((count) => count + 1);
+    };
+    return { ...state.asset, reportDecodeFailure };
   },
 }));
 
@@ -381,12 +398,12 @@ describe("<WorkspaceFileTile /> image mode", () => {
     },
   );
 
-  it("falls back on a decode error and clears that flag for a new asset URL", () => {
+  it("reports a decode error through the hook and recovers once a new asset request resolves ready", () => {
     const rendered = renderTile(nodeFor("assets/photo.png"));
 
     fireEvent.error(screen.getByRole("img", { name: "photo.png" }));
 
-    expect(screen.getByText("Preview could not be decoded.")).toBeTruthy();
+    expect(screen.getByText("This image could not be decoded.")).toBeTruthy();
     expect(screen.queryByTestId("workspace-image-preview")).toBeNull();
 
     state.asset = {
@@ -405,7 +422,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
       />,
     );
 
-    expect(screen.queryByText("Preview could not be decoded.")).toBeNull();
+    expect(screen.queryByText("This image could not be decoded.")).toBeNull();
     expect(screen.getByTestId("workspace-image-preview")).toBeTruthy();
   });
 });
