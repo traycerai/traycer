@@ -281,7 +281,7 @@ describe("ArtifactImageNodeView", () => {
       return found;
     });
     expect(img.tagName).toBe("IMG");
-    expect(img.getAttribute("src")).toBe("blob:http://localhost/ready-svg");
+    expect(img.getAttribute("src")).toMatch(/^data:image\/svg\+xml;base64,/);
     // Thumbnail is an <img> (chat SVG policy). Lucide action icons may still
     // appear as decorative SVGs in the shared lightbox chrome.
     expect(container.querySelectorAll("img")).toHaveLength(1);
