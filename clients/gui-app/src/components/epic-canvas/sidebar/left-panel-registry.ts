@@ -14,6 +14,7 @@ import {
   type LeftPanelId,
   type PanelVisibilityOverrideById,
 } from "@/stores/epics/left-panel-store";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 export interface LeftPanelAvailabilityContext {
   readonly commentsPanelRevealed: boolean;
@@ -120,7 +121,7 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       id: "sharing",
       title: "Sharing",
       icon: UserPlus,
-      isAutoVisible: () => true,
+      isAutoVisible: () => !isThanosSingleUserChrome(),
       forcedOnHint: null,
       supportsHeaderSearch: false,
     },

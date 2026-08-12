@@ -9,6 +9,7 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 /**
  * The honest-state gate for a host-scoped panel. Its contract has two planes,
@@ -181,7 +182,9 @@ function UnreachableNotice(props: {
         tone="warn"
         title={`Connecting to ${host.name} needs a paid plan`}
         detail="It keeps working on its own machine, and account-level settings here still apply. This app just can't attach to it remotely on the current plan."
-        action={<PlanRestrictedUpgradeAction />}
+        action={
+          isThanosSingleUserChrome() ? null : <PlanRestrictedUpgradeAction />
+        }
         testId="host-scope-plan-restricted"
       />
     );

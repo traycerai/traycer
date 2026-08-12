@@ -13,6 +13,7 @@ import { ProjectProfileSwitcher } from "@/components/profiles/project-profile-sw
 import { profileColorHex } from "@/components/profiles/profile-options";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import { cn } from "@/lib/utils";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
@@ -156,7 +157,9 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           <ResourceMonitorPopover className={undefined} />
         ) : null}
         {!navDisabled ? <HistoryButton /> : null}
-        {showBell ? <HeaderNotificationsBell /> : null}
+        {showBell && !isThanosSingleUserChrome() ? (
+          <HeaderNotificationsBell />
+        ) : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
       </div>
     </header>

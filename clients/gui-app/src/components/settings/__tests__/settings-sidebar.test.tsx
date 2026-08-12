@@ -19,6 +19,10 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __resetThanosFlagsForTesting,
+  __setThanosSingleUserChromeForTests,
+} from "@/lib/thanos-flags";
 
 // The sidebar's host group is headed by the one host switcher, which composes
 // several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
@@ -74,6 +78,7 @@ describe("<SettingsSidebar /> leader hints", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    __resetThanosFlagsForTesting();
   });
 
   // The machine console is labelled "Overview" now - it sits under the host
@@ -115,6 +120,21 @@ describe("<SettingsSidebar /> leader hints", () => {
 
     const link = await screen.findByRole("link", { name: "Sessions" });
     expect(link.getAttribute("href")).toBe("/settings/devices");
+  });
+
+  it("omits the Account group when Thanos single-user chrome is on", async () => {
+    __setThanosSingleUserChromeForTests(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByTestId("settings-sidebar-item-general")).toBeTruthy();
+    expect(screen.queryByText("Account")).toBeNull();
+    expect(screen.queryByTestId("settings-sidebar-item-devices")).toBeNull();
+    expect(screen.queryByTestId("settings-sidebar-item-usage")).toBeNull();
   });
 
   it("SETTINGS_SECTIONS does not contain the legacy Service id", () => {

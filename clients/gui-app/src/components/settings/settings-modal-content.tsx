@@ -16,6 +16,7 @@ import { OrchestrationsSettingsPanel } from "@/components/settings/panels/orches
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { isThanosHiddenSettingsSection } from "@/lib/thanos-flags";
 
 export interface SettingsModalContentProps {
   readonly section: SettingsSectionId | null;
@@ -52,6 +53,9 @@ export function SettingsModalContent(
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
+  if (isThanosHiddenSettingsSection(props.section)) {
+    return <GeneralSettingsPanel />;
+  }
   switch (props.section) {
     case "general":
       return <GeneralSettingsPanel />;

@@ -22,6 +22,10 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
+import {
+  isThanosHiddenSettingsSection,
+  isThanosSingleUserChrome,
+} from "@/lib/thanos-flags";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -57,39 +61,51 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const localHostSelected = scope.host !== null && scope.host.isLocalMachine;
   return (
     <aside className="flex w-[clamp(13rem,20vw,17rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
-      {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
-        <Fragment key={group.id}>
-          {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
-          <SettingsSidebarGroupHeader label={group.label} />
-          {group.id === "host" ? (
-            <SettingsSidebarHostPicker scope={scope} />
-          ) : null}
-          <div
-            className={cn(
-              "flex flex-col gap-0.5",
-              // Indent alone: these sections are not siblings of the host row,
-              // they are its contents, and stepping them in says so without
-              // drawing anything. A guide line said the same thing louder and
-              // put a second vertical edge next to the rail's own border.
-              group.id === "host" && "ml-4",
-            )}
-          >
-            {SETTINGS_SECTIONS.map((section, index) =>
-              section.group === group.id ? (
-                <SettingsSidebarItem
-                  key={section.id}
-                  section={section}
-                  index={index}
-                  mode={props.mode}
-                  unreachable={
-                    section.requiresLocalHost ? !localHostSelected : false
-                  }
-                />
-              ) : null,
-            )}
-          </div>
-        </Fragment>
-      ))}
+      {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => {
+        if (isThanosSingleUserChrome() && group.id === "account") {
+          return null;
+        }
+        const groupSections = SETTINGS_SECTIONS.filter(
+          (section) =>
+            section.group === group.id &&
+            !isThanosHiddenSettingsSection(section.id),
+        );
+        if (groupSections.length === 0) return null;
+        return (
+          <Fragment key={group.id}>
+            {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
+            <SettingsSidebarGroupHeader label={group.label} />
+            {group.id === "host" ? (
+              <SettingsSidebarHostPicker scope={scope} />
+            ) : null}
+            <div
+              className={cn(
+                "flex flex-col gap-0.5",
+                // Indent alone: these sections are not siblings of the host row,
+                // they are its contents, and stepping them in says so without
+                // drawing anything. A guide line said the same thing louder and
+                // put a second vertical edge next to the rail's own border.
+                group.id === "host" && "ml-4",
+              )}
+            >
+              {SETTINGS_SECTIONS.map((section, index) =>
+                section.group === group.id &&
+                !isThanosHiddenSettingsSection(section.id) ? (
+                  <SettingsSidebarItem
+                    key={section.id}
+                    section={section}
+                    index={index}
+                    mode={props.mode}
+                    unreachable={
+                      section.requiresLocalHost ? !localHostSelected : false
+                    }
+                  />
+                ) : null,
+              )}
+            </div>
+          </Fragment>
+        );
+      })}
     </aside>
   );
 }

@@ -18,6 +18,7 @@ import {
 } from "@/lib/settings-sections";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
+import { isThanosHiddenSettingsSection } from "@/lib/thanos-flags";
 import type {
   CommandContext,
   CommandItem,
@@ -61,7 +62,8 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
     useMemo<ReadonlyArray<CommandItem>>(
       () =>
         SETTINGS_SECTIONS.flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}`
+          ctx.pathname !== `/settings/${section.id}` &&
+          !isThanosHiddenSettingsSection(section.id)
             ? [buildSectionItem(section)]
             : [],
         ),
