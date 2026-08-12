@@ -4,9 +4,17 @@ import {
   useRef,
   useState,
   type ReactNode,
-  type UIEvent,
+  type RefObject,
 } from "react";
-import { FileMinus, FilePlus, ZoomIn, ZoomOut } from "lucide-react";
+import type { ReactZoomPanPinchRef } from "react-zoom-pan-pinch";
+import {
+  FileMinus,
+  FilePlus,
+  Maximize2,
+  Minus,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -17,11 +25,15 @@ import {
   type ImageAssetRequest,
   type UseImageAssetResult,
 } from "@/hooks/assets/use-image-asset";
+import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import {
-  ImagePreview,
-  type ImagePreviewFit,
-  type ImagePreviewStatus,
-} from "./image-preview";
+  fitScaleFor,
+  MAX_SCALE,
+  MIN_SCALE,
+  ZOOM_BOUNDARY_EPSILON,
+  ZOOM_STEP,
+  type ImagePreviewTransformState,
+} from "./image-preview-transform";
 
 export interface ImageDiffViewProps {
   readonly runningDir: string;
@@ -33,7 +45,7 @@ export interface ImageDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   readonly fileName: string;
   readonly conflicted: boolean;
-  /** Drops the shared toolbar (zoom toggle, Conflicted badge) for bundle use (image-preview decision log, decision #18). */
+  /** Drops the shared toolbar and all gestures for bundle use - static fit only (image-preview decision log, decision #18; ticket 07). */
   readonly compact: boolean;
   /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
   readonly onOpenExternally: (() => void) | null;
@@ -43,14 +55,45 @@ export interface ImageDiffViewProps {
 /**
  * Two `ImagePreview` instances side by side (image-preview decision log,
  * decision #9), always two columns - a missing side renders an Added/Deleted
- * empty state rather than collapsing to one column. Zoom is LINKED: one
- * shared `fit` state drives both sides via `ImagePreview`'s controlled
- * `fitOverride` (decision #17); scroll is synced between the two sides'
- * scrollable containers with a simple echo-guarded mirror, matching the
- * assignment's "two refs + one scroll handler pair" scope (no library).
+ * empty state rather than collapsing to one column. Zoom + pan are LINKED
+ * (decision #17, rebuilt on `react-zoom-pan-pinch` - ticket 07):
+ * - The shared toolbar's fit/actual/zoom buttons drive BOTH sides
+ *   independently and instantly (`animationTime: 0`, so `onTransform` fires
+ *   once synchronously per side, never mid-animation) - each side computes
+ *   its OWN correct fit from its OWN natural image size, not a shared
+ *   number forced onto a differently-sized peer.
+ * - A GESTURE on either side (drag, pinch, ctrl+wheel) instead mirrors that
+ *   side's raw `{scale, positionX, positionY}` onto the peer via
+ *   `setTransform` - exact for same-dimension sides, and for mismatched
+ *   dimensions simply syncs scale/position with the peer's OWN
+ *   `limitToBounds` clamping it into range (ticket 07: "do not over-
+ *   engineer sub-pixel alignment for mismatched dimensions").
+ * Compact (bundle) variant: static fit only, no toolbar, no gestures -
+ * matches decision #18's affordance-free intent.
  */
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
-  const [sharedFit, setSharedFit] = useState<ImagePreviewFit>("fit");
+  const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
+  const newTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
+  // Echo guard shared by both the gesture-mirror path and the toolbar's own
+  // dual-dispatch: a toolbar action already updates both sides correctly
+  // and independently, so the mirror below must not also overwrite the
+  // peer with the OTHER side's raw numbers while that dispatch is in flight.
+  const syncingTransformRef = useRef(false);
+  // Drives the shared toolbar's Fit/Actual-size `aria-pressed` state - the
+  // active zoom mode must be statically visible (UI polish requirements
+  // #6/#7), so a gesture on either side (which desyncs from both) also
+  // flips these, not just the toolbar's own buttons. Tracked as two
+  // EXPLICIT booleans (not `isActualSize` derived from `scale`): unlike the
+  // standalone `ImagePreview`, this component never learns either side's
+  // own initial fit scale (that's computed privately inside each instance),
+  // so a scale-derived `Math.abs(scale - 1) < epsilon` would read
+  // stale-true from `scale`'s `1` default until the first `onTransform`
+  // arrives. `scale` still exists below for the zoom-boundary disable
+  // check, where a stale default is harmless (both directions stay enabled
+  // until a real value arrives).
+  const [isFitted, setIsFitted] = useState(true);
+  const [isActualSize, setIsActualSize] = useState(false);
+  const [scale, setScale] = useState(1);
 
   // A rename's two sides can straddle the extension allowlist (pre-landing
   // review, P0: `old.png -> new.txt` / `old.txt -> new.png`) - each side is
@@ -104,42 +147,77 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
 
-  // Callback refs (not ref objects) so they can be forwarded into
-  // `ImagePreview`'s `scrollContainerRef` prop without tripping the
-  // "no refs during render" rule - mirrors
-  // `useNativeDivScrollRestoration`'s documented pattern.
-  const oldElementRef = useRef<HTMLDivElement | null>(null);
-  const newElementRef = useRef<HTMLDivElement | null>(null);
-  // Echo guard: a programmatic scroll set on the mirror below would
-  // otherwise re-fire that side's own onScroll and bounce back and forth.
-  const syncingScrollRef = useRef(false);
-
-  const oldScrollContainerRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      oldElementRef.current = element;
+  const handleOldTransform = useCallback(
+    (state: ImagePreviewTransformState): void => {
+      setScale(state.scale);
+      // Skipped during a toolbar-driven dual-dispatch (see `dualDispatch`
+      // below) - that path sets `isFitted`/`isActualSize` explicitly
+      // itself, correctly, instead of this generic "any transform change
+      // means an intermediate zoom" rule, which only applies to a genuine
+      // per-side gesture.
+      if (!syncingTransformRef.current) {
+        setIsFitted(false);
+        setIsActualSize(false);
+      }
+      mirrorTransform(syncingTransformRef, newTransformRef, state);
     },
     [],
   );
-  const newScrollContainerRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      newElementRef.current = element;
+  const handleNewTransform = useCallback(
+    (state: ImagePreviewTransformState): void => {
+      setScale(state.scale);
+      if (!syncingTransformRef.current) {
+        setIsFitted(false);
+        setIsActualSize(false);
+      }
+      mirrorTransform(syncingTransformRef, oldTransformRef, state);
     },
     [],
   );
 
-  const handleOldScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-    mirrorScroll(syncingScrollRef, event.currentTarget, newElementRef.current);
-  }, []);
-  const handleNewScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-    mirrorScroll(syncingScrollRef, event.currentTarget, oldElementRef.current);
-  }, []);
+  // A toolbar action fits/zooms BOTH sides independently and instantly
+  // (`animationTime: 0`) - each computes its own correct transform from its
+  // own natural size, never a shared number forced onto a differently-sized
+  // peer. The echo guard is reused here (not just for gestures) so the
+  // per-side `onTransform` this triggers doesn't ALSO mirror one side's raw
+  // numbers onto the other mid-dispatch.
+  const dualDispatch = useCallback(
+    (action: (ref: RefObject<ReactZoomPanPinchRef | null>) => void): void => {
+      syncingTransformRef.current = true;
+      action(oldTransformRef);
+      action(newTransformRef);
+      syncingTransformRef.current = false;
+    },
+    [],
+  );
 
-  const toggleSharedFit = useCallback(() => {
-    setSharedFit((current) => (current === "fit" ? "actual" : "fit"));
-  }, []);
+  const handleFit = useCallback(() => {
+    dualDispatch((ref) => fitSide(ref));
+    setIsFitted(true);
+    setIsActualSize(false);
+  }, [dualDispatch]);
+  const handleActualSize = useCallback(() => {
+    dualDispatch((ref) => ref.current?.centerView(1, 0));
+    setIsFitted(false);
+    setIsActualSize(true);
+  }, [dualDispatch]);
+  const handleZoomIn = useCallback(() => {
+    dualDispatch((ref) => ref.current?.zoomIn(ZOOM_STEP, 0));
+    setIsFitted(false);
+    setIsActualSize(false);
+  }, [dualDispatch]);
+  const handleZoomOut = useCallback(() => {
+    dualDispatch((ref) => ref.current?.zoomOut(ZOOM_STEP, 0));
+    setIsFitted(false);
+    setIsActualSize(false);
+  }, [dualDispatch]);
 
   const zoomDisabled =
     oldAsset.status !== "ready" && newAsset.status !== "ready";
+  const zoomOutDisabled =
+    zoomDisabled || scale <= MIN_SCALE + ZOOM_BOUNDARY_EPSILON;
+  const zoomInDisabled =
+    zoomDisabled || scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -147,34 +225,86 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
         <div
           role="toolbar"
           aria-label="Image diff controls"
-          className="flex h-8 shrink-0 items-center justify-between gap-1 border-b border-canvas-border/70 px-2"
+          className="relative z-10 flex h-8 shrink-0 items-center justify-between gap-1 border-b border-canvas-border/70 px-2"
         >
           <div className="flex min-w-0 items-center gap-1">
             {props.conflicted ? (
               <Badge variant="outline">Conflicted</Badge>
             ) : null}
           </div>
-          <TooltipWrapper
-            label={sharedFit === "fit" ? "Zoom to 100%" : "Zoom to fit"}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-pressed={sharedFit === "actual"}
-              disabled={zoomDisabled}
-              onClick={toggleSharedFit}
+          <div className="flex items-center gap-1">
+            <TooltipWrapper
+              label="Zoom out (-)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              {sharedFit === "fit" ? (
-                <ZoomIn className="size-4" />
-              ) : (
-                <ZoomOut className="size-4" />
-              )}
-            </Button>
-          </TooltipWrapper>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={zoomOutDisabled}
+                onClick={handleZoomOut}
+                aria-label="Zoom out"
+              >
+                <Minus className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <TooltipWrapper
+              label="Zoom in (+)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={zoomInDisabled}
+                onClick={handleZoomIn}
+                aria-label="Zoom in"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+            <TooltipWrapper
+              label="Fit to screen (F)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={isFitted}
+                disabled={zoomDisabled}
+                onClick={handleFit}
+                aria-label="Fit to screen"
+              >
+                <Maximize2 className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <TooltipWrapper
+              label="Actual size (0)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={isActualSize}
+                disabled={zoomDisabled}
+                onClick={handleActualSize}
+                aria-label="Actual size"
+              >
+                <RotateCcw className="size-4" />
+              </Button>
+            </TooltipWrapper>
+          </div>
         </div>
       )}
       <div className="flex min-h-0 flex-1">
@@ -186,10 +316,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             asset={oldAsset}
             emptyLabel="Added"
             compact={props.compact}
-            fit={sharedFit}
-            onFitChange={setSharedFit}
-            scrollContainerRef={oldScrollContainerRef}
-            onScroll={handleOldScroll}
+            transformRef={oldTransformRef}
+            onTransformChange={handleOldTransform}
             onOpenExternally={props.onOpenExternally}
             openExternallyOpening={props.openExternallyOpening}
           />
@@ -202,10 +330,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             asset={newAsset}
             emptyLabel="Deleted"
             compact={props.compact}
-            fit={sharedFit}
-            onFitChange={setSharedFit}
-            scrollContainerRef={newScrollContainerRef}
-            onScroll={handleNewScroll}
+            transformRef={newTransformRef}
+            onTransformChange={handleNewTransform}
             onOpenExternally={props.onOpenExternally}
             openExternallyOpening={props.openExternallyOpening}
           />
@@ -215,15 +341,33 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   );
 }
 
-function mirrorScroll(
+/** Independently fits `ref`'s own content to its own wrapper - never a shared number forced onto a differently-sized peer (ticket 07). */
+function fitSide(ref: RefObject<ReactZoomPanPinchRef | null>): void {
+  const instance = ref.current;
+  if (instance === null) return;
+  const wrapper = instance.instance.wrapperComponent;
+  const content = instance.instance.contentComponent;
+  if (wrapper === null || content === null) return;
+  const wrapperRect = wrapper.getBoundingClientRect();
+  instance.centerView(
+    fitScaleFor(
+      { width: wrapperRect.width, height: wrapperRect.height },
+      { width: content.offsetWidth, height: content.offsetHeight },
+    ),
+    0,
+  );
+}
+
+function mirrorTransform(
   syncingRef: { current: boolean },
-  source: HTMLDivElement,
-  mirror: HTMLDivElement | null,
+  peerRef: RefObject<ReactZoomPanPinchRef | null>,
+  state: ImagePreviewTransformState,
 ): void {
-  if (syncingRef.current || mirror === null) return;
+  if (syncingRef.current) return;
+  const peer = peerRef.current;
+  if (peer === null) return;
   syncingRef.current = true;
-  mirror.scrollTop = source.scrollTop;
-  mirror.scrollLeft = source.scrollLeft;
+  peer.setTransform(state.positionX, state.positionY, state.scale, 0);
   syncingRef.current = false;
 }
 
@@ -236,10 +380,8 @@ function ImageDiffSide(props: {
   readonly asset: UseImageAssetResult;
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
-  readonly fit: ImagePreviewFit;
-  readonly onFitChange: (fit: ImagePreviewFit) => void;
-  readonly scrollContainerRef: (element: HTMLDivElement | null) => void;
-  readonly onScroll: (event: UIEvent<HTMLDivElement>) => void;
+  readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
+  readonly onTransformChange: (state: ImagePreviewTransformState) => void;
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;
 }): ReactNode {
@@ -287,10 +429,16 @@ function ImageDiffSide(props: {
       meta={asset.meta}
       fileName={props.effectivePath}
       compact
-      fitOverride={props.compact ? "fit" : props.fit}
-      onFitOverrideChange={props.compact ? null : props.onFitChange}
-      scrollContainerRef={props.scrollContainerRef}
-      onScroll={props.onScroll}
+      gesturesEnabled={!props.compact}
+      // One motion language within the diff view (ticket 07, better-ui
+      // audit): a double-click on either side calls THIS ImagePreview's own
+      // internal fit/actual handlers, which must match the shared
+      // toolbar's instant dual-dispatch, not the standalone tile's smooth
+      // default - a mix of the two would read as inconsistent in the same
+      // view.
+      animationMs={0}
+      transformRef={props.compact ? null : props.transformRef}
+      onTransformChange={props.compact ? null : props.onTransformChange}
       onDecodeError={handleDecodeError}
     />
   );

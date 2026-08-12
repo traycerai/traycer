@@ -1,13 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
-import { ImagePreview } from "../image-preview";
+import { DEFAULT_ANIMATION_MS, ImagePreview } from "../image-preview";
 
 const IMAGE_WIDTH = 640;
 const IMAGE_HEIGHT = 480;
@@ -31,10 +25,10 @@ function renderPreview(
       meta={meta}
       fileName="photo.png"
       compact={compact}
-      fitOverride={null}
-      onFitOverrideChange={null}
-      scrollContainerRef={null}
-      onScroll={null}
+      gesturesEnabled
+      animationMs={DEFAULT_ANIMATION_MS}
+      transformRef={null}
+      onTransformChange={null}
       onDecodeError={null}
     />,
   );
@@ -74,33 +68,48 @@ describe("<ImagePreview />", () => {
     expect(screen.queryByTestId("image-preview-skeleton")).toBeNull();
   });
 
-  it("toggles fit/actual state from both controls and the image", () => {
+  // Supersedes decisions #16/#17's click-to-toggle interaction (ticket 07):
+  // the <button>-wrapped image and its cursor-zoom-in/out classes are gone,
+  // replaced by a continuous pan/zoom transform driven from the toolbar
+  // (plus gestures - covered separately, see the Luna-delegated transform
+  // suite). This pins the toolbar's initial static state and the removal
+  // of the old click affordance; deep transform-state assertions (actually
+  // clicking Fit/Actual and observing the resulting scale) need
+  // `react-zoom-pan-pinch` mocked for deterministic jsdom behavior and are
+  // left to that suite rather than guessed at here.
+  it("renders fit/zoom toolbar controls with fit active by default, and drops the old click-to-toggle image button", () => {
     renderPreview("ready", META, false);
 
     const toolbar = screen.getByRole("toolbar", {
       name: "Image preview controls",
     });
-    const zoomControl = within(toolbar).getAllByRole("button")[0];
-    const imageButton = screen.getByRole("button", { name: "Zoom to 100%" });
-
-    expect(zoomControl.getAttribute("aria-pressed")).toBe("false");
-    expect(imageButton.getAttribute("aria-pressed")).toBe("false");
-    expect(imageButton.className).toContain("cursor-zoom-in");
-
-    fireEvent.click(zoomControl);
-
-    expect(zoomControl.getAttribute("aria-pressed")).toBe("true");
     expect(
-      screen.getByRole("button", { name: "Zoom to fit" }).className,
-    ).toContain("cursor-zoom-out");
-
-    fireEvent.click(screen.getByRole("button", { name: "Zoom to fit" }));
+      within(toolbar).getByRole("button", { name: "Zoom out" }),
+    ).toBeTruthy();
+    expect(
+      within(toolbar).getByRole("button", { name: "Fit to screen" }),
+    ).toBeTruthy();
+    expect(
+      within(toolbar).getByRole("button", { name: "Actual size" }),
+    ).toBeTruthy();
+    expect(
+      within(toolbar).getByRole("button", { name: "Zoom in" }),
+    ).toBeTruthy();
 
     expect(
-      screen
-        .getByRole("button", { name: "Zoom to 100%" })
+      within(toolbar)
+        .getByRole("button", { name: "Fit to screen" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      within(toolbar)
+        .getByRole("button", { name: "Actual size" })
         .getAttribute("aria-pressed"),
     ).toBe("false");
+
+    expect(screen.queryByRole("button", { name: "Zoom to 100%" })).toBeNull();
+    expect(document.querySelector(".cursor-zoom-in")).toBeNull();
+    expect(document.querySelector(".cursor-zoom-out")).toBeNull();
   });
 
   it("omits the controls toolbar in compact mode", () => {

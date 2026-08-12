@@ -133,9 +133,7 @@ describe("<ImageDiffView />", () => {
     renderDiff({ oldStage: null });
 
     expect(screen.getByText("Added")).toBeTruthy();
-    expect(
-      screen.getAllByRole("button", { name: "Zoom to 100%" }),
-    ).toHaveLength(1);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
     expect(
       state.requests.filter((request) => request?.method === "git"),
     ).toHaveLength(1);
@@ -145,9 +143,7 @@ describe("<ImageDiffView />", () => {
     renderDiff({ newStage: null });
 
     expect(screen.getByText("Deleted")).toBeTruthy();
-    expect(
-      screen.getAllByRole("button", { name: "Zoom to 100%" }),
-    ).toHaveLength(1);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
     expect(
       state.requests.filter((request) => request?.method === "git"),
     ).toHaveLength(1);
@@ -251,68 +247,43 @@ describe("<ImageDiffView />", () => {
     expect(screen.queryByText("Conflicted")).toBeNull();
   });
 
-  it("links the shared zoom toggle to both image previews", () => {
+  // Supersedes decision #17's scroll-mirroring interaction (ticket 07): zoom
+  // + pan are now one continuous transform per side (react-zoom-pan-pinch),
+  // linked via `onTransform`-driven `setTransform` on the peer instead of
+  // scrollTop/Left mirroring. This pins the SHARED toolbar's own mechanism
+  // (single Fit/Actual-size pair driving both sides, no per-side toolbar);
+  // the deeper linked-transform-sync behavior (does a GESTURE on one side's
+  // real RZPP instance actually propagate to the peer's real instance) needs
+  // `react-zoom-pan-pinch` mocked for deterministic jsdom assertions and is
+  // left to that suite rather than guessed at here.
+  it("drives fit/actual state from one shared toolbar, with no per-side toolbar", () => {
     renderDiff({});
 
     const toolbar = screen.getByRole("toolbar", {
       name: "Image diff controls",
     });
-    fireEvent.click(within(toolbar).getByRole("button"));
+    const fitButton = within(toolbar).getByRole("button", {
+      name: "Fit to screen",
+    });
+    const actualButton = within(toolbar).getByRole("button", {
+      name: "Actual size",
+    });
+    expect(fitButton.getAttribute("aria-pressed")).toBe("true");
+    expect(actualButton.getAttribute("aria-pressed")).toBe("false");
 
-    const imageButtons = screen.getAllByRole("button", { name: "Zoom to fit" });
-    expect(imageButtons).toHaveLength(2);
-    expect(
-      imageButtons.every(
-        (button) => button.getAttribute("aria-pressed") === "true",
-      ),
-    ).toBe(true);
+    fireEvent.click(actualButton);
+
+    expect(fitButton.getAttribute("aria-pressed")).toBe("false");
+    expect(actualButton.getAttribute("aria-pressed")).toBe("true");
     expect(
       screen.queryAllByRole("toolbar", { name: "Image preview controls" }),
     ).toHaveLength(0);
   });
 
-  it("locks both sides to fit and removes every toolbar in compact mode", () => {
+  it("removes every toolbar (shared and per-side) in compact mode", () => {
     renderDiff({ compact: true });
 
     expect(screen.queryByRole("toolbar")).toBeNull();
-    const imageButtons = screen.getAllByRole("button", {
-      name: "Zoom to 100%",
-    });
-    expect(imageButtons).toHaveLength(2);
-
-    fireEvent.click(imageButtons[0]);
-
-    expect(
-      screen.getAllByRole("button", { name: "Zoom to 100%" }),
-    ).toHaveLength(2);
-  });
-
-  it("mirrors scroll positions between the two sides without a ping-pong loop", () => {
-    renderDiff({});
-
-    const stages = Array.from(
-      document.querySelectorAll<HTMLDivElement>(".image-preview-checkerboard"),
-    );
-    expect(stages).toHaveLength(2);
-
-    const oldStage = stages.at(0);
-    const newStage = stages.at(1);
-    if (oldStage === undefined || newStage === undefined) {
-      throw new Error("missing image diff stages");
-    }
-
-    oldStage.scrollTop = 41;
-    oldStage.scrollLeft = 17;
-    fireEvent.scroll(oldStage);
-
-    expect(newStage.scrollTop).toBe(41);
-    expect(newStage.scrollLeft).toBe(17);
-
-    newStage.scrollTop = 9;
-    newStage.scrollLeft = 3;
-    fireEvent.scroll(newStage);
-
-    expect(oldStage.scrollTop).toBe(9);
-    expect(oldStage.scrollLeft).toBe(3);
+    expect(screen.getAllByRole("img")).toHaveLength(2);
   });
 });

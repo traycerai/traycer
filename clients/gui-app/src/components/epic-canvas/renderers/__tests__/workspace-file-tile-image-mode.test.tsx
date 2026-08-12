@@ -215,6 +215,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
+  DEFAULT_ANIMATION_MS: 200,
   ImagePreview: (props: {
     readonly status: ImageAssetStatus;
     readonly url: string | null;

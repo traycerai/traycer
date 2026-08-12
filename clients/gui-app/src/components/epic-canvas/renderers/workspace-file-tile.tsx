@@ -61,7 +61,10 @@ import {
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
 import { useImageAsset } from "@/hooks/assets/use-image-asset";
-import { ImagePreview } from "@/components/epic-canvas/image-preview/image-preview";
+import {
+  DEFAULT_ANIMATION_MS,
+  ImagePreview,
+} from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
@@ -326,10 +329,10 @@ function WorkspaceImageFileTile(props: {
           meta={assetState.meta}
           fileName={node.name}
           compact={false}
-          fitOverride={null}
-          onFitOverrideChange={null}
-          scrollContainerRef={null}
-          onScroll={null}
+          gesturesEnabled
+          animationMs={DEFAULT_ANIMATION_MS}
+          transformRef={null}
+          onTransformChange={null}
           onDecodeError={handleDecodeError}
         />
       </div>
