@@ -34,6 +34,7 @@ interface MockTransformRef {
 interface MockTransformInstance {
   readonly id: number;
   disabled: boolean;
+  currentTransform: ImagePreviewTransformState;
   readonly centerViewCalls: Array<readonly [number, number]>;
   readonly zoomInCalls: Array<readonly [number, number]>;
   readonly zoomOutCalls: Array<readonly [number, number]>;
@@ -52,6 +53,9 @@ interface MockTransformWrapperProps {
     ref: MockTransformRef,
     state: ImagePreviewTransformState,
   ) => void;
+  readonly onPanningStart?: () => void;
+  readonly onPanning?: () => void;
+  readonly onPanningStop?: () => void;
   readonly children?: ReactNode;
 }
 
@@ -60,6 +64,8 @@ const state = vi.hoisted(() => ({
   nextId: 0,
   oldAsset: null as UseImageAssetResult | null,
   newAsset: null as UseImageAssetResult | null,
+  deferNextSetTransformCallback: false,
+  stageRect: { width: 800, height: 600 },
 }));
 
 vi.mock("react-zoom-pan-pinch", () => {
@@ -84,10 +90,16 @@ vi.mock("react-zoom-pan-pinch", () => {
       };
     }
 
-    function emitTransform(): void {
-      const transform = transformRef.current;
+    function emitTransform(
+      transform: {
+        readonly positionX: number;
+        readonly positionY: number;
+        readonly scale: number;
+      } | null,
+    ): void {
       const instance = instanceRef.current;
       if (transform === null || instance === null) return;
+      instance.currentTransform = { ...transform };
       propsRef.current.onTransform?.(instance.ref, { ...transform });
     }
 
@@ -108,7 +120,7 @@ vi.mock("react-zoom-pan-pinch", () => {
           ...transform,
           scale: Math.min(Math.max(nextScale, minScale), maxScale),
         };
-        emitTransform();
+        emitTransform(transformRef.current);
       }
 
       const ref: MockTransformRef = {
@@ -121,7 +133,7 @@ vi.mock("react-zoom-pan-pinch", () => {
             positionY: 0,
             scale,
           };
-          emitTransform();
+          emitTransform(transformRef.current);
         },
         zoomIn: (step, animationMs) => {
           zoomInCalls.push([step, animationMs]);
@@ -136,6 +148,13 @@ vi.mock("react-zoom-pan-pinch", () => {
         setTransform: (positionX, positionY, scale, animationMs) => {
           setTransformCalls.push([positionX, positionY, scale, animationMs]);
           transformRef.current = { positionX, positionY, scale };
+          const transformed = transformRef.current;
+          if (state.deferNextSetTransformCallback) {
+            state.deferNextSetTransformCallback = false;
+            queueMicrotask(() => emitTransform(transformed));
+          } else {
+            emitTransform(transformed);
+          }
         },
         instance: {
           wrapperComponent: {
@@ -151,6 +170,11 @@ vi.mock("react-zoom-pan-pinch", () => {
       const instance: MockTransformInstance = {
         id: state.nextId,
         disabled: props.disabled === true,
+        currentTransform: {
+          positionX: props.initialPositionX,
+          positionY: props.initialPositionY,
+          scale: props.initialScale,
+        },
         centerViewCalls,
         zoomInCalls,
         zoomOutCalls,
@@ -177,15 +201,36 @@ vi.mock("react-zoom-pan-pinch", () => {
           onClick={() => {
             const transform = transformRef.current;
             if (transform === null) return;
+            propsRef.current.onPanningStart?.();
             transformRef.current = {
               positionX: 12,
               positionY: -7,
               scale: 1.75,
             };
-            emitTransform();
+            propsRef.current.onPanning?.();
+            emitTransform(transformRef.current);
+            propsRef.current.onPanningStop?.();
           }}
         >
           Gesture
+        </button>
+        <button
+          type="button"
+          data-testid={`rzpp-wheel-gesture-${instance.id}`}
+          onClick={() => {
+            const transform = transformRef.current;
+            if (transform === null) return;
+            transformRef.current = {
+              ...transform,
+              scale: 0.19,
+            };
+            // Ctrl-wheel/trackpad zoom reports a transform without a
+            // panning-start callback; this is the path that used to leave a
+            // manually tracked `isFitted` flag stale.
+            emitTransform(transformRef.current);
+          }}
+        >
+          Wheel zoom out
         </button>
         {props.children}
       </div>
@@ -208,6 +253,47 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
     return asset;
   },
 }));
+
+const resizeObservers: Array<ControllableResizeObserver> = [];
+
+class ControllableResizeObserver implements ResizeObserver {
+  private readonly callback: ResizeObserverCallback;
+  private target: Element | null = null;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(target: Element): void {
+    this.target = target;
+    resizeObservers.push(this);
+  }
+
+  unobserve(target: Element): void {
+    if (this.target === target) this.target = null;
+  }
+
+  disconnect(): void {
+    this.target = null;
+  }
+
+  trigger(width: number, height: number): void {
+    const target = this.target;
+    if (target === null) return;
+    this.callback(
+      [
+        {
+          target,
+          contentRect: new DOMRect(0, 0, width, height),
+          borderBoxSize: [],
+          contentBoxSize: [],
+          devicePixelContentBoxSize: [],
+        },
+      ],
+      this,
+    );
+  }
+}
 
 import { ImageDiffView, type ImageDiffViewProps } from "../image-diff-view";
 import { ImagePreview } from "../image-preview";
@@ -271,11 +357,32 @@ beforeEach(() => {
   state.nextId = 0;
   state.oldAsset = readyAsset("blob:old");
   state.newAsset = readyAsset("blob:new");
+  state.deferNextSetTransformCallback = false;
+  state.stageRect = { width: 800, height: 600 };
+  vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      if (this.classList.contains("image-preview-checkerboard")) {
+        return new DOMRect(0, 0, state.stageRect.width, state.stageRect.height);
+      }
+      return new DOMRect();
+    },
+  );
 });
 
 afterEach(() => {
   cleanup();
+  resizeObservers.length = 0;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+function triggerStageResize(width: number, height: number): void {
+  state.stageRect = { width, height };
+  for (const observer of [...resizeObservers]) {
+    observer.trigger(width, height);
+  }
+}
 
 describe("image preview interactions", () => {
   it("distinguishes fit, intermediate zoom, and actual-size states", () => {
@@ -301,11 +408,13 @@ describe("image preview interactions", () => {
   });
 
   it("disables zoom controls at the minimum and maximum boundaries", () => {
+    state.stageRect = { width: 320, height: 240 };
     renderPreview(false);
 
     const zoomOut = screen.getByRole("button", { name: "Zoom out" });
     const zoomIn = screen.getByRole("button", { name: "Zoom in" });
 
+    fireEvent.click(zoomOut);
     expect(zoomOut.hasAttribute("disabled")).toBe(true);
 
     for (let index = 0; index < 50; index += 1) {
@@ -334,6 +443,52 @@ describe("image preview interactions", () => {
     expect(stage?.className).toContain("overflow-hidden");
     expect(stage?.className).toContain("isolate");
   });
+
+  it("does not snap a huge image above its true fit after a wheel zoom-out and resize", () => {
+    const largeMeta: ImageAssetMeta = {
+      ...META,
+      width: 4_000,
+      height: 3_000,
+    };
+
+    render(
+      <ImagePreview
+        status="ready"
+        url="blob:large-image"
+        meta={largeMeta}
+        fileName="large.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={200}
+        transformRef={null}
+        onTransformChange={null}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    const image = screen.getByRole("img", { name: "large.png" });
+    Object.defineProperty(image, "naturalWidth", {
+      configurable: true,
+      value: 4_000,
+    });
+    Object.defineProperty(image, "naturalHeight", {
+      configurable: true,
+      value: 3_000,
+    });
+
+    const instance = state.instances[0];
+    expect(instance.currentTransform.scale).toBeLessThan(0.25);
+
+    fireEvent.click(screen.getByTestId("rzpp-wheel-gesture-0"));
+
+    expect(instance.currentTransform.scale).toBeCloseTo(0.19);
+    triggerStageResize(800, 600);
+
+    expect(instance.currentTransform.scale).toBeCloseTo(0.19);
+    expect(instance.currentTransform.scale).not.toBeCloseTo(0.25);
+    expect(instance.centerViewCalls).toHaveLength(0);
+  });
 });
 
 describe("linked image diff transforms", () => {
@@ -358,6 +513,24 @@ describe("linked image diff transforms", () => {
     expect(newInstance.zoomInCalls).toContainEqual([0.2, 0]);
     expect(oldInstance.setTransformCalls).toHaveLength(0);
     expect(newInstance.setTransformCalls).toHaveLength(0);
+  });
+
+  it("exposes a late peer callback that would reopen mirroring if RZPP became async", async () => {
+    state.deferNextSetTransformCallback = true;
+    renderDiff({});
+
+    const oldInstance = state.instances[0];
+    const newInstance = state.instances[1];
+
+    fireEvent.click(screen.getByTestId("rzpp-gesture-0"));
+    expect(newInstance.setTransformCalls).toEqual([[12, -7, 1.75, 0]]);
+
+    await Promise.resolve();
+
+    // The delayed callback arrives after the synchronous guard closes and is
+    // therefore observable as the concrete ping-pong failure mode this
+    // harness must keep visible if the library's timing contract changes.
+    expect(oldInstance.setTransformCalls).toEqual([[12, -7, 1.75, 0]]);
   });
 
   it("disables both transform wrappers and all toolbars in compact mode", () => {
