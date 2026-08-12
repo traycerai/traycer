@@ -147,7 +147,6 @@ describe("HistoryPruneProvider", () => {
               ...idleState,
               status: "pending",
               isLoading: true,
-              isTransitioning: true,
             }
           : idleState,
     });
@@ -263,7 +262,6 @@ describe("HistoryPruneProvider", () => {
               ...idleState,
               status: "pending",
               isLoading: true,
-              isTransitioning: true,
             }
           : idleState,
     });
