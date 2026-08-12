@@ -543,6 +543,7 @@ describe("<HostStatusStrip />", () => {
         readiness: { kind },
         presentation: {
           ...BASE_PRESENTATION,
+          targetKind: "local",
           requestRespawn,
           compatibility: {
             ...BASE_PRESENTATION.compatibility,
@@ -567,6 +568,7 @@ describe("<HostStatusStrip />", () => {
       readiness: { kind: "unavailable-host" },
       presentation: {
         ...BASE_PRESENTATION,
+        targetKind: "local",
         requestRespawn,
         respawnPending: true,
         compatibility: {
@@ -608,6 +610,35 @@ describe("<HostStatusStrip />", () => {
     fireEvent.click(screen.getByTestId("host-status-strip-retry"));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(requestRespawn).not.toHaveBeenCalled();
+  });
+
+  // The counter-pin the local fix needed: `unavailable-host` is ALSO what a
+  // selected REMOTE host reports once it loses its dialable endpoint. Respawning
+  // then restarts the host on THIS computer and leaves the host the user is
+  // actually pointed at untouched.
+  it("does not respawn the local host when the unavailable target is remote", () => {
+    const retry = vi.fn();
+    const requestRespawn = vi.fn();
+    renderStrip({
+      compatibility: { status: "checking", retry },
+      readiness: { kind: "unavailable-host" },
+      presentation: {
+        ...BASE_PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        requestRespawn,
+        compatibility: {
+          ...BASE_PRESENTATION.compatibility,
+          status: "checking",
+          retry,
+        },
+      },
+      hostClient: null,
+    });
+
+    fireEvent.click(screen.getByTestId("host-status-strip-retry"));
+    expect(requestRespawn).not.toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("files the same report-issue context as the full-screen card on the error variant", () => {

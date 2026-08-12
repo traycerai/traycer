@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { hostFailureReportIssueAction } from "@/components/layout/host-failure-report";
 import {
+  presentsLocalHostLifecycle,
   useHostReadinessController,
   useSurfaceReadiness,
   type DefaultHostReadinessPresentation,
@@ -107,19 +108,31 @@ export function HostStatusStrip(): ReactNode {
  * nothing, however many times it is clicked.
  *
  * Everything else amber - an explicit switch, `restoring-request-context`, and
- * the still-dialing compat probe - is a CONNECTION question, and for a remote
- * target readiness is already `ready`, so respawning the local host would be
- * both useless and wrong. Those keep the probe retry.
+ * the still-dialing compat probe - is a CONNECTION question, and respawning the
+ * local host for one of those would be both useless and wrong. Those keep the
+ * probe retry.
+ *
+ * The target check is not redundant with the kind check. `unavailable-host` is
+ * ALSO what a selected remote host reports once it loses its dialable endpoint
+ * with no failover target, and that is the case where a respawn silently acts
+ * on the wrong machine.
  */
 function waitingRetryAction(
   kind: SurfaceReadiness["kind"],
   presentation: DefaultHostReadinessPresentation,
 ): { readonly onClick: () => void; readonly pending: boolean } {
-  if (
+  const localLifecycleWait =
     kind === "loading-host" ||
     kind === "provisioning-host" ||
-    kind === "unavailable-host"
-  ) {
+    kind === "unavailable-host";
+  // The readiness kind alone is NOT enough to authorize a respawn.
+  // `unavailable-host` is also what a selected REMOTE host reports once it
+  // loses its dialable endpoint with no failover target, and respawning then
+  // restarts the host on THIS computer while leaving the host the user is
+  // actually pointed at untouched. `presentsLocalHostLifecycle` is the
+  // codebase's own answer to "do these lifecycle actions belong to this
+  // target", including the unresolved-boot case that bare `targetKind` misses.
+  if (localLifecycleWait && presentsLocalHostLifecycle(presentation)) {
     return {
       onClick: presentation.requestRespawn,
       pending: presentation.respawnPending,

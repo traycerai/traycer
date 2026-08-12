@@ -112,6 +112,13 @@ export function HostOverviewPanel(props: {
   );
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [restartBusyCount, setRestartBusyCount] = useState<number | null>(null);
+  // The id of a restart whose DISPATCH OUTCOME IS UNKNOWN - the transport threw
+  // after the host may already have granted the claim. `host.restart` is
+  // claim-gated, so the retry has to carry that same id to adopt the claim it
+  // may already hold; minting a fresh one turns the idempotent retry this
+  // contract exists for into a busy refusal. Cleared on every DEFINITIVE
+  // answer, so a genuinely new action never inherits a stale claim.
+  const armedRestartIdRef = useRef<string | null>(null);
   const hostIdCopy = useClipboardCopy({
     resetMs: 1600,
     onSuccess: () => toast.success("Host ID copied"),
@@ -321,15 +328,21 @@ export function HostOverviewPanel(props: {
         }}
         isPending={restart.isPending}
         onConfirm={() => {
-          // Minted at CONFIRM — the moment the action is armed — and used for
-          // this attempt only. See `newTransitionId` for why neither a fresh id
-          // per network retry nor a shared constant is correct.
-          const transitionId = newTransitionId();
+          // Minted at CONFIRM — the moment the action is armed — then REUSED
+          // for every attempt at that same action, including a retry after an
+          // ambiguous transport failure. See `newTransitionId` for why neither
+          // a fresh id per network retry nor a shared constant is correct.
+          const transitionId = armedRestartIdRef.current ?? newTransitionId();
+          armedRestartIdRef.current = transitionId;
           restart.mutate(
             { transitionId },
             {
               onSuccess: (response) => {
                 setRestartConfirmOpen(false);
+                // A definitive answer ends this action: accepted means the
+                // claim is spent, busy means it was refused outright. Either
+                // way the next confirm is a NEW action and must not adopt it.
+                armedRestartIdRef.current = null;
                 if (response.outcome === "busy") {
                   // Not an error: the host closed admission, found work in
                   // flight, and reopened it. Nothing was interrupted.
@@ -340,6 +353,9 @@ export function HostOverviewPanel(props: {
               },
               onError: (error) => {
                 setRestartConfirmOpen(false);
+                // Deliberately NOT cleared: a transport failure says nothing
+                // about whether the host granted the claim, so the id stays
+                // armed for the retry that adopts it.
                 toastFromHostError(error, "Couldn't restart this host.");
               },
             },

@@ -309,6 +309,57 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it("reuses the armed transitionId when the retry follows an AMBIGUOUS failure", async () => {
+    // The complement of the busy case above, and the one the claim contract is
+    // actually for: a transport failure says nothing about whether the host
+    // granted the shutdown claim. Minting a fresh id for that retry means it
+    // cannot adopt a claim the host may already hold - turning the idempotent
+    // retry this design exists for into a busy refusal.
+    const transitionIds: string[] = [];
+    let attempt = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": (req) => {
+          transitionIds.push(req.transitionId);
+          attempt += 1;
+          if (attempt === 1) {
+            return Promise.reject(new Error("relay dropped the ack"));
+          }
+          return Promise.resolve({ outcome: "accepted" as const });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHost()}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await waitForButton("Restart"));
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+    await waitFor(() => expect(transitionIds).toHaveLength(1));
+
+    // The user tries again after the failure toast.
+    fireEvent.click(await waitForButton("Restart"));
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+    await waitFor(() => expect(transitionIds).toHaveLength(2));
+
+    expect(transitionIds[1]).toBe(transitionIds[0]);
+  });
+
   it("sends a non-empty transitionId, and a retry from the busy notice sends a fresh one", async () => {
     // Tracked locally, same reason as the arm-time-capture suite:
     // `overrideHandlers` replaces the fixture's own tracked handler.
