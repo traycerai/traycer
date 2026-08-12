@@ -29,12 +29,9 @@ export const HOST_LIST_ITEM_GOLDEN_FIXTURE: HostListItem = {
   publicKey: "golden-public-key",
   createdAt: "2026-01-01T00:00:00.000Z",
   status: {
-    presenceLease: "fresh",
-    hostRelayAttached: true,
+    connectivity: "connectable",
     viewerReachability: "unknown",
     clientCloud: "ok",
-    busy: false,
-    busySessionCount: 0,
     updateState: "current",
     appVersion: "1.2.3",
     lastSeenAt: "2026-01-01T00:00:00.000Z",

@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
-import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -67,11 +66,6 @@ export interface HostScope {
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
-
-const HEALTHY_PRESENCE: HostPresenceHealth = {
-  status: "healthy",
-  reason: null,
-};
 
 /**
  * Stand-in `queryFn` for the disabled installed-record query.
@@ -164,7 +158,6 @@ export function useHostScope(): HostScope {
       buildHostScopeOptions({
         directory: directory ?? [],
         registry: registry?.hosts ?? [],
-        presenceHealth: registry?.presenceHealth ?? HEALTHY_PRESENCE,
         localHostId,
         activeHostId,
         localService,

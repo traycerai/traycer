@@ -1,37 +1,49 @@
 import type {
   HostListItem,
-  HostPresenceHealth,
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import { HOST_VERSION_PATTERN } from "@traycer/protocol/host/version";
 
 /**
- * Pure status derivation for the My Hosts list (Remote Host Support §7,
- * Journey 2). Every row is a pure function of the host-status DTO + the
- * envelope's presence-health + two client-local signals (live-session
- * evidence, the viewer's own last reachability check) — no ambient probing
- * beyond what those two signals already recorded elsewhere. Invariants the
- * tests pin:
+ * Pure status derivation for a host row. Every row is a pure function of the
+ * host-status DTO plus two client-local signals (live-session evidence, the
+ * viewer's own last reachability check) — no ambient probing beyond what those
+ * two already recorded elsewhere.
  *
- *   1. NO green dot without a live signal — `showLiveDot` is `true` only for a
- *      live lease (`fresh`/`stale`) or live-session evidence.
- *   2. NEVER a false "Offline" when coordination is blind — an `expired` lease
- *      under `presenceHealth: degraded` renders "Status unknown", not Offline.
- *   3. Live-session evidence wins over every other signal (R4-B5) — a client
- *      holding an open E2E session to the host is firsthand truth; the lease
- *      is hearsay about a different leg.
- *   4. The relay-attach / tunnel / connection-issue sub-states only apply to a
- *      REMOTE row (`isViewerLocalHost: false`) — a local host never attaches
- *      to any relay in v1, so `hostRelayAttached` is always `false` for one
- *      and must never be read as "lost its tunnel".
+ * ONE cloud signal now decides reachability: `status.connectivity`. It used to
+ * take two — a heartbeat lease and a separately-derived relay-attach bit — and
+ * the extra states this file used to carry (`tunnel-down`, `likely-reachable`)
+ * existed only to narrate the cases where those two disagreed. "Up,
+ * re-establishing its tunnel" and "Not reporting — likely reachable" were
+ * therefore statements about our own bookkeeping dressed as statements about
+ * the machine, and neither told a person anything they could act on. They are
+ * gone, along with the lease tri-state that produced them.
+ *
+ * Precedence, and each step's claim to outrank the next:
+ *
+ *   1. **The local process read** — not decided here. `deriveHostHealth` asks
+ *      the local service snapshot first and only reaches this function when
+ *      there is no such answer. A direct read of the process on this box beats
+ *      anything the cloud can say about it.
+ *   2. **Live-session evidence** (R4-B5) — a client holding an open E2E session
+ *      to the host has firsthand proof it is up. That outranks `connectivity`,
+ *      which is a lease the cloud refreshes on a slower clock.
+ *   3. **`connectivity`** — the cloud's answer, and the only one for a host
+ *      this client has never dialled.
+ *
+ * Two invariants the tests pin:
+ *
+ *   - NO green dot without live evidence: `showLiveDot` is `true` only for a
+ *     live session or a `connectable` lease.
+ *   - NEVER a false "Offline" when the cloud is blind. `unknown` is its own
+ *     rendering, and `local-only` is not an outage at all.
  */
 
 export type HostPresenceTone =
   | "online"
-  | "likely-reachable"
-  | "tunnel-down"
   | "connection-issue"
+  | "local-only"
   | "offline"
   | "unknown"
   | "client-offline";
@@ -39,15 +51,12 @@ export type HostPresenceTone =
 export interface HostPresenceView {
   readonly tone: HostPresenceTone;
   readonly label: string;
-  /** A green liveness dot renders ONLY when a live lease/session backs it. */
+  /** A green liveness dot renders ONLY when a live session/lease backs it. */
   readonly showLiveDot: boolean;
-  /** Active agent work — meaningful (and shown) only when Online. */
-  readonly busy: boolean;
 }
 
 export interface DeriveHostPresenceOptions {
   readonly status: HostStatusDTO;
-  readonly presenceHealth: HostPresenceHealth;
   readonly isViewerLocalHost: boolean;
   readonly hasLiveSession: boolean;
   readonly viewerCheck: ViewerReachabilityCheckLike | null;
@@ -57,93 +66,53 @@ export interface DeriveHostPresenceOptions {
 export function deriveHostPresence(
   options: DeriveHostPresenceOptions,
 ): HostPresenceView {
-  const {
-    status,
-    presenceHealth,
-    isViewerLocalHost,
-    hasLiveSession,
-    viewerCheck,
-    nowMs,
-  } = options;
+  const { status, isViewerLocalHost, hasLiveSession, viewerCheck, nowMs } =
+    options;
   // This client is offline: we cannot claim anything about the host's liveness.
   if (status.clientCloud === "down") {
     return {
       tone: "client-offline",
       label: "You're offline",
       showLiveDot: false,
-      busy: false,
     };
   }
   // Live-session-evidence override (R4-B5): a client holding an open E2E
   // session to this host renders Online regardless of everything below.
   if (hasLiveSession) {
-    return {
-      tone: "online",
-      label: "Online",
-      showLiveDot: true,
-      busy: status.busy,
-    };
+    return { tone: "online", label: "Online", showLiveDot: true };
   }
-  if (status.presenceLease === "fresh" || status.presenceLease === "stale") {
-    if (!isViewerLocalHost && !status.hostRelayAttached) {
-      // The host's own leg is down — never the viewer's path. Distinguishing
-      // "which leg failed" is exactly R4's status-honesty requirement.
-      return {
-        tone: "tunnel-down",
-        label: "Up, re-establishing its tunnel",
-        showLiveDot: false,
-        busy: false,
-      };
+  switch (status.connectivity) {
+    case "connectable": {
+      // The host's leg is up and this client's own probe says the path to it is
+      // not. Only a REMOTE row can be in this state — a local host is not
+      // reached over a relay — and the distinction is worth keeping because the
+      // remedy differs: this is the viewer's network, not the host's.
+      if (
+        !isViewerLocalHost &&
+        viewerCheck !== null &&
+        viewerCheck.result === "failing"
+      ) {
+        return {
+          tone: "connection-issue",
+          label: `Reachable, connection issue (checked ${formatElapsed(
+            Math.max(0, Math.round((nowMs - viewerCheck.checkedAtMs) / 1000)),
+          )})`,
+          showLiveDot: true,
+        };
+      }
+      return { tone: "online", label: "Online", showLiveDot: true };
     }
-    if (
-      !isViewerLocalHost &&
-      viewerCheck !== null &&
-      viewerCheck.result === "failing"
-    ) {
-      return {
-        tone: "connection-issue",
-        label: `Reachable, connection issue (checked ${formatElapsed(
-          Math.max(0, Math.round((nowMs - viewerCheck.checkedAtMs) / 1000)),
-        )})`,
-        showLiveDot: true,
-        busy: status.busy,
-      };
-    }
-    return {
-      tone: "online",
-      label: "Online",
-      showLiveDot: true,
-      busy: status.busy,
-    };
+    case "local-only":
+      // Not an outage: this host never attaches to a relay because the plan
+      // does not include remote hosts. Rendering it "Offline" would put a
+      // fault where there is none and imply a retry as the fix.
+      return { tone: "local-only", label: "Local only", showLiveDot: false };
+    case "unknown":
+      // The cloud could not read liveness. Blind is not the same as absent.
+      return { tone: "unknown", label: "Status unknown", showLiveDot: false };
+    case "offline":
+      return { tone: "offline", label: "Offline", showLiveDot: false };
   }
-  // Lease expired. When coordination cannot see presence, an expired lease is
-  // NOT proof of Offline — render honest uncertainty instead.
-  if (presenceHealth.status === "degraded") {
-    return {
-      tone: "unknown",
-      label: "Status unknown",
-      showLiveDot: false,
-      busy: false,
-    };
-  }
-  if (!isViewerLocalHost && status.hostRelayAttached) {
-    // Heartbeat leg down but the relay leg is (recently) confirmed up — the
-    // host is very likely still reachable via a live session, just not
-    // reporting its own liveness right now.
-    return {
-      tone: "likely-reachable",
-      label: "Not reporting — likely reachable",
-      showLiveDot: false,
-      busy: false,
-    };
-  }
-  // Expired lease + healthy ingestion (+ no relay evidence) ⇒ a genuine Offline.
-  return {
-    tone: "offline",
-    label: "Offline",
-    showLiveDot: false,
-    busy: false,
-  };
 }
 
 /** Structural subset of `ViewerReachabilityCheck` so this module stays UI-free. */
@@ -211,9 +180,9 @@ export interface HostUpdateAffordanceView {
   readonly showUpdateNowInput: boolean;
   /**
    * "Waiting for N sessions" — populated only when the host is actually
-   * gated on open sessions (`updateState === "pending"` AND
-   * `busySessionCount > 0`); `null` otherwise, including a `pending` host
-   * that hasn't yet started draining (`busySessionCount === 0`).
+   * gated on open sessions (`updateState === "pending"` AND a LIVE session
+   * count above zero); `null` otherwise, including a `pending` host that
+   * hasn't started draining and a host with no live source at all.
    */
   readonly waitingForSessionsLabel: string | null;
   /** Whether to show the "Apply now — ends N sessions" drain-gate force. */
@@ -222,32 +191,75 @@ export interface HostUpdateAffordanceView {
   readonly applyNowLabel: string | null;
 }
 
+export interface DeriveUpdateAffordanceOptions {
+  /** Registry-backed, and available for an offline host. */
+  readonly updateState: HostUpdateState;
+  /**
+   * Open sessions blocking the drain, from a LIVE source only —
+   * `host.status@1.1` over an open connection, or the room's
+   * `hostRuntimeStatus` awareness entry. `null` means no live source, which is
+   * NOT zero: see the drain rules below.
+   */
+  readonly liveBusySessionCount: number | null;
+}
+
 function pluralizeSessions(count: number): string {
   return count === 1 ? "session" : "sessions";
 }
 
 /**
- * Derives the update-affordance view from the status DTO alone (Architecture
- * §13). Pure and DTO-driven, matching `deriveUpdatePill`'s contract — no
- * client-local signal is needed here (unlike `deriveHostPresence`).
+ * Derives the update affordances (Architecture §13) from two sources with
+ * deliberately different reliability, and the split is the whole point.
+ *
+ * `showUpdateNowInput` is registry-backed: the version pin is stored on the
+ * account and the host picks it up on its next check-in, so it stays offered
+ * for a host nothing can currently reach. That is exactly when someone wants
+ * it.
+ *
+ * The drain affordances are not. "Waiting for N sessions" and, far more
+ * seriously, "Apply now — ends N sessions" both NAME A COUNT and, in the second
+ * case, destroy that many sessions on click. The count therefore has to come
+ * from a live read of the host, and `null` — no live source — must render
+ * NOTHING rather than a zero:
+ *
+ *   - `null` treated as 0 would silently withdraw the drain-gate notice from a
+ *     host that is genuinely waiting on sessions, making a `pending` update
+ *     look stalled for no stated reason;
+ *   - and if the force button were shown anyway, it would offer to end "0
+ *     sessions" while ending however many are actually open.
+ *
+ * These fields used to ride the cloud hosts DTO, where the number could be up
+ * to a lease-interval stale. They now come from `host.status@1.1` / room
+ * awareness precisely so the count on the button is the count that dies.
  */
 export function deriveUpdateAffordance(
-  status: HostStatusDTO,
+  options: DeriveUpdateAffordanceOptions,
 ): HostUpdateAffordanceView {
+  const { updateState, liveBusySessionCount } = options;
   const showUpdateNowInput =
-    status.updateState !== "pending" && status.updateState !== "updating";
-  const isWaitingOnSessions =
-    status.updateState === "pending" && status.busySessionCount > 0;
-  const sessionsWord = pluralizeSessions(status.busySessionCount);
+    updateState !== "pending" && updateState !== "updating";
+  if (updateState !== "pending" || liveBusySessionCount === null) {
+    return {
+      showUpdateNowInput,
+      waitingForSessionsLabel: null,
+      showApplyNowForce: false,
+      applyNowLabel: null,
+    };
+  }
+  if (liveBusySessionCount === 0) {
+    return {
+      showUpdateNowInput,
+      waitingForSessionsLabel: null,
+      showApplyNowForce: false,
+      applyNowLabel: null,
+    };
+  }
+  const sessionsWord = pluralizeSessions(liveBusySessionCount);
   return {
     showUpdateNowInput,
-    waitingForSessionsLabel: isWaitingOnSessions
-      ? `Waiting for ${status.busySessionCount} ${sessionsWord}`
-      : null,
-    showApplyNowForce: isWaitingOnSessions,
-    applyNowLabel: isWaitingOnSessions
-      ? `Apply now — ends ${status.busySessionCount} ${sessionsWord}`
-      : null,
+    waitingForSessionsLabel: `Waiting for ${liveBusySessionCount} ${sessionsWord}`,
+    showApplyNowForce: true,
+    applyNowLabel: `Apply now — ends ${liveBusySessionCount} ${sessionsWord}`,
   };
 }
 
@@ -303,9 +315,13 @@ export function formatHostMeta(
   if (item.status.appVersion !== null && item.status.appVersion.length > 0) {
     parts.push(`v${item.status.appVersion}`);
   }
-  // For a host that is not live, the durable last-seen is the more useful hint
-  // than a stale version string.
-  if (presence.tone === "offline") {
+  // For a host we cannot vouch for, the durable last-seen is the more useful
+  // hint than a stale version string. `unknown` qualifies for the same reason
+  // `offline` does — arguably more so, since a blind liveness read leaves
+  // `lastSeenAt` as the only thing on the row that is still known to be true.
+  // `local-only` does NOT: nothing there is stale or missing, so replacing the
+  // identity line with a last-seen would read as a fault.
+  if (presence.tone === "offline" || presence.tone === "unknown") {
     const lastSeen = formatLastSeen(item.status.lastSeenAt, nowMs);
     if (lastSeen !== null) {
       return lastSeen;

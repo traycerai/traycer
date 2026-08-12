@@ -1,7 +1,6 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostListItem,
-  HostPresenceHealth,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -54,7 +53,6 @@ export interface HostScopeOption {
   readonly version: string | null;
   readonly health: HostHealth;
   readonly updateState: HostUpdateState | null;
-  readonly busySessionCount: number;
   /** The directory entry, when there is one — needed to build a client. */
   readonly entry: HostDirectoryEntry | null;
   /** The registry row, when there is one — needed for update policy writes. */
@@ -64,7 +62,6 @@ export interface HostScopeOption {
 export interface BuildHostScopeOptionsInput {
   readonly directory: readonly HostDirectoryEntry[];
   readonly registry: readonly HostListItem[];
-  readonly presenceHealth: HostPresenceHealth;
   readonly localHostId: string | null;
   readonly activeHostId: string | null;
   /** Local service truth, used only for the local machine's row. */
@@ -106,7 +103,6 @@ export function buildHostScopeOptions(
       version: item?.status.appVersion ?? entry?.version ?? null,
       health: deriveHostHealth({
         item,
-        presenceHealth: input.presenceHealth,
         isLocalMachine,
         hasLiveSession: input.hasLiveSession(hostId),
         viewerCheck: input.viewerCheck(hostId),
@@ -114,7 +110,6 @@ export function buildHostScopeOptions(
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
-      busySessionCount: item?.status.busySessionCount ?? 0,
       entry,
       item,
     };
@@ -214,7 +209,7 @@ function resolveHostName(
  * Stable ordering: this machine, then the active host, then everything else
  * alphabetically. Deliberately NOT sorted by health — a list that reorders
  * itself when a host blinks would move a row out from under the pointer mid-
- * click, and the registry polls every ~15s.
+ * click, and the registry keeps polling underneath it.
  */
 function compareHostOptions(a: HostScopeOption, b: HostScopeOption): number {
   if (a.isLocalMachine !== b.isLocalMachine) return a.isLocalMachine ? -1 : 1;

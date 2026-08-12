@@ -46,15 +46,33 @@ type UpdateHostVersionPolicyMutation = UseMutationResult<
  * account's host registry and the host reads it on its next check-in, which is
  * what keeps an offline host's Overview useful instead of blank.
  *
+ * The DRAIN half is the exception, and it is deliberate. "Waiting for N
+ * sessions" and "Apply now — ends N sessions" name a count and then destroy
+ * that many sessions, so the count has to come from a live read of the host
+ * (`liveBusySessionCount`) rather than from the registry row beside it. It used
+ * to come from the cloud DTO, where it could be a lease-interval stale; a host
+ * with no live source now shows no drain state at all, which is the only
+ * honest answer and — since ending sessions needs a reachable host anyway — not
+ * a capability anyone loses.
+ *
  * All controls share one mutation instance so concurrent writes to the same
  * host serialize rather than race.
  */
 export function HostRegistryUpdates(props: {
   readonly item: HostListItem;
+  /**
+   * Open sessions blocking the drain, from `host.status` over the live
+   * connection. `null` when this client has no live read of the host — NOT
+   * zero.
+   */
+  readonly liveBusySessionCount: number | null;
 }): ReactNode {
   const { item } = props;
   const mutation = useUpdateHostVersionPolicy(item.hostId);
-  const affordance = deriveUpdateAffordance(item.status);
+  const affordance = deriveUpdateAffordance({
+    updateState: item.status.updateState,
+    liveBusySessionCount: props.liveBusySessionCount,
+  });
   const pill = deriveUpdatePill(item.status.updateState);
   const isAuto = item.updatePolicy === "auto";
 

@@ -53,12 +53,12 @@ const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
  * check needs it to be present.
  */
 const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
-  presenceLease: "expired",
-  hostRelayAttached: false,
+  // `unknown`, not `offline`: this value is never rendered, but if it ever
+  // leaked to a status surface it must not assert something we did not learn.
+  // We are here precisely because the caller had no status DTO to hand.
+  connectivity: "unknown",
   viewerReachability: "unknown",
   clientCloud: "ok",
-  busy: false,
-  busySessionCount: 0,
   updateState: "current",
   appVersion: null,
   lastSeenAt: null,

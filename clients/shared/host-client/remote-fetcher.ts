@@ -130,12 +130,25 @@ export function isRemoteHostDirectoryEntry(
  * Projects a registry row to a directory entry. `websocketUrl` is the relay's
  * fixed WS attach endpoint (S2/T14) — every remote host shares the same
  * endpoint; the relay routes by the opaque `rendezvousId` inside the
- * CS-minted attach grant, never by this URL. `status` is a coarse, point-in-
- * time snapshot derived from the presence lease, consumed by the existing
- * open-time reachability gate (`useHostReachability`) exactly as a local
- * host's `status` already is — it is NOT the honest `viewerReachability` pill
- * (Architecture §7), which only a real connection attempt at tab-open time may
- * set. `version` shows the last-reported app version.
+ * CS-minted attach grant, never by this URL. `version` shows the last-reported
+ * app version.
+ *
+ * `status` answers exactly one question — can this client dial the host right
+ * now — so it is `available` if and only if the relay holds a live attachment
+ * for it (`connectivity === "connectable"`). Every other connectivity value is
+ * a DIFFERENT reason for the same dialing answer, and the directory must not
+ * distinguish them: `local-only` (the plan gate refuses the attach), `unknown`
+ * (we could not read liveness) and `offline` all mean the dial would not
+ * arrive. The honest per-reason copy is the derivation layer's job — the
+ * `local-only` upgrade prompt and the "status unknown" wording both live in
+ * `deriveHostPresence`, where there is room to say why.
+ *
+ * `unknown` is the one that would be tempting to admit, and must not be: a
+ * blind liveness read is not evidence of reachability, and letting it through
+ * would put a live-looking, selectable row in the directory on the strength of
+ * a failed Redis call. It is NOT the honest `viewerReachability` pill
+ * (Architecture §7) either, which only a real connection attempt at tab-open
+ * may set.
  */
 export function hostListItemToDirectoryEntry(
   item: HostListItem,
@@ -148,7 +161,7 @@ export function hostListItemToDirectoryEntry(
     websocketUrl: relayBaseUrl,
     version: item.status.appVersion,
     status:
-      item.status.presenceLease === "expired" ? "unavailable" : "available",
+      item.status.connectivity === "connectable" ? "available" : "unavailable",
     remoteStatus: item.status,
     publicKey: item.publicKey,
   };

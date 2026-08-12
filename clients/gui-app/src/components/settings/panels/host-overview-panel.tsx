@@ -311,6 +311,7 @@ export function HostOverviewPanel(props: {
         busy={anyPending}
         usable={usable}
         registryItem={registryItem}
+        liveBusySessionCount={view.busySessionCount}
       />
 
       <HostOverviewInstallationCard
@@ -463,6 +464,11 @@ interface OverviewDisplay {
   readonly endpointParts: readonly string[];
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
+  /**
+   * Live open-session count from `host.status`, or `null` when this client has
+   * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   */
+  readonly busySessionCount: number | null;
 }
 
 function useOverviewDisplay(input: {
@@ -494,6 +500,7 @@ function useOverviewDisplay(input: {
     endpointParts,
     hostVersion,
     updateProgress: status?.updateProgress ?? null,
+    busySessionCount,
   };
 }
 
@@ -516,6 +523,8 @@ function HostOverviewUpdatesCard(props: {
   readonly busy: boolean;
   readonly usable: boolean;
   readonly registryItem: HostListItem | null;
+  /** `host.status`'s live session count; `null` when there is no live read. */
+  readonly liveBusySessionCount: number | null;
 }): ReactNode {
   const { registryItem } = props;
   return (
@@ -540,7 +549,11 @@ function HostOverviewUpdatesCard(props: {
           // Keyed by host: every piece of state inside — an open drain-gate
           // confirmation, a half-typed version pin — belongs to ONE host, so a
           // scope change must destroy it rather than re-point it.
-          <HostRegistryUpdates key={registryItem.hostId} item={registryItem} />
+          <HostRegistryUpdates
+            key={registryItem.hostId}
+            item={registryItem}
+            liveBusySessionCount={props.liveBusySessionCount}
+          />
         )}
       </div>
     </SettingsGroup>
