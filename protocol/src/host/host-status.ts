@@ -6,8 +6,8 @@ import { z } from "zod";
  * ⚠️ CROSS-REPO MIRROR — keep in sync with the internal monorepo:
  *   - `@traycerai/common/types/host` (`HostStatusDTO`, `HostKind`,
  *     `HostUpdateState`, presence/viewer/cloud enums) — the T1 contract, and
- *   - `authn-v3/src/utils/hosts/host-status-dto.ts` (`HostListItem`,
- *     `HostPresenceHealth`) — the `GET /api/v3/hosts` response envelope.
+ *   - `authn-v3/src/utils/hosts/host-status-dto.ts` (`HostListItem`) — the
+ *     `GET /api/v3/hosts` response envelope.
  *
  * The open-source `traycer/` submodule does NOT depend on `@traycerai/common`
  * (zero references in the repo), so the DTO cannot be imported across the repo
@@ -147,25 +147,19 @@ export type HostListItem = {
 };
 
 /**
- * Envelope-level self-health of the liveness-read pipeline (R4-C3).
+ * The `GET /api/v3/hosts` envelope. Just the rows.
  *
- * NOT a rendering input any more. The never-render-Offline-when-blind rule it
- * used to carry now lives PER HOST, as `connectivity: "unknown"` — which is
- * strictly better, because a partial read (some hosts resolved, the rest not)
- * has an honest answer under the per-host form and none under a single
- * envelope flag. It stays on the wire as a diagnostic the server keeps
- * emitting; a client that derived status from it would be re-deriving, from a
- * coarser signal, something `connectivity` already said.
+ * It used to carry a `presenceHealth` flag — the server's self-report that its
+ * liveness-read pipeline was degraded — which the client turned into "status
+ * unknown" instead of a false "Offline". That rule is intact and load-bearing;
+ * it simply moved INTO the row, as `connectivity: "unknown"`. Per-host is the
+ * better carrier: a partial read (some hosts resolved, the rest not) has an
+ * honest answer under the per-host form and none at all under one envelope
+ * flag, which had to be all-or-nothing and so was wrong in one direction or
+ * the other whenever the read was partial.
  */
-export type HostPresenceHealth = {
-  status: "healthy" | "degraded";
-  /** Machine-readable cause when degraded; null when healthy. */
-  reason: string | null;
-};
-
 export type HostListResponse = {
   hosts: HostListItem[];
-  presenceHealth: HostPresenceHealth;
 };
 
 // -----------------------------------------------------------------------------
@@ -230,17 +224,9 @@ export const hostListItemSchema: z.ZodType<HostListItem> = z
   })
   .strict();
 
-export const hostPresenceHealthSchema: z.ZodType<HostPresenceHealth> = z
-  .object({
-    status: z.enum(["healthy", "degraded"]),
-    reason: z.string().nullable(),
-  })
-  .strict();
-
 export const hostListResponseSchema: z.ZodType<HostListResponse> = z
   .object({
     hosts: z.array(hostListItemSchema),
-    presenceHealth: hostPresenceHealthSchema,
   })
   .strict();
 

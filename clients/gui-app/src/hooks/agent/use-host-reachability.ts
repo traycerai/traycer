@@ -17,8 +17,9 @@ export interface HostReachability {
  * Per CLAUDE.md tabs are bound to a host for life. This hook is only a
  * directory-membership gate for renderers that need to know whether the bound
  * host still exists. It is NOT a remote reachability probe and must never write
- * viewer-reachability provenance; remote presence leases are status evidence
- * for My Hosts, not proof that an already-bound tab is permanently dead.
+ * viewer-reachability provenance; the cloud's `connectivity` verdict is status
+ * evidence for the host list, not proof that an already-bound tab is
+ * permanently dead.
  *
  * Rows that carry the unknown-host placeholder (legacy artifacts
  * created before per-tile binding existed, or transient pre-binding
