@@ -52,6 +52,7 @@ import {
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { packDisplayName } from "@/lib/orchestration/pack-display";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
+import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   TraycerModelGroup,
@@ -1893,26 +1894,94 @@ function CreateModelGroupForm(props: {
 
 // ─── Blocked providers / models ─────────────────────────────────────────────
 
+const ENTIRE_PROVIDER = "__entire__";
+
+const NOTE_PRESETS = [
+  "out of balance",
+  "key expired",
+  "rate limited",
+  "temporarily broken",
+] as const;
+
 function BlockedProvidersSection() {
   const blocksQuery = useRunnerOrchestrationBlocksQuery();
   const addBlock = useRunnerOrchestrationBlockAddMutation();
   const removeBlock = useRunnerOrchestrationBlockRemoveMutation();
+  const catalog = useGuiHarnessCatalog(null, {
+    enabled: true,
+    subscribed: true,
+  });
+
   const [harnessId, setHarnessId] = useState("");
-  const [model, setModel] = useState("");
+  const [modelChoice, setModelChoice] = useState(ENTIRE_PROVIDER);
   const [note, setNote] = useState("");
 
   const blocks = blocksQuery.data?.blocks ?? [];
 
+  const harnessOptions = useMemo(() => {
+    const list = catalog.harnesses
+      .filter((h) => h.id.trim().length > 0)
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return list;
+  }, [catalog.harnesses]);
+
+  const selectedHarness = useMemo(
+    () => harnessOptions.find((h) => h.id === harnessId) ?? null,
+    [harnessOptions, harnessId],
+  );
+
+  const modelOptions = useMemo(() => {
+    if (selectedHarness === null) return [];
+    const seen = new Set<string>();
+    const out: { slug: string; label: string }[] = [];
+    for (const m of selectedHarness.models) {
+      if (seen.has(m.slug)) continue;
+      seen.add(m.slug);
+      out.push({ slug: m.slug, label: m.label.length > 0 ? m.label : m.slug });
+    }
+    out.sort((a, b) => a.label.localeCompare(b.label));
+    return out;
+  }, [selectedHarness]);
+
+  // Keep selection valid when catalog/harness changes.
+  useEffect(() => {
+    if (harnessId.length === 0 && harnessOptions.length > 0) {
+      setHarnessId(harnessOptions[0].id);
+      setModelChoice(ENTIRE_PROVIDER);
+      return;
+    }
+    if (
+      harnessId.length > 0 &&
+      harnessOptions.length > 0 &&
+      !harnessOptions.some((h) => h.id === harnessId)
+    ) {
+      setHarnessId(harnessOptions[0].id);
+      setModelChoice(ENTIRE_PROVIDER);
+    }
+  }, [harnessId, harnessOptions]);
+
+  useEffect(() => {
+    if (modelChoice === ENTIRE_PROVIDER) return;
+    if (!modelOptions.some((m) => m.slug === modelChoice)) {
+      setModelChoice(ENTIRE_PROVIDER);
+    }
+  }, [modelChoice, modelOptions]);
+
   const handleAdd = (): void => {
     const h = harnessId.trim();
     if (h.length === 0) {
-      toast.error("Provider / harness is required (e.g. kimi, omp, cursor)");
+      toast.error("Pick a provider first");
       return;
     }
+    const model =
+      modelChoice === ENTIRE_PROVIDER || modelChoice.trim().length === 0
+        ? undefined
+        : modelChoice.trim();
     addBlock.mutate(
       {
         harnessId: h,
-        model: model.trim().length > 0 ? model.trim() : undefined,
+        model,
         note: note.trim().length > 0 ? note.trim() : undefined,
       },
       {
@@ -1922,18 +1991,20 @@ function BlockedProvidersSection() {
             return;
           }
           toast.success(
-            model.trim().length > 0
-              ? `Blocked ${h} / ${model.trim()}`
+            model !== undefined
+              ? `Blocked ${h} / ${model}`
               : `Blocked entire provider “${h}”`,
           );
-          setHarnessId("");
-          setModel("");
+          setModelChoice(ENTIRE_PROVIDER);
           setNote("");
         },
         onError: () => toast.error("Could not save the block"),
       },
     );
   };
+
+  const catalogLoading = catalog.harnessesLoading;
+  const noHarnesses = !catalogLoading && harnessOptions.length === 0;
 
   return (
     <section
@@ -1954,10 +2025,13 @@ function BlockedProvidersSection() {
       ) : (
         <div className="mt-3 flex flex-col gap-1.5">
           {blocks.map((b) => {
+            const harnessLabel =
+              harnessOptions.find((h) => h.id === b.harnessId)?.label ??
+              b.harnessId;
             const label =
               b.model === null || b.model === ""
-                ? `${b.harnessId} · entire provider`
-                : `${b.harnessId} / ${b.model}`;
+                ? `${harnessLabel} · entire provider`
+                : `${harnessLabel} / ${b.model}`;
             return (
               <div
                 key={`${b.harnessId}::${b.model ?? ""}`}
@@ -1966,7 +2040,7 @@ function BlockedProvidersSection() {
                 <Badge variant="destructive" className="text-ui-xs">
                   Blocked
                 </Badge>
-                <span className="font-mono">{label}</span>
+                <span className="min-w-0 truncate font-medium">{label}</span>
                 {b.note !== "" ? (
                   <span className="truncate text-muted-foreground">
                     — {b.note}
@@ -1975,7 +2049,7 @@ function BlockedProvidersSection() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="ml-auto h-7 px-2"
+                  className="ml-auto h-7 shrink-0 px-2"
                   disabled={removeBlock.isPending}
                   onClick={() =>
                     removeBlock.mutate(
@@ -2004,45 +2078,96 @@ function BlockedProvidersSection() {
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         <label className="flex flex-col gap-1 text-ui-xs">
-          <span className="text-muted-foreground">Provider / harness</span>
-          <input
-            type="text"
+          <span className="text-muted-foreground">Provider</span>
+          <select
             value={harnessId}
-            onChange={(e) => setHarnessId(e.target.value)}
-            placeholder="kimi"
+            onChange={(e) => {
+              setHarnessId(e.target.value);
+              setModelChoice(ENTIRE_PROVIDER);
+            }}
+            disabled={catalogLoading || noHarnesses}
             className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-            data-testid="block-harness-input"
-          />
+            data-testid="block-harness-select"
+          >
+            {catalogLoading ? (
+              <option value="">Loading providers…</option>
+            ) : noHarnesses ? (
+              <option value="">No providers found</option>
+            ) : (
+              harnessOptions.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.label}
+                  {!h.available ? " (unavailable)" : ""}
+                </option>
+              ))
+            )}
+          </select>
         </label>
+
         <label className="flex flex-col gap-1 text-ui-xs">
-          <span className="text-muted-foreground">
-            Model (optional — leave empty to block the whole provider)
-          </span>
-          <input
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="k3 or verboo-ultra/kimi-k3"
+          <span className="text-muted-foreground">What to block</span>
+          <select
+            value={modelChoice}
+            onChange={(e) => setModelChoice(e.target.value)}
+            disabled={harnessId.length === 0 || catalogLoading}
             className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-            data-testid="block-model-input"
-          />
+            data-testid="block-model-select"
+          >
+            <option value={ENTIRE_PROVIDER}>Entire provider</option>
+            {selectedHarness !== null && selectedHarness.modelsLoading ? (
+              <option value={ENTIRE_PROVIDER} disabled>
+                Loading models…
+              </option>
+            ) : null}
+            {modelOptions.map((m) => (
+              <option key={m.slug} value={m.slug}>
+                {m.label}
+                {m.label !== m.slug ? ` (${m.slug})` : ""}
+              </option>
+            ))}
+          </select>
         </label>
+
         <label className="flex flex-col gap-1 text-ui-xs">
           <span className="text-muted-foreground">Note (optional)</span>
-          <input
-            type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="out of balance"
+          <select
+            value={
+              NOTE_PRESETS.includes(note as (typeof NOTE_PRESETS)[number])
+                ? note
+                : note.length === 0
+                  ? ""
+                  : "__custom__"
+            }
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "__custom__") {
+                setNote("");
+                return;
+              }
+              setNote(v);
+            }}
             className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-            data-testid="block-note-input"
-          />
+            data-testid="block-note-select"
+          >
+            <option value="">No note</option>
+            {NOTE_PRESETS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
+
       <div className="mt-2 flex justify-end">
         <Button
           size="sm"
-          disabled={addBlock.isPending || harnessId.trim().length === 0}
+          disabled={
+            addBlock.isPending ||
+            harnessId.trim().length === 0 ||
+            catalogLoading ||
+            noHarnesses
+          }
           onClick={handleAdd}
           data-testid="block-add-button"
         >
@@ -2052,4 +2177,3 @@ function BlockedProvidersSection() {
     </section>
   );
 }
-
