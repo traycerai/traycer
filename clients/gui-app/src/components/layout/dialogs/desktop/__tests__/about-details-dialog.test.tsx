@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopSupportBridge } from "@/lib/windows/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { AboutDetailsDialog } from "@/components/layout/dialogs/desktop/about-details-dialog";
@@ -14,6 +14,7 @@ import { createDesktopSupportBridgeStub } from "./support-bridge-stub";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -32,11 +33,13 @@ function unavailableSupport(): DesktopSupportBridge {
 
 function readySupport(): DesktopSupportBridge {
   return {
+    ...createDesktopSupportBridgeStub(),
     getSnapshot: () =>
       Promise.resolve({
         appName: "Traycer",
         appVersion: "1.1.8",
         supportEmail: "support@traycer.ai",
+        privateDeliveryAvailable: true,
         platform: "darwin",
         arch: "arm64",
         versions: {
@@ -58,9 +61,6 @@ function readySupport(): DesktopSupportBridge {
         },
         links: [],
       }),
-    revealLog: vi.fn(),
-    submitReport: vi.fn(),
-    tailLog: vi.fn(),
   };
 }
 
@@ -96,8 +96,6 @@ describe("<AboutDetailsDialog />", () => {
       ].join("\n"),
     );
     await screen.findByRole("button", { name: "Copied details" });
-
-    vi.unstubAllGlobals();
   });
 
   it("hides the copy action while details are unavailable", async () => {
