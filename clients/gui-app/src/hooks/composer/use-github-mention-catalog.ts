@@ -249,8 +249,25 @@ export function useGithubMentionCatalog(
         }
         toastFromHostError(error, "Could not refresh from GitHub");
       },
-      onSettled: () => {
-        setPendingRefreshKey(null);
+      // Clears only if the settling refresh is the one being reported.
+      //
+      // Two can be open at once: a scope change does not cancel the request
+      // the previous scope issued, and the new scope can start its own while
+      // that is still running. Clearing unconditionally meant whichever
+      // finished FIRST cleared the flag - so a departed host's refresh landing
+      // early took the spinner off the current scope's still-running one and
+      // re-enabled its button mid-refresh.
+      //
+      // The settling mutation's own destination comes from its context, not
+      // from this render: `cacheKey` here belongs to whatever scope is bound
+      // now, which is exactly the value that cannot identify the request that
+      // just finished.
+      onSettled: (_data, _error, _variables, context) => {
+        if (context === undefined) return;
+        const settled = hashKey(context.destination);
+        setPendingRefreshKey((current) =>
+          current === settled ? null : current,
+        );
       },
     },
   });

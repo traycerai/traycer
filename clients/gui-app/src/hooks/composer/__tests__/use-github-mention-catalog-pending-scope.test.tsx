@@ -109,6 +109,52 @@ function pendingManualRefresh(): { readonly issued: Promise<void> } {
   return { issued };
 }
 
+/**
+ * One controllable manual refresh per workspace path, so two scopes' requests
+ * can be settled in a chosen order. Reads answer immediately; only the manual
+ * lane is held.
+ */
+function manualRefreshesByPath(): {
+  readonly issued: (path: string) => Promise<void>;
+  readonly settle: (path: string) => void;
+} {
+  const resolvers = new Map<string, () => void>();
+  const issuedMarkers = new Map<string, () => void>();
+  const issuedPromises = new Map<string, Promise<void>>();
+  const issuedFor = (path: string): Promise<void> => {
+    const existing = issuedPromises.get(path);
+    if (existing !== undefined) return existing;
+    const created = new Promise<void>((resolve) => {
+      issuedMarkers.set(path, resolve);
+    });
+    issuedPromises.set(path, created);
+    return created;
+  };
+  request.mockImplementation(
+    (_method: string, payload: MentionGithubCatalogRequest) => {
+      if (payload.refresh !== "manual") return Promise.resolve(answer());
+      const path = payload.workspacePaths[0] ?? "";
+      return new Promise<MentionGithubCatalogResponse>((resolve) => {
+        resolvers.set(path, () => {
+          resolve(answer());
+        });
+        void issuedFor(path);
+        issuedMarkers.get(path)?.();
+      });
+    },
+  );
+  return {
+    issued: issuedFor,
+    settle: (path) => {
+      const resolve = resolvers.get(path);
+      if (resolve === undefined) {
+        throw new Error(`no manual refresh was issued for ${path}`);
+      }
+      resolve();
+    },
+  };
+}
+
 beforeEach(() => {
   request.mockReset();
 });
@@ -154,5 +200,65 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
     });
 
     expect(result.current.isChecking).toBe(true);
+  });
+
+  it("keeps checking when a departed scope's refresh settles first", async () => {
+    // Two refreshes open at once: the scope change does not cancel the request
+    // the old folders issued, and the new folders can start their own while it
+    // is still running. Clearing the pending key unconditionally let whichever
+    // finished FIRST clear it - so the departed scope landing early took the
+    // spinner off the current scope's still-running refresh.
+    const refreshes = manualRefreshesByPath();
+    const { result, rerender } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-a");
+    });
+
+    rerender({ scope: REPO_B });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-b");
+    });
+    expect(result.current.isChecking).toBe(true);
+
+    // The DEPARTED scope's request comes back first.
+    await act(async () => {
+      refreshes.settle("/repo-a");
+      await Promise.resolve();
+    });
+
+    expect(result.current.isChecking).toBe(true);
+  });
+
+  it("stops checking when the current scope's own refresh settles", async () => {
+    // The control: the key must still be cleared by the request it belongs to,
+    // or the button never re-enables.
+    const refreshes = manualRefreshesByPath();
+    const { result } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-a");
+    });
+    expect(result.current.isChecking).toBe(true);
+
+    await act(async () => {
+      refreshes.settle("/repo-a");
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.isChecking).toBe(false));
   });
 });
