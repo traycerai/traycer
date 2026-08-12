@@ -177,6 +177,7 @@ import {
   INDENT_PX,
   anyMutationPending,
   nodePadRightClass,
+  useNodeIconDisplay,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
 import {
@@ -1850,28 +1851,6 @@ function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
       {props.children}
     </span>
   );
-}
-
-/**
- * Per-type icon color customization, read here rather than threaded from the
- * tree root so the leading icon stays a leaf concern. `ChatProgressIcon`
- * already subscribes to exactly these two settings internally for chat rows;
- * mirroring it here keeps a terminal-agent's bot glyph from staying muted
- * while chat glyphs pick up "color by type" in the same column.
- */
-function useNodeIconDisplay(artifactType: EpicNodeKind): {
-  readonly className: string;
-  readonly style: { color: string | undefined } | undefined;
-} {
-  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
-  const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
-  return {
-    className: cn(
-      "size-3.5 shrink-0",
-      colorMode === "none" && "text-muted-foreground/70",
-    ),
-    style: colorMode === "byType" ? { color } : undefined,
-  };
 }
 
 /**
