@@ -217,6 +217,27 @@ export function useRunnerOrchestrationGroupsQuery(): UseQueryResult<
   return useQuery(orchestrationGroupsQueryOptions(runnerHost.traycerCli));
 }
 
+function orchestrationBlocksQueryOptions(traycerCli: ITraycerCli | null) {
+  return {
+    queryKey:
+      traycerCli === null
+        ? (["runner.traycer.orchestrationBlocks", "unavailable"] as const)
+        : runnerQueryKeys.traycerOrchestrationBlocks(traycerCli),
+    queryFn: () => {
+      if (traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return traycerCli.orchestrationBlockList();
+    },
+    enabled: traycerCli !== null,
+  };
+}
+
+export function useRunnerOrchestrationBlocksQuery() {
+  const runnerHost = useRunnerHost();
+  return useQuery(orchestrationBlocksQueryOptions(runnerHost.traycerCli));
+}
+
 // ─── Mutations ──────────────────────────────────────────────────────────────
 
 function useInvalidateOrchestrations() {
@@ -231,6 +252,11 @@ function useInvalidateOrchestrations() {
       });
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.traycerOrchestrationGroups(
+          runnerHost.traycerCli,
+        ),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.traycerOrchestrationBlocks(
           runnerHost.traycerCli,
         ),
       });
@@ -335,6 +361,41 @@ export function useRunnerOrchestrationRoleDeleteMutation() {
         throw new Error("traycerCli unavailable");
       }
       return runnerHost.traycerCli.orchestrationRoleDelete(input);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useRunnerOrchestrationBlockAddMutation() {
+  const runnerHost = useRunnerHost();
+  const invalidate = useInvalidateOrchestrations();
+  return useMutation({
+    mutationFn: (input: {
+      harnessId: string;
+      model: string | undefined;
+      note: string | undefined;
+    }) => {
+      if (runnerHost.traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return runnerHost.traycerCli.orchestrationBlockAdd(input);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useRunnerOrchestrationBlockRemoveMutation() {
+  const runnerHost = useRunnerHost();
+  const invalidate = useInvalidateOrchestrations();
+  return useMutation({
+    mutationFn: (input: {
+      harnessId: string;
+      model: string | undefined;
+    }) => {
+      if (runnerHost.traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return runnerHost.traycerCli.orchestrationBlockRemove(input);
     },
     onSuccess: invalidate,
   });

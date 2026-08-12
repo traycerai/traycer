@@ -1012,6 +1012,29 @@ export class MockTraycerCli implements ITraycerCli {
   }): Promise<null> {
     return null;
   }
+
+  async orchestrationBlockList(): Promise<{ readonly blocks: readonly [] }> {
+    return { blocks: [] };
+  }
+
+  async orchestrationBlockAdd(_input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+    readonly note: string | undefined;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationBlockRemove(_input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationBlockClear(): Promise<null> {
+    return null;
+  }
 }
 
 /**

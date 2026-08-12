@@ -408,6 +408,10 @@ function buildFakeBridge(
       orchestrationRoleSave: async () => null,
       orchestrationRoleDelete: async () => false,
       orchestrationPrelude: async () => null,
+      orchestrationBlockList: async () => ({ blocks: [] }),
+      orchestrationBlockAdd: async () => null,
+      orchestrationBlockRemove: async () => null,
+      orchestrationBlockClear: async () => null,
     },
     migration: {
       announceRunning: async () => undefined,

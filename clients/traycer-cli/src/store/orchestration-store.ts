@@ -289,11 +289,16 @@ export async function getModelsForRole(
   const tier = group.tiers[role.tier];
   if (!tier) return null;
 
+  const blocks = await readModelBlocks();
+  const liveModels = tier.models.filter(
+    (m) => !isModelBlocked(m, blocks.blocks),
+  );
+
   return {
     role,
     modelGroup: groupName,
     tier: role.tier,
-    models: tier.models,
+    models: liveModels,
     rules: group.rules,
   };
 }
@@ -606,4 +611,174 @@ export async function deleteModelGroup(name: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ─── Blocks (temporary provider/model blacklist) ────────────────────────────
+//
+// Local-only file: ~/.traycer/model-blocks.json
+// When a provider or model is blocked, getModelsForRole skips it so the pack
+// ladder falls through to the next live entry. Unblock restores it instantly.
+// Does not delete pack entries — just filters at read time.
+
+const MODEL_BLOCKS_PATH = join(TRAYCER_HOME, "model-blocks.json");
+
+export interface ModelBlockEntry {
+  /** Exact harness id (e.g. "kimi", "omp", "cursor"). */
+  readonly harnessId: string;
+  /**
+   * When null/empty: block the entire provider/harness.
+   * When set: block only that model slug under the harness.
+   */
+  readonly model: string | null;
+  /** Optional human note (e.g. "out of balance"). */
+  readonly note: string;
+  /** ISO timestamp when blocked. */
+  readonly blockedAt: string;
+}
+
+export interface ModelBlocksFile {
+  readonly blocks: readonly ModelBlockEntry[];
+}
+
+function emptyBlocks(): ModelBlocksFile {
+  return { blocks: [] };
+}
+
+export async function readModelBlocks(): Promise<ModelBlocksFile> {
+  try {
+    const raw = await readFile(MODEL_BLOCKS_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<ModelBlocksFile>;
+    if (!Array.isArray(parsed.blocks)) return emptyBlocks();
+    const blocks: ModelBlockEntry[] = [];
+    for (const entry of parsed.blocks) {
+      if (entry === null || typeof entry !== "object") continue;
+      const harnessId =
+        typeof (entry as ModelBlockEntry).harnessId === "string"
+          ? (entry as ModelBlockEntry).harnessId.trim()
+          : "";
+      if (harnessId.length === 0) continue;
+      const modelRaw = (entry as ModelBlockEntry).model;
+      const model =
+        typeof modelRaw === "string" && modelRaw.trim().length > 0
+          ? modelRaw.trim()
+          : null;
+      const note =
+        typeof (entry as ModelBlockEntry).note === "string"
+          ? (entry as ModelBlockEntry).note
+          : "";
+      const blockedAt =
+        typeof (entry as ModelBlockEntry).blockedAt === "string"
+          ? (entry as ModelBlockEntry).blockedAt
+          : new Date().toISOString();
+      blocks.push({ harnessId, model, note, blockedAt });
+    }
+    return { blocks };
+  } catch {
+    return emptyBlocks();
+  }
+}
+
+async function writeModelBlocks(file: ModelBlocksFile): Promise<boolean> {
+  try {
+    await mkdir(TRAYCER_HOME, { recursive: true });
+    await writeFile(
+      MODEL_BLOCKS_PATH,
+      JSON.stringify(file, null, 2) + "\n",
+      "utf-8",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function blockKey(entry: {
+  readonly harnessId: string;
+  readonly model: string | null;
+}): string {
+  return `${entry.harnessId.toLowerCase()}::${(entry.model ?? "").toLowerCase()}`;
+}
+
+export function isModelBlocked(
+  entry: { readonly harnessId: string; readonly model: string },
+  blocks: readonly ModelBlockEntry[],
+): boolean {
+  const harness = entry.harnessId.toLowerCase();
+  const model = entry.model.toLowerCase();
+  for (const b of blocks) {
+    if (b.harnessId.toLowerCase() !== harness) continue;
+    // Whole-provider block
+    if (b.model === null || b.model === "") return true;
+    // Exact model block
+    if (b.model.toLowerCase() === model) return true;
+    // Prefix/substring match for slugs like "verboo-ultra/kimi-k3" when
+    // the user blocked "kimi" as a model token under omp — only when the
+    // block model is a free-standing token in the slug.
+    const token = b.model.toLowerCase();
+    if (
+      model === token ||
+      model.startsWith(`${token}/`) ||
+      model.endsWith(`/${token}`) ||
+      model.includes(`/${token}/`) ||
+      model.includes(`${token}-`) ||
+      model.startsWith(`${token}-`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function addModelBlock(input: {
+  readonly harnessId: string;
+  readonly model: string | null;
+  readonly note: string;
+}): Promise<ModelBlocksFile | null> {
+  const harnessId = input.harnessId.trim();
+  if (harnessId.length === 0) return null;
+  const model =
+    input.model !== null && input.model.trim().length > 0
+      ? input.model.trim()
+      : null;
+  const file = await readModelBlocks();
+  const key = blockKey({ harnessId, model });
+  const without = file.blocks.filter((b) => blockKey(b) !== key);
+  const next: ModelBlocksFile = {
+    blocks: [
+      ...without,
+      {
+        harnessId,
+        model,
+        note: input.note.trim(),
+        blockedAt: new Date().toISOString(),
+      },
+    ],
+  };
+  const ok = await writeModelBlocks(next);
+  return ok ? next : null;
+}
+
+export async function removeModelBlock(input: {
+  readonly harnessId: string;
+  readonly model: string | null;
+}): Promise<ModelBlocksFile | null> {
+  const harnessId = input.harnessId.trim();
+  if (harnessId.length === 0) return null;
+  const model =
+    input.model !== null && input.model.trim().length > 0
+      ? input.model.trim()
+      : null;
+  const file = await readModelBlocks();
+  const key = blockKey({ harnessId, model });
+  const next: ModelBlocksFile = {
+    blocks: file.blocks.filter((b) => blockKey(b) !== key),
+  };
+  const ok = await writeModelBlocks(next);
+  return ok ? next : null;
+}
+
+export async function clearModelBlocks(): Promise<ModelBlocksFile | null> {
+  const next = emptyBlocks();
+  const ok = await writeModelBlocks(next);
+  return ok ? next : null;
 }

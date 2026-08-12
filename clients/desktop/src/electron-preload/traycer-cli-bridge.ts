@@ -4,6 +4,7 @@ import type {
   TraycerDetectedShell,
   TraycerEnvOverride,
   TraycerHostStatusSnapshot,
+  TraycerModelBlocksFile,
   TraycerModelGroup,
   TraycerOrchestration,
   TraycerOrchestrationPrelude,
@@ -94,6 +95,17 @@ export interface TraycerCliBridgeSurface {
     readonly roleId: string;
     readonly group: string | undefined;
   }): Promise<TraycerOrchestrationPrelude | null>;
+  orchestrationBlockList(): Promise<TraycerModelBlocksFile>;
+  orchestrationBlockAdd(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+    readonly note: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockRemove(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockClear(): Promise<TraycerModelBlocksFile | null>;
 }
 
 export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
@@ -227,5 +239,23 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
         RunnerHostInvoke.traycerOrchestrationPrelude,
         input,
       ) as Promise<TraycerOrchestrationPrelude | null>,
+    orchestrationBlockList: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationBlockList,
+      ) as Promise<TraycerModelBlocksFile>,
+    orchestrationBlockAdd: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationBlockAdd,
+        input,
+      ) as Promise<TraycerModelBlocksFile | null>,
+    orchestrationBlockRemove: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationBlockRemove,
+        input,
+      ) as Promise<TraycerModelBlocksFile | null>,
+    orchestrationBlockClear: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationBlockClear,
+      ) as Promise<TraycerModelBlocksFile | null>,
   };
 }

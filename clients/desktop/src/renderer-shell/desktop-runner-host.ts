@@ -48,6 +48,7 @@ import type {
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
+  TraycerModelBlocksFile,
   TraycerModelGroup,
   TraycerOrchestration,
   TraycerOrchestrationPrelude,
@@ -500,6 +501,17 @@ export interface DesktopTraycerCliBridge {
     readonly roleId: string;
     readonly group: string | undefined;
   }): Promise<TraycerOrchestrationPrelude | null>;
+  orchestrationBlockList(): Promise<TraycerModelBlocksFile>;
+  orchestrationBlockAdd(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+    readonly note: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockRemove(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockClear(): Promise<TraycerModelBlocksFile | null>;
 }
 
 export interface DesktopServiceBridge {
@@ -805,6 +817,14 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.bridge.traycerCli.orchestrationRoleDelete(input),
       orchestrationPrelude: (input) =>
         this.bridge.traycerCli.orchestrationPrelude(input),
+      orchestrationBlockList: () =>
+        this.bridge.traycerCli.orchestrationBlockList(),
+      orchestrationBlockAdd: (input) =>
+        this.bridge.traycerCli.orchestrationBlockAdd(input),
+      orchestrationBlockRemove: (input) =>
+        this.bridge.traycerCli.orchestrationBlockRemove(input),
+      orchestrationBlockClear: () =>
+        this.bridge.traycerCli.orchestrationBlockClear(),
     };
     this.migration = {
       announceRunning: (snapshot) =>

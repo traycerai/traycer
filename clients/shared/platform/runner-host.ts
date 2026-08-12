@@ -616,6 +616,17 @@ export interface TraycerOrchestrationPrelude {
   readonly text: string;
 }
 
+export interface TraycerModelBlockEntry {
+  readonly harnessId: string;
+  readonly model: string | null;
+  readonly note: string;
+  readonly blockedAt: string;
+}
+
+export interface TraycerModelBlocksFile {
+  readonly blocks: readonly TraycerModelBlockEntry[];
+}
+
 export interface TraycerShellConfigSetInput {
   /** New shell path; null preserves the stored value (or default). */
   readonly path: string | null;
@@ -728,6 +739,17 @@ export interface ITraycerCli {
     readonly roleId: string;
     readonly group: string | undefined;
   }): Promise<TraycerOrchestrationPrelude | null>;
+  orchestrationBlockList(): Promise<TraycerModelBlocksFile>;
+  orchestrationBlockAdd(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+    readonly note: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockRemove(input: {
+    readonly harnessId: string;
+    readonly model: string | undefined;
+  }): Promise<TraycerModelBlocksFile | null>;
+  orchestrationBlockClear(): Promise<TraycerModelBlocksFile | null>;
 }
 
 /**

@@ -180,6 +180,8 @@ export const runnerQueryKeys = {
     ] as const,
   traycerOrchestrationGroups: (traycerCli: object) =>
     ["runner.traycer.orchestrationGroups", traycerCli] as const,
+  traycerOrchestrationBlocks: (traycerCli: object) =>
+    ["runner.traycer.orchestrationBlocks", traycerCli] as const,
   // Host-management queries are scoped by the `IHostManagement`
   // instance identity so a host swap invalidates them cleanly.
   hostAvailableVersionsScope: (management: object) =>

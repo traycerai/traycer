@@ -163,6 +163,11 @@ export const RunnerHostInvoke = {
   traycerOrchestrationRoleSave: "runnerHost:traycer:orchestration:role:save",
   traycerOrchestrationRoleDelete: "runnerHost:traycer:orchestration:role:delete",
   traycerOrchestrationPrelude: "runnerHost:traycer:orchestration:prelude",
+  traycerOrchestrationBlockList: "runnerHost:traycer:orchestration:block:list",
+  traycerOrchestrationBlockAdd: "runnerHost:traycer:orchestration:block:add",
+  traycerOrchestrationBlockRemove:
+    "runnerHost:traycer:orchestration:block:remove",
+  traycerOrchestrationBlockClear: "runnerHost:traycer:orchestration:block:clear",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",

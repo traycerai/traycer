@@ -447,4 +447,56 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
       return runTraycerCliJson(cliArgs);
     },
   );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationBlockList,
+    async () => {
+      return runTraycerCliJson(["orchestration", "block", "list"]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationBlockAdd,
+    async (_event, raw: unknown) => {
+      const harness = requireString(
+        raw,
+        "harnessId",
+        "traycerOrchestrationBlockAdd",
+      );
+      const model = optionalString(raw, "model");
+      const note = optionalString(raw, "note");
+      const cliArgs = ["orchestration", "block", "add", "--harness", harness];
+      if (model !== null) cliArgs.push("--model", model);
+      if (note !== null) cliArgs.push("--note", note);
+      return runTraycerCliJson(cliArgs);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationBlockRemove,
+    async (_event, raw: unknown) => {
+      const harness = requireString(
+        raw,
+        "harnessId",
+        "traycerOrchestrationBlockRemove",
+      );
+      const model = optionalString(raw, "model");
+      const cliArgs = [
+        "orchestration",
+        "block",
+        "remove",
+        "--harness",
+        harness,
+      ];
+      if (model !== null) cliArgs.push("--model", model);
+      return runTraycerCliJson(cliArgs);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationBlockClear,
+    async () => {
+      return runTraycerCliJson(["orchestration", "block", "clear"]);
+    },
+  );
 }

@@ -37,6 +37,10 @@ import {
 } from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import {
+  buildOrchestrationBlockAddCommand,
+  buildOrchestrationBlockClearCommand,
+  buildOrchestrationBlockListCommand,
+  buildOrchestrationBlockRemoveCommand,
   buildOrchestrationCreateCommand,
   buildOrchestrationDeleteCommand,
   buildOrchestrationGroupsCommand,
@@ -1487,6 +1491,63 @@ function registerOrchestrationCommands(program: Command): void {
         name: typeof opts.name === "string" ? opts.name : null,
         role: typeof opts.role === "string" ? opts.role : null,
       }),
+  );
+
+  const block = orch
+    .command("block")
+    .description(
+      "Temporarily block providers or models from pack ladders (local only)",
+    );
+
+  withRunner(
+    block
+      .command("list")
+      .description("List blocked providers and models"),
+    () => buildOrchestrationBlockListCommand(),
+  );
+
+  withRunner(
+    block
+      .command("add")
+      .description(
+        "Block a provider (entire harness) or a single model under a harness",
+      )
+      .requiredOption(
+        "--harness <id>",
+        "Harness/provider id (e.g. kimi, omp, cursor, codex)",
+      )
+      .option(
+        "--model <slug>",
+        "Optional model slug; omit to block the entire provider",
+      )
+      .option("--note <text>", "Why it is blocked (e.g. out of balance)"),
+    (opts) =>
+      buildOrchestrationBlockAddCommand({
+        harness: typeof opts.harness === "string" ? opts.harness : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+        note: typeof opts.note === "string" ? opts.note : null,
+      }),
+  );
+
+  withRunner(
+    block
+      .command("remove")
+      .description("Unblock a provider or model")
+      .requiredOption("--harness <id>", "Harness/provider id")
+      .option(
+        "--model <slug>",
+        "Optional model slug; omit to unblock the entire-provider entry",
+      ),
+    (opts) =>
+      buildOrchestrationBlockRemoveCommand({
+        harness: typeof opts.harness === "string" ? opts.harness : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+      }),
+  );
+
+  withRunner(
+    block.command("clear").description("Remove every block"),
+    () => buildOrchestrationBlockClearCommand(),
   );
 }
 

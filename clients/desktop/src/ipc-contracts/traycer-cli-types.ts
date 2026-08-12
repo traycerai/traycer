@@ -7,6 +7,8 @@ export type {
   TraycerDetectedShell,
   TraycerEnvOverride,
   TraycerHostStatusSnapshot,
+  TraycerModelBlockEntry,
+  TraycerModelBlocksFile,
   TraycerModelEntry,
   TraycerModelGroup,
   TraycerModelTier,

@@ -45,6 +45,9 @@ import {
   useRunnerOrchestrationGroupDeleteMutation,
   useRunnerOrchestrationRoleSaveMutation,
   useRunnerOrchestrationRoleDeleteMutation,
+  useRunnerOrchestrationBlocksQuery,
+  useRunnerOrchestrationBlockAddMutation,
+  useRunnerOrchestrationBlockRemoveMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { packDisplayName } from "@/lib/orchestration/pack-display";
@@ -151,6 +154,8 @@ export function OrchestrationsSettingsPanel() {
             setEditingPack(name);
           }}
         />
+
+        <BlockedProvidersSection />
       </div>
 
       <CreateTeamWizard
@@ -1884,3 +1889,167 @@ function CreateModelGroupForm(props: {
     </div>
   );
 }
+
+
+// ─── Blocked providers / models ─────────────────────────────────────────────
+
+function BlockedProvidersSection() {
+  const blocksQuery = useRunnerOrchestrationBlocksQuery();
+  const addBlock = useRunnerOrchestrationBlockAddMutation();
+  const removeBlock = useRunnerOrchestrationBlockRemoveMutation();
+  const [harnessId, setHarnessId] = useState("");
+  const [model, setModel] = useState("");
+  const [note, setNote] = useState("");
+
+  const blocks = blocksQuery.data?.blocks ?? [];
+
+  const handleAdd = (): void => {
+    const h = harnessId.trim();
+    if (h.length === 0) {
+      toast.error("Provider / harness is required (e.g. kimi, omp, cursor)");
+      return;
+    }
+    addBlock.mutate(
+      {
+        harnessId: h,
+        model: model.trim().length > 0 ? model.trim() : undefined,
+        note: note.trim().length > 0 ? note.trim() : undefined,
+      },
+      {
+        onSuccess: (result) => {
+          if (result === null) {
+            toast.error("Could not save the block");
+            return;
+          }
+          toast.success(
+            model.trim().length > 0
+              ? `Blocked ${h} / ${model.trim()}`
+              : `Blocked entire provider “${h}”`,
+          );
+          setHarnessId("");
+          setModel("");
+          setNote("");
+        },
+        onError: () => toast.error("Could not save the block"),
+      },
+    );
+  };
+
+  return (
+    <section
+      className="rounded-xl border border-border/60 bg-card p-4"
+      data-testid="blocked-providers"
+    >
+      <h2 className="text-ui-base font-medium">Blocked providers & models</h2>
+      <p className="mt-0.5 text-ui-xs text-muted-foreground">
+        Temporarily hide a provider or model from every AI preset ladder. Use
+        this when a balance is empty or a key is down — unblock when it is back.
+        Packs are not edited; the next live model is used automatically.
+      </p>
+
+      {blocks.length === 0 ? (
+        <p className="mt-3 text-ui-xs text-muted-foreground">
+          Nothing blocked right now.
+        </p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {blocks.map((b) => {
+            const label =
+              b.model === null || b.model === ""
+                ? `${b.harnessId} · entire provider`
+                : `${b.harnessId} / ${b.model}`;
+            return (
+              <div
+                key={`${b.harnessId}::${b.model ?? ""}`}
+                className="flex items-center gap-2 rounded-md border border-border/40 px-2.5 py-1.5 text-ui-xs"
+              >
+                <Badge variant="destructive" className="text-ui-xs">
+                  Blocked
+                </Badge>
+                <span className="font-mono">{label}</span>
+                {b.note !== "" ? (
+                  <span className="truncate text-muted-foreground">
+                    — {b.note}
+                  </span>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto h-7 px-2"
+                  disabled={removeBlock.isPending}
+                  onClick={() =>
+                    removeBlock.mutate(
+                      {
+                        harnessId: b.harnessId,
+                        model:
+                          b.model === null || b.model === ""
+                            ? undefined
+                            : b.model,
+                      },
+                      {
+                        onSuccess: () => toast.success(`Unblocked ${label}`),
+                        onError: () => toast.error("Could not unblock"),
+                      },
+                    )
+                  }
+                  data-testid={`unblock-${b.harnessId}`}
+                >
+                  Unblock
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <label className="flex flex-col gap-1 text-ui-xs">
+          <span className="text-muted-foreground">Provider / harness</span>
+          <input
+            type="text"
+            value={harnessId}
+            onChange={(e) => setHarnessId(e.target.value)}
+            placeholder="kimi"
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+            data-testid="block-harness-input"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-ui-xs">
+          <span className="text-muted-foreground">
+            Model (optional — leave empty to block the whole provider)
+          </span>
+          <input
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="k3 or verboo-ultra/kimi-k3"
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+            data-testid="block-model-input"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-ui-xs">
+          <span className="text-muted-foreground">Note (optional)</span>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="out of balance"
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+            data-testid="block-note-input"
+          />
+        </label>
+      </div>
+      <div className="mt-2 flex justify-end">
+        <Button
+          size="sm"
+          disabled={addBlock.isPending || harnessId.trim().length === 0}
+          onClick={handleAdd}
+          data-testid="block-add-button"
+        >
+          {addBlock.isPending ? "Blocking…" : "Block"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+

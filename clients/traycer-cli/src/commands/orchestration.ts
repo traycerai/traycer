@@ -1,14 +1,18 @@
 import {
+  addModelBlock,
   buildOrchestrationPrelude,
+  clearModelBlocks,
   createOrchestration,
   deleteOrchestration,
   deleteOrchestrationRole,
   getModelsForRole,
   listModelGroups,
   listOrchestrations,
+  readModelBlocks,
   readModelGroup,
   readOrchestration,
   readResponsibility,
+  removeModelBlock,
   upsertOrchestrationRole,
   writeModelGroup,
   deleteModelGroup,
@@ -532,5 +536,125 @@ export function buildOrchestrationRoleDeleteCommand(opts: {
       human: `Deleted role ${roleId} from ${name}`,
       exitCode: 0,
     };
+  };
+}
+
+// ─── Blocks ─────────────────────────────────────────────────────────────────
+
+// `traycer orchestration block list`
+export function buildOrchestrationBlockListCommand(): CommandFn {
+  return async (ctx) => {
+    const file = await readModelBlocks();
+    if (ctx.runtime.json) {
+      return { data: file, human: null, exitCode: 0 };
+    }
+    if (file.blocks.length === 0) {
+      return {
+        data: file,
+        human: "(no blocked providers or models)",
+        exitCode: 0,
+      };
+    }
+    const lines = file.blocks.map((b) => {
+      const target =
+        b.model === null || b.model === ""
+          ? `${b.harnessId} (entire provider)`
+          : `${b.harnessId} / ${b.model}`;
+      const note = b.note.length > 0 ? ` — ${b.note}` : "";
+      return `  · ${target}${note}`;
+    });
+    return {
+      data: file,
+      human: `Blocked (${file.blocks.length}):\n${lines.join("\n")}`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration block add --harness <id> [--model <slug>] [--note <text>]`
+export function buildOrchestrationBlockAddCommand(opts: {
+  readonly harness: string | null;
+  readonly model: string | null;
+  readonly note: string | null;
+}): CommandFn {
+  return async (ctx) => {
+    const harness = (opts.harness ?? "").trim();
+    if (harness.length === 0) {
+      return {
+        data: null,
+        human: "Error: --harness is required (e.g. kimi, omp, cursor)",
+        exitCode: 1,
+      };
+    }
+    const file = await addModelBlock({
+      harnessId: harness,
+      model: opts.model,
+      note: opts.note ?? "",
+    });
+    if (file === null) {
+      return { data: null, human: "Failed to save block", exitCode: 1 };
+    }
+    if (ctx.runtime.json) {
+      return { data: file, human: null, exitCode: 0 };
+    }
+    const target =
+      opts.model !== null && opts.model.trim().length > 0
+        ? `${harness} / ${opts.model.trim()}`
+        : `${harness} (entire provider)`;
+    return {
+      data: file,
+      human: `Blocked ${target}. Pack ladders will skip it until unblocked.`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration block remove --harness <id> [--model <slug>]`
+export function buildOrchestrationBlockRemoveCommand(opts: {
+  readonly harness: string | null;
+  readonly model: string | null;
+}): CommandFn {
+  return async (ctx) => {
+    const harness = (opts.harness ?? "").trim();
+    if (harness.length === 0) {
+      return {
+        data: null,
+        human: "Error: --harness is required",
+        exitCode: 1,
+      };
+    }
+    const file = await removeModelBlock({
+      harnessId: harness,
+      model: opts.model,
+    });
+    if (file === null) {
+      return { data: null, human: "Failed to remove block", exitCode: 1 };
+    }
+    if (ctx.runtime.json) {
+      return { data: file, human: null, exitCode: 0 };
+    }
+    const target =
+      opts.model !== null && opts.model.trim().length > 0
+        ? `${harness} / ${opts.model.trim()}`
+        : `${harness} (entire provider)`;
+    return {
+      data: file,
+      human: `Unblocked ${target}`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration block clear`
+export function buildOrchestrationBlockClearCommand(): CommandFn {
+  return async (ctx) => {
+    const file = await clearModelBlocks();
+    if (file === null) {
+      return { data: null, human: "Failed to clear blocks", exitCode: 1 };
+    }
+    if (ctx.runtime.json) {
+      return { data: file, human: null, exitCode: 0 };
+    }
+    return { data: file, human: "All blocks cleared", exitCode: 0 };
   };
 }
