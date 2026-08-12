@@ -3677,6 +3677,13 @@ function assistantMessageFromLiveAssistant(
       fallbackStatus,
     ),
   );
+  const ownerMessageId = liveAssistant.imageResolutionOwnerMessageId;
+  const imageResolutions =
+    ownerMessageId === undefined
+      ? liveAssistant.imageResolutions.map((resolution) => resolution.entry)
+      : liveAssistant.imageResolutions
+          .filter((resolution) => resolution.messageId === ownerMessageId)
+          .map((resolution) => resolution.entry);
   return {
     role: "assistant",
     // This frozen row is a transient safety-net placeholder that the host's
@@ -3692,9 +3699,7 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
-    imageResolutions: liveAssistant.imageResolutions.map(
-      (resolution) => resolution.entry,
-    ),
+    imageResolutions,
   };
 }
 
