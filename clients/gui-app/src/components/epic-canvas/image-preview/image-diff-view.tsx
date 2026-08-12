@@ -595,12 +595,19 @@ function fitInstance(instance: ReactZoomPanPinchRef): void {
  * (review finding #5) - `setTransform` calls the library's `setState`
  * directly, bypassing `limitToBounds` entirely (verified against installed
  * v4.0.4), so an unclamped mirror onto a smaller peer could push its
- * content wholly offscreen. Sane containment only, not a reimplementation
- * of the library's padding-aware bounds engine (ticket 07: "do not over-
- * engineer sub-pixel alignment for mismatched dimensions"). Increments the
- * PEER's own pending count (round-2 review finding #2), never a shared
- * synchronous bracket - the peer's `onTransform` consuming it is what
- * suppresses the echo, correct however long delivery takes.
+ * content wholly offscreen OR past its own interactive zoom range. Scale
+ * clamps to the peer's OWN `setup.minScale`/`maxScale` FIRST (round-2
+ * thermo review: two grossly mismatched sides can have different bounds,
+ * and `setTransform` would otherwise happily apply a scale the peer could
+ * never reach through its own toolbar/gestures) - position bounds are then
+ * computed at that CLAMPED scale, not the raw mirrored one, so they
+ * describe the transform actually being applied. Sane containment only,
+ * not a reimplementation of the library's padding-aware bounds engine
+ * (ticket 07: "do not over-engineer sub-pixel alignment for mismatched
+ * dimensions"). Increments the PEER's own pending count (round-2 review
+ * finding #2), never a shared synchronous bracket - the peer's
+ * `onTransform` consuming it is what suppresses the echo, correct however
+ * long delivery takes.
  */
 function mirrorTransform(
   peerPendingRef: { current: number },
@@ -609,17 +616,19 @@ function mirrorTransform(
 ): void {
   const peer = peerRef.current;
   if (peer === null) return;
+  const { minScale, maxScale } = peer.instance.setup;
+  const scale = Math.min(Math.max(state.scale, minScale), maxScale);
   const wrapper = peer.instance.wrapperComponent;
   const content = peer.instance.contentComponent;
   peerPendingRef.current += 1;
   if (wrapper === null || content === null) {
-    peer.setTransform(state.positionX, state.positionY, state.scale, 0);
+    peer.setTransform(state.positionX, state.positionY, scale, 0);
   } else {
     // `getBoundingClientRect()` for the wrapper, `offsetWidth`/`offsetHeight`
     // for the content - the same measurement split `fitInstance` above uses.
     const wrapperRect = wrapper.getBoundingClientRect();
-    const scaledWidth = content.offsetWidth * state.scale;
-    const scaledHeight = content.offsetHeight * state.scale;
+    const scaledWidth = content.offsetWidth * scale;
+    const scaledHeight = content.offsetHeight * scale;
     peer.setTransform(
       clampPositionToVisibleBounds(
         state.positionX,
@@ -631,7 +640,7 @@ function mirrorTransform(
         wrapperRect.height,
         scaledHeight,
       ),
-      state.scale,
+      scale,
       0,
     );
   }
