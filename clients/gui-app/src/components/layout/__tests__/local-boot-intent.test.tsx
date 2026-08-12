@@ -313,10 +313,14 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // BEFORE the store teardown, not after it. Two tests here install
+  // `breakStorageWrites()`, which makes `Storage.prototype.setItem` throw;
+  // `setSignedOut()` persists through that same setter, so restoring last
+  // turned a passing test into a DOMException blamed on teardown.
+  vi.restoreAllMocks();
   restoreFetch();
   window.localStorage.clear();
   useAuthStore.getState().setSignedOut();
-  vi.restoreAllMocks();
 });
 
 describe("local-boot intent", () => {

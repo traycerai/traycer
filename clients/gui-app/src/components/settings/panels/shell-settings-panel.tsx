@@ -482,7 +482,7 @@ function ShellConfigUnavailable(props: {
 }): ReactNode {
   if (props.configError === null) {
     return (
-      <div className={props.compact ? "p-4" : "p-5"}>
+      <div className={cn(props.compact ? "p-4" : "p-5")}>
         <ShellCardSkeleton />
       </div>
     );

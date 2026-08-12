@@ -105,6 +105,17 @@ export interface ShellConfigController {
  */
 export interface ShellProbeSource {
   readonly queryKeyFor: (path: string) => QueryKey;
-  readonly probe: (path: string) => Promise<ConfigShellProbeResponse>;
+  /**
+   * `signal` is the probing query's own `QueryFunctionContext.signal`, and it
+   * has to reach the transport rather than stop here. The status line reprobes
+   * on every keystroke of a typed path, so an abandoned probe is the common
+   * case, not the rare one: without the signal each obsolete call keeps its
+   * slot in the request coordinator until the host answers a question no
+   * surface is still asking.
+   */
+  readonly probe: (
+    path: string,
+    signal: AbortSignal | undefined,
+  ) => Promise<ConfigShellProbeResponse>;
   readonly pickProgramFile: (() => Promise<string | null>) | null;
 }

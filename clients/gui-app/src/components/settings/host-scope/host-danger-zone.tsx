@@ -94,7 +94,16 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
   const { host } = props;
   if (host.isLocalMachine) return <RemoveTraycerRow />;
   if (!host.registered) return null;
-  return <RemoveFromAccountRow hostId={host.hostId} hostName={host.name} />;
+  // Keyed by host id so a scope change REMOUNTS the row. Passing the new id
+  // into the same instance would leave an already-open confirmation - and the
+  // mutation's own `isPending` - pointing at whichever host the page moved to.
+  return (
+    <RemoveFromAccountRow
+      key={host.hostId}
+      hostId={host.hostId}
+      hostName={host.name}
+    />
+  );
 }
 
 /**
@@ -132,9 +141,10 @@ function RemoveFromAccountRow(props: {
 }): ReactNode {
   const { hostId, hostName } = props;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // Bound to the id, not to the scope: the hook and the dialog below both close
-  // over `hostId`, so a scope change while this confirmation is open cannot
-  // retarget the removal at whichever host the page moved to.
+  // Closing over `hostId` is NOT by itself what stops a scope change from
+  // retargeting an open confirmation - a re-render with a new prop rebuilds
+  // these closures around the new id while `confirmOpen` survives. The remount
+  // key at this component's one call site is what makes that safe.
   const removeFromAccount = useDeregisterHostFromAccount(hostId);
 
   return (

@@ -51,7 +51,7 @@ function shellProbeQueryOptions(
 ) {
   return queryOptions<ConfigShellProbeResponse>({
     queryKey: source.queryKeyFor(path),
-    queryFn: () => source.probe(path),
+    queryFn: ({ signal }) => source.probe(path, signal),
     enabled,
     // A given path's existence/executability doesn't change under the user's
     // feet mid-session, so cache the answer and never refetch on focus.

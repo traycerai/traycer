@@ -186,6 +186,9 @@ function DiagnosticsPanelOverRpc(props: {
         <LogDetailGroup
           desktopControl={desktopControl}
           hostControls={hostControls}
+          hostUnsupported={levelsSupported === false}
+          ownsUnsupportedNotice={logsSupported !== false}
+          hostName={scope.hostLabel}
         />
         <MemoryDiagnosticsGroup />
         <HostScopeGate
@@ -234,9 +237,17 @@ function DiagnosticsPanelOverLocalStore(props: {
           hostName={props.hostName}
           reason={props.reason}
         />
+        {/*
+          The bridge path reads the on-disk store, so there is no host RPC to
+          be too old for - its empty `hostControls` only ever means "no bridge
+          rows here", which the existing desktop-app line already describes.
+        */}
         <LogDetailGroup
           desktopControl={desktopControl}
           hostControls={hostControls}
+          hostUnsupported={false}
+          ownsUnsupportedNotice={false}
+          hostName={props.hostName}
         />
         <MemoryDiagnosticsGroup />
         <BridgeRecentLogsSection />
@@ -256,11 +267,61 @@ function DiagnosticsPanelOverLocalStore(props: {
  * filed outside the host group. The rows arrive with their transports already
  * resolved (see `LogLevelControl`), so nothing here knows which is which.
  */
+/**
+ * Why the Log detail group has no rows at all.
+ *
+ * The desktop-app line is a claim about the SHELL, and it is false whenever
+ * the rows are missing because the host is too old - it sends someone to
+ * install an app they are already running. So that copy is suppressed in the
+ * version case, and the real reason is stated unless the logs region below is
+ * already stating it for the same host.
+ */
+function LogDetailEmptyReason(props: {
+  readonly hostUnsupported: boolean;
+  readonly ownsUnsupportedNotice: boolean;
+  readonly hostName: string;
+}): ReactNode {
+  if (!props.hostUnsupported) {
+    return (
+      <LogInfoLine>
+        Log level controls are only available on the desktop app.
+      </LogInfoLine>
+    );
+  }
+  if (!props.ownsUnsupportedNotice) return null;
+  return (
+    <HostConfigUnsupportedNotice
+      hostName={props.hostName}
+      subject="log levels"
+    />
+  );
+}
+
 function LogDetailGroup(props: {
   /** Dropped outside the desktop shell, where there is no log-levels bridge. */
   readonly desktopControl: LogLevelControl;
   /** Empty when the host cannot answer for its own config right now. */
   readonly hostControls: readonly LogLevelControl[];
+  /**
+   * `hostControls` is empty because the host PREDATES `config.logLevels.get`,
+   * not because it is still loading.
+   *
+   * The two look identical from here and read very differently to the user.
+   * Without it the host rows just vanish, and outside the desktop shell the
+   * empty state blamed the shell ("only available on the desktop app") for
+   * what is actually a host version - sending someone to install an app they
+   * are already running.
+   */
+  readonly hostUnsupported: boolean;
+  /**
+   * Whether THIS group owns the explanation.
+   *
+   * False when the logs region below is already showing the same notice for
+   * the same host - its subject is literally "logs and log levels", so a
+   * second copy here would state the reason twice on one page.
+   */
+  readonly ownsUnsupportedNotice: boolean;
+  readonly hostName: string;
 }): ReactNode {
   const desktopAvailable = getLogLevelsBridge() !== null;
   const activeControls = useMemo(
@@ -320,9 +381,13 @@ function LogDetailGroup(props: {
       }
     }
     setResetPending(false);
+    // Only the MULTI-control case earns an aggregate line: with one control
+    // its transport's own toast already said the same thing, and a second
+    // would double-report a single failure. The plural is unconditional
+    // because this branch cannot be reached with fewer than two controls.
     if (failedCount > 0 && controls.length > 1) {
       toast.error(
-        `Couldn't reset ${failedCount} of ${controls.length} log level${controls.length === 1 ? "" : "s"}`,
+        `Couldn't reset ${failedCount} of ${controls.length} log levels`,
       );
     }
   };
@@ -335,9 +400,11 @@ function LogDetailGroup(props: {
         dataTestId={undefined}
         fill={false}
       >
-        <LogInfoLine>
-          Log level controls are only available on the desktop app.
-        </LogInfoLine>
+        <LogDetailEmptyReason
+          hostUnsupported={props.hostUnsupported}
+          ownsUnsupportedNotice={props.ownsUnsupportedNotice}
+          hostName={props.hostName}
+        />
       </SettingsGroup>
     );
   }
@@ -361,6 +428,12 @@ function LogDetailGroup(props: {
             disabled={resetPending}
           />
         ))}
+        {props.hostUnsupported && props.ownsUnsupportedNotice ? (
+          <HostConfigUnsupportedNotice
+            hostName={props.hostName}
+            subject="log levels"
+          />
+        ) : null}
         {nonDefaultControls.length > 0 ? (
           <TemporaryDebugReminderRow
             pending={resetPending}

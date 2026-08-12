@@ -45,9 +45,18 @@ export async function locateReplaceBoundFolder(args: {
   if (args.pick === null) return { kind: "cancelled" };
   if (args.pick.folders.length === 0) return { kind: "noop-empty" };
 
-  const distinct = args.pick.folders.filter(
-    (folder) => folder.workspacePath !== args.absentPath,
-  );
+  // Distinct in BOTH senses: not the dead entry, and not a path this pick
+  // already yielded. A picker is free to return the same folder twice (a
+  // multi-select over two symlinked entries does), and without the second
+  // filter each repeat issued its own binding write and its own failure
+  // toast for a row that was already added.
+  const seenPaths = new Set<string>();
+  const distinct = args.pick.folders.filter((folder) => {
+    if (folder.workspacePath === args.absentPath) return false;
+    if (seenPaths.has(folder.workspacePath)) return false;
+    seenPaths.add(folder.workspacePath);
+    return true;
+  });
   const hasSamePathPick = args.pick.folders.some(
     (folder) => folder.workspacePath === args.absentPath,
   );

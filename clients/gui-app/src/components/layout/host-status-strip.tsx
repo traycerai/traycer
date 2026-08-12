@@ -138,7 +138,14 @@ function waitingRetryAction(
       pending: presentation.respawnPending,
     };
   }
-  return { onClick: presentation.compatibility.retry, pending: false };
+  // `retrying` is the compat probe's own in-flight flag, the same one the
+  // error strip's Retry already consumes. Hardcoding `false` here left the
+  // amber "Retry now" enabled while the retry it just issued was still
+  // running, so a second click re-fired a probe that was already in flight.
+  return {
+    onClick: presentation.compatibility.retry,
+    pending: presentation.compatibility.retrying,
+  };
 }
 
 /**

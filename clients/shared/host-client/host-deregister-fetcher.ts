@@ -10,11 +10,17 @@
  * it stamps `deregisteredAt` and clears the presence lease. It does NOT revoke.
  * The `hostId` survives, so nothing about the machine changes and no data is
  * deleted; the row simply stops being listed (`GET /api/v3/hosts` filters
- * `deregisteredAt: null`) and its heartbeats start coming back 404. A host that
- * is still running reads that 404 as "not registered", drops to unprovisioned,
- * and re-enrolls on its next reconcile — returning under the SAME id with its
- * policy preserved. Removing a live host from the account is therefore not by
- * itself durable, which the confirmation copy says out loud.
+ * `deregisteredAt: null`) and its heartbeats start coming back 404.
+ *
+ * A live host does NOT come back on its own, and the copy must not imply it
+ * does. It reads that 404 as "not registered" and loops adopt → beat → 404
+ * → adopt, because nothing on that path calls `registerHost()` — the only
+ * thing that would clear `deregisteredAt`. Signing in again on the machine
+ * does not help either: the interactive login sits below the same early
+ * return, so a fresh `traycer login` is never consulted while a matching
+ * credential file exists. Coming back requires setting the host up again on
+ * that machine, and because the row is deregistered rather than revoked, the
+ * re-enrollment re-adopts the SAME id with its policy preserved.
  *
  * Deliberately never called "deregister" in user-facing copy: the GUI already
  * uses that word for OS-SERVICE deregistration (`HostController.deregisterService`),
@@ -36,7 +42,9 @@ const HOST_DEREGISTER_FETCH_TIMEOUT_MS = 10_000;
  *  - `revoked`       — the row is a revoked tombstone (409). Removing it is
  *                      meaningless and must not read as a benign removal.
  *  - `unauthorized`  — the bearer was rejected (401/403).
- *  - `network-error` — transient transport/timeout/5xx, or a malformed body.
+ *  - `network-error` — transient transport/timeout/5xx. NOT a malformed body:
+ *                      a 2xx is taken at its word without parsing, because the
+ *                      removal is already committed server-side by then.
  */
 export type DeregisterHostFetchResult =
   | { readonly kind: "ok" }

@@ -280,8 +280,29 @@ export function resolveSurfaceReadiness(args: {
 export function presentsLocalHostLifecycle(
   presentation: DefaultHostReadinessPresentation,
 ): boolean {
-  if (presentation.targetKind === "local") return true;
-  return presentation.targetKind === "unknown" && presentation.localBootIntent;
+  return targetPresentsLocalHostLifecycle(
+    presentation.targetKind,
+    presentation.localBootIntent,
+  );
+}
+
+/**
+ * The same question asked of the two raw inputs, for callers that are still
+ * BUILDING the presentation and so have nothing to pass the predicate above.
+ *
+ * It exists so there is exactly one definition. The projection, the strip's
+ * respawn gate and the presentation's own `canManageHost` all have to answer
+ * "are these lifecycle affordances about this machine" identically; when
+ * `canManageHost` carried its own inline `targetKind === "local"` it silently
+ * disagreed with the other two for the whole unresolved-boot window, which is
+ * precisely when the local host is being managed.
+ */
+export function targetPresentsLocalHostLifecycle(
+  targetKind: HostTargetKind,
+  localBootIntent: boolean,
+): boolean {
+  if (targetKind === "local") return true;
+  return targetKind === "unknown" && localBootIntent;
 }
 
 export function projectDefaultHostReadiness(args: {

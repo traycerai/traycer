@@ -18,6 +18,7 @@ import {
   isHostDialable,
   postLatchSurfaceFor,
   presentsLocalHostLifecycle,
+  targetPresentsLocalHostLifecycle,
   projectDefaultHostReadiness,
   resolveSurfaceReadiness,
   useHostReadinessController,
@@ -44,6 +45,7 @@ import {
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
@@ -98,7 +100,17 @@ export function HostReadinessControllerProvider(props: {
   // fresh closure each render would re-run every readiness consumer in the
   // surface tree.
   const refreshDirectory = useCallback(() => {
-    void directory?.refresh();
+    // A FAILED registry read is not an error here - `fetchRemoteOutcome`
+    // collapses a throwing fetcher into the `failed` outcome that retains the
+    // last-known entries, deliberately, so this button has nothing to report
+    // in the case users actually hit. What can still reject is a subscriber
+    // throwing out of the change emit, and letting that surface as an
+    // unhandled rejection loses the stack. Log it and keep the click silent.
+    directory?.refresh().catch((error: unknown) => {
+      appLogger.warn("[host-readiness] directory refresh rejected", {
+        error: describeLogError(error),
+      });
+    });
   }, [directory]);
   const openHostPicker = useCallback(() => {
     runnerHost.hostPicker.requestOpen();
@@ -317,7 +329,8 @@ function presentationFromLifecycle(args: {
     removed: args.lifecycle.provisioning.removed,
     hostBusy: args.lifecycle.provisioning.hostBusy,
     canManageHost:
-      args.targetKind === "local" && args.lifecycle.provisioning.canManageHost,
+      targetPresentsLocalHostLifecycle(args.targetKind, args.localBootIntent) &&
+      args.lifecycle.provisioning.canManageHost,
     retryProvisioning: args.lifecycle.provisioning.retry,
     forceProvisioning: args.lifecycle.provisioning.force,
     reinstall: args.lifecycle.provisioning.reinstall,

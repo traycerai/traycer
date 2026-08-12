@@ -84,6 +84,13 @@ const ITEM: WorkspaceRunItem = {
 };
 
 afterEach(cleanup);
+// Unconditional, because the in-test `vi.useRealTimers()` below is NOT
+// reached when an assertion before it throws - and fake timers left installed
+// leak into every later test in the file, which then fails for a reason that
+// has nothing to do with what it is testing.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("folder-mapping refresh affordance", () => {
   it("forces one re-derive when the picker opens, so the chip's stale branch heals on the way in", async () => {

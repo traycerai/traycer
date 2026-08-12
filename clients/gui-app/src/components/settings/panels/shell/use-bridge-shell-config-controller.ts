@@ -32,8 +32,13 @@ export function bridgeShellProbeSource(
   return {
     queryKeyFor: (path: string): QueryKey =>
       runnerQueryKeys.traycerShellProbe(traycerCli, path),
-    probe: (path: string): Promise<ConfigShellProbeResponse> =>
-      traycerCli.shellProbe({ path }),
+    // The bridge crosses an IPC channel with no cancellation of its own, so
+    // the signal is accepted and dropped. Keeping the parameter means the two
+    // sources stay interchangeable behind one query-options builder.
+    probe: (
+      path: string,
+      _signal: AbortSignal | undefined,
+    ): Promise<ConfigShellProbeResponse> => traycerCli.shellProbe({ path }),
     // This machine's dialog naming this machine's paths: the fallback only
     // ever describes the local host, so the native picker stays offered.
     pickProgramFile: traycerCli.pickShellProgramFile,

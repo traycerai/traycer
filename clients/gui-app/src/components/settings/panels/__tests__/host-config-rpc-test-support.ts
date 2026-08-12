@@ -201,6 +201,12 @@ export function buildConfigHostFixture(options: {
       if (entry === undefined) {
         return {
           status: "unavailable" as const,
+          // `cli`, not `req.target`, because the WIRE TYPE says so:
+          // `diagnosticsLogsTailUnavailableResponseSchema` pins this arm to
+          // `z.literal("cli")`. A missing host log is reported as an
+          // `available` tail with no lines - the host is running, its file
+          // just has not been written yet - so `unavailable` is a CLI-only
+          // outcome and echoing the request here would not type-check.
           target: "cli" as const,
           reason: "missing" as const,
         };

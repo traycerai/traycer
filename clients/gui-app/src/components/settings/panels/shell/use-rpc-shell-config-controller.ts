@@ -117,8 +117,11 @@ export function useRpcShellConfigController(props: {
           "config.shell.probe",
           { path },
         ),
-      probe: (path: string): Promise<ConfigShellProbeResponse> =>
-        probeShellPath(client, path),
+      probe: (
+        path: string,
+        signal: AbortSignal | undefined,
+      ): Promise<ConfigShellProbeResponse> =>
+        probeShellPath(client, path, signal),
       pickProgramFile: props.pickProgramFile,
     }),
     [client, hostId, props.pickProgramFile],
@@ -162,9 +165,14 @@ export function useRpcShellConfigController(props: {
 function probeShellPath(
   client: HostClient<HostRpcRegistry> | null,
   path: string,
+  signal: AbortSignal | undefined,
 ): Promise<ConfigShellProbeResponse> {
   if (client === null) {
     return Promise.reject(new Error("No host client to probe the shell path"));
   }
-  return client.request("config.shell.probe", { path });
+  // `requestWithSignal`, not `request` - the latter hardcodes `undefined` and
+  // the probe is exactly the read TanStack cancels most: a new keystroke, a
+  // closed popover, or a host swap retires the query while its RPC is still
+  // outstanding.
+  return client.requestWithSignal("config.shell.probe", { path }, signal);
 }
