@@ -5,6 +5,7 @@ export const MAX_SVG_SOURCE_LENGTH = 5 * 1024 * 1024;
 const MAX_SVG_DIMENSION = 8192;
 const MAX_SVG_NODES = 10_000;
 const MAX_SVG_PATH_DATA_LENGTH = 1_000_000;
+const MAX_SVG_POINT_DATA_LENGTH = 1_000_000;
 const MAX_FILTERS = 16;
 const MAX_FILTER_PRIMITIVES = 128;
 const FORBIDDEN_DECLARATION = /<!\s*entity\b|<!\s*doctype\b[^>]*\[/i;
@@ -88,6 +89,16 @@ function assertSvgBounds(root: Element): void {
     pathDataLength += path.getAttribute("d")?.length ?? 0;
     if (pathDataLength > MAX_SVG_PATH_DATA_LENGTH) {
       throw new Error("SVG paths are too complex");
+    }
+  }
+
+  let pointDataLength = 0;
+  for (const points of root.querySelectorAll(
+    "polygon[points], polyline[points]",
+  )) {
+    pointDataLength += points.getAttribute("points")?.length ?? 0;
+    if (pointDataLength > MAX_SVG_POINT_DATA_LENGTH) {
+      throw new Error("SVG polygon points are too complex");
     }
   }
 }

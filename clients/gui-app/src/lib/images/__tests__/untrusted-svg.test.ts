@@ -159,6 +159,13 @@ describe("sanitizeUntrustedSvg malicious fixtures", () => {
     ).toThrow(/paths are too complex/i);
   });
 
+  it("rejects polygon point data that is too complex", () => {
+    const points = Array.from({ length: 400_000 }, () => "1,1").join(" ");
+    expect(() =>
+      sanitizeUntrustedSvg(svg(`<polygon points="${points}"/>`, "")),
+    ).toThrow(/polygon points are too complex/i);
+  });
+
   it("retains a safe SVG document", () => {
     const source = svg(
       '<rect x="1" y="2" width="10" height="12" fill="#0f0"/><circle cx="5" cy="5" r="2"/>',
