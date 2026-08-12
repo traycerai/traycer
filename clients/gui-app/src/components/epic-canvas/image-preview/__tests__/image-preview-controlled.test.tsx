@@ -16,6 +16,7 @@ function preview(props: {
   readonly scrollContainerRef?:
     ((element: HTMLDivElement | null) => void) | null;
   readonly onScroll?: ((event: React.UIEvent<HTMLDivElement>) => void) | null;
+  readonly onDecodeError: (() => void) | null;
 }) {
   return render(
     <ImagePreview
@@ -28,7 +29,7 @@ function preview(props: {
       onFitOverrideChange={props.onFitOverrideChange}
       scrollContainerRef={props.scrollContainerRef ?? null}
       onScroll={props.onScroll ?? null}
-      onDecodeError={null}
+      onDecodeError={props.onDecodeError}
     />,
   );
 }
@@ -39,7 +40,11 @@ afterEach(() => {
 
 describe("<ImagePreview /> controlled fit and scroll props", () => {
   it("keeps the existing internal fit state when fitOverride is null", () => {
-    preview({ fitOverride: null, onFitOverrideChange: null });
+    preview({
+      fitOverride: null,
+      onFitOverrideChange: null,
+      onDecodeError: null,
+    });
 
     const imageButton = screen.getByRole("button", { name: "Zoom to 100%" });
     fireEvent.click(imageButton);
@@ -50,7 +55,11 @@ describe("<ImagePreview /> controlled fit and scroll props", () => {
 
   it("uses the external fit value and callback when controlled", () => {
     const onFitOverrideChange = vi.fn();
-    preview({ fitOverride: "fit", onFitOverrideChange });
+    preview({
+      fitOverride: "fit",
+      onFitOverrideChange,
+      onDecodeError: null,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom to 100%" }));
 
@@ -59,7 +68,11 @@ describe("<ImagePreview /> controlled fit and scroll props", () => {
   });
 
   it("allows the caller to freeze a controlled fit with a null callback", () => {
-    preview({ fitOverride: "fit", onFitOverrideChange: null });
+    preview({
+      fitOverride: "fit",
+      onFitOverrideChange: null,
+      onDecodeError: null,
+    });
 
     const imageButton = screen.getByRole("button", { name: "Zoom to 100%" });
     fireEvent.click(imageButton);
@@ -77,6 +90,7 @@ describe("<ImagePreview /> controlled fit and scroll props", () => {
       onFitOverrideChange: null,
       scrollContainerRef,
       onScroll,
+      onDecodeError: null,
     });
 
     const stage = document.querySelector<HTMLDivElement>(
@@ -90,5 +104,19 @@ describe("<ImagePreview /> controlled fit and scroll props", () => {
     expect(onScroll).toHaveBeenCalledWith(
       expect.objectContaining({ target: stage }),
     );
+  });
+
+  it("forwards an image decode error to the caller", () => {
+    const onDecodeError = vi.fn();
+
+    preview({
+      fitOverride: null,
+      onFitOverrideChange: null,
+      onDecodeError,
+    });
+
+    fireEvent.error(screen.getByRole("img", { name: "photo.png" }));
+
+    expect(onDecodeError).toHaveBeenCalledTimes(1);
   });
 });

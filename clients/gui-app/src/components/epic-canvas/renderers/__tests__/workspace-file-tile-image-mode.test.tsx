@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type {
@@ -197,8 +198,21 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
-  ImagePreview: (props: { readonly status: ImageAssetStatus }) => (
-    <div data-testid="workspace-image-preview" data-status={props.status} />
+  ImagePreview: (props: {
+    readonly status: ImageAssetStatus;
+    readonly url: string | null;
+    readonly fileName: string;
+    readonly onDecodeError: (() => void) | null;
+  }) => (
+    <div data-testid="workspace-image-preview" data-status={props.status}>
+      {props.status === "ready" ? (
+        <img
+          src={props.url ?? ""}
+          alt={props.fileName}
+          onError={props.onDecodeError ?? undefined}
+        />
+      ) : null}
+    </div>
   ),
 }));
 
@@ -217,8 +231,8 @@ function nodeFor(filePath: string): WorkspaceFileRef {
   };
 }
 
-function renderTile(node: WorkspaceFileRef): void {
-  render(<WorkspaceFileTile node={node} viewTabId="tab-1" isActive />);
+function renderTile(node: WorkspaceFileRef): RenderResult {
+  return render(<WorkspaceFileTile node={node} viewTabId="tab-1" isActive />);
 }
 
 function resetState(): void {
@@ -366,4 +380,32 @@ describe("<WorkspaceFileTile /> image mode", () => {
       });
     },
   );
+
+  it("falls back on a decode error and clears that flag for a new asset URL", () => {
+    const rendered = renderTile(nodeFor("assets/photo.png"));
+
+    fireEvent.error(screen.getByRole("img", { name: "photo.png" }));
+
+    expect(screen.getByText("Preview could not be decoded.")).toBeTruthy();
+    expect(screen.queryByTestId("workspace-image-preview")).toBeNull();
+
+    state.asset = {
+      status: "ready",
+      url: "blob:image-new",
+      meta: null,
+      reason: null,
+      receivedBytes: 0,
+      totalBytes: null,
+    };
+    rendered.rerender(
+      <WorkspaceFileTile
+        node={nodeFor("assets/next.png")}
+        viewTabId="tab-1"
+        isActive
+      />,
+    );
+
+    expect(screen.queryByText("Preview could not be decoded.")).toBeNull();
+    expect(screen.getByTestId("workspace-image-preview")).toBeTruthy();
+  });
 });

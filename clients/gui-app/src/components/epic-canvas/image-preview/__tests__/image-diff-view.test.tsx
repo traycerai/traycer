@@ -168,6 +168,52 @@ describe("<ImageDiffView />", () => {
     ).toBeNull();
   });
 
+  it("routes old.png to an image side and new.txt to a non-image placeholder without a new-side fetch", () => {
+    renderDiff({
+      filePath: "assets/new.txt",
+      previousPath: "assets/old.png",
+    });
+
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "old" })]);
+  });
+
+  it("routes new.png to an image side and old.txt to a non-image placeholder without an old-side fetch", () => {
+    renderDiff({
+      filePath: "assets/new.png",
+      previousPath: "assets/old.txt",
+    });
+
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "new" })]);
+  });
+
+  it("falls back only the side whose image fails to decode", () => {
+    renderDiff({});
+
+    const images = screen.getAllByRole("img");
+    const oldImage = images.at(0);
+    if (oldImage === undefined) throw new Error("missing old image");
+
+    fireEvent.error(oldImage);
+
+    expect(screen.getByText("Preview could not be decoded.")).toBeTruthy();
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Open Externally" }),
+    ).toBeTruthy();
+  });
+
   it("shows the Conflicted badge only in the full diff toolbar", () => {
     renderDiff({ conflicted: true });
 

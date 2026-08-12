@@ -188,13 +188,14 @@ import { BundleFileSection } from "../git-bundle-file-section";
 
 function file(args: {
   readonly path: string;
+  readonly previousPath?: string | null;
   readonly isBinary: boolean;
   readonly status?: GitChangedFile["status"];
   readonly stage?: GitChangedFile["stage"];
 }): GitChangedFile {
   return {
     path: args.path,
-    previousPath: null,
+    previousPath: args.previousPath ?? null,
     status: args.status ?? "modified",
     stage: args.stage ?? "unstaged",
     insertions: 1,
@@ -285,6 +286,60 @@ describe("<BundleFileSection /> image routing", () => {
       expect.stringContaining("assets/icon.svg"),
       "binary",
     );
+  });
+
+  it("routes a binary rename from old.png to new.jpg through both image sides", () => {
+    const changedFile = file({
+      path: "assets/new.jpg",
+      previousPath: "assets/old.png",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderSection(changedFile, node([]));
+
+    expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(2);
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps the old image side for old.png to new.txt without fetching the new side", () => {
+    const changedFile = file({
+      path: "assets/new.txt",
+      previousPath: "assets/old.png",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderSection(changedFile, node([]));
+
+    expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "old" })]);
+  });
+
+  it("keeps the new image side for old.txt to new.png without fetching the old side", () => {
+    const changedFile = file({
+      path: "assets/new.png",
+      previousPath: "assets/old.txt",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderSection(changedFile, node([]));
+
+    expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "new" })]);
   });
 
   it("keeps non-image binary files on the bundle placeholder", () => {

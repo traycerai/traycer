@@ -5,7 +5,10 @@ import type {
   GitChangedFile,
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
-import type { ImageDiffViewProps } from "@/components/epic-canvas/image-preview/image-diff-view";
+import type {
+  ImageAssetRequest,
+  ImageAssetState,
+} from "@/hooks/assets/use-image-asset";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 
@@ -41,6 +44,8 @@ const state = vi.hoisted(() => ({
   openFeedback: vi.fn(),
   refresh: vi.fn(),
   updateView: vi.fn(),
+  assetRequests: [] as Array<ImageAssetRequest | null>,
+  asset: null as ImageAssetState | null,
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -61,6 +66,14 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/assets/use-image-asset", () => ({
+  useImageAsset: (request: ImageAssetRequest | null): ImageAssetState => {
+    state.assetRequests.push(request);
+    if (state.asset === null) throw new Error("missing image state");
+    return state.asset;
+  },
 }));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
@@ -131,20 +144,32 @@ vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
   FileDiffContent: () => <div data-testid="file-diff-content" />,
 }));
 
-vi.mock("@/components/epic-canvas/image-preview/image-diff-view", () => ({
-  ImageDiffView: (props: ImageDiffViewProps) => (
+vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
+  ImagePreview: (props: {
+    readonly fileName: string;
+    readonly status: string;
+    readonly compact: boolean;
+    readonly fitOverride: string | null;
+  }) => (
     <div
-      data-testid="image-diff-view"
-      data-old-stage={props.oldStage ?? "none"}
-      data-new-stage={props.newStage ?? "none"}
-      data-conflicted={String(props.conflicted)}
-      data-previous-path={props.previousPath ?? "none"}
+      data-testid="image-preview-side"
+      data-file-name={props.fileName}
+      data-status={props.status}
+      data-compact={String(props.compact)}
+      data-fit={props.fitOverride ?? "null"}
     />
   ),
 }));
 
 vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
-  BinaryPlaceholder: () => <div data-testid="binary-placeholder" />,
+  BinaryPlaceholder: (props: {
+    readonly fileName: string;
+    readonly reason: string | null;
+  }) => (
+    <div data-testid="binary-placeholder" data-file-name={props.fileName}>
+      {props.reason}
+    </div>
+  ),
 }));
 
 vi.mock(
@@ -314,6 +339,15 @@ beforeEach(() => {
   state.file = null;
   state.diff = DIFF;
   state.editableCalls.length = 0;
+  state.assetRequests.length = 0;
+  state.asset = {
+    status: "ready",
+    url: "blob:image",
+    meta: null,
+    reason: null,
+    receivedBytes: 1,
+    totalBytes: 1,
+  };
   state.subscribe.mockReset();
   state.open.mockReset();
   state.openFeedback.mockReset();
@@ -330,7 +364,7 @@ describe("<GitDiffTile /> image routing", () => {
   it("routes binary image extensions to ImageDiffView and skips the text query", () => {
     renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
 
-    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(screen.queryByTestId("binary-placeholder")).toBeNull();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
@@ -346,19 +380,19 @@ describe("<GitDiffTile /> image routing", () => {
   it("defaults SVG to image mode and toggles to the existing source diff", () => {
     renderTile(changedFile({ path: "assets/icon.svg" }));
 
-    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "View source" }));
 
     expect(screen.getByTestId("file-diff-content")).toBeTruthy();
-    expect(screen.queryByTestId("image-diff-view")).toBeNull();
+    expect(screen.queryByTestId("image-preview-side")).toBeNull();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "View image" }));
 
-    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(screen.queryByTestId("file-diff-content")).toBeNull();
   });
 
@@ -381,8 +415,77 @@ describe("<GitDiffTile /> image routing", () => {
       }),
     );
 
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(
-      screen.getByTestId("image-diff-view").getAttribute("data-previous-path"),
-    ).toBe("assets/old-name.png");
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toEqual([
+      expect.objectContaining({
+        side: "old",
+        previousPath: "assets/old-name.png",
+      }),
+      expect.objectContaining({
+        side: "new",
+        previousPath: "assets/old-name.png",
+      }),
+    ]);
+  });
+
+  it("routes a binary rename from old.png to new.jpg through both image sides", () => {
+    const changed = changedFile({
+      path: "assets/new.jpg",
+      previousPath: "assets/old.png",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
+    expect(
+      screen.queryByText(
+        "This file is not one of the supported image formats.",
+      ),
+    ).toBeNull();
+    expect(
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps the old image side for a binary rename from old.png to new.txt without fetching the new side", () => {
+    const changed = changedFile({
+      path: "assets/new.txt",
+      previousPath: "assets/old.png",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "old" })]);
+  });
+
+  it("keeps the new image side for a binary rename from old.txt to new.png without fetching the old side", () => {
+    const changed = changedFile({
+      path: "assets/new.png",
+      previousPath: "assets/old.txt",
+      status: "renamed",
+      isBinary: true,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "new" })]);
   });
 });
