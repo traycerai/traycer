@@ -30,6 +30,7 @@ type CatalogResult = {
   freshnessAt: number | null;
   sourceStatus: "ok" | "cached" | "gh-unavailable" | "error" | "partial";
   notice: null;
+  errored: boolean;
   isLoading: boolean;
   isChecking: boolean;
   isPlaceholder: boolean;
@@ -44,6 +45,7 @@ const catalogMocks = vi.hoisted(() => {
     freshnessAt: null,
     sourceStatus: "cached",
     notice: null,
+    errored: false,
     isLoading: false,
     isChecking: false,
     isPlaceholder: false,
@@ -250,6 +252,23 @@ describe("useGithubMentionSections repository scope boundary", () => {
     const rows = result.current.context.issues.rows;
     expect(rows).toContainEqual(KEPT_ISSUE);
     expect(rows).toContainEqual(DEPARTED_ISSUE);
+  });
+
+  it("surfaces a failed catalog read through the result", () => {
+    // The wiring the dismissal verdict depends on: a mocked-away catalog that
+    // errored must reach `result.errored`, or a failed GitHub source reads as
+    // "settled and empty" at root and the picker dismisses over it.
+    catalogMocks.issues.errored = true;
+
+    const { result } = renderRoot("fix");
+
+    expect(result.current.errored).toBe(true);
+  });
+
+  it("reports no error when both catalogs are healthy", () => {
+    const { result } = renderRoot("fix");
+
+    expect(result.current.errored).toBe(false);
   });
 
   it("serves the warm store unfiltered while nothing has resolved", () => {

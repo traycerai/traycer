@@ -74,6 +74,15 @@ export interface GithubMentionSectionsResult {
   readonly loading: boolean;
   /** True while something is in flight BEHIND rows already on screen. */
   readonly checking: boolean;
+  /**
+   * A REQUESTED catalog read failed outright - no answer, not a degraded one.
+   * Each catalog reports this only while its own read is enabled, so a section
+   * nobody asked contributes nothing. The zero-match dismissal folds this in
+   * beside the workspace, epic and terminal errors: without it, a failed
+   * GitHub source read as "settled and empty" and closed the picker over rows
+   * it never saw.
+   */
+  readonly errored: boolean;
 }
 
 export function useGithubMentionSections(
@@ -508,6 +517,7 @@ export function useGithubMentionSections(
   return {
     context,
     chrome,
+    errored: anyCatalogErrored(pullRequestCatalog, issueCatalog),
     ...sectionActivity({
       atRoot,
       openSection,
@@ -559,6 +569,14 @@ function sectionContext(
   repositories: ReadonlyArray<GithubMentionRepository>,
 ): GithubMentionSectionContext {
   return { rows, repositories };
+}
+
+/** Each catalog is already requested-gated; an idle read cannot report. */
+function anyCatalogErrored(
+  pullRequests: GithubMentionCatalogResult,
+  issues: GithubMentionCatalogResult,
+): boolean {
+  return pullRequests.errored || issues.errored;
 }
 
 /**

@@ -699,11 +699,26 @@ describe("mentionNoMatchDismissVerdict", () => {
     terminalLoading: false,
     terminalFetching: false,
     terminalError: null,
+    githubErrored: false,
     referenceQuery: false,
   };
 
   it("closes when every source, including the terminal list, has settled with no match", () => {
     expect(mentionNoMatchDismissVerdict(settledNoMatch)).toBe(true);
+  });
+
+  it("holds the menu open when a requested GitHub catalog read failed", () => {
+    // A rejected cache-only read carries no rows and no scope, so zero
+    // matches proves nothing - the PR/issue source never answered. Before the
+    // GitHub error was folded in beside the other sources', retries
+    // exhausting flipped `loading` false and the picker dismissed over rows
+    // it never saw.
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        githubErrored: true,
+      }),
+    ).toBe(false);
   });
 
   // Without this the whole `referenceQuery` input can be deleted from the

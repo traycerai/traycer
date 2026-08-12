@@ -523,6 +523,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     terminalLoading: terminalListQuery.isLoading,
     terminalFetching: terminalListQuery.isFetching,
     terminalError: terminalListQuery.error,
+    githubErrored: github.errored,
     // Only a reference the GitHub sections could actually resolve earns the
     // exemption. The exemption exists because those sections offer a
     // `Resolve in ...` row for a reference the cache does not hold - but when
@@ -651,6 +652,12 @@ interface MentionNoMatchVerdictInput {
   readonly terminalLoading: boolean;
   readonly terminalFetching: boolean;
   readonly terminalError: Error | null;
+  /**
+   * Already requested-gated at the source: each catalog reports an error only
+   * while its own read is enabled, so there is no separate request count to
+   * pair it with here.
+   */
+  readonly githubErrored: boolean;
   readonly referenceQuery: boolean;
 }
 
@@ -669,7 +676,8 @@ export function mentionNoMatchDismissVerdict(
   const sourcesErrored =
     (input.workspaceRequestCount > 0 && input.workspaceError !== null) ||
     (input.epicRequestCount > 0 && input.epicError !== null) ||
-    (input.terminalRequested && input.terminalError !== null);
+    (input.terminalRequested && input.terminalError !== null) ||
+    input.githubErrored;
   const terminalPending =
     input.terminalRequested &&
     (input.terminalLoading || input.terminalFetching);

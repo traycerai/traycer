@@ -98,6 +98,14 @@ export interface GithubMentionCatalogResult {
   readonly freshnessAt: number | null;
   readonly sourceStatus: PrSourceStatus;
   readonly notice: PrSourceNotice | null;
+  /**
+   * The cache-only read itself FAILED - retries exhausted, no response at all.
+   * Not a degraded answer (`sourceStatus` reports those): a rejection carries
+   * no rows and no scope, so nothing downstream can tell "empty" from "never
+   * answered" without it. The zero-match dismissal reads this the way it reads
+   * the workspace and epic errors - a failed source proves nothing empty.
+   */
+  readonly errored: boolean;
   /** No cached rows have arrived yet - the `Loading…` row's condition. */
   readonly isLoading: boolean;
   /** Something is in flight behind rows that are already on screen. */
@@ -377,6 +385,12 @@ export function useGithubMentionCatalog(
   return {
     ...catalogFacts(answered),
     isPlaceholder: catalogQuery.isPlaceholderData,
+    // `enabled` gates this like the two flags below: a disabled observer can
+    // still HOLD an error from when it was live, and a section that is not
+    // being asked must not report one. Retries keep `isFetching` true, so the
+    // window where this is the only sign of the failure opens exactly when
+    // the query gives up.
+    errored: enabled && catalogQuery.isError,
     isLoading: enabled && answered === undefined && catalogQuery.isFetching,
     isChecking:
       enabled &&
@@ -397,7 +411,7 @@ function catalogFacts(
   data: MentionGithubCatalogResponse | undefined,
 ): Omit<
   GithubMentionCatalogResult,
-  "isLoading" | "isChecking" | "isPlaceholder" | "refreshManually"
+  "errored" | "isLoading" | "isChecking" | "isPlaceholder" | "refreshManually"
 > {
   if (data === undefined) {
     return {
