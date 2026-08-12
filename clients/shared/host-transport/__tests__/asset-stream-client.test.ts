@@ -18,6 +18,7 @@ import type {
 } from "../ws-stream-factory";
 import {
   AssetStreamClient,
+  type AssetStreamCallbacks,
   type AssetStreamFailure,
   type AssetStreamHeader,
 } from "../asset-stream-client";
@@ -101,6 +102,12 @@ function makeClient(
   });
 }
 
+type MethodManifest = Record<string, { major: number; minor: number }>;
+
+interface OpenFrame {
+  readonly manifest: MethodManifest;
+}
+
 /**
  * Mirrors the host's manifest by default, so the method negotiates - unless
  * `mutateManifest` strips an entry, mimicking an older host that predates
@@ -108,16 +115,10 @@ function makeClient(
  */
 function completeHandshake(
   socket: StubStreamWebSocket,
-  mutateManifest:
-    | ((
-        manifest: Record<string, { major: number; minor: number }>,
-      ) => Record<string, { major: number; minor: number }>)
-    | undefined,
+  mutateManifest: ((manifest: MethodManifest) => MethodManifest) | undefined,
 ): void {
   socket.fireOpen();
-  const open = JSON.parse(socket.textSent[0]) as {
-    readonly manifest: Record<string, { major: number; minor: number }>;
-  };
+  const open = JSON.parse(socket.textSent[0]) as OpenFrame;
   const manifest =
     mutateManifest === undefined
       ? open.manifest
@@ -132,11 +133,7 @@ interface RecordedCallbacks {
 }
 
 function recordingCallbacks(): {
-  readonly callbacks: {
-    readonly onHeader: (header: AssetStreamHeader) => void;
-    readonly onReady: (header: AssetStreamHeader, bytes: Uint8Array) => void;
-    readonly onFailure: (failure: AssetStreamFailure) => void;
-  };
+  readonly callbacks: AssetStreamCallbacks;
   readonly recorded: RecordedCallbacks;
 } {
   const recorded: RecordedCallbacks = {
