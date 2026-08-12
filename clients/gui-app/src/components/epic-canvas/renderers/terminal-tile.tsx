@@ -77,6 +77,7 @@ export function TerminalTile(props: TerminalTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -92,6 +93,7 @@ export function TerminalTile(props: TerminalTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);
@@ -103,6 +105,7 @@ export function TerminalTile(props: TerminalTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -118,6 +121,7 @@ export function TerminalTile(props: TerminalTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);

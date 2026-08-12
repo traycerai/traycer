@@ -874,6 +874,7 @@ describe("app-local notifications store", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
       hostId: "host-a",
+      terminalName: "Build terminal",
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -887,6 +888,7 @@ describe("app-local notifications store", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
       hostId: "host-a",
+      terminalName: "Build terminal",
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -905,6 +907,10 @@ describe("app-local notifications store", () => {
     expect(entries.map((entry) => entry.kind)).toEqual([
       "terminal.crashed",
       "terminal.crashed",
+    ]);
+    expect(entries.map((entry) => entry.message)).toEqual([
+      "Build terminal exited unexpectedly.",
+      "Build terminal could not be reconnected.",
     ]);
     expect(entries.map((entry) => entry.payload)).toEqual([
       {

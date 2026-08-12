@@ -225,9 +225,9 @@ export function mergedUnreadCount(input: {
   return input.hostUnread + input.appLocalUnread + input.globalUnread;
 }
 
-/** Every merged row, newest-first across all three sources - the shared base
- * the id/Attention/Recent projections all derive from without recomputing
- * their own source subscriptions. */
+/** Every merged row, newest-first across the active feed plus renderer-local
+ * failures - the shared base the id/Attention/Recent projections all derive
+ * from without recomputing their own source subscriptions. */
 function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   const activeHostId = useReactiveActiveHostId();
@@ -240,11 +240,14 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   return useMemo(() => {
     if (feedMode === "cloud") {
-      const rows = Object.values(cloudRows)
-        .filter(
-          (row): row is HostNotificationsCloudFeedRow => row !== undefined,
-        )
-        .map(rowFromCloudFeedRow);
+      const rows: MergedNotificationRow[] = [
+        ...Object.values(cloudRows)
+          .filter(
+            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+          )
+          .map(rowFromCloudFeedRow),
+        ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
+      ];
       rows.sort(compareFeedCandidates);
       return rows;
     }
@@ -414,18 +417,18 @@ function rowFromLocalFeedId(input: {
   readonly globalEntry: NotificationEntry | null;
   readonly hostOriginId: string | null;
 }): MergedNotificationRow | null {
-  if (input.feedMode !== "local") return null;
   switch (input.parsed.source) {
     case "host":
-      return input.hostEntry === null
+      return input.feedMode !== "local" || input.hostEntry === null
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
-      return input.appLocalEntry === null
+      return input.feedMode === "upgrade-required" ||
+        input.appLocalEntry === null
         ? null
         : rowFromAppLocalEntry(input.appLocalEntry);
     case "global":
-      return input.globalEntry === null
+      return input.feedMode !== "local" || input.globalEntry === null
         ? null
         : rowFromGlobalEntry(input.globalEntry);
     case "cloud":
@@ -477,7 +480,9 @@ export function useMergedNotificationUnreadCount(): number {
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  if (feedMode === "cloud") return cloudSummary?.unreadCount ?? 0;
+  if (feedMode === "cloud") {
+    return (cloudSummary?.unreadCount ?? 0) + appLocalUnread;
+  }
   if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
     hostUnread,
@@ -517,10 +522,11 @@ export function useNotificationBellState(): NotificationBellState {
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
     if (cloudSummary === null) return { kind: "unknown" };
-    if (cloudSummary.attentionCount > 0) {
-      return { kind: "attention", count: cloudSummary.attentionCount };
+    const attention = cloudSummary.attentionCount + appLocalUnread;
+    if (attention > 0) {
+      return { kind: "attention", count: attention };
     }
-    return cloudSummary.unreadCount > 0
+    return cloudSummary.unreadCount + appLocalUnread > 0
       ? { kind: "quietDot" }
       : { kind: "clear" };
   }
@@ -618,6 +624,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (state) => state.unreadRecentStatus === "error",
   );
   const cloudVersion = useCloudNotificationsStore((state) => state.version);
+  const cloudConnectionState = useCloudNotificationsStore(
+    (state) => state.connectionState,
+  );
 
   const markCloudUnavailable = (): void => {
     useCloudNotificationsStore.getState().setConnectionState("unavailable");
@@ -1073,6 +1082,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         const feedId = typeof target === "string" ? target : target.feedId;
         const parsed = parseFeedId(feedId);
         if (parsed === null) return;
+        if (parsed.source === "app-local") {
+          if (feedMode === "upgrade-required") return;
+          appLocalMarkAsRead(parsed.sourceId, Date.now());
+          return;
+        }
         if (parsed.source === "cloud") {
           if (feedMode !== "cloud" || typeof target === "string") return;
           useCloudNotificationsStore
@@ -1090,11 +1104,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           });
           return;
         }
-        if (parsed.source === "global") {
-          globalMarkAsRead(parsed.sourceId);
-          return;
-        }
-        appLocalMarkAsRead(parsed.sourceId, Date.now());
+        globalMarkAsRead(parsed.sourceId);
       },
       resolve: (row) => {
         if (row.source === "cloud") {
@@ -1122,7 +1132,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         });
       },
       markAllAsRead: () => {
-        if (feedMode === "cloud" && cloudVersion !== null) {
+        if (feedMode === "cloud") {
+          // Renderer-local failures never replicate into the cloud feed, so
+          // they must be acknowledged alongside it rather than hidden behind
+          // the cloud-only early return below.
+          appLocalMarkAllAsRead(Date.now());
+          if (cloudConnectionState !== "connected" || cloudVersion === null) {
+            return;
+          }
           // `cloudVersion` belongs to the rendered action closure, whereas a
           // frame can update the store before the click reaches this handler.
           // Do not locally consume rows that the versioned bulk command will
@@ -1296,6 +1313,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       client,
       feedMode,
       cloudVersion,
+      cloudConnectionState,
       captureCloudMutationContext,
       isCurrentCloudMutation,
       cloudMarkRead,
