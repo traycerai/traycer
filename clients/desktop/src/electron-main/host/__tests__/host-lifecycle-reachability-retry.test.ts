@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 
 vi.mock("electron", () => ({
   app: { isPackaged: false, getAppPath: (): string => "/fake/app/path" },
@@ -45,12 +46,23 @@ const REACHABILITY_RETRY_INITIAL_MS_FOR_TEST = 250;
 
 /**
  * Lets the REAL work a fired ladder timer starts actually finish.
- * `advanceTimersByTimeAsync` only drains microtasks, and a reload reads
- * `pid.json` off the real filesystem - so without giving the loop a few real
- * turns the probe has not been called yet when the advance returns.
+ * `advanceTimersByTimeAsync` only drains microtasks, and a reload does real
+ * libuv-threadpool filesystem reads (`pid.json`, host-name settings) - so the
+ * probe fires, and the NEXT ladder rung is re-armed, only after real
+ * event-loop turns whose count depends on machine load. A fixed number of
+ * turns is therefore a race on a slow CI runner; instead, yield real turns
+ * until the reload has observably settled: the expected probe count was
+ * reached AND the ladder re-armed its next fake timer. These tests never call
+ * `bootstrap()` (no watcher, no readiness wait), so the ladder owns the only
+ * fake `setTimeout` and `vi.getTimerCount()` is exactly "next rung armed".
+ * The deadline reads `performance.now()` because `Date` is faked here.
  */
-async function flushPendingIo(): Promise<void> {
-  for (let turn = 0; turn < 20; turn += 1) {
+async function settleLadderReload(probeSettled: () => boolean): Promise<void> {
+  const deadline = performance.now() + 10_000;
+  while (!(probeSettled() && vi.getTimerCount() > 0)) {
+    if (performance.now() > deadline) {
+      throw new Error("settleLadderReload: reload did not settle in time");
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
 }
@@ -578,19 +590,25 @@ describe("HostLifecycle respawn re-arm", () => {
     try {
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
       // Walk the ladder up: 250ms, then 500ms, leaving a 1s timer pending.
+      // Awaiting the reload settles it fully - probe fired, next rung armed -
+      // so each advance below finds its timer already scheduled.
       await lifecycle.reloadSnapshotFromDisk();
       await vi.advanceTimersByTimeAsync(250);
-      await flushPendingIo();
+      await settleLadderReload(() => probeCalls >= 2);
       await vi.advanceTimersByTimeAsync(500);
-      await flushPendingIo();
+      await settleLadderReload(() => probeCalls >= 3);
+      // Exactly one probe per rung: fake timers only fire inside an advance,
+      // so nothing can have raced the count past 3 between settles.
       const beforeRespawn = probeCalls;
       expect(beforeRespawn).toBe(3);
 
       lifecycle.notifyRespawning();
 
-      // The inherited 1s timer must have been replaced, not left to run out.
+      // The inherited 1s timer must have been replaced, not left to run out:
+      // advancing only the INITIAL delay must fire a probe (the settle throws
+      // if none does), and it must be exactly one.
       await vi.advanceTimersByTimeAsync(REACHABILITY_RETRY_INITIAL_MS_FOR_TEST);
-      await flushPendingIo();
+      await settleLadderReload(() => probeCalls >= beforeRespawn + 1);
       expect(probeCalls).toBe(beforeRespawn + 1);
     } finally {
       restoreLiveness();
