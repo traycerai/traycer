@@ -536,6 +536,39 @@ describe("useImageAsset", () => {
     second.unmount();
   });
 
+  it("replays a shared failure to a late concurrent subscriber", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "late-failure-identity", 3);
+    });
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+
+    act(() => {
+      emitFailure(session, "fatal");
+    });
+    await flushPromises();
+
+    expect(first.result.current.status).toBe("fallback");
+    expect(second.result.current.status).toBe("fallback");
+
+    const third = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const retrySession = mockWsStreamClient.sessions[1];
+    act(() => {
+      emitHeader(retrySession, "late-failure-identity", 3);
+    });
+    expect(third.result.current.status).toBe("header");
+
+    first.unmount();
+    second.unmount();
+    third.unmount();
+  });
+
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
       useImageAsset(WORKSPACE_REQUEST),
