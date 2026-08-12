@@ -206,7 +206,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.getByRole("img", { name: "diagram" })).toBeTruthy();
   });
 
-  it("keeps small images intrinsic while capping large images at 22.5rem", () => {
+  it("keeps small images intrinsic while applying a fluid image cap", () => {
     renderImage({
       src: "https://cdn.example.com/orange-square.png",
       alt: "small orange square",
@@ -221,9 +221,9 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(img.className).toContain("h-auto");
     expect(img.className).toContain("w-auto");
     expect(img.className.split(" ")).not.toContain("w-full");
-    expect(img.getAttribute("style")).toContain("max-height: 22.5rem");
+    expect(img.getAttribute("style")).toContain("max-height: min(90vw, 42rem)");
     expect(img.getAttribute("style")).toContain(
-      "max-width: min(100%, 22.5rem)",
+      "max-width: min(100%, min(90vw, 42rem))",
     );
   });
 

@@ -119,7 +119,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByText("Generating image")).toBeTruthy();
     expect(screen.getByText(/a misty pier/)).toBeTruthy();
     expect(card.className).toContain("w-full");
-    expect(frame.getAttribute("style")).toContain("22.5rem");
+    expect(frame.getAttribute("style")).toContain("min(90vw, 42rem)");
     expect(frame.getAttribute("style")).toContain("aspect-ratio: 1.777");
     expect(frame.getAttribute("style")).not.toContain("100vh");
   });
@@ -152,13 +152,13 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByText("Image ready").className).toContain("sr-only");
     expect(screen.getByText("800 × 600")).toBeTruthy();
     expect(screen.getByText(/a misty pier/)).toBeTruthy();
-    expect(frame?.getAttribute("style")).toContain("22.5rem");
+    expect(frame?.getAttribute("style")).toContain("min(90vw, 42rem)");
     expect(frame?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
     expect(frame?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
     expect(img.className).toContain("h-auto");
     expect(img.className).toContain("w-auto");
     expect(img.className.split(" ")).not.toContain("w-full");
-    expect(img.getAttribute("style")).toContain("22.5rem");
+    expect(img.getAttribute("style")).toContain("min(90vw, 42rem)");
     expect(
       screen.queryByRole("button", { name: "Add image to artifact" }),
     ).toBeNull();
@@ -179,7 +179,9 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     const card = screen.getByRole("region", { name: "Image generation" });
     const frame = card.querySelector("[data-image-generation-media]");
     const img = screen.getByRole("img", { name: "small orange square" });
-    expect(frame?.getAttribute("style")).toContain("max-height: 22.5rem");
+    expect(frame?.getAttribute("style")).toContain(
+      "max-height: min(90vw, 42rem)",
+    );
     expect(img.className).toContain("h-auto");
     expect(img.className).toContain("w-auto");
     expect(img.className).not.toContain("size-full");
