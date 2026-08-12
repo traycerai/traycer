@@ -590,6 +590,50 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
     ]);
   });
 
+  it("uses the live block owner while its persisted row still points to the prior message", () => {
+    const source = "/workspace/live-owner.png";
+    const first: Message = {
+      ...assistantMessage("turn-live-owner", 2000),
+      messageId: "assistant-first",
+      blocks: [textBlock("text-first", 2001, `![first](${source})`)],
+      imageResolutions: [],
+    };
+    const live = {
+      turnId: "turn-live-owner",
+      sender: ASSISTANT_SENDER,
+      blocks: [textBlock("text-live", 3001, `![live](${source})`)],
+      startedAt: 2000,
+      blocksVersion: 1,
+      imageResolutions: [
+        {
+          messageId: "assistant-second",
+          entry: resolvedEntry(source, "hash-second-live", {}),
+        },
+      ],
+      imageResolutionOwnerMessageId: "assistant-second",
+      imageResolutionsVersion: 1,
+      timestamp: 3001,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [first],
+      liveAssistantMessage: live,
+      runStatus: "running",
+    });
+
+    const context = textSegmentContexts(result.current[0]?.segments ?? []).at(
+      -1,
+    );
+    expect(context?.resolutions).toEqual([
+      {
+        messageId: "assistant-second",
+        entry: resolvedEntry(source, "hash-second-live", {}),
+      },
+    ]);
+  });
+
   it("rebuilds only the assistant row whose imageResolutions record changed", () => {
     const turnA: Message = {
       ...assistantMessage("turn-a", 2000),

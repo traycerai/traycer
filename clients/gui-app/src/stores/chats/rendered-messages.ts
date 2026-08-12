@@ -1890,8 +1890,15 @@ function addLiveAssistantImageProjection(
   const liveResolutionMessageIds = new Set(
     liveAssistant.imageResolutions.map((resolution) => resolution.messageId),
   );
-  let ownerMessageId: string | null = acc.messageId;
-  if (isTransientLiveAssistantMessageId(acc.messageId)) {
+  let ownerMessageId: string | null =
+    liveAssistant.imageResolutionOwnerMessageId ?? null;
+  if (liveAssistant.imageResolutionOwnerMessageId === undefined) {
+    ownerMessageId = acc.messageId;
+  }
+  if (
+    liveAssistant.imageResolutionOwnerMessageId === undefined &&
+    isTransientLiveAssistantMessageId(acc.messageId)
+  ) {
     const [onlyMessageId] = liveResolutionMessageIds;
     ownerMessageId = liveResolutionMessageIds.size === 1 ? onlyMessageId : null;
   }

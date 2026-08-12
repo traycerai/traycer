@@ -1,7 +1,7 @@
 import DOMPurify from "dompurify";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-const MAX_SVG_SOURCE_LENGTH = 5 * 1024 * 1024;
+export const MAX_SVG_SOURCE_LENGTH = 5 * 1024 * 1024;
 const MAX_SVG_DIMENSION = 8192;
 const MAX_SVG_NODES = 10_000;
 const MAX_SVG_PATH_DATA_LENGTH = 1_000_000;

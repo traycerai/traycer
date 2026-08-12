@@ -1,7 +1,7 @@
 import type { Editor } from "@tiptap/react";
 import { useEditorState } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection } from "@tiptap/pm/state";
 import {
   Bold,
   Code,
@@ -142,8 +142,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
       if (currentEditor.isActive("mermaidBlock")) return false;
       if (currentEditor.isActive("uiPreviewBlock")) return false;
       if (currentEditor.isActive("image")) return false;
-      if (!(currentEditor.state.selection instanceof TextSelection))
-        return false;
+      if (currentEditor.state.selection instanceof NodeSelection) return false;
       return from !== to;
     },
     [commentAction],

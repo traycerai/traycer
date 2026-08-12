@@ -201,6 +201,8 @@ export interface LiveAssistantMessage {
     readonly messageId: string;
     readonly entry: ImageResolutionEntry;
   }>;
+  /** Message owner of the currently streamed blocks' image resolutions. */
+  readonly imageResolutionOwnerMessageId?: string | null;
   readonly imageResolutionsVersion: number;
   readonly timestamp: number;
   /**
@@ -3182,6 +3184,7 @@ function applyImageResolutionDelta(
     return {
       liveAssistantMessage: {
         ...liveAssistant,
+        imageResolutionOwnerMessageId: event.messageId,
         imageResolutions,
         imageResolutionsVersion: liveAssistant.imageResolutionsVersion + 1,
         timestamp: event.timestamp,
@@ -3769,6 +3772,7 @@ function liveAssistantForActiveTurn(
     startedAt: activeTurn.startedAt,
     blocksVersion: 0,
     imageResolutions: [],
+    imageResolutionOwnerMessageId: null,
     imageResolutionsVersion: 0,
     timestamp: activeTurn.updatedAt,
     reasoningEffort: activeTurn.reasoningEffort,

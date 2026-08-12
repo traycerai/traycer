@@ -17,7 +17,10 @@ import {
   AttachmentImageLoading,
 } from "./attachment-image";
 import { base64ToBytes, bytesToBase64 } from "@/lib/composer/image-base64";
-import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
+import {
+  MAX_SVG_SOURCE_LENGTH,
+  sanitizeUntrustedSvg,
+} from "@/lib/images/untrusted-svg";
 
 const RASTER_DATA_URL_PATTERN =
   /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z\d+/]+={0,2})$/i;
@@ -111,18 +114,14 @@ function classifySvgDataUrl(src: string): AssistantImageSource {
     if (/(?:^|;)base64(?:;|$)/i.test(metadata)) {
       const bytes = base64ToBytes(payload);
       if (bytes === null) return { kind: "invalid-data", src };
-      if (bytes.byteLength > MAX_ARTIFACT_IMAGE_BYTES) {
+      if (bytes.byteLength > MAX_SVG_SOURCE_LENGTH) {
         return { kind: "data-oversized", src };
       }
       svgSource = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } else {
-      if (!percentEncodedPayloadFits(payload, MAX_ARTIFACT_IMAGE_BYTES)) {
-        return { kind: "data-oversized", src };
-      }
       svgSource = decodeURIComponent(payload);
       if (
-        new TextEncoder().encode(svgSource).byteLength >
-        MAX_ARTIFACT_IMAGE_BYTES
+        new TextEncoder().encode(svgSource).byteLength > MAX_SVG_SOURCE_LENGTH
       ) {
         return { kind: "data-oversized", src };
       }
@@ -159,23 +158,6 @@ function decodedBase64ByteLength(payload: string): number | null {
   else if (payload.endsWith("=")) padding = 1;
   const byteLength = (payload.length / 4) * 3 - padding;
   return byteLength;
-}
-
-function percentEncodedPayloadFits(payload: string, limit: number): boolean {
-  let byteLength = 0;
-  for (let index = 0; index < payload.length; index += 1) {
-    if (
-      payload[index] === "%" &&
-      /^[0-9a-f]{2}$/i.test(payload.slice(index + 1, index + 3))
-    ) {
-      byteLength += 1;
-      index += 2;
-    } else {
-      byteLength += new TextEncoder().encode(payload[index] ?? "").byteLength;
-    }
-    if (byteLength > limit) return false;
-  }
-  return true;
 }
 
 function rasterPixelCount(mediaType: string, payload: string): number | null {
