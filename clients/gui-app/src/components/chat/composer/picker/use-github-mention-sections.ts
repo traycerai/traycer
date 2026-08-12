@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -286,7 +286,7 @@ export function useGithubMentionSections(
   // deliberate - a remote hit that the filter excludes was fetched under those
   // same qualifiers, so it can only be excluded by a filter the user changed
   // while it was in flight.
-  const openRows = useMemo<ReadonlyArray<GithubMentionRow>>(() => {
+  const localRows = useMemo<ReadonlyArray<GithubMentionRow>>(() => {
     if (openSection === null) return EMPTY_ROWS;
     // Both inputs are narrowed to this section's entity type FIRST. The search
     // observer is the one that can hand over the other section's rows (see
@@ -304,6 +304,28 @@ export function useGithubMentionSections(
       limit,
     });
   }, [filter, limit, openCatalog.rows, openSection, query, search.rows]);
+
+  // Changing a funnel must not flash the list away and back.
+  //
+  // The catalog only ever sweeps the DEFAULT view, so a filter it cannot answer
+  // - `State: Merged` over a cache of open PRs - excludes every cached row the
+  // instant it is selected, and the only thing left to render is the appended
+  // `Searching GitHub…` row. The menu collapsed from a full list to one line
+  // and back on every filter change, and while the remote was slow or paused
+  // that empty frame read as "changing the filter does nothing".
+  //
+  // An empty local list under an in-flight search is "not answered yet", not
+  // "nothing matches", so the rows already on screen stay until the answer
+  // lands - the `keepPreviousData` bargain, applied one layer up, where the
+  // funnel is actually applied.
+  const openRows = useHeldRowsDuringSearch({
+    rows: localRows,
+    searching: search.isSearching,
+    // Keyed so the hold is only ever a FILTER swap. A new query or a different
+    // section is a different question, and answering it with the previous
+    // question's rows would be the lie this exists to avoid.
+    key: `${openSection ?? ""}\x1f${query}`,
+  });
 
   // Root rows are cache-only and unfiltered: the funnel is the SECTION's
   // control, and a narrowing set there must not quietly hide rows from the
@@ -438,6 +460,46 @@ function sectionContext(
   singleRepositoryScope: boolean,
 ): GithubMentionSectionContext {
   return { rows, singleRepositoryScope };
+}
+
+/**
+ * Keeps the last answered row set on screen while a search for the SAME
+ * question is in flight. See the call site for why a filter swap needs it.
+ *
+ * State adjusted DURING render rather than in an effect. An effect would paint
+ * the collapsed frame first and only then correct it, which is the exact frame
+ * this exists to remove; a ref would be read during render, which the compiler
+ * rejects and which would not re-render on its own anyway. React re-runs this
+ * render pass before committing, so the set converges in one paint.
+ */
+function useHeldRowsDuringSearch(input: {
+  readonly rows: ReadonlyArray<GithubMentionRow>;
+  readonly searching: boolean;
+  readonly key: string;
+}): ReadonlyArray<GithubMentionRow> {
+  const { rows, searching, key } = input;
+  const [held, setHeld] = useState<HeldRows | null>(null);
+  // A settled answer is always authoritative - INCLUDING a settled empty one,
+  // which is how "no merged pull requests here" survives rather than being
+  // papered over by whatever happened to be on screen before it.
+  const answered = !searching || rows.length > 0;
+  if (answered) {
+    const next = rows.length > 0 ? { key, rows } : null;
+    if (!sameHeldRows(held, next)) setHeld(next);
+    return rows;
+  }
+  return held !== null && held.key === key ? held.rows : rows;
+}
+
+interface HeldRows {
+  readonly key: string;
+  readonly rows: ReadonlyArray<GithubMentionRow>;
+}
+
+/** Identity comparison; the row array is never rebuilt for an unchanged answer. */
+function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.key === right.key && left.rows === right.rows;
 }
 
 /**
