@@ -40,6 +40,17 @@ export interface ImageAssetState {
   /** Byte progress ticket 04 may render; `totalBytes` is `null` until the header arrives. */
   readonly receivedBytes: number;
   readonly totalBytes: number | null;
+  /**
+   * Meaningful only at `status === "ready"`: whether `url` resolved from the
+   * shared `imageBlobCache` (a hit - `fetcher` below never ran) rather than
+   * a fresh stream. A brand-new `<img>` element mounted for a cache hit
+   * still reports `complete === false` at layout time even though the
+   * bytes are already local - that per-element browser signal can never
+   * carry "this was already resident" across a remount, but this
+   * asset-layer signal can, so a consumer can skip the entrance fade for a
+   * cache hit specifically without guessing from decode timing.
+   */
+  readonly servedFromCache: boolean;
 }
 
 export interface UseImageAssetResult extends ImageAssetState {
@@ -81,6 +92,7 @@ const LOADING_STATE: ImageAssetState = {
   reason: null,
   receivedBytes: 0,
   totalBytes: null,
+  servedFromCache: false,
 };
 
 /**
@@ -284,6 +296,7 @@ export function useImageAsset(
         reason: DECODE_FAILURE_REASON,
         receivedBytes: 0,
         totalBytes: null,
+        servedFromCache: false,
       },
     });
   }, []);
@@ -348,6 +361,7 @@ export function useImageAsset(
             reason: null,
             receivedBytes: 0,
             totalBytes: header.sizeBytes,
+            servedFromCache: false,
           },
         });
 
@@ -409,6 +423,10 @@ export function useImageAsset(
                 reason: null,
                 receivedBytes: header.sizeBytes,
                 totalBytes: header.sizeBytes,
+                // `usedForFetch` is exactly "did the fetcher run" - false
+                // means `imageBlobCache.acquire` resolved this lease from
+                // an existing entry without ever invoking it.
+                servedFromCache: !usedForFetch,
               },
             });
           },
@@ -424,6 +442,7 @@ export function useImageAsset(
                   pendingFailureMessage ?? "This image could not be loaded.",
                 receivedBytes: 0,
                 totalBytes: header.sizeBytes,
+                servedFromCache: false,
               },
             });
           },
@@ -452,6 +471,7 @@ export function useImageAsset(
             reason: describeFailure(failure),
             receivedBytes: 0,
             totalBytes: null,
+            servedFromCache: false,
           },
         });
       },

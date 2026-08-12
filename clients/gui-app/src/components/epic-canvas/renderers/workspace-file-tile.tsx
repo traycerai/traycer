@@ -327,6 +327,7 @@ function WorkspaceImageFileTile(props: {
           status={assetState.status}
           url={assetState.url}
           meta={assetState.meta}
+          servedFromCache={assetState.servedFromCache}
           fileName={node.name}
           compact={false}
           gesturesEnabled

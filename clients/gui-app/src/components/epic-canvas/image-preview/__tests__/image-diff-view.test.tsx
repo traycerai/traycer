@@ -42,6 +42,7 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
         reason: "This image could not be decoded.",
         receivedBytes: 0,
         totalBytes: null,
+        servedFromCache: false,
       };
       if (side === "old") {
         state.old = fallback;
@@ -90,6 +91,7 @@ beforeEach(() => {
     reason: null,
     receivedBytes: 12,
     totalBytes: 12,
+    servedFromCache: false,
   };
   state.new = {
     status: "ready",
@@ -103,6 +105,7 @@ beforeEach(() => {
     reason: null,
     receivedBytes: 18,
     totalBytes: 18,
+    servedFromCache: false,
   };
 });
 
@@ -164,6 +167,7 @@ describe("<ImageDiffView />", () => {
       reason: "This image could not be loaded.",
       receivedBytes: 0,
       totalBytes: null,
+      servedFromCache: false,
     };
 
     renderDiff({});
@@ -182,6 +186,7 @@ describe("<ImageDiffView />", () => {
       reason: "This image could not be loaded.",
       receivedBytes: 0,
       totalBytes: null,
+      servedFromCache: false,
     };
 
     renderDiff({ onOpenExternally: null });

@@ -251,6 +251,7 @@ beforeEach(() => {
     reason: null,
     receivedBytes: 1,
     totalBytes: 1,
+    servedFromCache: false,
   };
 });
 

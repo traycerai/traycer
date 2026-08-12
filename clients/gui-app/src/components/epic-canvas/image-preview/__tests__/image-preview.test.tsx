@@ -23,6 +23,7 @@ function renderPreview(
       status={status}
       url={status === "ready" ? "blob:image" : null}
       meta={meta}
+      servedFromCache={false}
       fileName="photo.png"
       compact={compact}
       gesturesEnabled

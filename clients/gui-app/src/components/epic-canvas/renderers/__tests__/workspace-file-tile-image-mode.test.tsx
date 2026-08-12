@@ -38,6 +38,7 @@ const state = vi.hoisted(() => ({
     reason: null as string | null,
     receivedBytes: 0,
     totalBytes: null as number | null,
+    servedFromCache: false,
   } satisfies ImageAssetState,
   assetRequests: [] as ImageAssetRequest[],
   readFileCalls: 0,
@@ -85,6 +86,7 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
         reason: "This image could not be decoded.",
         receivedBytes: 0,
         totalBytes: null,
+        servedFromCache: false,
       };
       forceRender((count) => count + 1);
     };
@@ -261,6 +263,7 @@ function resetState(): void {
     reason: null,
     receivedBytes: 0,
     totalBytes: null,
+    servedFromCache: false,
   };
   state.assetRequests.length = 0;
   state.readFileCalls = 0;
@@ -376,6 +379,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
         reason,
         receivedBytes: 0,
         totalBytes: 42,
+        servedFromCache: false,
       };
 
       renderTile(node);
@@ -414,6 +418,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
       reason: null,
       receivedBytes: 0,
       totalBytes: null,
+      servedFromCache: false,
     };
     rendered.rerender(
       <WorkspaceFileTile

@@ -363,6 +363,7 @@ function readyAsset(url: string): UseImageAssetResult {
     reason: null,
     receivedBytes: 2048,
     totalBytes: 2048,
+    servedFromCache: false,
     reportDecodeFailure: vi.fn(),
   };
 }
@@ -373,6 +374,7 @@ function renderPreview(compact: boolean): void {
       status="ready"
       url="blob:image"
       meta={META}
+      servedFromCache={false}
       fileName="photo.png"
       compact={compact}
       gesturesEnabled={!compact}
@@ -495,6 +497,7 @@ describe("image preview interactions", () => {
         status="ready"
         url="blob:large-image"
         meta={largeMeta}
+        servedFromCache={false}
         fileName="large.png"
         compact={false}
         gesturesEnabled

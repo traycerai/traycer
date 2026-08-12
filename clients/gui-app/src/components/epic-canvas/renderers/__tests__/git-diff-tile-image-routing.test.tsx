@@ -347,6 +347,7 @@ beforeEach(() => {
     reason: null,
     receivedBytes: 1,
     totalBytes: 1,
+    servedFromCache: false,
   };
   state.subscribe.mockReset();
   state.open.mockReset();

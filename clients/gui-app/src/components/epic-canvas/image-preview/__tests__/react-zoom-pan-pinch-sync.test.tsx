@@ -139,6 +139,7 @@ describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
         status="ready"
         url="blob:real-library"
         meta={META}
+        servedFromCache={false}
         fileName="photo.png"
         compact={false}
         gesturesEnabled
@@ -195,6 +196,7 @@ describe("react-zoom-pan-pinch 4.0.4 timing contract", () => {
         status="ready"
         url="blob:animated"
         meta={META}
+        servedFromCache={false}
         fileName="photo.png"
         compact={false}
         gesturesEnabled

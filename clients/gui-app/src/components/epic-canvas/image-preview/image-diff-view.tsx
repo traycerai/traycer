@@ -694,6 +694,7 @@ function ImageDiffSide(props: {
       status={status}
       url={asset.url}
       meta={asset.meta}
+      servedFromCache={asset.servedFromCache}
       fileName={props.effectivePath}
       compact
       gesturesEnabled={!props.compact}

@@ -448,6 +448,7 @@ describe("useImageAsset", () => {
       reason: null,
       receivedBytes: 0,
       totalBytes: 3,
+      servedFromCache: false,
     });
     expect(createObjectUrlMock).not.toHaveBeenCalled();
 
@@ -500,6 +501,13 @@ describe("useImageAsset", () => {
 
     expect(first.result.current.url).toBe("blob:image/1");
     expect(second.result.current.url).toBe("blob:image/1");
+    // `first` owns the fetch (its header triggered the fetcher that
+    // `emitBytes` above feeds); `second` resolves from the shared cache
+    // without ever invoking its own fetcher - a genuine cache hit, and
+    // exactly the case a fresh `<img>` remount can't detect via
+    // `img.complete` (ticket 07 closing E2E item).
+    expect(first.result.current.servedFromCache).toBe(false);
+    expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
     // Owning session self-closes once ITS OWN assetComplete lands
     // (de02da59: every terminal path closes), same as the redundant

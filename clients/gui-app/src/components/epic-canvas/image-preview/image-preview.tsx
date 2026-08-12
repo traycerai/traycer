@@ -53,6 +53,16 @@ export interface ImagePreviewProps {
   /** Blob URL; non-null only once `status === "ready"`. */
   readonly url: string | null;
   readonly meta: ImageAssetMeta | null;
+  /**
+   * Whether `url` resolved from the shared asset cache rather than a fresh
+   * stream (`ImageAssetState.servedFromCache`, ticket 07 closing E2E item:
+   * a brand-new `<img>` element mounted for a cache hit still reports
+   * `complete === false` at layout time even though the bytes are already
+   * local - that per-element browser signal can't carry "already resident"
+   * across a remount, but this asset-layer one can) - skips the entrance
+   * fade for a cache hit specifically. Only meaningful when `url !== null`.
+   */
+  readonly servedFromCache: boolean;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
   /** Drops this instance's own toolbar (ticket 05) - image-preview decision log, decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
@@ -639,6 +649,7 @@ export function ImagePreview(props: ImagePreviewProps) {
         {renderImagePreviewStage({
           status: props.status,
           url: props.url,
+          servedFromCache: props.servedFromCache,
           fileName: props.fileName,
           aspectRatio,
           setImgRef,
@@ -687,6 +698,8 @@ function copyButtonIcon(state: "idle" | "copied" | "error"): ReactNode {
 function renderImagePreviewStage(args: {
   readonly status: ImagePreviewStatus;
   readonly url: string | null;
+  /** Ticket 07 closing E2E item: skips `ImageStageImg`'s entrance fade for a cache hit, in both branches below. */
+  readonly servedFromCache: boolean;
   readonly fileName: string;
   readonly aspectRatio: number | null;
   readonly setImgRef: (el: HTMLImageElement | null) => void;
@@ -728,6 +741,7 @@ function renderImagePreviewStage(args: {
           <ImageStageImg
             url={args.url}
             fileName={args.fileName}
+            servedFromCache={args.servedFromCache}
             setImgRef={args.setImgRef}
             onDecodeError={args.onDecodeError}
             onNaturalSize={args.onNaturalSize}
@@ -800,6 +814,7 @@ function renderImagePreviewStage(args: {
             <ImageStageImg
               url={args.url}
               fileName={args.fileName}
+              servedFromCache={args.servedFromCache}
               setImgRef={args.setImgRef}
               onDecodeError={args.onDecodeError}
               onNaturalSize={args.onNaturalSize}
@@ -841,6 +856,8 @@ function renderSkeleton(aspectRatio: number | null): ReactNode {
 function ImageStageImg(props: {
   readonly url: string;
   readonly fileName: string;
+  /** Ticket 07 closing E2E item: see {@link ImagePreviewProps.servedFromCache}. */
+  readonly servedFromCache: boolean;
   readonly setImgRef: (el: HTMLImageElement | null) => void;
   readonly onDecodeError: () => void;
   /** Review finding #6: reports the blob-URL `<img>`'s own decoded natural size, the only way to fit/pan/zoom a host-reported-dimensionless file (every SVG). Ignored (never called) for a genuinely 0x0 decode. */
@@ -848,14 +865,23 @@ function ImageStageImg(props: {
   readonly className: string;
 }): ReactNode {
   // Skeleton -> image cross-fade (UI polish requirement #4): opacity-only,
-  // <=150ms, and SKIPPED for an already-cached URL - `HTMLImageElement`
-  // reports `complete: true` synchronously once the browser has the bytes
-  // decoded, which a fresh network load never does before this first
-  // render. `useLayoutEffect`, not `useEffect` (review finding #8): a
-  // passive effect runs AFTER the browser paints, so a cached remount still
-  // flashed one hidden frame before the fade; layout timing reads
-  // `complete` and applies it before that paint.
-  const { setImgRef, onNaturalSize } = props;
+  // <=150ms, and SKIPPED for an already-cached URL. `useLayoutEffect`, not
+  // `useEffect` (review finding #8): a passive effect runs AFTER the
+  // browser paints, so a cached remount still flashed one hidden frame
+  // before the fade; layout timing reads/applies the skip before that
+  // paint.
+  //
+  // Two independent cache-hit signals, both checked (ticket 07 closing E2E
+  // item): `img.complete` catches a genuinely fast decode on the SAME `<img>`
+  // element within this session, but a BRAND-NEW element (a fresh remount -
+  // a different pane, a switched file and back) always starts
+  // `complete === false` even when the underlying bytes are already
+  // resident, because browser decode state lives on the ELEMENT, not the
+  // URL - that per-element signal can never carry "already resident" across
+  // a remount. `props.servedFromCache` is the asset layer's OWN knowledge
+  // of exactly that (a hit against the shared blob cache), independent of
+  // any particular `<img>` element's decode history.
+  const { setImgRef, onNaturalSize, servedFromCache } = props;
   const [loaded, setLoaded] = useState(false);
   const localImgRef = useRef<HTMLImageElement | null>(null);
   const setImgEl = useCallback(
@@ -871,10 +897,10 @@ function ImageStageImg(props: {
     onNaturalSize({ width: el.naturalWidth, height: el.naturalHeight });
   }, [onNaturalSize]);
   useLayoutEffect(() => {
-    const complete = localImgRef.current?.complete === true;
+    const complete = servedFromCache || localImgRef.current?.complete === true;
     setLoaded(complete);
     if (complete) reportNaturalSizeIfKnown();
-  }, [props.url, reportNaturalSizeIfKnown]);
+  }, [props.url, servedFromCache, reportNaturalSizeIfKnown]);
   const handleLoad = useCallback((): void => {
     setLoaded(true);
     reportNaturalSizeIfKnown();
