@@ -21,7 +21,7 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV15 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
   WorktreeSubmoduleMergeFactV12,
@@ -327,12 +327,12 @@ type WorktreeSubmoduleMergeFactInput = Omit<
   >;
 
 function entry(
-  over: Partial<Omit<WorktreeHostEntryV14, "submodules">> & {
+  over: Partial<Omit<WorktreeHostEntryV15, "submodules">> & {
     worktreePath: string;
     branch: string;
     submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
-): WorktreeHostEntryV14 {
+): WorktreeHostEntryV15 {
   const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
@@ -359,11 +359,12 @@ function entry(
       })) ?? [],
     atBaseCommit: false,
     resolvedAt: 1,
+    presence: "present",
     ...rest,
   };
 }
 
-const WORKTREES: WorktreeHostEntryV14[] = [
+const WORKTREES: WorktreeHostEntryV15[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -420,17 +421,17 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV14[],
-): ReadonlyMap<string, WorktreeHostEntryV14> {
+  worktrees: readonly WorktreeHostEntryV15[],
+): ReadonlyMap<string, WorktreeHostEntryV15> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV14[];
+  readonly worktrees: readonly WorktreeHostEntryV15[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV14> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV15> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
@@ -2312,7 +2313,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV14 {
+  function merged(path: string, branch: string): WorktreeHostEntryV15 {
     return entry({
       worktreePath: path,
       branch,
@@ -2322,7 +2323,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV14[],
+    worktrees: readonly WorktreeHostEntryV15[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -2411,7 +2412,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV14 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV15 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -3704,8 +3705,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV14[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
+    readonly worktrees: readonly WorktreeHostEntryV15[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -3729,7 +3730,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV14[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV15[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -3967,7 +3968,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
       resolvedAt: 10,
     });
-    const unresolvedBase: WorktreeHostEntryV14 = {
+    const unresolvedBase: WorktreeHostEntryV15 = {
       ...lastKnown,
       branch: null,
       gitRemovable: false,
@@ -4269,7 +4270,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
       resolvedAt: 10,
     });
-    const detached: WorktreeHostEntryV14 = {
+    const detached: WorktreeHostEntryV15 = {
       ...oldActivity,
       branch: null,
       branchStatus: null,
@@ -4369,8 +4370,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV14[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
+    readonly worktrees: readonly WorktreeHostEntryV15[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (
@@ -4706,7 +4707,7 @@ describe("WorktreesList PR-number search", () => {
   // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
   // exist here - they only arrive on the enrichment overlay below. Building the
   // fixture this way is what makes the un-enriched cases honest.
-  const PR_BASE: readonly WorktreeHostEntryV14[] = [
+  const PR_BASE: readonly WorktreeHostEntryV15[] = [
     entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
     entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
     entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
@@ -4714,7 +4715,7 @@ describe("WorktreesList PR-number search", () => {
 
   // What those rows resolve to once probed: a superproject PR, a submodule-only
   // PR, and a row that genuinely has none.
-  const PR_ENRICHED: readonly WorktreeHostEntryV14[] = [
+  const PR_ENRICHED: readonly WorktreeHostEntryV15[] = [
     entry({
       worktreePath: "/wt/super-pr",
       branch: "feat-super-pr",
@@ -4744,7 +4745,7 @@ describe("WorktreesList PR-number search", () => {
   // The overlay with the named paths held back - i.e. still awaiting their probe.
   function enrichedExcept(
     unprobedPaths: readonly string[],
-  ): ReadonlyMap<string, WorktreeHostEntryV14> {
+  ): ReadonlyMap<string, WorktreeHostEntryV15> {
     return new Map(
       PR_ENRICHED.filter(
         (worktree) => !unprobedPaths.includes(worktree.worktreePath),
@@ -4760,7 +4761,7 @@ describe("WorktreesList PR-number search", () => {
   }
 
   function renderPrList(args: {
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
   }): void {
     renderList({

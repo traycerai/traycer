@@ -146,8 +146,18 @@ export const runnerQueryKeys = {
     ["runner.traycer.shellProbe", traycerCli, path] as const,
   traycerEnvOverrideList: (traycerCli: object) =>
     ["runner.traycer.envOverrideList", traycerCli] as const,
-  // Host-management queries are scoped by the `IHostManagement`
-  // instance identity so a host swap invalidates them cleanly.
+  // Host-management queries carry the `IHostManagement` instance as a key
+  // segment.
+  //
+  // It does NOT discriminate: `IHostManagement` and its desktop wrapper are
+  // method-only, so TanStack's key hash serializes every instance to `{}`.
+  // That is harmless here only because the bridge is app-wide and singular -
+  // `runnerHost.hostManagement` is this computer's local CLI bridge, and a
+  // remote host has none at all (those callers take the
+  // `...Unavailable()` keys). A host swap does not swap this object, so it is
+  // effectively a namespace marker rather than a scope. Anything that ever
+  // needs two live bridges to hold distinct cache entries has to key on a
+  // stable primitive instead - this segment will not do it.
   hostAvailableVersionsScope: (management: object) =>
     ["runner.host.availableVersions", management] as const,
   hostAvailableVersions: (management: object, includePreReleases: boolean) =>

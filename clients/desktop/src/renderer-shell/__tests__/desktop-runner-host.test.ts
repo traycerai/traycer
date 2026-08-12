@@ -79,6 +79,7 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {

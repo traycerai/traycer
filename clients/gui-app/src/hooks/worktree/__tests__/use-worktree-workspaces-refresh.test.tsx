@@ -11,7 +11,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   LEGACY_HOST_RESOLVED_AT,
-  type WorktreeWorkspaceSummaryV14,
+  type WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -46,7 +46,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
 
   it("lands the forced read in the cache entry the picker already renders from", async () => {
     const fixture = createFixture();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -90,7 +90,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // cache entries. Refreshing only the summary fixes the row's label and
     // leaves the deleted branch selectable as a new worktree's source.
     const fixture = createFixture();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -118,7 +118,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
       branch: "feature/login",
       resolvedAt: LEGACY_HOST_RESOLVED_AT,
     });
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -136,7 +136,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // view - leaving the label worse than if nothing had refreshed at all.
     const fixture = createFixture();
     fixture.holdCacheOnlyReads();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -162,13 +162,24 @@ describe("useWorktreeWorkspacesRefresh", () => {
     expect(rendered.result.current.branch).toBe("main");
   });
 
-  it("completes only once the branch list has caught up, not just been marked", async () => {
-    // `NewWorktreeForm` builds its selectable rows from `branchesQuery.data`
-    // and passes only `isLoading` to the list, so a refresh that resolves while
-    // the branch refetch is still `fetching` leaves the just-deleted branch
-    // selectable behind a spinner that has already stopped.
+  it("waits for the VISIBLE branch list before reporting done", async () => {
+    // Supersedes "settles without awaiting the branch-list fan-out (D3
+    // reversal)", which pinned fire-and-forget outright.
+    //
+    // D3's concern was awaiting INACTIVE branch queries - the list usually
+    // lives in an unmounted nested form - which wedged "Checking…" on relay
+    // round-trips nobody was watching. That concern survives and is still
+    // pinned, one test below. What did not survive is the conclusion: an
+    // active-only invalidation never fetches an inactive entry, so dropping
+    // the await bought nothing against it and cost the visible list. Refresh
+    // reported done while the mounted picker still showed cached branches, so
+    // a branch deleted outside Traycer - the reason someone presses Refresh -
+    // stayed selectable exactly when the spinner said it was safe to look.
+    //
+    // This fixture holds an ACTIVE read (the picker is mounted and
+    // observing), so it now pins the opposite of what it used to.
     const fixture = createFixture();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -189,17 +200,75 @@ describe("useWorktreeWorkspacesRefresh", () => {
         settled = true;
       });
     });
-    // The summary is back, but the branch list is still held - and this is the
-    // moment the old code called the refresh done.
-    await fixture.waitForHeldRequest("branch", 1);
+    // Summary force lands, branch list still held: refresh must NOT report
+    // done yet. The held read is the one the user is looking at.
+    await waitFor(() => {
+      expect(rendered.result.current.refresh.isRefreshing).toBe(true);
+    });
     expect(settled).toBe(false);
+
     await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
     });
 
+    expect(settled).toBe(true);
+    expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+    // The spinner cleared and the deleted branch is already gone - the two
+    // facts that were allowed to disagree before.
+    expect(rendered.result.current.branches).toEqual(["main"]);
+  });
+
+  it("does NOT wait for an unobserved branch list (the half of D3 that stands)", async () => {
+    // The other side of the test above, and the reason the await is
+    // `refetchType: "active"` rather than a plain await.
+    //
+    // The branch list usually lives in an unmounted nested form. Awaiting THAT
+    // is what D3 correctly refused: it wedged "Checking…" on serial relay
+    // round-trips for a list nobody had on screen. An active-only invalidation
+    // never fetches an inactive entry, so this must settle even with branch
+    // reads held.
+    const fixture = createFixture();
+    const rendered = renderHook(
+      ({ observe }: { observe: boolean }) =>
+        usePicker(fixture.client, PATHS, observe),
+      { wrapper: fixture.Wrapper, initialProps: { observe: true } },
+    );
+
     await waitFor(() => {
-      expect(rendered.result.current.branches).toEqual(["main"]);
+      expect(rendered.result.current.branches).toEqual([
+        "main",
+        "feature/login",
+      ]);
+    });
+
+    // The nested form closes: the entry stays in cache, with no observer.
+    rendered.rerender({ observe: false });
+    await waitFor(() => {
+      expect(fixture.isFetching()).toBe(0);
+    });
+
+    fixture.setNext({ branch: "main", resolvedAt: 7_000 });
+    fixture.setBranches(["main"]);
+    fixture.holdBranchReads();
+    let settled = false;
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh().then(() => {
+        settled = true;
+      });
+    });
+
+    // Held branch reads, and refresh still reports done - because the
+    // active-only invalidation never asked for them.
+    await waitFor(() => {
+      expect(settled).toBe(true);
+    });
+    expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+
+    await act(async () => {
+      fixture.releaseHeldReads();
+      await inFlight;
     });
   });
 
@@ -210,7 +279,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // per-path host entries, so the current key only needs re-reading.
     const fixture = createFixture();
     const rendered = renderHook(
-      (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths),
+      (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths, true),
       { wrapper: fixture.Wrapper, initialProps: PATHS },
     );
 
@@ -259,7 +328,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // exactly two is what proves the follow-up is bounded to one.
     const fixture = createFixture();
     fixture.swapHostOnEachForcedRead();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -284,7 +353,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // toasted "Couldn't refresh folder details." at a user who did nothing but
     // change hosts.
     const fixture = createFixture();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
     });
 
@@ -324,7 +393,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // user is looking at is still the pre-checkout one.
     const fixture = createFixture();
     const rendered = renderHook(
-      (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths),
+      (paths: ReadonlyArray<string>) => usePicker(fixture.client, paths, true),
       { wrapper: fixture.Wrapper, initialProps: PATHS },
     );
 
@@ -386,6 +455,81 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
     expect(fixture.calls()).toEqual([]);
   });
+
+  it("sets verifyFailed on a real (non-cancelled) forced-read error, and clears it on a successful retry", async () => {
+    const fixture = createFixture();
+    fixture.failNextForcedRead(new Error("relay unreachable"));
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("feature/login");
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(false);
+
+    await act(async () => {
+      await rendered.result.current.refresh.refresh().catch(() => undefined);
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(true);
+    // A real failure still toasts - distinct from the silent coordinator
+    // cancellation path exercised elsewhere in this file.
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+
+    // The next user-driven attempt clears the footer failure state up front,
+    // not only once the retry itself succeeds.
+    fixture.setNext({ branch: "main", resolvedAt: 7_000 });
+    await act(async () => {
+      await rendered.result.current.refresh.refresh();
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(false);
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("main");
+    });
+  });
+
+  it("sets verifyFailed when the one-hop post-host-change force fails", async () => {
+    // A→B cancel path: the outer refresh settles as CancelledError (no
+    // verifyFailed), then forceAgainstLiveHost fires against B. If THAT hop
+    // fails, the footer must still show the failure state — toast alone left
+    // it silently idle.
+    //
+    // Arm order matters: failNextForced is checked BEFORE holdForced in the
+    // fixture. Arming fail before A's request starts makes A reject
+    // immediately and waitForHeldRequest never sees a hold.
+    const fixture = createFixture();
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("feature/login");
+    });
+
+    fixture.holdForcedReads();
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh
+        .refresh()
+        .catch(() => undefined);
+    });
+    // A is held. NOW arm B to fail so the one-hop follow-up rejects.
+    await fixture.waitForHeldRequest("forced", 1);
+    fixture.failNextForcedRead(new Error("host B unreachable"));
+    // Abort the in-flight force under A; onError hands work to
+    // forceAgainstLiveHost against B, which fails immediately (failNext is
+    // checked before hold).
+    act(() => {
+      fixture.swapHost();
+    });
+    await act(async () => {
+      fixture.releaseHeldReads();
+      await inFlight;
+    });
+
+    expect(rendered.result.current.refresh.verifyFailed).toBe(true);
+    expect(toastSpy).toHaveBeenCalled();
+  });
 });
 
 /**
@@ -398,6 +542,9 @@ describe("useWorktreeWorkspacesRefresh", () => {
 function usePicker(
   client: HostClient<HostRpcRegistry>,
   workspacePaths: ReadonlyArray<string>,
+  // `false` leaves the branch cache entry populated but UNOBSERVED, which is
+  // the "unmounted nested form" case D3 was actually about.
+  observeBranches: boolean,
 ): {
   readonly branch: string | null;
   readonly branches: ReadonlyArray<string>;
@@ -413,7 +560,7 @@ function usePicker(
     client,
     method: "worktree.listBranches",
     params: { workspacePath: REPO, includeRemote: true },
-    options: { enabled: true },
+    options: { enabled: observeBranches },
   });
   return {
     branch: summaries[0]?.worktrees[0]?.branch ?? null,
@@ -431,7 +578,7 @@ function summariesFor(
   branch: string,
   resolvedAt: number | null,
 ): {
-  readonly workspaces: WorktreeWorkspaceSummaryV14[];
+  readonly workspaces: WorktreeWorkspaceSummaryV15[];
   readonly scriptsAtRefs: never[];
 } {
   return {
@@ -449,7 +596,7 @@ function workspaceSummary(args: {
   readonly workspacePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
-}): WorktreeWorkspaceSummaryV14 {
+}): WorktreeWorkspaceSummaryV15 {
   return {
     workspacePath: args.workspacePath,
     isGitRepo: true,
@@ -469,6 +616,7 @@ function workspaceSummary(args: {
     scripts: null,
     repoBranchPrefix: { status: "absent" },
     resolvedAt: args.resolvedAt,
+    presence: "present",
   };
 }
 
@@ -522,6 +670,8 @@ function createFixture(): {
    * held so a test can order settlement deterministically.
    */
   readonly releaseHeldOfKind: (kind: HeldRequestKind) => void;
+  /** The next forced read rejects with `error` instead of settling. */
+  readonly failNextForcedRead: (error: Error) => void;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -538,6 +688,7 @@ function createFixture(): {
   let holdCacheOnly = false;
   let holdForced = false;
   let holdBranches = false;
+  let failNextForced: Error | null = null;
   // Bounded so a regression that chases the host forever fails the count
   // assertion instead of spinning the suite.
   let swapsLeft = 0;
@@ -609,6 +760,11 @@ function createFixture(): {
         calls.push(params);
         const paths = params.workspacePaths;
         if (params.forceRefresh) {
+          if (failNextForced !== null) {
+            const error = failNextForced;
+            failNextForced = null;
+            return Promise.reject(error);
+          }
           if (swapsLeft > 0) {
             swapsLeft -= 1;
             client.bind(
@@ -618,7 +774,7 @@ function createFixture(): {
             );
           }
           const settle = (): {
-            readonly workspaces: WorktreeWorkspaceSummaryV14[];
+            readonly workspaces: WorktreeWorkspaceSummaryV15[];
             readonly scriptsAtRefs: never[];
           } => {
             cachedBranch = branch;
@@ -706,7 +862,7 @@ function createFixture(): {
       // Built with the hook's own key builders, so the assertion cannot drift
       // from the entry the rows actually render out of.
       const data = queryClient.getQueryData<{
-        readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
+        readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV15>;
       }>(
         queryKeys.hostMethod<HostRpcRegistry, "worktree.listByWorkspacePaths">(
           client.getActiveHostId(),
@@ -767,6 +923,9 @@ function createFixture(): {
     },
     releaseHeldOfKind: (kind) => {
       releaseKind(kind);
+    },
+    failNextForcedRead: (error) => {
+      failNextForced = error;
     },
   };
 }

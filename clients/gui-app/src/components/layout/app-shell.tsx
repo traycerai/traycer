@@ -6,7 +6,7 @@ import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-br
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
-import { HostConnectionDegradedBanner } from "@/components/layout/host-connection-degraded-banner";
+import { HostStatusStrip } from "@/components/layout/host-status-strip";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -45,7 +45,7 @@ export function AppShell(props: AppShellProps) {
           <RootDndProvider>
             <div className="relative flex h-screen w-full flex-col">
               <AppHeader variant="app" />
-              <HostConnectionDegradedBanner />
+              <HostStatusStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}

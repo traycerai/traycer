@@ -304,6 +304,27 @@ const LATEST_SCHEDULING = {
 
 export const HOST_METHOD_POLL_TABLE = {
   "host.status": { ...LATEST_SCHEDULING, poll: null },
+  // Restart commits host admission state before its deferred teardown.
+  "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The host's own name: a bounded read that can coalesce. It has no poll —
+  // the host watches `host-name.json`, so a rename made anywhere else lands on
+  // the next read (or the next explicit invalidation) rather than needing one.
+  "host.identity.get": { ...LATEST_SCHEDULING, poll: null },
+  // Renaming persists a file the heartbeat then publishes; rapid edits must
+  // land in the order the user made them, so this is never coalesced.
+  "host.identity.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.doctor": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.check": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.install": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
@@ -1237,6 +1258,43 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Config reads and bounded diagnostics reads can coalesce safely; config
+  // writes are ordered so rapid user changes are all persisted in sequence.
+  "config.shell.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.add": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.revertArgs": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.listDetected": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.list": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.env.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.logLevels.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
+  "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The
   // Settings panel controls its own refetch (window/metric change, manual
   // retry) and opts out of polling; the ambient epic cost badge opts in

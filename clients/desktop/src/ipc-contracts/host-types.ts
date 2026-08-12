@@ -68,3 +68,4 @@ export type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+export type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";

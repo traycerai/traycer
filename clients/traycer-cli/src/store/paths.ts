@@ -1,6 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  cliInstallHomeDir as sharedCliInstallHomeDir,
+  cliManifestPath as sharedCliManifestPath,
+  hostInstallDir as sharedHostInstallDir,
+  hostInstallRecordPath as sharedHostInstallRecordPath,
+  hostStagedDir as sharedHostStagedDir,
+  hostStagedRecordPath as sharedHostStagedRecordPath,
+} from "@traycer/protocol/config/installation";
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
@@ -35,7 +43,6 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
-const HOST_INSTALL_SUBDIR = "install";
 // The host install temp/extract area (verify-before-replace), kept distinct
 // from the host root. Named "install-staging" for clarity. Also the root
 // under which `host download`'s owner-tokened download/extract temp dirs
@@ -43,14 +50,11 @@ const HOST_INSTALL_SUBDIR = "install";
 // transient, verify-before-replace scratch space for the same install
 // tree, so they share one root.
 const HOST_STAGING_SUBDIR = "install-staging";
-const HOST_INSTALL_RECORD_FILENAME = "install.json";
 // The single-slot staged-download area: a fully extracted, verified host
 // tree ready to promote into `install/` (Host Update Layer Redesign Tech
 // Plan, "CLI: two-phase split with a staged store"). Distinct from
 // `install-staging/`, which is scratch space that never itself becomes the
 // final install dir.
-const HOST_STAGED_SUBDIR = "staged";
-const HOST_STAGED_RECORD_FILENAME = "staged.json";
 // Where a registry archive is streamed to disk while it downloads. Unlike
 // `install-staging/`, this area is deliberately NOT per-invocation: the
 // archive path is derived from the version + sha256 so a re-spawned CLI
@@ -115,9 +119,7 @@ export function cliHomeDir(environment: Environment | undefined): string {
 }
 
 export function cliInstallHomeDir(environment: Environment): string {
-  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
-  if (devSlot !== null) return devRunSubdir(CLI_HOME, devSlot);
-  return cliHomeDir(environment);
+  return sharedCliInstallHomeDir(environment);
 }
 
 /**
@@ -138,7 +140,7 @@ export function cliChatPartCacheDir(): string {
 }
 
 export function cliManifestPath(environment: Environment): string {
-  return join(cliInstallHomeDir(environment), "manifest.json");
+  return sharedCliManifestPath(environment);
 }
 export function cliLockPath(environment: Environment): string {
   return join(cliInstallHomeDir(environment), ".lock");
@@ -239,13 +241,13 @@ export function bootstrapLogPath(environment: Environment | undefined): string {
 // the swap. Both environments stay isolated under the single ~/.traycer/
 // root per the Tech Plan; there is no cross-environment sharing.
 export function hostInstallDir(environment: Environment): string {
-  return join(hostHomeDir(environment), HOST_INSTALL_SUBDIR);
+  return sharedHostInstallDir(environment);
 }
 export function hostStagingRoot(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_STAGING_SUBDIR);
 }
 export function hostInstallRecordPath(environment: Environment): string {
-  return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
+  return sharedHostInstallRecordPath(environment);
 }
 // Cross-process handoff marker `traycer host update` writes before it
 // touches anything and clears/rewrites on outcome - see
@@ -260,12 +262,12 @@ export function hostDownloadCacheDir(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_DOWNLOAD_CACHE_SUBDIR);
 }
 
-// Single-slot staged store - see the `HOST_STAGED_SUBDIR` comment above.
+// Single-slot staged store - see the installation-layout comment above.
 export function hostStagedDir(environment: Environment): string {
-  return join(hostHomeDir(environment), HOST_STAGED_SUBDIR);
+  return sharedHostStagedDir(environment);
 }
 export function hostStagedRecordPath(environment: Environment): string {
-  return join(hostStagedDir(environment), HOST_STAGED_RECORD_FILENAME);
+  return sharedHostStagedRecordPath(environment);
 }
 
 export async function ensureTraycerHomeDir(): Promise<void> {
