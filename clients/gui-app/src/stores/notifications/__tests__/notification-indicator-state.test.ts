@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HostNotificationsCloudFeedRow } from "@traycer/protocol/host/notifications/contracts";
 import {
   mergeHostPendingForkIntoCloudIndicators,
+  selectCloudNotificationIndicatorProjection,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
@@ -25,6 +26,7 @@ describe("notification indicator state", () => {
         },
       },
       { epicId: "epic-1", chatId: "chat-1" },
+      null,
       {
         epics: {},
         chats: {
@@ -66,16 +68,51 @@ describe("notification indicator state", () => {
         },
       },
       { epicId: "epic-1" },
+      null,
       { epics: {}, chats: {} },
     );
 
     expect(state.unreadFailure).toBe(true);
   });
+
+  it("keeps a host-bound tab free of another host's local failure", () => {
+    const state = {
+      byId: {
+        failure: {
+          id: "failure",
+          originHostId: "host-a",
+          updatedAt: 1,
+          readAt: null,
+          kind: "stream.transport.error" as const,
+          sourceRef: "chat-1",
+          payload: {
+            kind: "chat" as const,
+            epicId: "epic-1",
+            chatId: "chat-1",
+          },
+          message: "Connection lost",
+          detail: null,
+          displayedUpdatedAt: null,
+        },
+      },
+    };
+    const entity = { epicId: "epic-1", chatId: "chat-1" };
+    const indicators = { epics: {}, chats: {} };
+
+    expect(
+      selectNotificationIndicatorState(state, entity, "host-b", indicators)
+        .unreadFailure,
+    ).toBe(false);
+    expect(
+      selectNotificationIndicatorState(state, entity, "host-a", indicators)
+        .unreadFailure,
+    ).toBe(true);
+  });
 });
 
-/** The cloud predicates are a port of the host's `indicatorState` SQL, so
- * these pin the four `MAX(CASE WHEN ...)` arms and the entity join against
- * that source rather than against the shape of the code under them. */
+/** The cloud predicates mirror the host's `indicatorState` SQL, so these pin
+ * prompt aggregation, terminal chronology, and the entity join against that
+ * source rather than against the shape of the code under them. */
 describe("cloud notification indicator derivation", () => {
   function wrap(
     entryId: string,
@@ -96,20 +133,36 @@ describe("cloud notification indicator derivation", () => {
     severity: "done" | "failure" | "info",
     readAt: number | null,
   ): HostNotificationsCloudFeedRow {
-    return wrap(entryId, {
-      id: entryId,
-      updatedAt: 1,
+    return stoppedAt({
+      entryId,
+      severity,
       readAt,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+  }
+
+  function stoppedAt(input: {
+    readonly entryId: string;
+    readonly severity: "done" | "failure" | "info";
+    readonly readAt: number | null;
+    readonly updatedAt: number;
+    readonly chatId: string;
+  }): HostNotificationsCloudFeedRow {
+    return wrap(input.entryId, {
+      id: input.entryId,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
       kind: "agent.stopped",
       sourceRef: null,
-      severity,
+      severity: input.severity,
       outcome: "completed",
       epicId: "epic-1",
-      chatId: "chat-1",
+      chatId: input.chatId,
       payload: {
         kind: "chat",
         epicId: "epic-1",
-        chatId: "chat-1",
+        chatId: input.chatId,
         outcome: "completed",
       },
     });
@@ -154,17 +207,239 @@ describe("cloud notification indicator derivation", () => {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
-  it("aggregates a chat's rows into the entity's flags", () => {
+  it("uses the newest terminal outcome for a chat", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
-        stopped("done-unread", "done", null),
-        stopped("failure-unread", "failure", null),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
       ]),
       [],
       ["chat-1"],
     );
 
     expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: false,
+      unreadDone: true,
+    });
+  });
+
+  it("keeps a newer failure above an older completion", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: false,
+    });
+  });
+
+  it("does not let an independent completion hide a failure on the same chat", () => {
+    const failure = stoppedAt({
+      entryId: "workspace-failure",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "agent-done",
+      severity: "done",
+      readAt: null,
+      updatedAt: 2,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        { ...failure, coalesceKey: "workspace.operation.failed:event-1" },
+        { ...done, coalesceKey: "agent.stopped:chat-1" },
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.epics["epic-1"]).toMatchObject({
+      unreadFailure: true,
+      unreadDone: true,
+    });
+    expect(result.chats["chat-1"]).toMatchObject({
+      unreadFailure: true,
+      unreadDone: true,
+    });
+  });
+
+  it("preserves an unread failure when terminal timestamps tie", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "a-failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "z-done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: false,
+    });
+  });
+
+  it("does not compare terminal timestamps across origin hosts", () => {
+    const failure = stoppedAt({
+      entryId: "failure-unread",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 100,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "done-unread",
+      severity: "done",
+      readAt: null,
+      updatedAt: 1_000,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        { ...failure, originHostId: "host-a" },
+        { ...done, originHostId: "host-b" },
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: true,
+    });
+  });
+
+  it("keeps per-origin feed indicators separate for host-bound tabs", () => {
+    const failure = stoppedAt({
+      entryId: "failure-unread",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 100,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "done-unread",
+      severity: "done",
+      readAt: null,
+      updatedAt: 200,
+      chatId: "chat-1",
+    });
+    const projection = selectCloudNotificationIndicatorProjection(
+      rowsById([
+        { ...failure, originHostId: "host-a" },
+        { ...done, originHostId: "host-b" },
+      ]),
+      [],
+      ["chat-1"],
+    );
+    const indicators = {
+      ...projection.aggregate,
+      byOriginHostId: projection.byOriginHostId,
+    };
+    const local = { byId: {} };
+    const entity = { epicId: "epic-1", chatId: "chat-1" };
+
+    expect(
+      selectNotificationIndicatorState(local, entity, null, indicators),
+    ).toMatchObject({ unreadFailure: true, unreadDone: true });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-a", indicators),
+    ).toMatchObject({ unreadFailure: true, unreadDone: false });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-b", indicators),
+    ).toMatchObject({ unreadFailure: false, unreadDone: true });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-c", indicators),
+    ).toEqual({
+      pendingApproval: false,
+      pendingFork: false,
+      pendingInterview: false,
+      unreadDone: false,
+      unreadFailure: false,
+    });
+  });
+
+  it("does not let one chat's completion hide a sibling failure", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-2",
+        }),
+      ]),
+      ["epic-1"],
+      [],
+    );
+
+    expect(result.epics["epic-1"]).toEqual({
       pendingApproval: false,
       pendingInterview: false,
       pendingFork: false,
@@ -195,6 +470,31 @@ describe("cloud notification indicator derivation", () => {
     );
 
     expect(result.chats["chat-1"]).toBeUndefined();
+  });
+
+  it("keeps a read completion as the quiet winner over an older failure", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "done-read",
+          severity: "done",
+          readAt: 3,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result).toEqual({ epics: {}, chats: {} });
   });
 
   it("pends an approval only while resolvedAt is null", () => {
@@ -285,7 +585,7 @@ describe("cloud notification indicator authority", () => {
       },
     };
 
-    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host)).toEqual({
+    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host, null)).toEqual({
       epics: cloud.epics,
       chats: {
         "chat-1": {

@@ -306,6 +306,7 @@ function renderIcon() {
   return render(
     <ChatProgressIcon
       chatId={CHAT_ID}
+      originHostId={null}
       className={undefined}
       epicId={EPIC_ID}
       mutedClassName="text-muted-foreground"
@@ -317,6 +318,7 @@ function renderIcon() {
 
 function createHandle(): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: null,

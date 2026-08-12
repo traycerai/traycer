@@ -175,6 +175,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -251,6 +252,7 @@ import {
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
   epicEditCommentV10,
+  epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
@@ -273,6 +275,7 @@ import {
   epicMentionSpecsV10,
   epicMentionStoriesV10,
   epicMentionTicketsV10,
+  epicPrepareArtifactImageV10,
   epicRemoveRepoV10,
   epicRecordViewedV10,
   epicRenameArtifactV10,
@@ -4782,6 +4785,32 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  "epic.prepareArtifactImage": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicPrepareArtifactImageV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.finishArtifactImage": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicFinishArtifactImageV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.createTuiAgent": {
     1: {
       latestMinor: 1,
@@ -6748,7 +6777,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -6770,6 +6799,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         6: {
           contract: chatSubscribeV16,
+        },
+        7: {
+          contract: chatSubscribeV17,
         },
       },
     },

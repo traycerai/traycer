@@ -275,6 +275,7 @@ describe("accumulateEvent", () => {
       timestamp: 3,
       toolName: "Bash",
       agentMessageSend: null,
+      imageResults: [],
     });
     expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
   });
@@ -332,6 +333,7 @@ describe("accumulateEvent", () => {
       timestamp: 2,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
 
     expect(blocks).toHaveLength(1);
@@ -364,6 +366,7 @@ describe("accumulateEvent", () => {
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
       backgroundTask: true,
+      imageResults: [],
     });
 
     expect(blocks).toHaveLength(1);
@@ -404,6 +407,7 @@ describe("accumulateEvent", () => {
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
       backgroundTask: true,
+      imageResults: [],
     });
 
     expect(blocks[0].status).toBe("completed");
@@ -566,6 +570,7 @@ describe("accumulateEvent", () => {
       timestamp: 3,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
 
     // another text delta with new blockId
@@ -686,6 +691,7 @@ describe("accumulateEvent", () => {
       timestamp: 4,
       toolName: "read_file",
       agentMessageSend: null,
+      imageResults: [],
     });
     blocks = accumulateEvent(blocks, {
       type: "approval.requested",
@@ -3472,5 +3478,133 @@ describe("accumulateEvent - provider_notice.upsert", () => {
 
     expect(parsed.sender).toBeNull();
     expect((blocks[0] as SteerBlock).sender).toBeNull();
+  });
+
+  // ── image generation (chat.subscribe@1.7) ──────────────────
+
+  it("tool_call.completed stamps imageResults onto an existing block", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc-img",
+      timestamp: 1,
+      toolName: "image_gen",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc-img",
+      timestamp: 2,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [
+        {
+          attachmentHash: "sha256-a",
+          mediaType: "image/png",
+          byteLength: 100,
+          width: 10,
+          height: 10,
+          alt: null,
+          revisedPrompt: null,
+          filePath: null,
+        },
+      ],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      {
+        attachmentHash: "sha256-a",
+        mediaType: "image/png",
+        byteLength: 100,
+        width: 10,
+        height: 10,
+        alt: null,
+        revisedPrompt: null,
+        filePath: null,
+      },
+    ]);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc-img",
+      timestamp: 3,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      expect.objectContaining({ attachmentHash: "sha256-a" }),
+    ]);
+  });
+
+  it("tool_call.completed creates a completed block with imageResults when no prior started event exists", () => {
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "tool_call.completed",
+      blockId: "tc-img-only",
+      timestamp: 3,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [
+        {
+          attachmentHash: "sha256-b",
+          mediaType: "image/jpeg",
+          byteLength: 200,
+          width: null,
+          height: null,
+          alt: "photo",
+          revisedPrompt: null,
+          filePath: "/tmp/b.jpg",
+        },
+      ],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("tool_call");
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      {
+        attachmentHash: "sha256-b",
+        mediaType: "image/jpeg",
+        byteLength: 200,
+        width: null,
+        height: null,
+        alt: "photo",
+        revisedPrompt: null,
+        filePath: "/tmp/b.jpg",
+      },
+    ]);
+  });
+
+  it("image_resolution.updated is a no-op on the block list", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "read_file",
+      agentMessageSend: null,
+    });
+    const before = blocks;
+    const after = accumulateEvent(blocks, {
+      type: "image_resolution.updated",
+      blockId: "assistant-1",
+      timestamp: 2,
+      turnId: "turn-1",
+      messageId: "assistant-1",
+      entry: {
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        attachmentHash: null,
+        mediaType: null,
+        width: null,
+        height: null,
+        state: "consent-required",
+      },
+    });
+
+    expect(after).toBe(before);
+    expect(after).toHaveLength(1);
+    expect(after[0].type).toBe("tool_call");
   });
 });

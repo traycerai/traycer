@@ -39,7 +39,8 @@ interface NotificationIndicatorIconProps {
  * The single renderer for notification status icons. Notification state wins
  * over live activity: errors first, then unresolved prompts, followed by the
  * session-backed running indicator (turn spinner, or the muted background
- * variant) and unread completion.
+ * variant) and unread completion. Producers suppress historical failures per
+ * exact entity before aggregate state reaches this renderer.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,

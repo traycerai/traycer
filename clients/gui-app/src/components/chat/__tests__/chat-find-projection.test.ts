@@ -148,6 +148,7 @@ describe("chat find projection", () => {
         progress: null,
         backgroundOutput: null,
         backgroundTask: false,
+        imageResults: [],
         durationMs: null,
         startedAt: 0,
         parentId: null,
@@ -278,6 +279,7 @@ describe("chat find projection", () => {
           backgroundOutput: null,
           // No durable marker - promotion is visible ONLY through the live set.
           backgroundTask: false,
+          imageResults: [],
           durationMs: null,
           startedAt: 0,
           parentId: null,
