@@ -32,6 +32,31 @@ export interface HostDisplayIdentity {
 }
 
 /**
+ * The string an untouched name form opens with, and the baseline its dirtiness
+ * is measured against — derived ONCE, for both transports.
+ *
+ * It existed twice, and the two copies did not agree: the bridge card seeded
+ * `customName ?? systemName` while the RPC page seeded `customName ??
+ * effectiveName`. That only looks equivalent under the unwritten assumption
+ * that `effectiveName === customName ?? systemName`, which is exactly what a
+ * PROVISIONED host breaks — its effective name folds a registration label, so
+ * the two seeds differ and an untouched form reads as dirty on one path.
+ *
+ * `effectiveName` is the correct fallback: it is the name the host actually
+ * publishes, so an unnamed provisioned host opens showing its label rather
+ * than a hostname nobody chose.
+ */
+export function persistedDraftFromIdentity(
+  // Both absences, because the two transports spell it differently: the bridge
+  // card holds `undefined` while the RPC view holds `null`. Widening here beats
+  // making one call site launder its own value.
+  identity: HostDisplayIdentity | null | undefined,
+): string {
+  if (identity === null || identity === undefined) return "";
+  return identity.customName ?? identity.effectiveName;
+}
+
+/**
  * The BRIDGE path's draft rule, used only by the recovery console.
  *
  * Typing the machine's own name means "clear the override", which is correct

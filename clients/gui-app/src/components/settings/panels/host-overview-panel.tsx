@@ -31,6 +31,7 @@ import {
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import {
   managedInstallation,
   useHostIdentityQuery,
@@ -468,7 +469,7 @@ function useOverviewDisplay(input: {
   return {
     identity,
     displayName: identity?.effectiveName ?? host?.name ?? scope.hostLabel,
-    persistedNameDraft: identity?.customName ?? identity?.effectiveName ?? "",
+    persistedNameDraft: persistedDraftFromIdentity(identity),
     endpointParts,
     hostVersion,
     updateProgress: status?.updateProgress ?? null,

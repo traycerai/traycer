@@ -7,6 +7,7 @@ import { HostProgressBanner } from "@/components/settings/panels/host-settings-p
 import { HostUpdateRegion } from "@/components/settings/panels/host-settings-update-region";
 import {
   customNameFromDraft,
+  persistedDraftFromIdentity,
   statusColorClass,
   statusDescription,
   statusLabel,
@@ -143,11 +144,7 @@ export function HostSummaryCard(props: HostSummaryCardProps): ReactNode {
             settings={nameEdit.settings}
             pending={nameEdit.pending}
             draftName={nameEdit.draft}
-            persistedDraft={
-              nameEdit.settings === undefined
-                ? ""
-                : (nameEdit.settings.customName ?? nameEdit.settings.systemName)
-            }
+            persistedDraft={persistedDraftFromIdentity(nameEdit.settings)}
             savePending={nameEdit.savePending}
             // The BRIDGE rule: this card is the recovery console's, and the
             // console writes this computer's name file. See
