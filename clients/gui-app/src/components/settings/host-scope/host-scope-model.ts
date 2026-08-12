@@ -296,6 +296,46 @@ export function transientClientEntry(
   return host.entry;
 }
 
+/** Why a config surface is reading this computer's disk instead of a host RPC. */
+export type LocalConfigFallbackReason = "host-stopped" | "host-outdated";
+
+/**
+ * Whether a config surface may honestly read the on-disk store through the
+ * local CLI bridge instead of over the host's own RPC — and if so, why.
+ *
+ * One condition is non-negotiable: the row must be THIS machine
+ * (`isLocalMachine`, an id identity — see `buildHostScopeOptions`). The store
+ * the bridge reads is machine-OS-user-global, so for a local row it describes
+ * exactly the host being named; for any remote row it would be the substitution
+ * the whole scope model exists to prevent. A remote host that cannot answer has
+ * no local truth to fall back to and must say so instead.
+ *
+ * Given that, two states make the RPC path unusable, and both must fall back or
+ * a working page would go dark:
+ *
+ *   - **`host-stopped`** — no route to the process exists (`connectable`, the
+ *     same dialability rule `deriveHostScopeStatus` turns into `unreachable`).
+ *   - **`host-outdated`** — the process answered a handshake that did not carry
+ *     the config methods. This one matters most during a fleet update: the app
+ *     updates before the host it manages, and without this branch shell and
+ *     diagnostics editing would disappear for exactly that window even though
+ *     the on-disk store is right here and the host reads it on start.
+ *
+ * `methodsSupported` is deliberately the TRI-STATE answer.  `null` means no
+ * handshake has completed yet — and the panel's own first RPC is what produces
+ * one — so treating it as absent would abandon the RPC path before it was ever
+ * tried, permanently, for a host that supports everything.
+ */
+export function localConfigFallbackReason(
+  host: HostScopeOption | null,
+  methodsSupported: boolean | null,
+): LocalConfigFallbackReason | null {
+  if (host === null || !host.isLocalMachine) return null;
+  if (!host.connectable) return "host-stopped";
+  if (methodsSupported === false) return "host-outdated";
+  return null;
+}
+
 export function findHostOption(
   options: readonly HostScopeOption[],
   hostId: string | null,

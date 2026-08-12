@@ -1,8 +1,5 @@
-import {
-  LOG_LEVELS,
-  isLogLevel,
-  type LogLevel,
-} from "@traycer/protocol/config/log-level";
+import { LOG_LEVELS, isLogLevel } from "@traycer/protocol/config/log-level";
+import type { LogLevel } from "@traycer/protocol/config/log-level";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
   Select,
@@ -11,13 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useRunnerLogLevelsQuery } from "@/hooks/runner/use-runner-log-levels-query";
-import { useRunnerLogLevelsSet } from "@/hooks/runner/use-runner-log-levels-set-mutation";
-import {
-  getLogLevelsBridge,
-  selectScopeLevel,
-  type LogLevelScope,
-} from "@/lib/desktop-log-levels";
+import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
 
 const LOG_LEVEL_LABEL: Record<LogLevel, string> = {
   trace: "Trace",
@@ -28,9 +19,7 @@ const LOG_LEVEL_LABEL: Record<LogLevel, string> = {
 };
 
 interface LogLevelRowProps {
-  readonly scope: LogLevelScope;
-  readonly label: string;
-  readonly description: string;
+  readonly control: LogLevelControl;
   // Externally-driven disable, e.g. a caller-coordinated bulk reset across
   // several `LogLevelRow`s - so the row can't fire a conflicting per-scope
   // mutation while that coordinated operation is in flight.
@@ -38,44 +27,35 @@ interface LogLevelRowProps {
 }
 
 /**
- * One Settings dropdown for a log threshold (desktop / cli / host). Reads the
- * shared log-levels query (deduped across the rows) and writes through the set
- * mutation. Renders nothing outside the desktop shell, where the bridge — and
- * therefore the config — is absent.
+ * One Settings dropdown for a log threshold. Purely presentational: the control
+ * arrives with its own transport already resolved (local bridge for `desktop`,
+ * the selected host's config RPC for `cli`/`host` - see `LogLevelControl`), so
+ * this row is identical whichever machine is answering.
  */
 export function LogLevelRow(props: LogLevelRowProps) {
-  const { scope, label, description, disabled } = props;
-  const query = useRunnerLogLevelsQuery();
-  const setMutation = useRunnerLogLevelsSet();
-
-  if (getLogLevelsBridge() === null) return null;
-
-  const value =
-    query.data === undefined ? undefined : selectScopeLevel(query.data, scope);
+  const { control, disabled } = props;
 
   return (
     <SettingsRow
-      label={label}
-      description={description}
+      label={control.label}
+      description={control.description}
       control={
         <Select
-          value={value}
-          disabled={
-            disabled ||
-            query.isPending ||
-            query.isError ||
-            setMutation.isPending
-          }
+          value={control.level}
+          disabled={disabled || control.busy}
           onValueChange={(next) => {
             if (isLogLevel(next)) {
-              setMutation.mutate({ scope, level: next });
+              void control.set(next).catch(() => {
+                // The control's own transport toasts; a rejection here is the
+                // already-reported failure travelling back out of `set`.
+              });
             }
           }}
         >
           <SelectTrigger
             className="w-[min(40vw,9rem)]"
-            aria-label={label}
-            data-testid={`settings-log-level-${scope}`}
+            aria-label={control.label}
+            data-testid={`settings-log-level-${control.scope}`}
           >
             <SelectValue placeholder="Loading…" />
           </SelectTrigger>
