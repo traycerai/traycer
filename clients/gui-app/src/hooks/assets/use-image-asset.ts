@@ -184,27 +184,6 @@ function isWorktreeBackedRequest(request: ImageAssetRequest): boolean {
   return request.side === "new" && request.stage === "unstaged";
 }
 
-/** Built directly from primitive fields, inside the effect that needs it (no memoization - see the hook's doc comment). */
-function buildImageAssetRequest(fields: {
-  readonly method: "workspace" | "git" | null;
-  readonly filePath: string | null;
-  readonly workspacePath: string | null;
-  readonly runningDir: string | null;
-  readonly previousPath: string | null;
-  readonly side: "old" | "new" | null;
-  readonly stage: "staged" | "unstaged" | null;
-}): ImageAssetRequest | null {
-  const { method, filePath } = fields;
-  if (method === null || filePath === null) return null;
-  if (method === "workspace") {
-    if (fields.workspacePath === null) return null;
-    return { method, workspacePath: fields.workspacePath, filePath };
-  }
-  const { runningDir, previousPath, side, stage } = fields;
-  if (runningDir === null || side === null || stage === null) return null;
-  return { method, runningDir, filePath, previousPath, side, stage };
-}
-
 /**
  * Fetches one image asset - a workspace file or one side of a git-tracked
  * file - over the ticket-01 asset stream, surfacing the header before bytes
@@ -215,11 +194,12 @@ function buildImageAssetRequest(fields: {
  * `useHostStreamClientFor`), never the renderer-default host - mirrors
  * `usePrDetailSubscription`'s tab-scoped stream pattern.
  *
- * `request` is reduced to primitive fields (not a `useMemo`-stabilized
- * object) precisely because the caller passes a fresh literal every render;
- * the effect below depends on those primitives directly and reconstructs the
- * typed request from them itself - `buildImageAssetRequest` is a plain
- * function, not a hook, so it needs no memoization to stay cheap.
+ * The caller passes a fresh `request` literal every render, so the fetch
+ * effect below depends on `requestKeyFor(request)` (a string, stable across
+ * renders for the same logical request) rather than `request` itself - a
+ * same-key request is guaranteed field-equivalent, so `latestRequestRef`
+ * (kept in sync every render, read only inside the effect) is always the
+ * right one to act on whenever the effect actually re-runs.
  *
  * On a re-focus of a worktree-backed request (a workspace file, or a git
  * side's unstaged worktree position), the stream reopens to re-stat the file
@@ -240,31 +220,12 @@ export function useImageAsset(
   const wsStreamClient = useHostStreamClientFor(target, auth);
   const paneFocused = usePaneFocused();
 
-  const method = request?.method ?? null;
-  const filePath = request?.filePath ?? null;
-  const workspacePath =
-    request?.method === "workspace" ? request.workspacePath : null;
-  const [runningDir, previousPath, side, stage] =
-    request?.method === "git"
-      ? ([
-          request.runningDir,
-          request.previousPath,
-          request.side,
-          request.stage,
-        ] as const)
-      : ([null, null, null, null] as const);
-
-  const currentRequest = buildImageAssetRequest({
-    method,
-    filePath,
-    workspacePath,
-    runningDir,
-    previousPath,
-    side,
-    stage,
+  const requestKey = request === null ? null : requestKeyFor(request);
+  const latestRequestRef = useRef(request);
+  useEffect(() => {
+    latestRequestRef.current = request;
   });
-  const isWorktreeBacked =
-    currentRequest !== null && isWorktreeBackedRequest(currentRequest);
+  const isWorktreeBacked = request !== null && isWorktreeBackedRequest(request);
 
   // Re-stat on refocus (decision #11): only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
@@ -328,15 +289,7 @@ export function useImageAsset(
   }, []);
 
   useEffect(() => {
-    const normalizedRequest = buildImageAssetRequest({
-      method,
-      filePath,
-      workspacePath,
-      runningDir,
-      previousPath,
-      side,
-      stage,
-    });
+    const normalizedRequest = latestRequestRef.current;
     if (normalizedRequest === null || wsStreamClient === null) {
       isMountedRef.current = false;
       cacheKeyRef.current = null;
@@ -543,23 +496,10 @@ export function useImageAsset(
       if (!usedForFetch) client.close();
       releaseLease?.();
     };
-  }, [
-    method,
-    filePath,
-    workspacePath,
-    runningDir,
-    previousPath,
-    side,
-    stage,
-    wsStreamClient,
-    hostId,
-    focusRefreshNonce,
-  ]);
+  }, [requestKey, wsStreamClient, hostId, focusRefreshNonce]);
 
-  const currentKey =
-    currentRequest === null ? null : requestKeyFor(currentRequest);
   const state =
-    resolved !== null && resolved.key === currentKey
+    resolved !== null && resolved.key === requestKey
       ? resolved.state
       : LOADING_STATE;
   return { ...state, reportDecodeFailure };
