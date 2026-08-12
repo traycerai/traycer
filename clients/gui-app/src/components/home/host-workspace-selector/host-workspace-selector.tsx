@@ -858,6 +858,7 @@ function HomeWorkspaceRows(props: {
           defaultBranchByPath,
           hostLabel: props.hostLabel,
           isFetchingSummaries: summariesQuery.isFetching,
+          summariesFailed: summariesQuery.isError,
           // Path-scoped: Locate must replace THIS absent entry, not merely
           // append a new folder next to the dead one.
           onLocate: () => {
@@ -881,6 +882,7 @@ function HomeWorkspaceRows(props: {
       setFolderIntent,
       summariesByPath,
       summariesQuery.isFetching,
+      summariesQuery.isError,
     ],
   );
 
@@ -1185,6 +1187,8 @@ function workspaceRunItemForResolvedFolder(input: {
   >;
   readonly hostLabel: string;
   readonly isFetchingSummaries: boolean;
+  /** The summaries read REJECTED - distinct from "answered with nothing". */
+  readonly summariesFailed: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
   readonly setFolderIntent: (
@@ -1217,6 +1221,7 @@ function workspaceRunItemForResolvedFolder(input: {
       entry: input.entry,
       hostLabel: input.hostLabel,
       isFetchingSummaries: input.isFetchingSummaries,
+      summariesFailed: input.summariesFailed,
       onLocate: input.onLocate,
       resolvedPrimaryPath: input.resolvedPrimaryPath,
       summary,
@@ -1359,6 +1364,8 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly entry: UnresolvedWorkspaceFolder;
   readonly hostLabel: string;
   readonly isFetchingSummaries: boolean;
+  /** The summaries read REJECTED - distinct from "answered with nothing". */
+  readonly summariesFailed: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
   readonly summary: WorktreeWorkspaceSummaryV15 | null;
@@ -1391,7 +1398,13 @@ function workspaceRunItemForUnresolvedFolder(input: {
     repoIdentifier: input.entry.repoIdentifier,
     hostLabel: input.hostLabel,
     isPrimary,
-    onLocate: input.onLocate,
+    // A FAILED summaries read is not a confirmed absence. Both leave
+    // `summary === null` with `isFetching` false, so without this the row
+    // offered to replace the folder on the strength of a metadata request
+    // that never got an answer. Removing stays available - it acts on the
+    // binding the user can see - but replacing waits for the host to say
+    // `presence: "absent"` out loud.
+    onLocate: input.summariesFailed ? null : input.onLocate,
     onMakePrimary: () => {
       input.workspaceSource.setPrimaryFolder(input.entry.path);
       input.announcePrimaryChange(input.entry.name);
@@ -1514,7 +1527,15 @@ function unresolvedWorkspaceRunItem(input: {
   readonly repoIdentifier: WorktreeWorkspaceSummaryV15["repoIdentifier"];
   readonly hostLabel: string;
   readonly isPrimary: boolean;
-  readonly onLocate: () => void;
+  /**
+   * `null` withholds the replace affordance.
+   *
+   * Locate REPLACES this entry, so offering it demands a confirmed absence.
+   * A failed `worktree.listByWorkspacePaths` leaves the same empty summary a
+   * real `presence: "absent"` does, and acting on that would talk the user
+   * into replacing a folder that is very likely still there.
+   */
+  readonly onLocate: (() => void) | null;
   readonly onMakePrimary: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {

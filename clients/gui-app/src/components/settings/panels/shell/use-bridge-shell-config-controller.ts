@@ -102,6 +102,25 @@ export function useBridgeShellConfigController(props: {
     revertShellArgs: (path, callbacks) =>
       revertMutation.mutate({ path }, callbacks),
     setEnv: (entry, callbacks) => envSetMutation.mutate(entry, callbacks),
+    // The bridge writes the on-disk store through one IPC channel per call,
+    // so there is no cross-observer boundary to lose the delete at the way the
+    // RPC path had - but the sequencing still belongs here rather than at the
+    // call site, so both controllers expose the same one-shot verb.
+    renameEnv: (rename, callbacks) => {
+      envSetMutation.mutate(
+        { key: rename.newKey, value: rename.value },
+        {
+          onSuccess: () => {
+            if (rename.oldKey.length === 0) {
+              callbacks.onSuccess();
+              return;
+            }
+            envDeleteMutation.mutate({ key: rename.oldKey }, callbacks);
+          },
+          onError: callbacks.onError,
+        },
+      );
+    },
     deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
   };
 }

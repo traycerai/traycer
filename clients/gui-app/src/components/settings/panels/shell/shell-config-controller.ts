@@ -86,6 +86,29 @@ export interface ShellConfigController {
     callbacks: ShellCommandCallbacks,
   ) => void;
   readonly deleteEnv: (key: string, callbacks: ShellCommandCallbacks) => void;
+  /**
+   * Rename an override as a SINGLE operation: write `newKey`, then drop
+   * `oldKey`.
+   *
+   * Not `setEnv` followed by `deleteEnv` at the call site. Chaining them
+   * through the set's per-`mutate` `onSuccess` put the delete on the far side
+   * of an unmount boundary TanStack does not cross - close Settings or switch
+   * host while the set is in flight and the observer is gone, so the delete
+   * never fires and the rename leaves two live variables that both reach the
+   * next host and agent launch.
+   *
+   * Order is deliberate and unchanged: create first, so a failed delete leaves
+   * a harmless duplicate rather than a lost value. `oldKey` of `""` means
+   * there is nothing to drop (a newly added row).
+   */
+  readonly renameEnv: (
+    rename: {
+      readonly oldKey: string;
+      readonly newKey: string;
+      readonly value: string | null;
+    },
+    callbacks: ShellCommandCallbacks,
+  ) => void;
 }
 
 /**

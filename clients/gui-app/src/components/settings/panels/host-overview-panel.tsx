@@ -234,6 +234,11 @@ export function HostOverviewPanel(props: {
               // focus-loss finding: block the TRIGGER while there is no name
               // data to edit, not just the input.
               identityLoaded={identity !== null}
+              identityFailed={identity === null && identityQuery.isError}
+              identityRetrying={identityQuery.isFetching}
+              onRetryIdentity={() => {
+                void identityQuery.refetch();
+              }}
               editNameRef={editNameRef}
               onRestart={() => {
                 setRestartBusyCount(null);

@@ -410,21 +410,14 @@ function ShellSettingsPanelBody(props: {
       controller.setEnv({ key: newKey, value }, envSaveCallbacks);
       return;
     }
-    // Rename: create the new key first, then drop the old one so a failed
-    // delete leaves a harmless duplicate rather than a lost value.
-    controller.setEnv(
-      { key: newKey, value },
-      {
-        onSuccess: () => {
-          if (oldKey.length > 0) {
-            controller.deleteEnv(oldKey, envSaveCallbacks);
-          } else {
-            finishEnvSave();
-          }
-        },
-        onError: cancelEnvSave,
-      },
-    );
+    // ONE call, not a set whose per-`mutate` `onSuccess` fires the delete.
+    // Chained here, the delete sat on the far side of an unmount boundary
+    // TanStack does not cross: close Settings or switch host while the set is
+    // in flight and the observer is gone, so the old key was never dropped and
+    // the rename left two live variables. The controller owns the sequencing
+    // now - create first, then drop, so a failed delete still leaves a
+    // harmless duplicate rather than a lost value.
+    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks);
   };
   const onEnvDelete = (key: string): void => {
     if (envPending) return;

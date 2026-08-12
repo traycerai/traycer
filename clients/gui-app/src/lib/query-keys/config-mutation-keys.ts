@@ -13,5 +13,11 @@ export const configMutationKeys = {
   shellRevertArgs: () => ["config.shell.revertArgs"] as const,
   envSet: () => ["config.env.set"] as const,
   envDelete: () => ["config.env.delete"] as const,
+  // A rename is ONE operation, not a set the panel follows with a delete.
+  // Chained through a per-`mutate` callback it split at the unmount boundary:
+  // TanStack drops those callbacks when the observer goes, so closing Settings
+  // (or switching host) between the two left the new key written and the old
+  // one still live - a rename silently becoming two active variables.
+  envRename: () => ["config.env.rename"] as const,
   logLevelsSet: () => ["config.logLevels.set"] as const,
 };

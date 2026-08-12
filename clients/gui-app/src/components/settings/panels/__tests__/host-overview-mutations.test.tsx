@@ -157,7 +157,9 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     const view = render(makeUi());
 
     fireEvent.click(await waitForButton("Restart"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
 
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
@@ -300,7 +302,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     );
 
     fireEvent.click(await waitForButton("Restart"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
 
     expect(
       await screen.findByTestId("host-overview-restart-busy"),
@@ -349,12 +353,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     );
 
     fireEvent.click(await waitForButton("Restart"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
     await waitFor(() => expect(transitionIds).toHaveLength(1));
 
     // The user tries again after the failure toast.
     fireEvent.click(await waitForButton("Restart"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
     await waitFor(() => expect(transitionIds).toHaveLength(2));
 
     expect(transitionIds[1]).toBe(transitionIds[0]);
@@ -395,11 +403,15 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     );
 
     fireEvent.click(await waitForButton("Restart"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
     await screen.findByTestId("host-overview-restart-busy");
 
     fireEvent.click(screen.getByTestId("host-overview-restart-busy-retry"));
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
 
     await waitFor(() => {
       expect(transitionIds.length).toBe(2);

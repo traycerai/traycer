@@ -1,6 +1,15 @@
 import { useMemo } from "react";
-import type { QueryKey } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  toHostRpcError,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import type { ConfigShellProbeResponse } from "@traycer/protocol/host/config/index";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -96,6 +105,7 @@ export function useRpcShellConfigController(props: {
     errorMessage: "Couldn't restore the default flags",
     invalidateMethods: ["config.shell.get"],
   });
+  const queryClient = useQueryClient();
   const envSetMutation = useHostScopedMutationForClient(client, {
     method: "config.env.set",
     mutationKey: configMutationKeys.envSet(),
@@ -107,6 +117,48 @@ export function useRpcShellConfigController(props: {
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the environment variable",
     invalidateMethods: ["config.env.list"],
+  });
+
+  // Both writes inside ONE `mutationFn`, so there is no observer boundary
+  // between them to lose the second half at. The host id is captured in
+  // `onMutate` and used for the invalidation, matching every other write here.
+  const envRenameMutation = useMutation<
+    void,
+    HostRpcError,
+    {
+      readonly oldKey: string;
+      readonly newKey: string;
+      readonly value: string | null;
+    },
+    { readonly hostId: string | null }
+  >({
+    mutationKey: configMutationKeys.envRename(),
+    mutationFn: async (rename) => {
+      if (client === null) {
+        // Normalized so `onError` always receives the `HostRpcError` shape the
+        // toast helper reads, rather than a bare `Error` it cannot classify.
+        throw toHostRpcError(
+          new Error("No host client to rename the environment variable"),
+          "config.env.set",
+        );
+      }
+      await client.request("config.env.set", {
+        key: rename.newKey,
+        value: rename.value,
+      });
+      if (rename.oldKey.length === 0) return;
+      await client.request("config.env.delete", { key: rename.oldKey });
+    },
+    onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+    onSuccess: (_data, _variables, context) => {
+      if (context.hostId === null) return;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.hostMethodScope(context.hostId, "config.env.list"),
+      });
+    },
+    onError: (error) => {
+      toastFromHostError(error, "Couldn't rename the environment variable");
+    },
   });
 
   const probeSource = useMemo(
@@ -142,7 +194,10 @@ export function useRpcShellConfigController(props: {
       addMutation.isPending ||
       removeMutation.isPending ||
       revertMutation.isPending,
-    envPending: envSetMutation.isPending || envDeleteMutation.isPending,
+    envPending:
+      envSetMutation.isPending ||
+      envDeleteMutation.isPending ||
+      envRenameMutation.isPending,
     probeSource,
     setShell: (request, callbacks) => setMutation.mutate(request, callbacks),
     resetShell: (callbacks) => resetMutation.mutate({}, callbacks),
@@ -153,6 +208,8 @@ export function useRpcShellConfigController(props: {
       revertMutation.mutate({ path }, callbacks),
     setEnv: (entry, callbacks) => envSetMutation.mutate(entry, callbacks),
     deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
+    renameEnv: (rename, callbacks) =>
+      envRenameMutation.mutate(rename, callbacks),
   };
 }
 

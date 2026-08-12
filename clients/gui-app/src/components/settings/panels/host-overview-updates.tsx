@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -20,7 +19,6 @@ import {
   useHostUpdateInstall,
 } from "@/components/settings/panels/host-overview-rpc";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -50,7 +48,6 @@ export function HostOverviewUpdatesRegion(props: {
   readonly busy: boolean;
 }): ReactNode {
   const { client, hostName, installedVersion } = props;
-  const queryClient = useQueryClient();
   const [manifest, setManifest] = useState<HostAvailableManifest | null>(null);
   // Two different lifetimes, deliberately kept apart.
   //
@@ -119,33 +116,21 @@ export function HostOverviewUpdatesRegion(props: {
                 installMutation.mutate(
                   { version: latest, force: false },
                   {
-                    onSuccess: (response, _variables, context) => {
+                    // MOUNTED UI state only. The `host.status` invalidation
+                    // this used to do moved to `useHostUpdateInstall`'s
+                    // hook-level `onSuccess`: an install outlives a Settings
+                    // scope switch, which remounts this panel under its host
+                    // key, and TanStack drops per-`mutate` callbacks once the
+                    // observer is gone. Everything left here only touches
+                    // state that is meaningless without this component.
+                    onSuccess: (response) => {
                       handleInstallOutcome({
                         outcome: response.outcome,
                         hostName,
                         latest,
                         onSticky: setDiscoveredDegrade,
                         onTransient: setTransientFailure,
-                        onAccepted: () => {
-                          setTransientFailure(null);
-                          // The swap is detached and outlives this response;
-                          // `host.status.updateProgress` is what reports it, so
-                          // re-read it rather than inventing a local spinner.
-                          //
-                          // The ARM-TIME host, not the live active one: an
-                          // install is long enough for the scope to move, and
-                          // reading it at settle time would refresh whichever
-                          // host the user switched to while leaving the one
-                          // that is actually updating on a stale progress row.
-                          const hostId = context?.hostId ?? null;
-                          if (hostId === null) return;
-                          void queryClient.invalidateQueries({
-                            queryKey: hostQueryKeys.methodScope(
-                              hostId,
-                              "host.status",
-                            ),
-                          });
-                        },
+                        onAccepted: () => setTransientFailure(null),
                       });
                     },
                     onError: (error) =>

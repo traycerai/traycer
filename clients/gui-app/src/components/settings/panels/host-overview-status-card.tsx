@@ -229,6 +229,10 @@ export function HostOverviewActions(props: {
   readonly anyPending: boolean;
   /** The identity read has answered, so there is a name to edit. */
   readonly identityLoaded: boolean;
+  /** The identity read REJECTED - distinct from "has not answered yet". */
+  readonly identityFailed: boolean;
+  readonly identityRetrying: boolean;
+  readonly onRetryIdentity: () => void;
   readonly editNameRef: RefObject<HTMLButtonElement | null>;
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
@@ -259,17 +263,40 @@ export function HostOverviewActions(props: {
         buttonRef={undefined}
         onClick={props.onOpenDoctor}
       />
-      <HostOverviewActionButton
-        label="Edit name"
-        hostName={hostName}
-        variant="ghost"
-        degrade={props.identityDegrade}
-        pending={false}
-        busy={!props.identityLoaded}
-        testId="host-overview-edit-name"
-        buttonRef={props.editNameRef}
-        onClick={props.onEditName}
-      />
+      {/*
+        A FAILED identity read is not a slow one, and conflating them stranded
+        rename outright: `identityLoaded` was `identity !== null`, so a
+        rejected `host.identity.get` left "Edit name" permanently busy with no
+        error text and nothing to click. These reads do not retry, and
+        focus/reconnect refetches are disabled in production, so nothing short
+        of a remount or an unrelated invalidation ever cleared it. The failed
+        read gets its own retry instead.
+      */}
+      {props.identityFailed ? (
+        <HostOverviewActionButton
+          label="Retry name"
+          hostName={hostName}
+          variant="ghost"
+          degrade={props.identityDegrade}
+          pending={props.identityRetrying}
+          busy={false}
+          testId="host-overview-retry-identity"
+          buttonRef={props.editNameRef}
+          onClick={props.onRetryIdentity}
+        />
+      ) : (
+        <HostOverviewActionButton
+          label="Edit name"
+          hostName={hostName}
+          variant="ghost"
+          degrade={props.identityDegrade}
+          pending={false}
+          busy={!props.identityLoaded}
+          testId="host-overview-edit-name"
+          buttonRef={props.editNameRef}
+          onClick={props.onEditName}
+        />
+      )}
     </>
   );
 }

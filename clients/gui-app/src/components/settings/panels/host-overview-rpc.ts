@@ -257,6 +257,7 @@ export function useHostUpdateInstall(
   { readonly version: string; readonly force: boolean },
   HostOverviewMutationContext
 > {
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "host.update.install",
@@ -272,6 +273,26 @@ export function useHostUpdateInstall(
     options: {
       mutationKey: hostMaintenanceMutationKeys.updateInstall(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // HOOK-level, not in the caller's per-`mutate` callbacks.
+      //
+      // The swap is detached and outlives this response, so
+      // `host.status.updateProgress` is what reports it and the read has to be
+      // refreshed. An install is long enough for the user to switch Settings
+      // scope, which remounts the panel under its host key and destroys the
+      // observer - and TanStack does not run per-`mutate` callbacks after
+      // that. The invalidation would then be skipped entirely, and coming back
+      // to that host inside the 15s stale window showed the old version with
+      // no progress row.
+      //
+      // Uses the ARM-TIME host id, so the refresh lands on the host that is
+      // actually updating rather than whichever one the picker has reached.
+      onSuccess: (response, _variables, context) => {
+        if (response.outcome !== "accepted") return;
+        if (context.hostId === null) return;
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
+        });
+      },
     },
   });
 }

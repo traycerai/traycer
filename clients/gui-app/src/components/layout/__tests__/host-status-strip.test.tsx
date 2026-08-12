@@ -636,7 +636,7 @@ describe("<HostStatusStrip />", () => {
       hostClient: null,
     });
 
-    fireEvent.click(screen.getByTestId("host-status-strip-retry"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
     expect(requestRespawn).not.toHaveBeenCalled();
     expect(retry).toHaveBeenCalledTimes(1);
   });
