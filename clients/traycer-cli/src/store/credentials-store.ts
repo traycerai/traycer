@@ -14,7 +14,6 @@ import type {
   RevalidateOutcome,
 } from "../../../shared/auth/bearer-revalidator";
 import { config } from "../config";
-import { effectiveAuthnBaseUrl } from "./credentials";
 import { cliCredentialsPath } from "./paths";
 
 /**
@@ -50,17 +49,13 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
       metaPath: `${credentialsPath}.meta.json`,
       lockPath: `${credentialsPath}.lock`,
     },
-    // `rotate` refreshes against the file's stored `authnBaseUrl`. The shared
-    // dev credentials file can carry a *sibling* dev-desktop run's authn URL
-    // (its own local-stack port), so re-point the refresh at THIS run's
-    // effective URL — the exact override `resolveHostAuth` applies to the initial
-    // bearer. Production is a no-op (`effectiveAuthnBaseUrl` returns the stored
-    // value when not inside a dev-desktop slot); the persisted pair keeps the raw
-    // stored URL untouched (only this refresh call is re-pointed).
+    // The store hands over only the pair; the refresh endpoint is THIS build's
+    // configured authn (baked, with the dev-slot env override applied at module
+    // init). The file deliberately carries no URL - see `store/credentials.ts`.
     refresh: (args) =>
       refreshOnceAbortable({
         ...args,
-        authnBaseUrl: effectiveAuthnBaseUrl(args.authnBaseUrl),
+        authnBaseUrl: config.authnBaseUrl,
         clientKind: "cli",
       }),
     lockWaitMs: LOCK_WAIT_MS,
@@ -82,8 +77,9 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
  * auth-aware messenger observes the rotated lease; the stream monitor + proactive
  * scheduler key on the outcome kind.
  *
- * The store already knows the file's `authnBaseUrl`/`refreshToken`, so — unlike
- * the old revalidator — no `authnBaseUrl` is threaded here. The lock also makes
+ * The injected refresh closes over this process's configured authn origin and
+ * the store reads the file's `refreshToken`, so — unlike the old revalidator —
+ * no `authnBaseUrl` is threaded here. The lock also makes
  * the old reject-reread poll unnecessary: a concurrent winner's pair is observed
  * as `superseded` (adopt, spend nothing) rather than a lost race to recover from.
  */
@@ -130,9 +126,11 @@ export function createStoreBackedRevalidator(args: {
           return "rotated";
         case "refresh-network":
         case "lock-busy":
-          // Transient, bearer untouched: a refresh transport blip, or a lock
-          // held past the wait budget by a concurrent desktop/CLI mutation.
-          // Neither is a dead credential — stay in reconnect backoff and retry.
+        case "spend-pending":
+          // Transient, bearer untouched: a refresh transport blip, a lock held
+          // past the wait budget, or a sibling's still-landing spend of this
+          // base. None is a dead credential — stay in reconnect backoff and
+          // retry (the sibling's landed pair adopts via `superseded`).
           return "network-error";
         case "deleted":
         case "tombstoned":

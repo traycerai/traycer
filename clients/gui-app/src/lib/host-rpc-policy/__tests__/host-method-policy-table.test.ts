@@ -213,6 +213,82 @@ describe("host method poll policy table", () => {
     expect(policy.classify({ providers: [] })).toBe(PROVIDERS_STEADY_POLL_LANE);
   });
 
+  // Integration seam: non-blocking installPackVersion leaves only the
+  // user-lane version row as downloading while the automatic slot stays
+  // settled. Classifying that as steady freezes the progress bar at 15 min.
+  it("selects the installing lane when only a user-lane version row is downloading", () => {
+    const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: false,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            // Automatic lane settled — the case the old classifier missed.
+            managedInstallState: { status: "installed", version: "1.0.0" },
+            managedVersions: {
+              autoDownload: true,
+              pinnedVersion: null,
+              updateAvailable: null,
+              sharedWithProviders: [],
+              totalSizeBytes: 0,
+              available: [
+                {
+                  version: "1.2.0",
+                  sizeBytes: 40_000_000,
+                  certification: "eligible",
+                  recommended: false,
+                  current: false,
+                  // Sibling-owned transfer: percent null still needs the fast
+                  // lane so completion is noticed promptly.
+                  installState: { status: "downloading", percent: null },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
+  });
+
+  it("selects the installing lane for a determinate user-lane download too", () => {
+    const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: false,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: { status: "absent" },
+            managedVersions: {
+              autoDownload: false,
+              pinnedVersion: null,
+              updateAvailable: { version: "1.3.0" },
+              sharedWithProviders: [],
+              totalSizeBytes: null,
+              available: [
+                {
+                  version: "1.3.0",
+                  sizeBytes: 10_000_000,
+                  certification: "eligible",
+                  recommended: true,
+                  current: false,
+                  installState: { status: "downloading", percent: 42 },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
+  });
+
   // Not cosmetic, and the reason it is asserted as a bound rather than as two
   // magic numbers: `providers.list` is the ONLY source of managed-install
   // progress, and the host reports `downloading` at a full fraction for the
