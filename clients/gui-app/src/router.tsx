@@ -59,9 +59,30 @@ export function createAppRouter(
   return router;
 }
 
-export function bindAuthInvalidation(router: {
+export interface AuthInvalidationRouter {
+  readonly state: {
+    readonly status: "pending" | "idle";
+    /**
+     * Assigned once the first load's render is acknowledged (after its match
+     * set commits) and never cleared afterwards — `undefined` means no load
+     * has ever fully resolved, which conservatively includes the
+     * just-committed-but-unacknowledged instant. `matches` is NOT usable
+     * here: a cold load that outlives `defaultPendingMs` publishes
+     * provisional pending matches before anything commits.
+     */
+    readonly resolvedLocation?: unknown;
+  };
   invalidate: () => Promise<void> | void;
-}): () => void {
+  load: () => Promise<void> | void;
+}
+
+export function bindAuthInvalidation(router: AuthInvalidationRouter): () => void {
+  // At most one recovery load per uncommitted window, however many auth
+  // changes land inside it: `router.load()` on these router-core versions
+  // ABORTS its predecessor transaction rather than joining it, so issuing one
+  // per auth flip multiplies route passes (and each continuation's invalidate
+  // would fan out further).
+  let recovery: Promise<void> | null = null;
   return useAuthStore.subscribe((state, prevState) => {
     if (
       state.status === prevState.status &&
@@ -69,7 +90,38 @@ export function bindAuthInvalidation(router: {
     ) {
       return;
     }
-    void router.invalidate();
+    // On a cold launch the auth status flips (e.g. signed-out → signed-in as
+    // stored tokens validate) while the router's INITIAL load may still be in
+    // flight — no match set has ever committed. Invalidating in that window
+    // retires the in-flight load inside router-core's scheduler and nothing
+    // reschedules it: the router sits at `status: "pending"` forever and the
+    // app renders a permanently blank screen (no error, no pending component —
+    // there is no committed match to hang either on). A fresh mobile install
+    // hits this window on nearly every launch.
+    const uncommitted =
+      router.state.status === "pending" &&
+      router.state.resolvedLocation === undefined;
+    if (!uncommitted) {
+      void router.invalidate();
+      return;
+    }
+    if (recovery !== null) {
+      // The active recovery's post-settle invalidate re-runs route guards
+      // against the auth store's LATEST snapshot, so this later change is
+      // already covered.
+      return;
+    }
+    const invalidateAfterSettle = () => {
+      recovery = null;
+      // A rejected load still owes the auth change its recheck — invalidating
+      // on failure also gives the failed load a retry with the fresh auth
+      // snapshot.
+      void router.invalidate();
+    };
+    recovery = Promise.resolve(router.load()).then(
+      invalidateAfterSettle,
+      invalidateAfterSettle,
+    );
   });
 }
 
