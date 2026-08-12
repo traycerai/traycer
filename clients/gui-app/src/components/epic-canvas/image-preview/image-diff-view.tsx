@@ -113,22 +113,6 @@ function combinedMode(
   };
 }
 
-/**
- * Resets `current` to `defaultValue` once a side goes inactive (round-3
- * review finding #1) - a stable module-level `defaultValue` reference
- * means this settles after one reset and never loops.
- */
-function resetIfInactive<T>(
-  active: boolean,
-  current: T,
-  defaultValue: T,
-  setValue: (value: T) => void,
-): void {
-  if (!active && current !== defaultValue) {
-    setValue(defaultValue);
-  }
-}
-
 export interface ImageDiffViewProps {
   readonly runningDir: string;
   readonly filePath: string;
@@ -289,18 +273,6 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // Added/Deleted empty-state decision - unrelated).
   const oldActive = oldIsImageSide && oldAsset.status === "ready";
   const newActive = newIsImageSide && newAsset.status === "ready";
-
-  // Cleared (not just excluded from the derivation above) the moment a
-  // side LEAVES active, so a later side that becomes active again never
-  // inherits a stale mode/bounds snapshot from before it failed. Render-
-  // time adjustment, once per inactive transition (matches this file's
-  // established pattern) - `DEFAULT_SIDE_MODE`/`DEFAULT_SIDE_BOUNDS` are
-  // stable module-level references, so this settles after one reset and
-  // never loops.
-  resetIfInactive(oldActive, oldMode, DEFAULT_SIDE_MODE, setOldMode);
-  resetIfInactive(oldActive, oldBounds, DEFAULT_SIDE_BOUNDS, setOldBounds);
-  resetIfInactive(newActive, newMode, DEFAULT_SIDE_MODE, setNewMode);
-  resetIfInactive(newActive, newBounds, DEFAULT_SIDE_BOUNDS, setNewBounds);
 
   // `report.origin` distinguishes a genuine user GESTURE on THIS side from
   // a PROGRAMMATIC transform `ImagePreview` issued itself - its own

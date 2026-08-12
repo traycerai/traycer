@@ -8,7 +8,6 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
   StreamCloseReason,
-  StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -76,10 +75,6 @@ export interface AssetStreamCallbacks {
   readonly onReady: (header: AssetStreamHeader, bytes: Uint8Array) => void;
   /** Terminal failure - no `onReady` will follow for this fetch. */
   readonly onFailure: (failure: AssetStreamFailure) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
 }
 
 export interface AssetStreamClientOptions<Method extends AssetStreamMethod> {
@@ -134,7 +129,6 @@ export class AssetStreamClient<
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
       if (status === "closed") {
         this.handleClosed(reason);
       }

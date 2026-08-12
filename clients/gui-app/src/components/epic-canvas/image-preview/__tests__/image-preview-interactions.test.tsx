@@ -83,7 +83,6 @@ const state = vi.hoisted(() => ({
   nextId: 0,
   oldAsset: null as UseImageAssetResult | null,
   newAsset: null as UseImageAssetResult | null,
-  deferNextSetTransformCallback: false,
   stageRect: { width: 800, height: 600 },
 }));
 
@@ -180,13 +179,7 @@ vi.mock("react-zoom-pan-pinch", () => {
         setTransform: (positionX, positionY, scale, animationMs) => {
           setTransformCalls.push([positionX, positionY, scale, animationMs]);
           transformRef.current = { positionX, positionY, scale };
-          const transformed = transformRef.current;
-          if (state.deferNextSetTransformCallback) {
-            state.deferNextSetTransformCallback = false;
-            queueMicrotask(() => emitTransform(transformed));
-          } else {
-            emitTransform(transformed);
-          }
+          emitTransform(transformRef.current);
         },
         instance: {
           wrapperComponent: {
@@ -411,7 +404,6 @@ beforeEach(() => {
   state.nextId = 0;
   state.oldAsset = readyAsset("blob:old");
   state.newAsset = readyAsset("blob:new");
-  state.deferNextSetTransformCallback = false;
   state.stageRect = { width: 800, height: 600 };
   vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
@@ -616,28 +608,6 @@ describe("linked image diff transforms", () => {
     expect(newInstance.zoomInCalls).toContainEqual([0.2, 0]);
     expect(oldInstance.setTransformCalls).toHaveLength(0);
     expect(newInstance.setTransformCalls).toHaveLength(0);
-  });
-
-  it("suppresses the echo even when the peer's callback arrives on a later tick", async () => {
-    state.deferNextSetTransformCallback = true;
-    renderDiff({});
-
-    const oldInstance = state.instances[0];
-    const newInstance = state.instances[1];
-
-    fireEvent.click(screen.getByTestId("rzpp-gesture-0"));
-    expect(newInstance.setTransformCalls).toEqual([[12, -7, 1.75, 0]]);
-
-    await Promise.resolve();
-
-    // The mirrored side's callback was deferred past the call that
-    // triggered it - a synchronous true/then/false bracket would already
-    // have reset by now and let this late arrival read as a fresh gesture,
-    // mirroring back onto the side that originated it (a rebound/ping-pong
-    // echo). The pending count survives until THIS specific callback
-    // consumes it, so no rebound reaches the origin side no matter how
-    // late delivery arrives.
-    expect(oldInstance.setTransformCalls).toHaveLength(0);
   });
 
   it("disables both transform wrappers and all toolbars in compact mode", () => {

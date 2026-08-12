@@ -21,10 +21,6 @@ import {
   type AssetStreamFailure,
   type AssetStreamHeader,
 } from "../asset-stream-client";
-import type {
-  StreamCloseReason,
-  StreamConnectionStatus,
-} from "../i-stream-session";
 import { WsStreamClient } from "../ws-stream-client";
 
 class StubStreamWebSocket implements StreamWebSocketLike {
@@ -34,6 +30,8 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
 
   readonly textSent: string[] = [];
+  /** Each `AssetStreamClient` owns one dedicated session/socket (`WsStreamClient`'s per-session `close()` tears down `activeSocket` directly) - counting THIS is the close signal, not a callback the client no longer exposes. */
+  closeCount = 0;
 
   send(data: string | Uint8Array): void {
     if (typeof data === "string") {
@@ -41,7 +39,9 @@ class StubStreamWebSocket implements StreamWebSocketLike {
     }
   }
 
-  close(_code: number, _reason: string): void {}
+  close(_code: number, _reason: string): void {
+    this.closeCount += 1;
+  }
 
   fireOpen(): void {
     this.onopen?.({ type: "open" });
@@ -125,16 +125,10 @@ function completeHandshake(
   socket.fireText({ kind: "openAck", manifest });
 }
 
-interface RecordedStatus {
-  readonly status: StreamConnectionStatus;
-  readonly reason: StreamCloseReason | null;
-}
-
 interface RecordedCallbacks {
   readonly headers: AssetStreamHeader[];
   readonly ready: { header: AssetStreamHeader; bytes: Uint8Array }[];
   readonly failures: AssetStreamFailure[];
-  readonly statuses: RecordedStatus[];
 }
 
 function recordingCallbacks(): {
@@ -142,10 +136,6 @@ function recordingCallbacks(): {
     readonly onHeader: (header: AssetStreamHeader) => void;
     readonly onReady: (header: AssetStreamHeader, bytes: Uint8Array) => void;
     readonly onFailure: (failure: AssetStreamFailure) => void;
-    readonly onConnectionStatus: (
-      status: StreamConnectionStatus,
-      reason: StreamCloseReason | null,
-    ) => void;
   };
   readonly recorded: RecordedCallbacks;
 } {
@@ -153,7 +143,6 @@ function recordingCallbacks(): {
     headers: [],
     ready: [],
     failures: [],
-    statuses: [],
   };
   return {
     callbacks: {
@@ -166,17 +155,14 @@ function recordingCallbacks(): {
       onFailure: (failure) => {
         recorded.failures.push(failure);
       },
-      onConnectionStatus: (status, reason) => {
-        recorded.statuses.push({ status, reason });
-      },
     },
     recorded,
   };
 }
 
-/** How many times the session actually transitioned to `"closed"` so far. */
-function closedCount(recorded: RecordedCallbacks): number {
-  return recorded.statuses.filter((entry) => entry.status === "closed").length;
+/** How many times the dedicated socket actually closed so far. */
+function closedCount(socket: StubStreamWebSocket): number {
+  return socket.closeCount;
 }
 
 const WORKSPACE_PARAMS = {
@@ -251,16 +237,12 @@ describe("AssetStreamClient", () => {
     // The one-shot fetch closes ITS OWN session as soon as it settles - it
     // must not leave an idle subscription (and host resolver) alive for as
     // long as the caller happens to hold the instance.
-    expect(closedCount(recorded)).toBe(1);
-    expect(recorded.statuses.at(-1)).toEqual({
-      status: "closed",
-      reason: { kind: "caller" },
-    });
+    expect(closedCount(sockets[0])).toBe(1);
 
     // The gui-app hook closes on unmount/refetch regardless of whether this
     // already settled and closed itself first - that must stay silent.
     asset.close();
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     expect(recorded.ready).toHaveLength(1);
     expect(recorded.failures).toHaveLength(0);
   });
@@ -303,9 +285,9 @@ describe("AssetStreamClient", () => {
     // Failure paths close the session too, not just success - and a
     // redundant hook-driven close afterward stays silent (no second
     // onFailure, no second "closed" transition).
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     asset.close();
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     expect(recorded.failures).toHaveLength(1);
   });
 
@@ -336,7 +318,7 @@ describe("AssetStreamClient", () => {
         message: "requested file exceeds the pixel cap",
       },
     ]);
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     asset.close();
   });
 
@@ -361,7 +343,7 @@ describe("AssetStreamClient", () => {
         message: "assetComplete arrived before assetHeader",
       },
     ]);
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     asset.close();
   });
 
@@ -398,7 +380,7 @@ describe("AssetStreamClient", () => {
     ]);
     // The external teardown produced the one and only "closed" transition -
     // `fail()`'s own follow-up `close()` call must not double-fire it.
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
   });
 
   it("reports unsupported-method, not a crash or hang, when the host's manifest omits the method", () => {
@@ -428,9 +410,9 @@ describe("AssetStreamClient", () => {
     expect(recorded.failures).toHaveLength(1);
     expect(recorded.failures[0]?.reason).toBe("unsupported-method");
     expect(recorded.failures[0]?.message).toContain("workspace.streamAsset");
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     asset.close();
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
   });
 
   it("never calls onFailure when the caller closes before any terminal frame arrives", () => {
@@ -459,12 +441,12 @@ describe("AssetStreamClient", () => {
 
     expect(recorded.failures).toHaveLength(0);
     expect(recorded.ready).toHaveLength(0);
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
 
     // Idempotent: a second close() must not retroactively fail it either.
     asset.close();
     expect(recorded.failures).toHaveLength(0);
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
   });
 
   it("smoke-tests git.streamFileAsset on the same happy path", () => {
@@ -502,7 +484,7 @@ describe("AssetStreamClient", () => {
     expect(recorded.failures).toHaveLength(0);
     expect(recorded.ready).toHaveLength(1);
     expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([9, 8, 7, 6]);
-    expect(closedCount(recorded)).toBe(1);
+    expect(closedCount(sockets[0])).toBe(1);
     asset.close();
   });
 });

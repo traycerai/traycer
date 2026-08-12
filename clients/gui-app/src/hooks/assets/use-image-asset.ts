@@ -519,7 +519,6 @@ export function useImageAsset(
           },
         });
       },
-      onConnectionStatus: () => undefined,
     };
 
     client =
