@@ -7,6 +7,7 @@ import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { AttachmentImageFailure } from "./attachment-image";
+import { useSanitizedSvg } from "./use-sanitized-svg";
 import {
   ImageGeneration,
   type ImageGenerationStatus,
@@ -132,6 +133,12 @@ function GeneratedImageContent(props: {
   );
   const alt =
     props.result.alt ?? props.result.revisedPrompt ?? props.fallbackAlt;
+  const sanitizedSvg = useSanitizedSvg(
+    image.src ?? "",
+    image.src !== null &&
+      props.result.mediaType === "image/svg+xml" &&
+      !image.src.startsWith("data:"),
+  );
 
   if (image.status === "loading") {
     return (
@@ -148,6 +155,19 @@ function GeneratedImageContent(props: {
       />
     );
   }
+  if (sanitizedSvg.status === "loading") {
+    return (
+      <div className="flex items-center justify-center text-ui-sm text-muted-foreground">
+        Loading image
+      </div>
+    );
+  }
+  if (sanitizedSvg.status === "error") {
+    return (
+      <AttachmentImageFailure alt={alt} reason="Couldn't display this SVG." />
+    );
+  }
+  const displaySrc = sanitizedSvg.src ?? image.src;
 
   return (
     <div className="group relative size-full @container">
@@ -159,7 +179,7 @@ function GeneratedImageContent(props: {
         className="size-full overflow-hidden"
       >
         <img
-          src={image.src}
+          src={displaySrc}
           alt={alt.length > 0 ? alt : "Generated image"}
           className="block h-auto w-auto max-h-full max-w-full object-contain"
           style={{
