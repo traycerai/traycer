@@ -988,7 +988,9 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
       },
     });
 
-    const nameInput = await screen.findByLabelText("Name for OLD_NAME");
+    const nameInput = await screen.findByRole("textbox", {
+      name: "Name for OLD_NAME",
+    });
     fireEvent.change(nameInput, { target: { value: "NEW_NAME" } });
     // Blur directly: the row commits in `onBlur`, and Enter only gets there by
     // calling `.blur()` on the focused element - which jsdom no-ops when the
@@ -1009,9 +1011,77 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
     });
 
     // Terminal state of the store the host will read: renamed, not duplicated.
+    // BOTH halves in one condition. The set writes NEW_NAME before the delete
+    // runs, so waiting on NEW_NAME alone awaits an intermediate state and the
+    // follow-up assertion could fail a CORRECT implementation the moment the
+    // delete lands a microtask later.
     await waitFor(() => {
-      expect(cli.envOverrides.map((row) => row.key)).toContain("NEW_NAME");
+      const keys = cli.envOverrides.map((row) => row.key);
+      expect(keys).toContain("NEW_NAME");
+      expect(keys).not.toContain("OLD_NAME");
     });
-    expect(cli.envOverrides.map((row) => row.key)).not.toContain("OLD_NAME");
+  });
+
+  /**
+   * The SAME property on the stopped-local fallback. The bridge speaks IPC
+   * rather than host RPC, which tempted a comment claiming it had "no
+   * cross-observer boundary to lose the delete at" - but the boundary that
+   * loses the second half is the OBSERVER, not the transport, so a delete
+   * chained onto the set's per-`mutate` callback was dropped here exactly as
+   * it was on the RPC path. This is the user-facing path for a host that is
+   * stopped or predates the config methods, so it needs its own pin.
+   */
+  it("drops the old key on the bridge fallback when the set is still in flight as the panel unmounts", async () => {
+    let releaseSet: (() => void) | null = null;
+    const setInFlight = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    let setDispatched: (() => void) | null = null;
+    const setReached = new Promise<void>((resolve) => {
+      setDispatched = resolve;
+    });
+
+    const cli = renderShellPanelStoppedLocal({
+      configure: (target) => {
+        target.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+        target.envOverrides = [{ key: "OLD_NAME", value: "keep-me" }];
+        const originalSet = target.envOverrideSet.bind(target);
+        target.envOverrideSet = async (input): Promise<void> => {
+          setDispatched?.();
+          await setInFlight;
+          await originalSet(input);
+        };
+      },
+    });
+
+    expect(
+      await screen.findByTestId("local-config-fallback-notice"),
+    ).toBeTruthy();
+    const nameInput = await screen.findByRole("textbox", {
+      name: "Name for OLD_NAME",
+    });
+    fireEvent.change(nameInput, { target: { value: "NEW_NAME" } });
+    fireEvent.blur(nameInput);
+
+    await act(async () => {
+      await setReached;
+    });
+
+    cleanup();
+
+    await act(async () => {
+      releaseSet?.();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const keys = cli.envOverrides.map((row) => row.key);
+      expect(keys).toContain("NEW_NAME");
+      expect(keys).not.toContain("OLD_NAME");
+    });
   });
 });

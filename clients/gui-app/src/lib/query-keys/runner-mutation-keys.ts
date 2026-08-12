@@ -36,6 +36,11 @@ export const runnerMutationKeys = {
   traycerShellRevertArgs: () => ["runner.traycer.shellRevertArgs"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
+  // A rename is ONE operation on the bridge too: the boundary that loses the
+  // second half is the OBSERVER, not the transport, so chaining a delete onto
+  // the set's per-`mutate` callback drops it on unmount exactly as the RPC
+  // path did before `config.env.rename`.
+  traycerEnvOverrideRename: () => ["runner.traycer.envOverrideRename"] as const,
   // Host-management mutations consumed by the host gate, update banner,
   // Settings → Host, and the Doctor failure card.
   hostInstallVersion: () => ["runner.host.installVersion"] as const,
