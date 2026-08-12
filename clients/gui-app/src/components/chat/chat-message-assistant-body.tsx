@@ -171,7 +171,10 @@ export function AssistantMessageBody({
     }
   }
   return (
-    <div className="flex w-full max-w-none flex-col gap-2 py-1 @container">
+    <div
+      className="flex w-full max-w-none flex-col gap-2 py-1 @container"
+      data-assistant-turn
+    >
       {timeline.map((item) => {
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={item.id} group={item.group} />;
@@ -786,6 +789,7 @@ function AssistantSegment({
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
+          imageContext={segment.assistantImageContext}
         />
       );
     case "reasoning":
@@ -822,6 +826,7 @@ function AssistantSegment({
           backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          imageResults={segment.imageResults}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null

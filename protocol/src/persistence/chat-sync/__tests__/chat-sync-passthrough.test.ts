@@ -119,6 +119,7 @@ const assistantMessage: JsonObject = {
   usage: null,
   reasoningEffort: null,
   serviceTier: null,
+  imageResolutions: [],
 };
 
 // A message role no shipped reader knows.

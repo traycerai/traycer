@@ -68,6 +68,7 @@ export const RunnerHostInvoke = {
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
+  clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   // The `hostId` in `pid.json`, read as a pure structural parse with no
   // reachability requirement. `localHostChange` only ever emits a snapshot

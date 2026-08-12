@@ -93,6 +93,7 @@ import type {
   Chat,
   ChatEvent,
   ContentBlock,
+  ImageResolutionEntry,
   InterviewAnswer,
   Message,
   UserMessageSender,
@@ -196,6 +197,13 @@ export interface LiveAssistantMessage {
    */
   readonly startedAt: number;
   readonly blocksVersion: number;
+  readonly imageResolutions: ReadonlyArray<{
+    readonly messageId: string;
+    readonly entry: ImageResolutionEntry;
+  }>;
+  /** Message owner of the currently streamed blocks' image resolutions. */
+  readonly imageResolutionOwnerMessageId?: string | null;
+  readonly imageResolutionsVersion: number;
   readonly timestamp: number;
   /**
    * Reasoning effort + service tier the turn is running with, mirrored from
@@ -3128,6 +3136,81 @@ function applyBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
 ): Partial<ChatSessionState> {
+  return event.type === "image_resolution.updated"
+    ? applyImageResolutionDelta(state, event)
+    : applyContentDelta(state, event);
+}
+
+function applyImageResolutionDelta(
+  state: ChatSessionState,
+  event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+): Partial<ChatSessionState> {
+  const messageIndex = state.messages.findIndex(
+    (message) =>
+      message.role === "assistant" && message.messageId === event.messageId,
+  );
+  if (messageIndex < 0) {
+    const activeTurn = state.activeTurn;
+    if (
+      activeTurn === null ||
+      event.turnId === null ||
+      event.turnId !== activeTurn.turnId
+    ) {
+      return {};
+    }
+    const liveAssistant = liveAssistantForActiveTurn(
+      state.liveAssistantMessage,
+      activeTurn,
+    );
+    const resolutionIndex = liveAssistant.imageResolutions.findIndex(
+      (resolution) =>
+        resolution.messageId === event.messageId &&
+        resolution.entry.canonicalSource === event.entry.canonicalSource,
+    );
+    const imageResolutions =
+      resolutionIndex < 0
+        ? [
+            ...liveAssistant.imageResolutions,
+            {
+              messageId: event.messageId,
+              entry: event.entry,
+            },
+          ]
+        : liveAssistant.imageResolutions.map((resolution, index) =>
+            index === resolutionIndex
+              ? { ...resolution, entry: event.entry }
+              : resolution,
+          );
+    return {
+      liveAssistantMessage: {
+        ...liveAssistant,
+        imageResolutionOwnerMessageId: event.messageId,
+        imageResolutions,
+        imageResolutionsVersion: liveAssistant.imageResolutionsVersion + 1,
+        timestamp: event.timestamp,
+      },
+    };
+  }
+  const message = state.messages[messageIndex];
+  if (message.role !== "assistant") return {};
+  const entryIndex = message.imageResolutions.findIndex(
+    (entry) => entry.canonicalSource === event.entry.canonicalSource,
+  );
+  const imageResolutions =
+    entryIndex < 0
+      ? [...message.imageResolutions, event.entry]
+      : message.imageResolutions.map((entry, index) =>
+          index === entryIndex ? event.entry : entry,
+        );
+  const messages = state.messages.slice();
+  messages[messageIndex] = { ...message, imageResolutions };
+  return { messages };
+}
+
+function applyContentDelta(
+  state: ChatSessionState,
+  event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
+): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
   // NOT flow through the block accumulator (no message content to
@@ -3594,6 +3677,13 @@ function assistantMessageFromLiveAssistant(
       fallbackStatus,
     ),
   );
+  const ownerMessageId = liveAssistant.imageResolutionOwnerMessageId;
+  const imageResolutions =
+    ownerMessageId === undefined
+      ? liveAssistant.imageResolutions.map((resolution) => resolution.entry)
+      : liveAssistant.imageResolutions
+          .filter((resolution) => resolution.messageId === ownerMessageId)
+          .map((resolution) => resolution.entry);
   return {
     role: "assistant",
     // This frozen row is a transient safety-net placeholder that the host's
@@ -3609,6 +3699,7 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    imageResolutions,
   };
 }
 
@@ -3685,6 +3776,9 @@ function liveAssistantForActiveTurn(
     blocks: [],
     startedAt: activeTurn.startedAt,
     blocksVersion: 0,
+    imageResolutions: [],
+    imageResolutionOwnerMessageId: null,
+    imageResolutionsVersion: 0,
     timestamp: activeTurn.updatedAt,
     reasoningEffort: activeTurn.reasoningEffort,
     serviceTier: activeTurn.serviceTier,

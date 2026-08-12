@@ -262,6 +262,41 @@ export const worktreeIntentSchema = z.object({
 });
 export type WorktreeIntent = z.infer<typeof worktreeIntentSchema>;
 
+// Released chat.subscribe lines keep the pre-collision worktree intent shape.
+// The live intent above may grow, but frozen stream contracts must not observe
+// those additions through a shared schema reference.
+const worktreeBranchSelectionSchemaV10 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("new"),
+    name: z.string().min(1),
+    source: z.string().min(1),
+    carryUncommittedChanges: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("existing"),
+    name: z.string().min(1),
+  }),
+]);
+
+const worktreeFolderIntentSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
+  z.object({
+    kind: z.literal("import"),
+    ...worktreeFolderIntentBaseShape,
+    worktreePath: z.string(),
+  }),
+  z.object({
+    kind: z.literal("worktree"),
+    ...worktreeFolderIntentBaseShape,
+    branch: worktreeBranchSelectionSchemaV10,
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+]);
+
+export const worktreeIntentSchemaV10 = z.object({
+  entries: z.array(worktreeFolderIntentSchemaV10),
+});
+
 export const diskWorktreeEntrySchema = z.object({
   worktreePath: z.string(),
   branch: z.string().nullable(),
@@ -531,18 +566,8 @@ const worktreeOwnerRequestFields = {
   ownerKind: worktreeBindingOwnerKindSchema,
 } as const;
 
-const worktreeBranchSelectionRequestSchemaV10 = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("new"),
-    name: z.string().min(1),
-    source: z.string().min(1),
-    carryUncommittedChanges: z.boolean(),
-  }),
-  z.object({
-    type: z.literal("existing"),
-    name: z.string().min(1),
-  }),
-]);
+const worktreeBranchSelectionRequestSchemaV10 =
+  worktreeBranchSelectionSchemaV10;
 
 const worktreeBranchSelectionRequestSchemaV11 = z.union([
   z.object({
@@ -560,20 +585,7 @@ const worktreeBranchSelectionRequestSchemaV11 = z.union([
   }),
 ]);
 
-const worktreeFolderIntentRequestSchemaV10 = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
-  z.object({
-    kind: z.literal("import"),
-    ...worktreeFolderIntentBaseShape,
-    worktreePath: z.string(),
-  }),
-  z.object({
-    kind: z.literal("worktree"),
-    ...worktreeFolderIntentBaseShape,
-    branch: worktreeBranchSelectionRequestSchemaV10,
-    scripts: worktreeEntryScriptsSchema.nullable(),
-  }),
-]);
+const worktreeFolderIntentRequestSchemaV10 = worktreeFolderIntentSchemaV10;
 
 const worktreeFolderIntentRequestSchemaV11 = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),

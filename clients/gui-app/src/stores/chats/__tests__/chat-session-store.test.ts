@@ -13,6 +13,7 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -536,6 +537,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -3471,6 +3473,7 @@ describe("createChatSessionStore", () => {
         toolName: "Bash",
         agentMessageSend: null,
         backgroundTask: true,
+        imageResults: [],
       },
     });
 
@@ -3521,6 +3524,7 @@ describe("createChatSessionStore", () => {
           usage: null,
           reasoningEffort: null,
           serviceTier: null,
+          imageResolutions: [],
         },
       ],
       queue: { status: "idle", items: [] },
@@ -3808,6 +3812,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
@@ -3950,6 +3955,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
             {
@@ -3975,6 +3981,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
@@ -5054,6 +5061,84 @@ describe("blockDelta coalescing", () => {
     unsubscribe();
   });
 
+  it("applies image resolution events to an ordinary live turn", () => {
+    const harness = createCoalesceHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    const emitResolution = (attachmentHash: string, timestamp: number): void =>
+      callbacks.onBlockDelta(
+        createImageResolutionUpdatedFrame({
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-live-1",
+            messageId: "assistant-live-1",
+            timestamp,
+            turnId: "turn-1",
+            entry: {
+              source: "C:%5Cwork%5Cchart.png",
+              canonicalSource: "C:\\work\\chart.png",
+              state: "resolved",
+              attachmentHash,
+              mediaType: "image/png",
+              width: null,
+              height: null,
+            },
+          },
+        }),
+      );
+
+    emitResolution("hash-1", 11);
+    harness.manual.runAll();
+    let live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.messageId).toBe("assistant-live-1");
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+
+    callbacks.onBlockDelta(
+      createImageResolutionUpdatedFrame({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "image_resolution.updated",
+          blockId: "assistant-old-1",
+          messageId: "assistant-old-1",
+          timestamp: 12,
+          turnId: "turn-old",
+          entry: {
+            source: "C:%5Cwork%5Cold.png",
+            canonicalSource: "C:\\work\\old.png",
+            state: "resolved",
+            attachmentHash: "stale-hash",
+            mediaType: "image/png",
+            width: null,
+            height: null,
+          },
+        },
+      }),
+    );
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+
+    emitTextDelta(callbacks, "![chart](C:%5Cwork%5Cchart.png)", 12);
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.blocks).toHaveLength(1);
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+    expect(live?.imageResolutionsVersion).toBe(1);
+
+    emitResolution("hash-2", 13);
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-2");
+    expect(live?.imageResolutionsVersion).toBe(2);
+  });
+
   it("flushes buffered deltas before a consuming frame materializes the turn", () => {
     const harness = createCoalesceHarness();
     const callbacks = harness.callbacks();
@@ -5620,6 +5705,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      imageResolutions: [],
     };
   }
 
@@ -5805,6 +5891,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         usage: null,
         reasoningEffort: null,
         serviceTier: null,
+        imageResolutions: [],
       },
     ]);
     expect(harness.nudgeCount()).toBe(1);

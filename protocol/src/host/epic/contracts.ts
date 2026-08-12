@@ -38,6 +38,8 @@ import {
   epicMentionSpecsResponseSchema,
   epicMentionStoriesResponseSchema,
   epicMentionTicketsResponseSchema,
+  finishArtifactImageRequestSchema,
+  finishArtifactImageResponseSchema,
   grantEpicAccessRequestSchema,
   grantEpicAccessResponseSchema,
   listCommentThreadsRequestSchema,
@@ -50,6 +52,8 @@ import {
   listTasksRequestSchemaV11,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
+  prepareArtifactImageRequestSchema,
+  prepareArtifactImageResponseSchema,
   removeEpicRepoRequestSchema,
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
@@ -440,6 +444,20 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+export const epicPrepareArtifactImageV10 = defineRpcContract({
+  method: "epic.prepareArtifactImage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: prepareArtifactImageRequestSchema,
+  responseSchema: prepareArtifactImageResponseSchema,
+});
+
+export const epicFinishArtifactImageV10 = defineRpcContract({
+  method: "epic.finishArtifactImage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: finishArtifactImageRequestSchema,
+  responseSchema: finishArtifactImageResponseSchema,
 });
 
 export const epicCreateTuiAgentV10 = defineRpcContract({
