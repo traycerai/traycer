@@ -2230,6 +2230,46 @@ export const providerSkillSchemaV70 = z.object({
 });
 
 /**
+ * The v7.0 copy of the scope/workspaceRoot invariant. The live
+ * `refineProviderNativeScope` may change with the live line; the v7.0 pin must
+ * keep parsing exactly as frozen, so it carries its own copy rather than
+ * sharing the live function.
+ */
+function refineProviderNativeScopeV70(
+  value: { readonly scope?: unknown; readonly workspaceRoot?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (!("scope" in value) || !("workspaceRoot" in value)) {
+    return;
+  }
+  const scope = value.scope;
+  const workspaceRoot = value.workspaceRoot;
+  if (scope !== "global" && scope !== "project") {
+    return;
+  }
+  if (typeof workspaceRoot !== "string" && workspaceRoot !== null) {
+    return;
+  }
+  if (scope === "project") {
+    if (workspaceRoot === null || workspaceRoot.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["workspaceRoot"],
+        message: 'scope "project" requires a non-empty workspaceRoot',
+      });
+    }
+    return;
+  }
+  if (workspaceRoot !== null) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["workspaceRoot"],
+      message: 'scope "global" requires workspaceRoot: null',
+    });
+  }
+}
+
+/**
  * The `native` query as `providers.list@7.0` accepts it. A discriminated union
  * on `kind`, and a closed provider-id enum inside every arm, so growth in
  * either is a value a v7.0 host rejects outright rather than ignores - which
@@ -2274,7 +2314,7 @@ export const nativeListQuerySchemaV70 = z
       theme: providerPluginIconThemeSchemaV70,
     }),
   ])
-  .superRefine(refineProviderNativeScope);
+  .superRefine(refineProviderNativeScopeV70);
 export type NativeListQueryV70 = z.infer<typeof nativeListQuerySchemaV70>;
 
 const nativeListSuccessResultSchemaV70 = z.discriminatedUnion("kind", [
@@ -2351,30 +2391,6 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
     modelProviders: null,
   };
 
-/**
- * The v7.0-shaped input both projections parse. Shared so the strict and
- * degrading forms below cannot drift into disagreeing about what the cut IS.
- *
- * Two cuts, and they are made in different ways on purpose:
- *
- * 1. `modelProviders` is dropped. A plain (non-strict) reparse would do this
- *    on its own, but the drop is written out so the projection reads as the
- *    contract it is.
- * 2. `supportedTabs` is FILTERED before the parse. This is the cut a reparse
- *    cannot make: `z.array(enum)` rejects the whole array on one unknown
- *    member, the object parse fails with it, and `providerCliStateSchemaV70`'s
- *    whole-object `.catch()` then serves the empty default - so a v7.0 client
- *    would lose MCP, Plugins AND Skills for that provider, not just the tab it
- *    never knew about.
- *
- * Everything else is parsed through the frozen tree unchanged. `supportedTabs`
- * is the one field known to grow and its projection is written down; a member
- * added to any other frozen enum has no agreed answer for a v7.0 caller, and
- * inventing one here - dropping it, or collapsing to the default - would ship
- * that guess silently. So neither form below invents one: the strict form
- * throws, the degrading form returns null, and the decision is routed to
- * whoever grew the enum by a red test rather than a field incident.
- */
 /**
  * There is no v7.0 capability PROJECTION, and its absence is the shape of this
  * transition rather than an omission.

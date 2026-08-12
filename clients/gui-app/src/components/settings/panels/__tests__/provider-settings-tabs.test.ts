@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
+import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import {
   PROVIDER_TAB_ORDER,
   providerTabLabel,
@@ -205,13 +206,12 @@ describe("supportedTabsFor", () => {
 
     it("names what the tab actually holds everywhere else", () => {
       // The panel's own words: the section inside is headed "Usage limits".
-      for (const providerId of [
-        "grok",
-        "openrouter",
-        "opencode",
-        "cursor",
-        "amp",
-      ] as const) {
+      // Every provider id except the two profile-backed ones, so a newly added
+      // provider cannot regress to the profiles label without failing here.
+      const everywhereElse = providerIdSchema.options.filter(
+        (id) => id !== "claude-code" && id !== "codex",
+      );
+      for (const providerId of everywhereElse) {
         expect(providerTabLabel("usage", LABELS, providerId)).toBe(
           "Usage limits",
         );

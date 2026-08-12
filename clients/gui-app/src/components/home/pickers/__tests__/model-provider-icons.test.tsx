@@ -84,8 +84,8 @@ describe("model provider icons", () => {
   it("gives a user-declared custom provider the generic mark", () => {
     // It has no brand, and borrowing one would put a real company's logo on
     // someone's private gateway.
-    expect(markFor("my-gateway", false)).toBe("generic");
-    expect(markFor("wafer.ai", false)).toBe("generic");
+    expect(markFor("my-gateway", true)).toBe("generic");
+    expect(markFor("wafer.ai", true)).toBe("generic");
   });
 
   it("refuses a brand mark to a DECLARED row, even under a mapped id", () => {

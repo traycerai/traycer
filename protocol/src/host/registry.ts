@@ -5635,10 +5635,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // `speech.*@1.0` - on-device dictation model lifecycle. The live audio
-  // stream rides `speech.dictate` in `hostStreamRpcRegistry` below; these
-  // unary methods only manage the recognizer's model files. Schemas live in
-  // `protocol/host/speech/`.
   "worktree.listBindingsForEpic": {
     1: {
       latestMinor: 2,
@@ -5874,7 +5870,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
  * alone carries seven majors and their bridges, and the inferred type of one
  * object literal holding every method crossed the limit as this family grew.
  *
- * Purely a compile-time seam: the three definitions are intersected into one
+ * Purely a compile-time seam: the four definitions are intersected into one
  * `HostRpcRegistryDefinition` below, so nothing about registration, ordering
  * or negotiation changes.
  */

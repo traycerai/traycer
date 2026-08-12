@@ -64,7 +64,7 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (data, _variables, context) => {
         if (data.cancelled || data.result.kind !== "done") return;
-        invalidateAfterModelProviderMutation({
+        void invalidateAfterModelProviderMutation({
           queryClient,
           hostId: context.hostId,
         });

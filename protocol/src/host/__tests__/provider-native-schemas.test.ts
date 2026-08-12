@@ -295,7 +295,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     });
     const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
     // The v7.0-shaped default, not the live one: this hop's target is the
-    // frozen v7.0 line, which predates the `modelProviders` block entirely.
+    // pinned v7.0 line, whose default carries `modelProviders: null`.
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
     );
@@ -398,6 +398,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
               traycerSessionToolsNotice: true,
             },
             skills: null,
+        modelProviders: null,
           },
         },
       ],
@@ -445,6 +446,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         mcp: sampleMcpCapabilities,
         plugins: null,
         skills: null,
+        modelProviders: null,
       },
     });
     const downgraded = downgradeProviderCliStateToV10(latest);
@@ -478,6 +480,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
             mcp: sampleMcpCapabilities,
             plugins: null,
             skills: null,
+        modelProviders: null,
           },
         },
       ],
@@ -505,6 +508,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
           mcp: sampleMcpCapabilities,
           plugins: null,
           skills: null,
+        modelProviders: null,
         },
       }),
     };
@@ -1162,6 +1166,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
         mcp: sampleMcpCapabilities,
         plugins: null,
         skills: null,
+        modelProviders: null,
       },
     });
     const asMutationV20 = providerMutationCliStateSchemaV20.parse(latest);

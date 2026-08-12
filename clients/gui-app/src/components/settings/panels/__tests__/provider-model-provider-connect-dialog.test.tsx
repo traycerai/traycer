@@ -106,28 +106,50 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
 // Radix's Select needs a pointer-capable layout to open its listbox, which
 // jsdom does not provide. The stand-in keeps the same element structure with
 // every option always rendered, following the mock the host-workspace selector
-// suites already use.
-vi.mock("@/components/ui/select", () => ({
-  Select: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectTrigger: (props: {
-    readonly children: ReactNode;
-    readonly id?: string;
-  }) => (
-    <button type="button" id={props.id}>
-      {props.children}
-    </button>
-  ),
-  SelectValue: () => null,
-  SelectContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectItem: (props: {
-    readonly children: ReactNode;
-    readonly value: string;
-  }) => <div data-value={props.value}>{props.children}</div>,
-}));
+// suites already use - and it forwards `onValueChange` so a test can pick an
+// option by clicking it, which is what keeps non-default selections testable.
+vi.mock("@/components/ui/select", async () => {
+  const { createContext, useContext } = await import("react");
+  const ValueChangeContext = createContext<(value: string) => void>(() => {});
+  return {
+    Select: (props: {
+      readonly children: ReactNode;
+      readonly value?: string;
+      readonly onValueChange?: (value: string) => void;
+    }) => (
+      <ValueChangeContext.Provider value={props.onValueChange ?? (() => {})}>
+        <div>{props.children}</div>
+      </ValueChangeContext.Provider>
+    ),
+    SelectTrigger: (props: {
+      readonly children: ReactNode;
+      readonly id?: string;
+    }) => (
+      <button type="button" id={props.id}>
+        {props.children}
+      </button>
+    ),
+    SelectValue: () => null,
+    SelectContent: (props: { readonly children: ReactNode }) => (
+      <div>{props.children}</div>
+    ),
+    SelectItem: (props: {
+      readonly children: ReactNode;
+      readonly value: string;
+    }) => {
+      const onValueChange = useContext(ValueChangeContext);
+      return (
+        <button
+          type="button"
+          data-value={props.value}
+          onClick={() => onValueChange(props.value)}
+        >
+          {props.children}
+        </button>
+      );
+    },
+  };
+});
 
 const FULL_CAPS: ProviderModelProvidersCapabilities = {
   actions: ["connect", "oauth", "disconnect"],
@@ -416,6 +438,62 @@ describe("connect with an API key", () => {
     expect(screen.queryByLabelText("Instance URL")).toBeNull();
     expect(screen.getByLabelText("Account id")).toBeTruthy();
   });
+
+  it("reveals a conditional field once its condition is met, and submits its value", () => {
+    renderDialog({
+      entry: entry({
+        methods: [
+          {
+            type: "api",
+            label: "API key",
+            prompts: [
+              {
+                type: "select",
+                key: "deploymentType",
+                message: "Deployment",
+                options: [
+                  { label: "Cloud", value: "cloud", hint: null },
+                  { label: "Enterprise", value: "enterprise", hint: null },
+                ],
+                when: null,
+              },
+              {
+                type: "text",
+                key: "instanceUrl",
+                message: "Instance URL",
+                placeholder: null,
+                when: { key: "deploymentType", op: "eq", value: "enterprise" },
+              },
+            ],
+          },
+        ],
+      }),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.queryByLabelText("Instance URL")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enterprise" }));
+    fireEvent.change(screen.getByLabelText("Instance URL"), {
+      target: { value: "https://ghe.example.test" },
+    });
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-enterprise" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(mocks.authCalls[0]?.variables).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "connect",
+        modelProviderId: "anthropic",
+        methodIndex: 0,
+        key: "sk-enterprise",
+        inputs: {
+          deploymentType: "enterprise",
+          instanceUrl: "https://ghe.example.test",
+        },
+      },
+    });
+  });
 });
 
 describe("credential precedence", () => {
@@ -500,6 +578,40 @@ describe("method picker", () => {
     expect(screen.getByText("Manually enter API Key")).toBeTruthy();
     // And no third, invented "API key" row beside the two it advertised.
     expect(screen.queryByText("API key")).toBeNull();
+  });
+
+  it("sends the picked method's own index, not the first one's", () => {
+    // The second arm here is the API-key one, so a submit routed through
+    // `methodIndex: 0` would send the pasted key down the OAuth arm.
+    renderDialog({
+      entry: entry({
+        id: "xai",
+        name: "xAI",
+        methods: [
+          { type: "oauth", label: "SuperGrok Subscription", prompts: [] },
+          { type: "api", label: "Manually enter API Key", prompts: [] },
+        ],
+      }),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manually enter API Key" }),
+    );
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-second-arm" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(mocks.authCalls[0]?.variables).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "connect",
+        modelProviderId: "xai",
+        methodIndex: 1,
+        key: "sk-second-arm",
+        inputs: {},
+      },
+    });
   });
 });
 

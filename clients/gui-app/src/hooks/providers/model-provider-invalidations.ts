@@ -18,16 +18,25 @@ import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-
  * Called only for a `done` result. A `pending` OAuth attempt has changed
  * nothing yet, and invalidating on it would re-list (and so re-lease a managed
  * server) on every poll tick.
+ *
+ * In-flight fetches on both scopes are cancelled before invalidating: a
+ * request started before the mutation carries the pre-mutation state, and if
+ * left running it can settle after the invalidation and publish that stale
+ * snapshot over the fresh one.
  */
-export function invalidateAfterModelProviderMutation(args: {
+export async function invalidateAfterModelProviderMutation(args: {
   readonly queryClient: QueryClient;
   readonly hostId: string | null;
-}): void {
+}): Promise<void> {
   if (args.hostId === null) return;
-  void args.queryClient.invalidateQueries({
-    queryKey: modelProvidersQueryKeys.listScope(args.hostId),
-  });
-  void args.queryClient.invalidateQueries({
+  const listScope = { queryKey: modelProvidersQueryKeys.listScope(args.hostId) };
+  const catalogScope = {
     queryKey: modelProvidersQueryKeys.modelCatalogScope(args.hostId),
-  });
+  };
+  await Promise.all([
+    args.queryClient.cancelQueries(listScope),
+    args.queryClient.cancelQueries(catalogScope),
+  ]);
+  void args.queryClient.invalidateQueries(listScope);
+  void args.queryClient.invalidateQueries(catalogScope);
 }

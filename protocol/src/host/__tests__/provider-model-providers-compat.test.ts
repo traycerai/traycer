@@ -1626,6 +1626,11 @@ describe("attempt lifecycle is encodable end to end", () => {
     ).toBe(true);
   });
 
+  it("has an OUTCOMES entry for every auth error code, so a new member cannot ship untested", () => {
+    const covered = OUTCOMES.map(({ code }) => code).sort();
+    expect(covered).toEqual([...modelProviderAuthErrorCodeSchema.options].sort());
+  });
+
   it.each(OUTCOMES)("cancel: $name, with cancelled:false", ({ code }) => {
     // Cancel is best-effort and local. "Nothing was torn down" and "here is
     // why" are separate facts, and both have to be sayable together.
@@ -2160,10 +2165,10 @@ describe("the v7.0 freeze goes all the way down", () => {
     }
   });
 
-  it("keeps the frozen provider-id enum out of the live one's future", () => {
-    // The v7.0 native query and the v7.0 state both carry a provider id. A
-    // provider added to the live enum reaches a v7.0 caller only through the
-    // bridge, never by the frozen schema quietly widening underneath it.
+  it("keeps the v7.0 provider-id copy in lockstep with the live enum", () => {
+    // While the v7.0 line is unreleased its copy mirrors the live enum, so a
+    // provider added to one without the other goes red here and the drift is
+    // resolved deliberately instead of shipping half-wired.
     expect(providerIdSchemaV70.options).toEqual(providerIdSchema.options);
   });
 

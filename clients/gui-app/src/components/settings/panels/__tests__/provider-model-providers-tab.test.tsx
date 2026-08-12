@@ -325,10 +325,9 @@ describe("ProviderModelProvidersTab method filter", () => {
     renderTab({ result: MIXED, capabilities: FULL_CAPS });
     expect(screen.getByText("Anthropic")).toBeTruthy();
     expect(screen.getByText("GitHub Copilot")).toBeTruthy();
-    // No dot on the trigger while nothing is filtered.
-    expect(
-      screen.getByTestId("model-provider-filter-trigger").textContent,
-    ).toBeDefined();
+    // The bare accessible name IS the unfiltered state: once a filter is
+    // picked the name grows a ", showing ..." suffix, so an exact-name match
+    // here proves no filter is marked active.
     expect(
       screen.getByRole("button", { name: "Filter model providers" }),
     ).toBeTruthy();

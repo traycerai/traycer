@@ -84,7 +84,7 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
           isCustomProviderWrite(variables.action) ||
           data.result.kind === "done"
         ) {
-          invalidateAfterModelProviderMutation({
+          void invalidateAfterModelProviderMutation({
             queryClient,
             hostId: context.hostId,
           });

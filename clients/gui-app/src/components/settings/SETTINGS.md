@@ -850,9 +850,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     - **ONE list, connected first** (`sortModelProviderEntries`), not a
       "Connected" section above a searchable catalog. Search has to be able to
       find a connected provider, and the two-section shape is precisely the one
-      where it cannot. ~180 rows in a scroll region of their own, capped against
-      the VIEWPORT alone (`max-h-[60vh]`, no px/rem branch, so the cap follows
-      the window rather than the text size); deliberately NOT virtualized
+      where it cannot. ~180 rows flowing in the panel's own scroll (no internal
+      height cap - an inner `overflow-y-auto` nested a second scrollbar inside
+      the panel's); deliberately NOT virtualized
       (single-line rows, no per-row queries - and a virtualizer renders an empty
       viewport under jsdom's zero-height layout, which would put this list's
       behavior beyond test).
