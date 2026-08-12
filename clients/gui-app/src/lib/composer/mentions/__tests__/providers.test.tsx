@@ -16,6 +16,7 @@ import type {
   EpicTerminalMentionEntry,
 } from "@/lib/composer/types";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { GithubMentionRow } from "@traycer/protocol/host/mention-schemas";
 
 function context(
   overrides: Partial<ComposerMentionProviderContext>,
@@ -230,6 +231,53 @@ describe("mention provider registry", () => {
     );
     expect(unsupportedLabels).not.toContain("Resolve in Pull requests...");
     expect(unsupportedLabels).not.toContain("Resolve in Issues...");
+  });
+
+  it("counts an author-login root match toward the zero-match verdict", () => {
+    // `githubMentionMatchScore` matches the author's login, so the source
+    // includes this row at root - but no rendered segment carries the login.
+    // The entry's search-only text is what lets the root ranker reproduce
+    // that match; without it the row rode the appended, unmatched tail with
+    // `matchedCount: 0`, and the settled zero-match dismissal closed the
+    // picker over a row it was showing.
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "octocat", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+
+    const searched = mentionProviderRegistry.entriesWithMatches(
+      ROOT_MENTION_STEP,
+      context({
+        query: "octocat",
+        github: {
+          pullRequests: {
+            rows: [row],
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(searched.matchedCount).toBe(1);
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {

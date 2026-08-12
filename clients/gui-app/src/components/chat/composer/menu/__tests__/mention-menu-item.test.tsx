@@ -17,6 +17,7 @@ function entry(fields: {
     label: "Planning agent",
     detail: fields.detail,
     description: "",
+    searchText: null,
     icon: createElement("span"),
     action: { kind: "back" },
     updatedAt: fields.updatedAt,

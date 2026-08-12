@@ -39,6 +39,11 @@ const FUSE_KEYS: NonNullable<IFuseOptions<RootSearchCandidate>["keys"]> = [
   { name: "entry.label", weight: 2 },
   { name: "entry.detail", weight: 1 },
   { name: "entry.description", weight: 0.5 },
+  // Non-rendered search-only text (a PR/issue author's login). Weighted at
+  // the bottom: it exists so a row the SOURCE matched can be re-matched -
+  // and counted by `matchedCount`, which gates the zero-match dismissal -
+  // not to outrank rows matched on what the user can actually see.
+  { name: "entry.searchText", weight: 0.5 },
 ];
 
 export interface RankedRootSearch {

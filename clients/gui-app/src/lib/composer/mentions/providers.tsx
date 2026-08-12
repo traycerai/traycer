@@ -112,6 +112,16 @@ export interface MentionMenuEntry {
   readonly label: string;
   readonly detail: string;
   readonly description: string;
+  /**
+   * Text the row is findable by at root but never renders - the source
+   * matcher's fields that no visible segment carries (a PR/issue author's
+   * login). The root ranker searches this beside the visible fields so a row
+   * a SOURCE matched can always be re-matched client-side: a row that only
+   * survives in the appended, unmatched tail does not gate the zero-match
+   * dismissal, and a source match the ranker could not reproduce closed the
+   * picker over a row it was showing.
+   */
+  readonly searchText: string | null;
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
   /**
@@ -1040,6 +1050,11 @@ function githubRowEntry(
     label: row.title,
     detail: githubMentionRowTrailing(row, repositories, now),
     description: githubMentionReference(row),
+    // Every field `githubMentionMatchScore` matches is carried by a
+    // searchable segment: number and reference by `labelPrefix` and
+    // `description`, title by `label`, owner/repo by `detail` - and the
+    // author only here, because no rendered segment shows the login.
+    searchText: row.author?.login ?? null,
     // Null even though these rows DO have a last-activity clock: their age is
     // already composed into `detail` alongside the repository (`acme/web ·
     // 2h`), because the two only read correctly together. Filling the separate
@@ -1207,6 +1222,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     label: args.label,
     detail: args.detail,
     description: args.description,
+    searchText: null,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
     updatedAt: null,
@@ -1222,6 +1238,7 @@ function backEntry(description: string): MentionMenuEntry {
     label: "Back",
     detail: "",
     description,
+    searchText: null,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
     updatedAt: null,
@@ -1248,6 +1265,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       label: entry.label,
       detail: detailForSuggestion(entry),
       description: descriptionForSuggestion(entry),
+      searchText: null,
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
       updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,

@@ -18,6 +18,7 @@ function entry(fields: {
     label: fields.label,
     detail: fields.detail ?? "",
     description: fields.description ?? "",
+    searchText: null,
     icon: createElement("span"),
     action: { kind: "back" },
     updatedAt: null,
@@ -44,6 +45,7 @@ function githubCandidate(fields: {
   labelPrefix: string;
   label: string;
   description?: string;
+  searchText?: string;
 }): RootSearchCandidate {
   return {
     entry: {
@@ -53,6 +55,7 @@ function githubCandidate(fields: {
         description: fields.description,
       }),
       labelPrefix: fields.labelPrefix,
+      searchText: fields.searchText ?? null,
     },
     providerId: "pull-requests",
   };
@@ -259,5 +262,47 @@ describe("rankRootSearchEntries", () => {
     ];
 
     expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
+  });
+});
+
+describe("search-only text", () => {
+  it("counts a row matched only through its search-only text", () => {
+    // The author's login lives in no rendered segment, so before
+    // `entry.searchText` joined the Fuse keys this row was appended without
+    // counting - and `matchedCount: 0` let the settled zero-match dismissal
+    // close the picker over a row it was showing.
+    const ranked = rankRootSearchEntries(
+      [
+        githubCandidate({
+          id: "pr1",
+          labelPrefix: "#4917",
+          label: "Stop the busy-loop",
+          searchText: "octocat",
+        }),
+      ],
+      "octocat",
+    );
+
+    expect(ranked.matchedCount).toBe(1);
+    expect(ranked.entries).toHaveLength(1);
+  });
+
+  it("appends without counting when no field carries the match", () => {
+    // The control: the same row minus its search-only text stays VISIBLE
+    // (unmatched rows are appended, never dropped) but does not gate the
+    // dismissal - the distinction `matchedCount` exists to draw.
+    const ranked = rankRootSearchEntries(
+      [
+        githubCandidate({
+          id: "pr1",
+          labelPrefix: "#4917",
+          label: "Stop the busy-loop",
+        }),
+      ],
+      "octocat",
+    );
+
+    expect(ranked.matchedCount).toBe(0);
+    expect(ranked.entries).toHaveLength(1);
   });
 });
