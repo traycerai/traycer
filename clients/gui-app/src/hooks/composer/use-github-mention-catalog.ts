@@ -282,19 +282,27 @@ export function useGithubMentionCatalog(
     }
   }, [mutateAsync, scope.epicId, scope.workspacePaths, section]);
 
+  // What THIS scope has actually said, which is not `catalogQuery.data`: a
+  // placeholder response belongs to the PREVIOUS scope, and its rows are
+  // selectable, so left exposed a user can commit a mention naming a pull
+  // request from the host, epic or roots they just left. Reported as the
+  // unanswered case instead, so every derived fact - `scopeResolved`, the
+  // repositories, the notice, and the loading row - describes one scope rather
+  // than two.
+  //
+  // Read by EVERYTHING below, deliberately. Deriving one fact from the raw
+  // query while the rest read this is how the section came to render a settled
+  // empty list for a scope that had not answered: `keepPreviousData` leaves
+  // `data` defined and the query `success`, so a loading flag taken off the
+  // query is false while the rows taken off this are empty.
+  const answered = catalogQuery.isPlaceholderData
+    ? undefined
+    : catalogQuery.data;
+
   return {
-    // A placeholder response belongs to the PREVIOUS scope, and its rows are
-    // selectable: left exposed, a user can commit a mention naming a pull
-    // request from the host, epic or roots they just left. Reported as the
-    // unanswered case instead - which is what this scope has actually said so
-    // far - so every derived fact (`scopeResolved`, the repositories, the
-    // notice) describes one scope rather than two.
-    ...catalogFacts(
-      catalogQuery.isPlaceholderData ? undefined : catalogQuery.data,
-    ),
+    ...catalogFacts(answered),
     isPlaceholder: catalogQuery.isPlaceholderData,
-    isLoading:
-      enabled && catalogQuery.data === undefined && catalogQuery.isLoading,
+    isLoading: enabled && answered === undefined && catalogQuery.isFetching,
     isChecking:
       enabled && (catalogQuery.isFetching || refreshMutation.isPending),
     refreshManually,

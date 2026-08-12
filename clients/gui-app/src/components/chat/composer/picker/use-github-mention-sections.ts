@@ -394,7 +394,13 @@ export function useGithubMentionSections(
   }, [refreshManually, refreshSearch]);
 
   const chrome = useMemo<MentionStepChrome | null>(() => {
-    if (openSection === null) return null;
+    // `supported` gates the chrome for the same reason it gates the reads.
+    // Method support is reactive - an app-wide composer can rebind to an older
+    // host, or the bound host can re-handshake after an in-place downgrade,
+    // while a GitHub step is still open. The reads go quiet on their own; the
+    // chrome would not, leaving a refresh button that calls a method this
+    // handshake negotiated away.
+    if (openSection === null || !supported) return null;
     // Every decision below - ⓘ suppression, banner, empty-scope copy - lives in
     // `githubMentionChromeFor`, which is pure and directly tested. This hook
     // only supplies what the host said.
@@ -427,6 +433,7 @@ export function useGithubMentionSections(
     search.isSearching,
     search.notice,
     search.sourceStatus,
+    supported,
   ]);
 
   return {

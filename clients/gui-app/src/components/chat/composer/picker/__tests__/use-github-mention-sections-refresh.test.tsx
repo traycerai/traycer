@@ -73,8 +73,11 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({ hostId: "host-1" }),
 }));
 
+/** Mutable: method support is reactive, and that is the point of one test. */
+const support = vi.hoisted(() => ({ github: true }));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostSupportsMethod: () => true,
+  useHostSupportsMethod: () => support.github,
 }));
 
 import { useGithubMentionSections } from "../use-github-mention-sections";
@@ -104,6 +107,7 @@ function renderSections(query: string) {
 beforeEach(() => {
   refreshes.catalog = 0;
   refreshes.search = 0;
+  support.github = true;
   useGithubMentionCatalogStore.setState(
     useGithubMentionCatalogStore.getInitialState(),
     true,
@@ -150,5 +154,18 @@ describe("useGithubMentionSections refresh", () => {
 
     expect(refreshes.catalog).toBe(1);
     expect(refreshes.search).toBe(1);
+  });
+
+  it("publishes no chrome once the host stops supporting the methods", () => {
+    // Method support is reactive: an app-wide composer can rebind to an older
+    // host, or the bound host can re-handshake after an in-place downgrade,
+    // while a GitHub step is still open. The reads go quiet on their own, but
+    // the chrome carries a refresh button that calls `mention.githubCatalog`
+    // directly - it has to go with them.
+    support.github = false;
+
+    const { result } = renderSections("auth");
+
+    expect(result.current.chrome).toBeNull();
   });
 });
