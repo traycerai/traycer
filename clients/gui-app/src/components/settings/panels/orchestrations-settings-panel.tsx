@@ -51,9 +51,11 @@ import {
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { packDisplayName } from "@/lib/orchestration/pack-display";
+import { cn } from "@/lib/utils";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { findModelBlock } from "@traycer-clients/shared/platform/is-model-blocked";
 import type {
   TraycerModelGroup,
   TraycerOrchestrationRole,
@@ -1238,6 +1240,8 @@ function ModelPacksSection(props: {
 /** Read-only tier/model listing for the selected pack (shown on chip click). */
 function PackPreview(props: { readonly name: string }) {
   const runnerHost = useRunnerHost();
+  const blocksQuery = useRunnerOrchestrationBlocksQuery();
+  const blocks = blocksQuery.data?.blocks ?? [];
   const [group, setGroup] = useState<TraycerModelGroup | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -1307,31 +1311,71 @@ function PackPreview(props: { readonly name: string }) {
               ) : null}
             </div>
             <div className="flex flex-col gap-1">
-              {tier.models.map((m, i) => (
-                <div
-                  key={`${m.harnessId}/${m.model}`}
-                  className="flex items-center gap-2 rounded-md border border-border/30 px-2.5 py-1.5 text-ui-xs"
-                >
-                  <span className="text-muted-foreground">{i + 1}.</span>
-                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground">
-                    {m.harnessId}
-                  </span>
-                  <code className="font-mono">{m.model}</code>
-                  {m.effort !== null && m.effort !== "" ? (
-                    <Badge variant="outline" className="text-ui-xs">
-                      {m.effort}
-                    </Badge>
-                  ) : null}
-                  <Badge variant="secondary" className="text-ui-xs">
-                    {m.family}
-                  </Badge>
-                  {m.note !== "" ? (
-                    <span className="ml-auto truncate text-muted-foreground">
-                      {m.note}
+              {tier.models.map((m, i) => {
+                const block = findModelBlock(
+                  { harnessId: m.harnessId, model: m.model },
+                  blocks,
+                );
+                const blocked = block !== null;
+                const skipHint =
+                  block !== null && block.note !== ""
+                    ? `Blocked — ${block.note}. Auto-pilot skips to the next model.`
+                    : "Blocked — auto-pilot skips to the next model.";
+                return (
+                  <div
+                    key={`${m.harnessId}/${m.model}`}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-ui-xs",
+                      blocked
+                        ? "border-destructive/40 bg-destructive/5"
+                        : "border-border/30",
+                    )}
+                    data-testid={
+                      blocked ? `pack-preview-blocked-${m.harnessId}` : undefined
+                    }
+                  >
+                    <span className="text-muted-foreground">{i + 1}.</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground">
+                      {m.harnessId}
                     </span>
-                  ) : null}
-                </div>
-              ))}
+                    <code
+                      className={cn(
+                        "font-mono",
+                        blocked && "text-muted-foreground line-through",
+                      )}
+                    >
+                      {m.model}
+                    </code>
+                    {m.effort !== null && m.effort !== "" ? (
+                      <Badge variant="outline" className="text-ui-xs">
+                        {m.effort}
+                      </Badge>
+                    ) : null}
+                    <Badge variant="secondary" className="text-ui-xs">
+                      {m.family}
+                    </Badge>
+                    {blocked ? (
+                      <Badge
+                        variant="destructive"
+                        className="ml-auto shrink-0"
+                        title={skipHint}
+                      >
+                        Blocked
+                      </Badge>
+                    ) : null}
+                    {m.note !== "" ? (
+                      <span
+                        className={cn(
+                          "truncate text-muted-foreground",
+                          !blocked && "ml-auto",
+                        )}
+                      >
+                        {m.note}
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </div>
         );

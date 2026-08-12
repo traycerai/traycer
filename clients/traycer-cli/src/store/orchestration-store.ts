@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { isModelBlocked } from "@traycer-clients/shared/platform/is-model-blocked";
 import {
   DEFAULT_ORCHESTRATION_SEEDS,
   SEED_VERSION,
@@ -699,35 +700,7 @@ function blockKey(entry: {
   return `${entry.harnessId.toLowerCase()}::${(entry.model ?? "").toLowerCase()}`;
 }
 
-export function isModelBlocked(
-  entry: { readonly harnessId: string; readonly model: string },
-  blocks: readonly ModelBlockEntry[],
-): boolean {
-  const harness = entry.harnessId.toLowerCase();
-  const model = entry.model.toLowerCase();
-  for (const b of blocks) {
-    if (b.harnessId.toLowerCase() !== harness) continue;
-    // Whole-provider block
-    if (b.model === null || b.model === "") return true;
-    // Exact model block
-    if (b.model.toLowerCase() === model) return true;
-    // Prefix/substring match for slugs like "verboo-ultra/kimi-k3" when
-    // the user blocked "kimi" as a model token under omp — only when the
-    // block model is a free-standing token in the slug.
-    const token = b.model.toLowerCase();
-    if (
-      model === token ||
-      model.startsWith(`${token}/`) ||
-      model.endsWith(`/${token}`) ||
-      model.includes(`/${token}/`) ||
-      model.includes(`${token}-`) ||
-      model.startsWith(`${token}-`)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
+export { isModelBlocked };
 
 export async function addModelBlock(input: {
   readonly harnessId: string;
