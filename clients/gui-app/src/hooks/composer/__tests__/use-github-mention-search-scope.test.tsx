@@ -129,6 +129,45 @@ afterEach(() => {
   request.mockReset();
 });
 
+describe("useGithubMentionSearch request canonicalization", () => {
+  it("canonicalizes folder order in the search request", async () => {
+    // `buildSearchRequest` sorts `workspacePaths` for the same reason the
+    // catalog hook does: the request is what the query key hashes, so an
+    // order-only change in the same folder set must not fork the search
+    // cache into a second slot. Answering ONLY the sorted shape - rather
+    // than asserting after the fact - proves the request actually left the
+    // hook sorted, not merely that some later assertion happens to match
+    // whichever order was sent.
+    let capturedPaths: ReadonlyArray<string> | null = null;
+    request.mockImplementation(
+      (_method: string, params: MentionGithubSearchRequest) => {
+        capturedPaths = params.workspacePaths;
+        return params.workspacePaths[0] === "/a" &&
+          params.workspacePaths[1] === "/b"
+          ? Promise.resolve(answer([pullRequest(11)]))
+          : new Promise<MentionGithubSearchResponse>(() => {
+              // Still in flight - an unsorted request must never resolve.
+            });
+      },
+    );
+
+    const { result } = renderSearch({
+      scope: { epicId: "epic-1", workspacePaths: ["/b", "/a"] },
+      section: "pull-requests",
+      debouncedQuery: "auth",
+    });
+
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+
+    expect(capturedPaths).toEqual(["/a", "/b"]);
+    // Control: independent of order, proves the assertion above is catching
+    // a SORT bug rather than a request that silently dropped one folder.
+    expect(capturedPaths).toHaveLength(2);
+    expect(capturedPaths).toContain("/a");
+    expect(capturedPaths).toContain("/b");
+  });
+});
+
 describe("useGithubMentionSearch placeholder lane", () => {
   it("holds the previous answer while a newer QUERY for the same scope lands", async () => {
     answerOnly((params) => params.query === "auth", [pullRequest(11)]);

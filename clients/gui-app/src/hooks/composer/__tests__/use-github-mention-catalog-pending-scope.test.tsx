@@ -71,6 +71,19 @@ const REPO_B: GithubMentionScope = {
   workspacePaths: ["/repo-b"],
 };
 
+// Two paths, one scope: an order-only difference between these two is what
+// `canonicalWorkspacePaths` exists to collapse. A single-path scope can never
+// exercise that - there is nothing to reorder - so the reorder test below
+// needs its own pair of scopes.
+const TWO_PATH_SCOPE: GithubMentionScope = {
+  epicId: "epic-1",
+  workspacePaths: ["/repo-a", "/repo-b"],
+};
+const TWO_PATH_SCOPE_REORDERED: GithubMentionScope = {
+  epicId: "epic-1",
+  workspacePaths: ["/repo-b", "/repo-a"],
+};
+
 function renderCatalog(initialProps: { readonly scope: GithubMentionScope }) {
   return renderHook(
     (props: { readonly scope: GithubMentionScope }) =>
@@ -377,5 +390,53 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
 
     expect(result.current.isChecking).toBe(true);
+  });
+
+  it("treats a reordered folder set as the same scope's pending refresh", async () => {
+    // The wire request sorts `workspacePaths` (`canonicalWorkspacePaths`), so
+    // the cache-only read and the pending-refresh key it hashes must be
+    // IDENTICAL for the same folder set regardless of the order the caller
+    // hands it in. Unsorted, the reordered render forked a second cache slot
+    // whose pending-refresh set never learned about the manual refresh the
+    // first ordering had just issued - so the button's spinner vanished
+    // mid-refresh purely because the caller's array order changed.
+    let cacheOnlyReads = 0;
+    let markManualIssued: () => void = () => undefined;
+    const manualIssued = new Promise<void>((resolve) => {
+      markManualIssued = resolve;
+    });
+    request.mockImplementation(
+      (_method: string, payload: MentionGithubCatalogRequest) => {
+        if (payload.refresh !== "manual") {
+          cacheOnlyReads += 1;
+          return Promise.resolve(answer());
+        }
+        return new Promise<MentionGithubCatalogResponse>(() => {
+          markManualIssued();
+        });
+      },
+    );
+
+    const { result, rerender } = renderCatalog({ scope: TWO_PATH_SCOPE });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await manualIssued;
+    });
+    expect(result.current.isChecking).toBe(true);
+
+    const readsBeforeReorder = cacheOnlyReads;
+
+    // Same two folders, reversed order. A scope this hook already treats as
+    // canonical must resolve to the SAME query key, so the pending refresh
+    // above is still remembered and no new cache-only request is needed.
+    rerender({ scope: TWO_PATH_SCOPE_REORDERED });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    expect(result.current.isChecking).toBe(true);
+    expect(cacheOnlyReads).toBe(readsBeforeReorder);
   });
 });

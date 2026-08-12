@@ -217,7 +217,10 @@ function buildSearchRequest(
 ): MentionGithubSearchRequest {
   const base = {
     epicId: scope.epicId,
-    workspacePaths: [...scope.workspacePaths],
+    // Sorted for the same reason the catalog hook canonicalizes: the request
+    // is what the query key hashes, and an order-only change in the same
+    // folder set must not fork the search cache into a second slot.
+    workspacePaths: [...scope.workspacePaths].toSorted(),
     query,
   };
   if (section === "pull-requests") {

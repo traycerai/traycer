@@ -167,14 +167,27 @@ export function useGithubMentionCatalog(
     boundHostIdRef.current = readiness.hostId;
   }, [readiness.hostId]);
 
+  // ONE canonical ordering for every request this hook sends. The scope is
+  // order-independent everywhere else (`githubMentionScopeKey` and the
+  // follow-up key both sort), but the WIRE request is what the TanStack query
+  // key and the pending-refresh keys hash - unsorted, two orderings of the
+  // same folder set forked one logical scope into two cache slots, a refresh
+  // issued under the old ordering wrote its response to a slot the menu no
+  // longer reads, and the current slot neither showed the response nor
+  // reported the refresh as pending.
+  const canonicalWorkspacePaths = useMemo(
+    () => [...scope.workspacePaths].toSorted(),
+    [scope.workspacePaths],
+  );
+
   const cacheOnlyRequest = useMemo<MentionGithubCatalogRequest>(
     () => ({
       epicId: scope.epicId,
-      workspacePaths: [...scope.workspacePaths],
+      workspacePaths: [...canonicalWorkspacePaths],
       section,
       refresh: "none",
     }),
-    [scope.epicId, scope.workspacePaths, section],
+    [scope.epicId, canonicalWorkspacePaths, section],
   );
 
   const catalogQuery = useHostQuery<HostRpcRegistry, "mention.githubCatalog">({
@@ -348,7 +361,7 @@ export function useGithubMentionCatalog(
   // `stale: true` catalog reads as a sweep that already ran, and that host
   // never gets the one refresh a session owes it.
   const autoFollowedRef = useRef<Set<string>>(new Set());
-  const followKey = `${readiness.hostId ?? ""}\x1f${scope.epicId ?? ""}\x1f${[...scope.workspacePaths].toSorted().join("\x1f")}\x1f${section}`;
+  const followKey = `${readiness.hostId ?? ""}\x1f${scope.epicId ?? ""}\x1f${canonicalWorkspacePaths.join("\x1f")}\x1f${section}`;
   useEffect(() => {
     if (!pickerActive) {
       autoFollowedRef.current.clear();
@@ -375,7 +388,7 @@ export function useGithubMentionCatalog(
     autoFollowedRef.current.add(followKey);
     void mutateAsync({
       epicId: scope.epicId,
-      workspacePaths: [...scope.workspacePaths],
+      workspacePaths: [...canonicalWorkspacePaths],
       section,
       // NOT "manual". See the note at the top of this file.
       refresh: "auto",
@@ -390,10 +403,10 @@ export function useGithubMentionCatalog(
     enabled,
     followKey,
     mutateAsync,
+    canonicalWorkspacePaths,
     pickerActive,
     readiness.isReady,
     scope.epicId,
-    scope.workspacePaths,
     section,
   ]);
 
@@ -411,7 +424,7 @@ export function useGithubMentionCatalog(
     try {
       await mutateAsync({
         epicId: scope.epicId,
-        workspacePaths: [...scope.workspacePaths],
+        workspacePaths: [...canonicalWorkspacePaths],
         section,
         refresh: "manual",
       });
@@ -420,7 +433,7 @@ export function useGithubMentionCatalog(
       // already typed as `HostRpcError`. Swallowed here so the click handler
       // does not also reject at its call site.
     }
-  }, [followKey, mutateAsync, scope.epicId, scope.workspacePaths, section]);
+  }, [canonicalWorkspacePaths, followKey, mutateAsync, scope.epicId, section]);
 
   // What THIS scope has actually said, which is not `catalogQuery.data`: a
   // placeholder response belongs to the PREVIOUS scope, and its rows are
