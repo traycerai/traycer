@@ -166,9 +166,20 @@ export function ImagePreview(props: ImagePreviewProps) {
   // when its OWN `onTransform` callback actually arrives and is "consumed"
   // (round-2 review finding #2). A synchronous set-true/call/set-false
   // bracket only reports the right origin if the callback happens to fire
-  // within that exact synchronous window; a PENDING COUNT stays correct
-  // regardless of whether the library ever defers delivery (e.g. a future
-  // version), because nothing else clears it in between.
+  // within that exact synchronous window.
+  //
+  // This is a COUNT, not a per-call identity - round-3 review finding #2
+  // proved a count alone still misattributes origin if a DIFFERENT
+  // programmatic call's callback consumes a slot meant for an earlier one
+  // (or a gesture interleaves between issuing and its own delivery). The
+  // ruling was NOT to build call-matching machinery for this: with
+  // `react-zoom-pan-pinch` PINNED to exactly 4.0.4 (package.json - no
+  // caret), `onTransform` for a `0`-duration transform fires synchronously,
+  // in the same tick, before the issuing call returns - interleaving is
+  // impossible on a single thread, so a plain count is correct as-is. See
+  // the sync-delivery contract test against the real library; a version
+  // bump that ever breaks that assumption must fail that test loudly
+  // before this mechanism can silently reopen a ping-pong echo.
   const pendingProgrammaticCountRef = useRef(0);
   const [isPanning, setIsPanning] = useState(false);
   // The single source of truth for "where is this image right now" -

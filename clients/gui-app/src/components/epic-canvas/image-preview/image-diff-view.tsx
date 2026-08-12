@@ -51,13 +51,21 @@ const DEFAULT_SIDE_BOUNDS: SideBounds = {
   maxScale: MAX_SCALE,
 };
 
-/** Review finding #3: an EXISTING side blocks the shared zoom-out button once it's at ITS OWN floor (finding #7: that floor can be below the constant `MIN_SCALE`). */
-function sideAtMin(exists: boolean, bounds: SideBounds): boolean {
-  return exists && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
+/**
+ * Round-1 review finding #3: an ACTIVE side blocks the shared zoom-out
+ * button once it's at ITS OWN floor (finding #7: that floor can be below
+ * the constant `MIN_SCALE`). `active` means "has a currently mounted,
+ * reporting `ImagePreview`" (round-3 review finding #1) - NOT "the git
+ * stage exists": a non-image side or one that's fallen back to
+ * `BinaryPlaceholder` never mounts one and must never contribute its
+ * (now-reset-to-default) bounds.
+ */
+function sideAtMin(active: boolean, bounds: SideBounds): boolean {
+  return active && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
 }
 
-function sideAtMax(exists: boolean, bounds: SideBounds): boolean {
-  return exists && bounds.scale >= bounds.maxScale - ZOOM_BOUNDARY_EPSILON;
+function sideAtMax(active: boolean, bounds: SideBounds): boolean {
+  return active && bounds.scale >= bounds.maxScale - ZOOM_BOUNDARY_EPSILON;
 }
 
 /**
@@ -72,20 +80,45 @@ interface SideMode {
 
 const DEFAULT_SIDE_MODE: SideMode = { isFitted: true, isActualSize: false };
 
-/** The shared toolbar's pressed state (round-2 review finding #3): pressed iff every EXISTING side reports itself in that mode - a missing (Added/Deleted) side never blocks the derivation. */
+/**
+ * The shared toolbar's pressed state (round-2 review finding #3): pressed
+ * iff every ACTIVE side reports itself in that mode. `active`, not
+ * `exists` (round-3 review finding #1) - a missing (Added/Deleted) side
+ * correctly never blocks the derivation, but neither may a side that
+ * exists as a git stage yet never mounts an `ImagePreview` (a non-image
+ * side, or one that's failed to `BinaryPlaceholder`) - its stale/default
+ * mode would otherwise permanently block the SURVIVING side's own pressed
+ * state from ever showing.
+ */
 function combinedMode(
-  oldExists: boolean,
+  oldActive: boolean,
   oldMode: SideMode,
-  newExists: boolean,
+  newActive: boolean,
   newMode: SideMode,
 ): SideMode {
   return {
     isFitted:
-      (!oldExists || oldMode.isFitted) && (!newExists || newMode.isFitted),
+      (!oldActive || oldMode.isFitted) && (!newActive || newMode.isFitted),
     isActualSize:
-      (!oldExists || oldMode.isActualSize) &&
-      (!newExists || newMode.isActualSize),
+      (!oldActive || oldMode.isActualSize) &&
+      (!newActive || newMode.isActualSize),
   };
+}
+
+/**
+ * Resets `current` to `defaultValue` once a side goes inactive (round-3
+ * review finding #1) - a stable module-level `defaultValue` reference
+ * means this settles after one reset and never loops.
+ */
+function resetIfInactive<T>(
+  active: boolean,
+  current: T,
+  defaultValue: T,
+  setValue: (value: T) => void,
+): void {
+  if (!active && current !== defaultValue) {
+    setValue(defaultValue);
+  }
 }
 
 export interface ImageDiffViewProps {
@@ -140,11 +173,21 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // peer echo) - and decremented when THAT side's own `onTransform`
   // actually arrives and is consumed. A synchronous true/then/false bracket
   // only suppresses the echo if the callback happens to fire within that
-  // exact synchronous window; a count that survives until consumed stays
-  // correct even if delivery is ever deferred (e.g. a future RZPP version),
-  // where a synchronous bracket would already have reset and let a late
-  // callback re-trigger a mirror back onto its own origin side (a ping-
-  // pong echo).
+  // exact synchronous window.
+  //
+  // A COUNT, not a per-call identity - round-3 review finding #2 proved
+  // this still misattributes origin under INTERLEAVING (a genuine gesture
+  // on a side consumes the slot meant for that side's own queued mirror
+  // callback, so the mirror callback then arrives at count zero and reads
+  // as a fresh gesture, rebounding back onto its origin). The ruling was
+  // NOT to build call-matching machinery: `react-zoom-pan-pinch` is PINNED
+  // to exactly 4.0.4 (package.json - no caret) specifically because this
+  // guard relies on `onTransform` for a `0`-duration transform firing
+  // synchronously, same tick, before the issuing call returns - on a
+  // single thread that makes interleaving between issuing and consuming
+  // impossible, so a plain count is correct as-is. See the sync-delivery
+  // contract test against the real library, the tripwire that must fail
+  // loudly before a version bump could silently reintroduce this.
   const oldPendingSyncRef = useRef(0);
   const newPendingSyncRef = useRef(0);
   // Per-side, never a single shared value, and never manually toggled
@@ -217,6 +260,30 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
 
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
+
+  // Round-3 review finding #1: "the git stage is non-null" (`oldSideExists`
+  // above) is NOT "this side currently has a mounted, reporting
+  // `ImagePreview`" - a non-image side (renders `BinaryPlaceholder`, e.g.
+  // `old.txt -> new.png`) or a side that fails to `fallback` never mounts
+  // one, so its default `isActualSize: false`/default bounds would
+  // otherwise permanently block the SURVIVING side's pressed state and
+  // zoom-boundary checks. Mode/bounds aggregation below gates on THIS, not
+  // on `oldSideExists`/`newSideExists` (which stay correct for the
+  // Added/Deleted empty-state decision - unrelated).
+  const oldActive = oldIsImageSide && oldAsset.status === "ready";
+  const newActive = newIsImageSide && newAsset.status === "ready";
+
+  // Cleared (not just excluded from the derivation above) the moment a
+  // side LEAVES active, so a later side that becomes active again never
+  // inherits a stale mode/bounds snapshot from before it failed. Render-
+  // time adjustment, once per inactive transition (matches this file's
+  // established pattern) - `DEFAULT_SIDE_MODE`/`DEFAULT_SIDE_BOUNDS` are
+  // stable module-level references, so this settles after one reset and
+  // never loops.
+  resetIfInactive(oldActive, oldMode, DEFAULT_SIDE_MODE, setOldMode);
+  resetIfInactive(oldActive, oldBounds, DEFAULT_SIDE_BOUNDS, setOldBounds);
+  resetIfInactive(newActive, newMode, DEFAULT_SIDE_MODE, setNewMode);
+  resetIfInactive(newActive, newBounds, DEFAULT_SIDE_BOUNDS, setNewBounds);
 
   // `report.origin` distinguishes a genuine user GESTURE on THIS side from
   // a PROGRAMMATIC transform `ImagePreview` issued itself - its own
@@ -311,11 +378,14 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // - review finding #3: that would mirror a raw fit/actual transform
   // computed for THIS side's size onto the differently-sized peer instead
   // of the peer computing its own.
-  // Derived, never stored (round-2 review finding #3).
+  // Derived, never stored (round-2 review finding #3). Gated on `oldActive`/
+  // `newActive` (round-3 review finding #1), never `oldSideExists`/
+  // `newSideExists` - a non-image or failed side must never count toward
+  // "every side agrees".
   const { isFitted, isActualSize } = combinedMode(
-    oldSideExists,
+    oldActive,
     oldMode,
-    newSideExists,
+    newActive,
     newMode,
   );
 
@@ -329,18 +399,21 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
 
   const zoomDisabled =
     oldAsset.status !== "ready" && newAsset.status !== "ready";
-  // Disable when EITHER existing side is at ITS OWN boundary (review
-  // finding #3) - each side's `minScale` already reflects its own fit floor
-  // (finding #7), so this stays correct even when the two sides' floors
-  // differ.
+  // Disable when EITHER ACTIVE side is at ITS OWN boundary (round-1 review
+  // finding #3, gate corrected by round-3 finding #1) - each side's
+  // `minScale` already reflects its own fit floor (finding #7), so this
+  // stays correct even when the two sides' floors differ; a non-image or
+  // failed side's default bounds never contribute (its state was also just
+  // reset to the default above, so this is belt-and-suspenders, not load-
+  // bearing on its own).
   const zoomOutDisabled =
     zoomDisabled ||
-    sideAtMin(oldSideExists, oldBounds) ||
-    sideAtMin(newSideExists, newBounds);
+    sideAtMin(oldActive, oldBounds) ||
+    sideAtMin(newActive, newBounds);
   const zoomInDisabled =
     zoomDisabled ||
-    sideAtMax(oldSideExists, oldBounds) ||
-    sideAtMax(newSideExists, newBounds);
+    sideAtMax(oldActive, oldBounds) ||
+    sideAtMax(newActive, newBounds);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
