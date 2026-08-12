@@ -482,6 +482,48 @@ describe("traycer CLI entrypoint registration", () => {
     ]);
   });
 
+  it("rewrites host update --version under a Node-style argv, not just a user-style one", async () => {
+    // The offset used to be guessed by comparing argv[0]/argv[1] against
+    // process.argv. Any caller supplying its OWN node-style prefix therefore
+    // computed offset 0, the command path read as [exec, script, "host", ...],
+    // the host-update check failed, and --version fell through to root - which
+    // prints the CLI version instead of selecting a host version. The offset
+    // now comes from Commander's `from` contract.
+    mocks.downloadCalls.length = 0;
+
+    const nodeStyle = buildProgram();
+    nodeStyle.exitOverride();
+    await nodeStyle.parseAsync(
+      [
+        "/custom/node",
+        "/custom/traycer.js",
+        "host",
+        "update",
+        "--version",
+        "3.1.4",
+      ],
+      { from: "node" },
+    );
+
+    // Default options are node-style too, so an omitted `from` must behave the
+    // same way rather than falling back to the old comparison.
+    const defaultStyle = buildProgram();
+    defaultStyle.exitOverride();
+    await defaultStyle.parseAsync([
+      "/other/node",
+      "/other/traycer.js",
+      "host",
+      "update",
+      "--version",
+      "3.1.5",
+    ]);
+
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "3.1.4", automatic: false },
+      { environment: "production", versionRequest: "3.1.5", automatic: false },
+    ]);
+  });
+
   it("preserves the six root/global/local option parsing contracts", async () => {
     const write = vi
       .spyOn(process.stdout, "write")

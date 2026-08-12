@@ -119,7 +119,7 @@ export function HostOverviewUpdatesRegion(props: {
                 installMutation.mutate(
                   { version: latest, force: false },
                   {
-                    onSuccess: (response) => {
+                    onSuccess: (response, _variables, context) => {
                       handleInstallOutcome({
                         outcome: response.outcome,
                         hostName,
@@ -131,7 +131,13 @@ export function HostOverviewUpdatesRegion(props: {
                           // The swap is detached and outlives this response;
                           // `host.status.updateProgress` is what reports it, so
                           // re-read it rather than inventing a local spinner.
-                          const hostId = client?.getActiveHostId() ?? null;
+                          //
+                          // The ARM-TIME host, not the live active one: an
+                          // install is long enough for the scope to move, and
+                          // reading it at settle time would refresh whichever
+                          // host the user switched to while leaving the one
+                          // that is actually updating on a stale progress row.
+                          const hostId = context?.hostId ?? null;
                           if (hostId === null) return;
                           void queryClient.invalidateQueries({
                             queryKey: hostQueryKeys.methodScope(

@@ -251,17 +251,51 @@ function installHostUpdateVersionParser(program: Command): void {
   program.parseAsync = (...args: unknown[]) => {
     const argv = args[0];
     const options = args[1];
-    if (!Array.isArray(argv)) return parseAsync();
-    const rewrittenArgv = rewriteHostUpdateVersion(argv);
-    return isParseOptions(options)
-      ? parseAsync(rewrittenArgv, options)
-      : parseAsync(rewrittenArgv);
+    const parseOptions = isParseOptions(options) ? options : null;
+    if (!Array.isArray(argv)) {
+      // Forward the options even with no argv: Commander reads `from` to decide
+      // how to interpret `process.argv`, so dropping it here silently reparses
+      // under different rules than the caller asked for.
+      return parseOptions === null
+        ? parseAsync()
+        : parseAsync(undefined, parseOptions);
+    }
+    const rewrittenArgv = rewriteHostUpdateVersion(argv, parseOptions);
+    return parseOptions === null
+      ? parseAsync(rewrittenArgv)
+      : parseAsync(rewrittenArgv, parseOptions);
   };
 }
 
-function rewriteHostUpdateVersion(argv: readonly string[]): string[] {
-  const commandOffset =
-    argv[0] === process.argv[0] && argv[1] === process.argv[1] ? 2 : 0;
+/**
+ * Where the COMMAND tokens start, per Commander's own `from` contract rather
+ * than a guess.
+ *
+ * Comparing `argv[0]`/`argv[1]` against `process.argv` was the guess, and it is
+ * wrong for any caller that supplies its own Node-style prefix: the offset came
+ * out 0, the command path then read as [<exec>, <script>, "host", …], the
+ * `host update` check failed, and `--version` fell through to root - printing
+ * the CLI version instead of selecting a host version.
+ */
+function commandOffsetFor(options: ParseOptions | null): number {
+  switch (options?.from ?? "node") {
+    case "user":
+      return 0;
+    case "electron":
+      // Commander's own rule: a packaged Electron app has no script argument.
+      // `defaultApp` is injected by Electron and absent from Node's `Process`,
+      // so it is read reflectively rather than cast onto the type.
+      return Reflect.get(process, "defaultApp") === true ? 2 : 1;
+    default:
+      return 2;
+  }
+}
+
+function rewriteHostUpdateVersion(
+  argv: readonly string[],
+  options: ParseOptions | null,
+): string[] {
+  const commandOffset = commandOffsetFor(options);
   const commandArgs = argv.slice(commandOffset);
   const separatorIndex = commandArgs.indexOf("--");
   const beforeSeparator =

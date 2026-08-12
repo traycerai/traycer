@@ -1,5 +1,6 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { readStoredCliInstallManifestAtPath } from "@traycer/protocol/config/installation";
+import { ZodError } from "zod";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
@@ -275,7 +276,13 @@ export async function readCliManifest(
   let manifest: CliInstallManifest | null;
   try {
     manifest = await readStoredCliInstallManifestAtPath(path);
-  } catch {
+  } catch (err) {
+    // Only a parse failure means "invalid". The reader already turns ENOENT
+    // into null and rethrows every other I/O error, so swallowing those here
+    // reported a permissions or disk fault as a corrupt manifest and told the
+    // user to fix a file that is fine. Same narrowing as the sibling
+    // host-install reader.
+    if (!(err instanceof SyntaxError) && !(err instanceof ZodError)) throw err;
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
       message: `CLI manifest ${path} is invalid; refusing to overwrite`,
