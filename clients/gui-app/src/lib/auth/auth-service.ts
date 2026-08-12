@@ -397,6 +397,10 @@ export class AuthService {
   private sessionRecoveryTimer: number | null = null;
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
+  // True while the live bearer was projected from the credentials-file cache
+  // because authn was unreachable. Recovery must keep probing; a validated
+  // session (applySignedIn / rotateLiveBearer) or sign-out clears this.
+  private sessionPendingValidation = false;
 
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -615,10 +619,13 @@ export class AuthService {
         // authorizes the locked rotate. Rotating here instead would let a
         // half-reachable authn (identity probe down, refresh up) burn one
         // refresh generation per retry for pairs it can never validate.
+        // Project the cached profile + stored bearer so laptop-offline does
+        // not look like "please log in again"; recovery still confirms later.
         appLogger.warn(
           "[auth] stored session could not be validated at startup",
           {},
         );
+        this.projectCachedStoredSession(stored);
         this.scheduleSessionRecovery("startup:validate-network");
         return;
       }
@@ -731,13 +738,13 @@ export class AuthService {
         token: stored.token,
       });
     } catch (error) {
-      if (!stillWanted() || this.hasLiveBearer()) {
+      if (!stillWanted() || this.hasValidatedLiveBearer()) {
         return;
       }
       this.markStoreUnavailable(`${trigger}.rotate`, error);
       return;
     }
-    if (!stillWanted() || this.hasLiveBearer()) {
+    if (!stillWanted() || this.hasValidatedLiveBearer()) {
       return;
     }
     appLogger.info("[auth] stored-session rotate outcome", {
@@ -752,7 +759,7 @@ export class AuthService {
       // The rotated pair carries only the cached identity; re-validate it
       // (access-only) to mint the full `AuthenticatedUser` the context needs.
       const revalidated = await this.validateToken(pair.token);
-      if (!stillWanted() || this.hasLiveBearer()) {
+      if (!stillWanted() || this.hasValidatedLiveBearer()) {
         return;
       }
       if (revalidated.kind === "valid") {
@@ -763,7 +770,7 @@ export class AuthService {
           this.scheduleSessionRecovery(`${trigger}:rotated-pair-superseded`);
           return;
         }
-        if (!stillWanted() || this.hasLiveBearer()) {
+        if (!stillWanted() || this.hasValidatedLiveBearer()) {
           return;
         }
         this.settleSessionRecovery("recovered");
@@ -838,6 +845,15 @@ export class AuthService {
   }
 
   /**
+   * A live bearer that recovery/rotate must stand down for: a fully
+   * validated session. An optimistic cached projection still needs the
+   * recovery loop to confirm or reject it, so it does not count.
+   */
+  private hasValidatedLiveBearer(): boolean {
+    return this.hasLiveBearer() && !this.sessionPendingValidation;
+  }
+
+  /**
    * Arm (or extend) the background recovery loop. One timer, exponential
    * backoff, generation-fenced: a user sign-in/sign-out that lands while a
    * tick is pending makes the tick a no-op via `isIdentityCurrent`.
@@ -886,7 +902,7 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation)) {
       return;
     }
-    if (this.hasLiveBearer()) {
+    if (this.hasValidatedLiveBearer()) {
       this.settleSessionRecovery("already-signed-in");
       return;
     }
@@ -912,15 +928,18 @@ export class AuthService {
       this.scheduleSessionRecovery("recovery:store-unavailable");
       return;
     }
-    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+    if (!this.isIdentityCurrent(generation) || this.hasValidatedLiveBearer()) {
       return;
     }
     if (stored === null || stored.token.length === 0) {
+      if (this.sessionPendingValidation) {
+        this.clearUiSessionIfSignedIn();
+      }
       this.settleSessionRecovery("no-stored-session");
       return;
     }
     const outcome = await this.validateToken(stored.token);
-    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+    if (!this.isIdentityCurrent(generation) || this.hasValidatedLiveBearer()) {
       return;
     }
     if (outcome.kind === "valid") {
@@ -961,7 +980,7 @@ export class AuthService {
       this.scheduleSessionRecovery("recovery:stored-session-superseded");
       return;
     }
-    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+    if (!this.isIdentityCurrent(generation) || this.hasValidatedLiveBearer()) {
       return;
     }
     this.settleSessionRecovery("recovered");
@@ -1793,6 +1812,7 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
+    this.sessionPendingValidation = false;
     this.contextProvider.rotateCurrentBearer({ userId, bearerToken });
     this.currentBearer = bearerToken;
     this.emitSessionSnapshot();
@@ -2457,6 +2477,7 @@ export class AuthService {
     this.contextProvider.dispose();
     this.currentBearer = null;
     this.currentProfile = null;
+    this.sessionPendingValidation = false;
     this.listeners.clear();
     this.errorListeners.clear();
     this.sessionSnapshotListeners.clear();
@@ -2549,6 +2570,40 @@ export class AuthService {
   }
 
   /**
+   * Optimistic UI + bearer projection from the credentials file when authn
+   * is unreachable. Recovery stays armed to confirm or reject later. Does
+   * not mint a stub `AuthenticatedUser` and does not start the proactive
+   * refresh scheduler. No-op when `stored.user.id` is empty.
+   */
+  private projectCachedStoredSession(stored: StoredCredentials): void {
+    if (this.disposed || stored.user.id.length === 0) {
+      return;
+    }
+    const profile: AuthProfile = {
+      userId: stored.user.id,
+      userName: stored.user.name,
+      email: stored.user.email,
+      avatarUrl: null,
+    };
+    const username = stored.user.name || stored.user.email;
+    const contextMetadata: AuthContextMetadata = {
+      userId: stored.user.id,
+      username,
+    };
+    this.contextProvider.setCachedSession({
+      userId: stored.user.id,
+      username,
+      bearerToken: stored.token,
+    });
+    this.currentBearer = stored.token;
+    this.currentProfile = profile;
+    this.sessionPendingValidation = true;
+    this.setLastError(null);
+    useAuthStore.getState().setSignedIn(profile, contextMetadata, []);
+    this.emitSessionSnapshot();
+  }
+
+  /**
    * Projects the validated identity into the request context, store and
    * persistence snapshot. Which context operation that means depends on who
    * is already live:
@@ -2576,6 +2631,8 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    const upgradingCachedSession = this.sessionPendingValidation;
+    this.sessionPendingValidation = false;
     this.settleSessionRecovery("signed-in");
     // A session being established IS the recovery: any prior transient error
     // (store-unavailable, session-expired) is stale the moment a bearer
@@ -2585,7 +2642,11 @@ export class AuthService {
     this.setDeviceProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
     let rotatedInPlace = false;
-    if (liveUserId !== undefined && liveUserId === user.user.id) {
+    if (
+      liveUserId !== undefined &&
+      liveUserId === user.user.id &&
+      !upgradingCachedSession
+    ) {
       try {
         this.contextProvider.rotateCurrentBearer({
           userId: liveUserId,
@@ -2639,6 +2700,7 @@ export class AuthService {
     this.contextProvider.signOut();
     this.currentBearer = null;
     this.currentProfile = null;
+    this.sessionPendingValidation = false;
     useAuthStore.getState().setSignedOut();
     this.emitSessionSnapshot();
   }

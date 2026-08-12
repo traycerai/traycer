@@ -1112,8 +1112,9 @@ describe("AuthService", () => {
     }
     await start;
 
-    // No verdict yet: signed out but NOT expired, and zero refresh spends.
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    // No verdict yet: signed in from cache but NOT expired, and zero refresh spends.
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("stale-token");
     expect(service.getLastError()).toBeNull();
     expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
     expect(
@@ -1219,9 +1220,72 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
+  it("projects a cached signed-in session when startup validation is a network-error", async () => {
+    // Authn unreachable at boot is not "please log in again": stored.user +
+    // stored bearer are enough to project signed-in. Recovery stays armed so
+    // a later reachable probe can still reject or fully validate.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "cached-offline-token", refreshToken: "cached-offline-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      calls.push(
+        `${init?.method ?? "GET"} ${typeof input === "string" ? input : String(input)}`,
+      );
+      return Promise.reject(new Error("offline"));
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+
+    const state = useAuthStore.getState();
+    expect(state.status).toBe("signed-in");
+    expect(state.profile).toEqual({
+      userId: "user-1",
+      userName: "Test User",
+      email: "test@example.com",
+      avatarUrl: null,
+    });
+    expect(state.contextMetadata).toEqual({
+      userId: "user-1",
+      username: "Test User",
+    });
+    expect(state.shareableTeams).toEqual([]);
+    expect(state.subscriptionStatus).toBeNull();
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "cached-offline-token",
+    );
+    expect(
+      service
+        .getRequestContextProvider()
+        .current()
+        ?.credentials.getBearerToken(),
+    ).toBe("cached-offline-token");
+    expect(service.getLastError()).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("cached-offline-token", "cached-offline-refresh"),
+    );
+    expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
+
+    const callsBefore = calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    expect(calls.length).toBeGreaterThan(callsBefore);
+  });
+
   it("UI-only signs out (file kept, no session-expired) when startup stays offline", async () => {
     // Transient refresh-network does not destroy the file and does not claim
-    // a dead credential (H1 / §5).
+    // a dead credential (H1 / §5). Cached projection is signed-in; recovery
+    // stays armed until authn answers.
     vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1243,8 +1307,8 @@ describe("AuthService", () => {
     }
     await start;
 
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("offline-token");
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("offline-token", "offline-token-refresh"),
     );
@@ -1255,8 +1319,8 @@ describe("AuthService", () => {
     expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
 
     // The anti-latch: a transient startup failure arms the recovery loop
-    // rather than parking signed-out until an app restart. The next tick
-    // re-runs the validate cycle.
+    // rather than parking until an app restart. The next tick re-runs the
+    // validate cycle.
     const callsBefore = calls.length;
     await vi.advanceTimersByTimeAsync(1_000);
     for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
@@ -1338,7 +1402,8 @@ describe("AuthService", () => {
       await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
     }
     await start;
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
 
     reachable = true;
     // First recovery tick fires after the initial 1s backoff.
@@ -1383,7 +1448,7 @@ describe("AuthService", () => {
       await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
     }
     await start;
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().status).toBe("signed-in");
 
     reachable = true;
     await vi.advanceTimersByTimeAsync(1_000);
@@ -1425,7 +1490,7 @@ describe("AuthService", () => {
       await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
     }
     await start;
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().status).toBe("signed-in");
 
     // Several recovery ticks with /user still down: zero refresh spends.
     for (let tick = 0; tick < 4; tick += 1) {
@@ -1435,7 +1500,7 @@ describe("AuthService", () => {
       }
     }
     expect(refreshCalls).toBe(0);
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().status).toBe("signed-in");
 
     // The probe recovers: the next tick adopts the stored pair AS-IS.
     userReachable = true;

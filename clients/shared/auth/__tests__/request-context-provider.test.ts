@@ -148,6 +148,48 @@ describe("DefaultRequestContextProvider - sign-in transitions", () => {
   });
 });
 
+describe("DefaultRequestContextProvider - cached session", () => {
+  it("mints a renderer-origin context from claims identity and the stored bearer", () => {
+    const provider = createProvider();
+    const events: Array<RequestContext | null> = [];
+    provider.onChange((ctx) => events.push(ctx));
+
+    const ctx = provider.setCachedSession({
+      userId: "user-1",
+      username: "Test User",
+      bearerToken: "cached-bearer",
+    });
+
+    expect(provider.current()).toBe(ctx);
+    expect(ctx.origin).toBe("renderer");
+    expect(ctx.identity.userId).toBe("user-1");
+    expect(ctx.identity.username).toBe("Test User");
+    expect(ctx.identity.providerHandle).toBeNull();
+    expect(ctx.credentials.getBearerToken()).toBe("cached-bearer");
+    expect(events).toEqual([ctx]);
+  });
+
+  it("aborts the previous context when installing a cached session", () => {
+    const provider = createProvider();
+    const previous = provider.setCachedSession({
+      userId: "user-a",
+      username: "A",
+      bearerToken: "bearer-a",
+    });
+
+    const next = provider.setCachedSession({
+      userId: "user-b",
+      username: "B",
+      bearerToken: "bearer-b",
+    });
+
+    expect(previous.isAborted).toBe(true);
+    expect(previous.abortSignal.reason).toBe("auth-identity-changed");
+    expect(provider.current()).toBe(next);
+    expect(next.credentials.getBearerToken()).toBe("bearer-b");
+  });
+});
+
 describe("DefaultRequestContextProvider - same-user credential rotation", () => {
   it("rotates the bearer in place without changing the live context reference", () => {
     const provider = createProvider();
