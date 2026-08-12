@@ -319,15 +319,29 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
       />
     );
   }
-  if (source.kind === "https" || source.kind === "data-raster") {
+  const resolution = findResolution(props.context.resolutions, source.src);
+  if (source.kind === "https") {
+    if (resolution !== null) {
+      return renderImageResolution(resolution, props.alt);
+    }
     return (
       <AttachmentImage
         key={source.src}
         src={source.src}
         alt={props.alt}
-        mediaType={
-          source.kind === "data-raster" ? dataMediaType(source.src) : null
-        }
+        mediaType={null}
+        suggestedName={null}
+        fullWidth={false}
+      />
+    );
+  }
+  if (source.kind === "data-raster") {
+    return (
+      <AttachmentImage
+        key={source.src}
+        src={source.src}
+        alt={props.alt}
+        mediaType={dataMediaType(source.src)}
         suggestedName={null}
         fullWidth={false}
       />
@@ -370,7 +384,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     );
   }
 
-  const resolution = findResolution(props.context.resolutions, source.src);
   if (resolution === null) {
     return (
       <AttachmentImageFailure
@@ -379,10 +392,17 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
       />
     );
   }
+  return renderImageResolution(resolution, props.alt);
+}
+
+function renderImageResolution(
+  resolution: AssistantMarkdownImageResolution,
+  alt: string,
+): ReactNode {
   if (resolution.entry.state === "resolved") {
     return (
       <ResolvedImage
-        alt={props.alt}
+        alt={alt}
         hash={resolution.entry.attachmentHash}
         mediaType={resolution.entry.mediaType}
       />
@@ -390,7 +410,7 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   }
   return (
     <AttachmentImageFailure
-      alt={props.alt}
+      alt={alt}
       reason={resolutionFailureReason(resolution.entry.state)}
     />
   );

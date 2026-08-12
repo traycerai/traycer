@@ -160,6 +160,32 @@ function jpegWithDimensions(width: number, height: number): ArrayBuffer {
   return bytes.buffer;
 }
 
+function jpegWithLargeMetadata(width: number, height: number): ArrayBuffer {
+  const metadataLength = 70_000;
+  const sofOffset = 4 + metadataLength;
+  const bytes = new Uint8Array(sofOffset + 16);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8;
+  bytes[2] = 0xff;
+  bytes[3] = 0xe1;
+  bytes[4] = (metadataLength >> 8) & 0xff;
+  bytes[5] = metadataLength & 0xff;
+  bytes[sofOffset] = 0xff;
+  bytes[sofOffset + 1] = 0xc0;
+  bytes[sofOffset + 2] = 0x00;
+  bytes[sofOffset + 3] = 0x0b;
+  bytes[sofOffset + 4] = 0x08;
+  bytes[sofOffset + 5] = (height >> 8) & 0xff;
+  bytes[sofOffset + 6] = height & 0xff;
+  bytes[sofOffset + 7] = (width >> 8) & 0xff;
+  bytes[sofOffset + 8] = width & 0xff;
+  bytes[sofOffset + 9] = 0x01;
+  bytes[sofOffset + 10] = 0x01;
+  bytes[sofOffset + 11] = 0x11;
+  bytes[sofOffset + 12] = 0x00;
+  return bytes.buffer;
+}
+
 const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
   readonly type: ClipboardImageMediaType;
   readonly bytes: ArrayBuffer;
@@ -315,5 +341,16 @@ describe("platform IPC clipboard.writeImage validation", () => {
       ),
     ).rejects.toThrow(/clipboard image bytes are invalid/i);
     expect(createFromBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("scans past large JPEG metadata before reading dimensions", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+    await handler?.(IPC_EVENT, {
+      type: "image/jpeg",
+      bytes: jpegWithLargeMetadata(32, 24),
+    });
+    expect(createFromBufferMock).toHaveBeenCalledTimes(1);
+    expect(writeImageMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -557,7 +557,6 @@ interface ClipboardImageInput {
 }
 
 const MAX_CLIPBOARD_IMAGE_PIXELS = 64_000_000;
-const MAX_CLIPBOARD_IMAGE_HEADER_BYTES = 64 * 1024;
 
 function parseClipboardImageInput(input: unknown): ClipboardImageInput {
   if (!isRecord(input)) {
@@ -611,11 +610,7 @@ function pngDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
 }
 
 function jpegDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
-  const view = new Uint8Array(
-    bytes,
-    0,
-    Math.min(bytes.byteLength, MAX_CLIPBOARD_IMAGE_HEADER_BYTES),
-  );
+  const view = new Uint8Array(bytes);
   if (view.length < 4 || view[0] !== 0xff || view[1] !== 0xd8) return null;
   let offset = 2;
   while (offset + 1 < view.length) {

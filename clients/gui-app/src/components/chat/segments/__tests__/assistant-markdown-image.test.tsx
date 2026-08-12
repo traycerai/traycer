@@ -206,6 +206,30 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.getByRole("img", { name: "diagram" })).toBeTruthy();
   });
 
+  it.each(["blocked", "consent-required", "oversized", "not-found"] as const)(
+    "honors a terminal host resolution for HTTPS sources: %s",
+    (state) => {
+      renderImage({
+        src: "https://cdn.example.com/shot.png",
+        alt: "remote image",
+        context: {
+          ...BASE_CONTEXT,
+          resolutions: [
+            resolution(
+              nonResolvedEntry("https://cdn.example.com/shot.png", state, {}),
+              "msg-https",
+            ),
+          ],
+        },
+      });
+
+      expect(screen.queryByRole("img")).toBeNull();
+      expect(
+        document.querySelector("[data-assistant-image-failure]"),
+      ).not.toBeNull();
+    },
+  );
+
   it("keeps small images intrinsic while applying a fluid image cap", () => {
     renderImage({
       src: "https://cdn.example.com/orange-square.png",
