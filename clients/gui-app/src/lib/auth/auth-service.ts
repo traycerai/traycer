@@ -2028,11 +2028,13 @@ export class AuthService {
 
   /**
    * Projects a reconcile's access-only validation result onto the UI session
-   * (never writes/spends itself). Same-user → rotate the lease in place
-   * (host-runtime / cache state survives); signed-out→present or account
-   * switch → full signed-in projection; network blip → leave the live session
-   * intact; invalid/expired → UI-only sign-out plus a recovery-loop handoff
-   * (the loop owns the locked rotate that can revive the stored session).
+   * (never writes/spends itself). Same-user already-validated → rotate the
+   * lease in place (host-runtime / cache state survives); pending cache,
+   * signed-out→present, or account switch → applySignedIn (same-user still
+   * rotates the live lease; Zustand gets teams/subscription); network blip →
+   * leave the live session intact; invalid/expired → UI-only sign-out plus a
+   * recovery-loop handoff (the loop owns the locked rotate that can revive
+   * the stored session).
    */
   private applyReconciledOutcome(
     stored: StoredCredentials,
@@ -2040,13 +2042,19 @@ export class AuthService {
   ): void {
     if (outcome.kind === "valid") {
       const liveUserId = this.contextProvider.current()?.identity.userId;
-      if (liveUserId !== undefined && liveUserId === outcome.user.user.id) {
-        // Same-user adopt (external sibling rotation or a self-write echo that
-        // raced past the pre-validate no-op): rotate the lease in place.
+      if (
+        liveUserId !== undefined &&
+        liveUserId === outcome.user.user.id &&
+        !this.sessionPendingValidation
+      ) {
+        // Same-user adopt of an already-validated session (external sibling
+        // rotation or a self-write echo that raced past the pre-validate
+        // no-op): rotate the lease in place. A pending cached projection
+        // still needs applySignedIn so teams/subscription land in Zustand.
         this.rotateLiveBearer(liveUserId, stored.token);
         return;
       }
-      // Signed-out → present, or account switch: full signed-in projection.
+      // Signed-out → present, account switch, or cached-session upgrade.
       this.applySignedIn(stored.token, outcome.user, undefined);
       return;
     }
@@ -2616,9 +2624,9 @@ export class AuthService {
    *    epoch under every live session while its holders keep using it, then
    *    duplicate the physical connection on the next acquire. The rotate
    *    paths (locked rotate, reconcile, session restore) already hold this
-   *    invariant; this branch closes the last two ways around it (the
-   *    cross-window snapshot projection and a same-user device-flow
-   *    re-sign-in).
+   *    invariant; this branch also covers a cached-session upgrade (claims-only
+   *    identity, providerHandle null is acceptable) plus the cross-window
+   *    snapshot projection and a same-user device-flow re-sign-in.
    *  - Signed out, or a DIFFERENT user -> mint a fresh context. The
    *    provider's `setSignedIn` aborts any previously-active context, so
    *    host / runtime consumers see a single emit for the new identity.
@@ -2631,7 +2639,6 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
-    const upgradingCachedSession = this.sessionPendingValidation;
     this.sessionPendingValidation = false;
     this.settleSessionRecovery("signed-in");
     // A session being established IS the recovery: any prior transient error
@@ -2642,11 +2649,7 @@ export class AuthService {
     this.setDeviceProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
     let rotatedInPlace = false;
-    if (
-      liveUserId !== undefined &&
-      liveUserId === user.user.id &&
-      !upgradingCachedSession
-    ) {
+    if (liveUserId !== undefined && liveUserId === user.user.id) {
       try {
         this.contextProvider.rotateCurrentBearer({
           userId: liveUserId,

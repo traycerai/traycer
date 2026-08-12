@@ -1404,14 +1404,84 @@ describe("AuthService", () => {
     await start;
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
+    expect(useAuthStore.getState().subscriptionStatus).toBeNull();
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore).not.toBeNull();
 
     reachable = true;
     // First recovery tick fires after the initial 1s backoff.
     await vi.advanceTimersByTimeAsync(1_000);
 
+    // Same-user cache upgrade must rotate the live lease in place. Reminting
+    // aborts the cached context with auth-resigned-in and duplicates the
+    // physical connection on the next acquire.
+    expect(provider.current()).toBe(contextBefore);
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
     expect(service.getLastError()).toBeNull();
+    expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
+  });
+
+  it("applies the validated user when a cached session adopts a same-user file rotation", async () => {
+    // Cached projection leaves teams/subscription empty. A sibling same-user
+    // token that then validates must run applySignedIn (not rotateLiveBearer
+    // alone), or pending is cleared and recovery later settles already-signed-in
+    // with the store still empty.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "cached-offline-token", refreshToken: "cached-offline-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
+    expect(useAuthStore.getState().subscriptionStatus).toBeNull();
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore).not.toBeNull();
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer sibling-rotated-token"
+      ) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    await host.tokenStore.signIn(
+      {
+        token: "sibling-rotated-token",
+        refreshToken: "sibling-rotated-refresh",
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "sibling-rotated-token",
+    );
+    expect(provider.current()).toBe(contextBefore);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
   });
 
   it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {
