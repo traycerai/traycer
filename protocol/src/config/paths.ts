@@ -28,9 +28,11 @@ export type Environment = string;
 
 /**
  * Absolute path to the stored credentials file (the single, machine-local
- * source of truth for the signed-in user). Environment-scoped: the file embeds
- * a per-environment `authnBaseUrl` + a token minted by that authn service, so a
- * dev token is not valid against prod.
+ * source of truth for the signed-in user). Environment-scoped by PATH: each
+ * build's baked `environment` resolves its own file, so a dev token is never
+ * presented against prod. The file carries only the session (token pair +
+ * cached identity) — the authn endpoint is each consumer's build-time/env
+ * config, never file content.
  *
  * Lives in `@traycer/protocol/config` (not the CLI's `store/paths`) because BOTH
  * the CLI - which writes it on `traycer login` - and the host - which reads
