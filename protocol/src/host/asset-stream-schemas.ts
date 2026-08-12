@@ -24,6 +24,14 @@
  */
 import { z } from "zod";
 
+/**
+ * Hard cap on a single asset's byte size, shared by the host (admission +
+ * `validateAssetBytes`) and every client (`AssetStreamClient`'s cumulative
+ * budget) - one constant so raising or lowering it can't drift between the
+ * side that enforces it and the side that bounds its own buffering to it.
+ */
+export const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+
 export const assetMediaTypeSchema = z.enum([
   "image/png",
   "image/jpeg",

@@ -1,5 +1,6 @@
 import {
   assetStreamServerFrameSchema,
+  MAX_ASSET_BYTES,
   type AssetMediaType,
   type AssetStreamErrorReason,
 } from "@traycer/protocol/host/asset-stream-schemas";
@@ -34,9 +35,13 @@ export interface AssetStreamHeader {
  * - `"unsupported-method"` - the host predates this stream method; the
  *   mirror compatibility check rejected the subscribe before anything was
  *   sent. Old-host behaviour: falls back to today's placeholder.
- * - `"fatal"` - any other fatal close, or a wire-protocol violation (a
- *   chunk without its paired binary payload, `assetComplete` before
- *   `assetHeader`).
+ * - `"fatal"` - any other fatal close, or a wire-protocol violation: an
+ *   unparseable frame, a second `assetHeader`, a chunk arriving before the
+ *   header/out of sequence/duplicated, a chunk's payload length not matching
+ *   its declared `byteLength`, cumulative bytes exceeding the header's
+ *   declared size or `MAX_ASSET_BYTES`, a chunk without its paired binary
+ *   payload, or `assetComplete` before `assetHeader`. Any invalid frame ends
+ *   the fetch immediately - a strict state machine, not best-effort parsing.
  * - `"interrupted"` - the session closed (caller or transport drop) before
  *   `assetComplete`, with no fatal detail to explain why.
  * - `"length-mismatch"` - every chunk arrived but the assembled byte count
@@ -154,11 +159,19 @@ export class AssetStreamClient<
     }
     const parsed = assetStreamServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
+      this.fail({ reason: "fatal", message: "received an invalid frame" });
       return;
     }
     const frame = parsed.data;
     switch (frame.kind) {
       case "assetHeader": {
+        if (this.header !== null) {
+          this.fail({
+            reason: "fatal",
+            message: "assetHeader arrived more than once",
+          });
+          return;
+        }
         this.header = {
           mediaType: frame.mediaType,
           sizeBytes: frame.sizeBytes,
@@ -166,12 +179,18 @@ export class AssetStreamClient<
           height: frame.height,
           contentIdentity: frame.contentIdentity,
         };
-        this.chunks = [];
-        this.receivedBytes = 0;
         this.callbacks.onHeader(this.header);
         return;
       }
       case "assetChunk": {
+        const header = this.header;
+        if (header === null) {
+          this.fail({
+            reason: "fatal",
+            message: "assetChunk arrived before assetHeader",
+          });
+          return;
+        }
         if (binaryPayload === null) {
           // The local `/stream` WS transport enforces this pairing itself
           // (a hard socket teardown on violation, before this handler is
@@ -184,6 +203,28 @@ export class AssetStreamClient<
           this.fail({
             reason: "fatal",
             message: "assetChunk arrived without its paired binary payload",
+          });
+          return;
+        }
+        if (frame.index !== this.chunks.length) {
+          this.fail({
+            reason: "fatal",
+            message: `assetChunk index ${frame.index} out of sequence, expected ${this.chunks.length}`,
+          });
+          return;
+        }
+        if (binaryPayload.byteLength !== frame.byteLength) {
+          this.fail({
+            reason: "fatal",
+            message: `assetChunk declared byteLength ${frame.byteLength} but carried ${binaryPayload.byteLength}`,
+          });
+          return;
+        }
+        const budget = Math.min(header.sizeBytes, MAX_ASSET_BYTES);
+        if (this.receivedBytes + binaryPayload.byteLength > budget) {
+          this.fail({
+            reason: "fatal",
+            message: `assetChunk pushed cumulative bytes past the ${budget}-byte budget`,
           });
           return;
         }
