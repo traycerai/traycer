@@ -704,7 +704,7 @@ describe("useImageAsset", () => {
   });
 
   it("opens the git stream and keys the old side separately", async () => {
-    const release = vi.spyOn(imageBlobCache, "release");
+    const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
     const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
 
     expect(mockWsStreamClient.sessions).toHaveLength(1);
@@ -728,8 +728,11 @@ describe("useImageAsset", () => {
     expect(result.current.status).toBe("ready");
     unmount();
 
-    expect(release).toHaveBeenCalledWith(
+    expect(acquireSpy).toHaveBeenCalledWith(
       "host-1|git-old|/repo::images/logo.png|git-oid",
+      "image/png",
+      expect.any(Function),
+      "session",
     );
   });
 
@@ -756,7 +759,7 @@ describe("useImageAsset", () => {
   );
 
   it("closes the stream and releases the cache entry on unmount mid-stream", () => {
-    const release = vi.spyOn(imageBlobCache, "release");
+    const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
     const { result, unmount } = renderHook(() =>
       useImageAsset(WORKSPACE_REQUEST),
     );
@@ -771,8 +774,11 @@ describe("useImageAsset", () => {
     unmount();
 
     expect(session.closed).toBe(true);
-    expect(release).toHaveBeenCalledWith(
+    expect(acquireSpy).toHaveBeenCalledWith(
       "host-1|workspace|/repo::images/logo.png|cancelled-identity",
+      "image/png",
+      expect.any(Function),
+      "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();
     expect(imageBlobCache.size()).toBe(0);

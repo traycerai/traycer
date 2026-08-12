@@ -39,10 +39,9 @@ describe("image-blob-cache", () => {
     const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const [a, b] = await Promise.all([
-      cache.acquire("h1", "image/png", fetcher, "grace"),
-      cache.acquire("h1", "image/png", fetcher, "grace"),
-    ]);
+    const leaseA = cache.acquire("h1", "image/png", fetcher, "grace");
+    const leaseB = cache.acquire("h1", "image/png", fetcher, "grace");
+    const [a, b] = await Promise.all([leaseA.promise, leaseB.promise]);
 
     expect(a).toBe(b);
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -54,8 +53,9 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire("h1", "image/png", fetcher, "grace");
-    cache.release("h1");
+    const lease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const url = await lease.promise;
+    lease.release();
     expect(revoked).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -68,10 +68,12 @@ describe("image-blob-cache", () => {
     const { ops, revoked, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const first = await cache.acquire("h1", "image/png", fetcher, "grace");
-    cache.release("h1");
+    const firstLease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const first = await firstLease.promise;
+    firstLease.release();
     await vi.advanceTimersByTimeAsync(500);
-    const second = await cache.acquire("h1", "image/png", fetcher, "grace");
+    const secondLease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const second = await secondLease.promise;
 
     expect(second).toBe(first);
     await vi.advanceTimersByTimeAsync(2000);
@@ -94,10 +96,10 @@ describe("image-blob-cache", () => {
     const { ops, created, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const pending = cache.acquire("h1", "image/png", fetcher, "grace");
-    cache.release("h1");
+    const lease = cache.acquire("h1", "image/png", fetcher, "grace");
+    lease.release();
 
-    await expect(pending).rejects.toThrow();
+    await expect(lease.promise).rejects.toThrow();
     expect(aborted).toBe(true);
     expect(created).toHaveLength(0);
     expect(revoked).toHaveLength(0);
@@ -109,8 +111,8 @@ describe("image-blob-cache", () => {
     const { ops } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const a = await cache.acquire("h1", "image/png", fetcher, "grace");
-    const b = await cache.acquire("h2", "image/png", fetcher, "grace");
+    const a = await cache.acquire("h1", "image/png", fetcher, "grace").promise;
+    const b = await cache.acquire("h2", "image/png", fetcher, "grace").promise;
 
     expect(a).not.toBe(b);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -122,13 +124,14 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire(
+    const lease = cache.acquire(
       "session-hash",
       "image/png",
       fetcher,
       "session",
     );
-    cache.release("session-hash");
+    const url = await lease.promise;
+    lease.release();
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(revoked).toHaveLength(0);
@@ -143,13 +146,9 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire(
-      "clear-hash",
-      "image/png",
-      fetcher,
-      "session",
-    );
-    cache.release("clear-hash");
+    const lease = cache.acquire("clear-hash", "image/png", fetcher, "session");
+    const url = await lease.promise;
+    lease.release();
     cache.clear();
 
     expect(revoked).toEqual([url]);
@@ -161,12 +160,13 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire(
+    const lease = cache.acquire(
       "referenced-hash",
       "image/png",
       fetcher,
       "grace",
     );
+    const url = await lease.promise;
     cache.discard("referenced-hash");
 
     expect(revoked).toEqual([url]);
@@ -174,6 +174,11 @@ describe("image-blob-cache", () => {
     cache.discard("referenced-hash");
     cache.discard("unknown-hash");
     expect(revoked).toEqual([url]);
+
+    // A release for the now-discarded generation must be a silent no-op.
+    lease.release();
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
   });
 
   it("discards session-retained entries and bypasses retention", async () => {
@@ -181,13 +186,14 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire(
+    const lease = cache.acquire(
       "session-discard-hash",
       "image/png",
       fetcher,
       "session",
     );
-    cache.release("session-discard-hash");
+    const url = await lease.promise;
+    lease.release();
     await vi.advanceTimersByTimeAsync(2000);
     expect(revoked).toHaveLength(0);
 
@@ -201,22 +207,127 @@ describe("image-blob-cache", () => {
     const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const first = await cache.acquire(
+    const firstLease = cache.acquire(
       "refetch-hash",
       "image/png",
       fetcher,
       "grace",
     );
+    const first = await firstLease.promise;
     cache.discard("refetch-hash");
-    const second = await cache.acquire(
+    const secondLease = cache.acquire(
       "refetch-hash",
       "image/png",
       fetcher,
       "grace",
     );
+    const second = await secondLease.promise;
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(second).not.toBe(first);
     expect(created).toHaveLength(2);
+  });
+
+  it("keeps a replacement live when stale leases release after discard", async () => {
+    const oldFetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const replacementFetcher = vi.fn(() =>
+      Promise.resolve(new Uint8Array([2])),
+    );
+    const { ops, created, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const oldLeaseA = cache.acquire(
+      "aba-hash",
+      "image/png",
+      oldFetcher,
+      "grace",
+    );
+    const oldLeaseB = cache.acquire(
+      "aba-hash",
+      "image/png",
+      oldFetcher,
+      "grace",
+    );
+    const oldUrl = await oldLeaseA.promise;
+    expect(await oldLeaseB.promise).toBe(oldUrl);
+
+    cache.discard("aba-hash");
+    expect(revoked).toEqual([oldUrl]);
+
+    const replacementLease = cache.acquire(
+      "aba-hash",
+      "image/png",
+      replacementFetcher,
+      "grace",
+    );
+    const replacementUrl = await replacementLease.promise;
+    expect(replacementUrl).not.toBe(oldUrl);
+    expect(created).toHaveLength(2);
+
+    oldLeaseA.release();
+    oldLeaseB.release();
+    expect(revoked).toEqual([oldUrl]);
+    expect(cache.size()).toBe(1);
+
+    replacementLease.release();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(revoked).toEqual([oldUrl, replacementUrl]);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("does not let stale releases abort an in-flight replacement", async () => {
+    const oldFetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const resolveReplacementHolder: {
+      current: ((bytes: Uint8Array<ArrayBuffer>) => void) | null;
+    } = { current: null };
+    let replacementAborted = false;
+    const replacementFetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
+          resolveReplacementHolder.current = resolve;
+          signal.addEventListener("abort", () => {
+            replacementAborted = true;
+            reject(new Error("replacement aborted"));
+          });
+        }),
+    );
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const oldLeaseA = cache.acquire(
+      "aba-pending",
+      "image/png",
+      oldFetcher,
+      "grace",
+    );
+    const oldLeaseB = cache.acquire(
+      "aba-pending",
+      "image/png",
+      oldFetcher,
+      "grace",
+    );
+    await oldLeaseA.promise;
+    await oldLeaseB.promise;
+    cache.discard("aba-pending");
+
+    const replacementLease = cache.acquire(
+      "aba-pending",
+      "image/png",
+      replacementFetcher,
+      "grace",
+    );
+    oldLeaseA.release();
+    oldLeaseB.release();
+
+    expect(replacementAborted).toBe(false);
+    resolveReplacementHolder.current?.(new Uint8Array([2]));
+    const replacementUrl = await replacementLease.promise;
+    expect(replacementAborted).toBe(false);
+    expect(revoked).toHaveLength(1);
+
+    replacementLease.release();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(revoked).toEqual(["blob:fake/0", replacementUrl]);
+    expect(cache.size()).toBe(0);
   });
 });

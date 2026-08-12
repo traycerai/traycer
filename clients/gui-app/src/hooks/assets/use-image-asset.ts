@@ -315,7 +315,7 @@ export function useImageAsset(
       : "session";
 
     let active = true;
-    let cacheKey: string | null = null;
+    let releaseLease: (() => void) | null = null;
     let client: AssetStreamClient | null = null;
     // Set only while a fetch this hook OWNS (a cache miss) is in flight -
     // bridges this session's `onReady`/`onFailure` into the promise
@@ -357,7 +357,6 @@ export function useImageAsset(
           path: assetPathFor(normalizedRequest),
           contentIdentity: header.contentIdentity,
         });
-        cacheKey = key;
         cacheKeyRef.current = key;
 
         const fetcher: ImageBytesFetcher = (_key, signal) => {
@@ -386,7 +385,15 @@ export function useImageAsset(
           });
         };
 
-        imageBlobCache.acquire(key, header.mediaType, fetcher, retention).then(
+        const lease = imageBlobCache.acquire(
+          key,
+          header.mediaType,
+          fetcher,
+          retention,
+        );
+        releaseLease = lease.release;
+
+        lease.promise.then(
           (url) => {
             if (!active) return;
             // Cache hit: `fetcher` above was never invoked, so this
@@ -482,14 +489,16 @@ export function useImageAsset(
       // its stream must outlive THIS unmount when other consumers still
       // hold a reference - closing it here would strand every sibling on
       // the header skeleton forever, since only the owner's `onReady` /
-      // `onFailure` ever settles the shared promise. `imageBlobCache.release`
-      // below is what may still close it, via the fetcher's abort listener,
-      // but only once the LAST reference drops. A fetch that never became
-      // the owner (never reached `onHeader`, or lost the cache race) has no
-      // such shared responsibility - nothing else will ever close it, so it
-      // must be closed directly.
+      // `onFailure` ever settles the shared promise. `releaseLease()` below
+      // is what may still close it, via the fetcher's abort listener, but
+      // only once the LAST reference to the SAME entry this lease was
+      // issued against drops - never a same-hash entry that replaced it (a
+      // `discard()`, e.g. `reportDecodeFailure`, in between). A fetch that
+      // never became the owner (never reached `onHeader`, or lost the cache
+      // race) has no such shared responsibility - nothing else will ever
+      // close it, so it must be closed directly.
       if (!usedForFetch) client.close();
-      if (cacheKey !== null) imageBlobCache.release(cacheKey);
+      releaseLease?.();
     };
   }, [
     method,

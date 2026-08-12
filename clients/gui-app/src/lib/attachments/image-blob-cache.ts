@@ -18,9 +18,33 @@
  * only ever dropped by a page reload. A still-pending fetch is aborted once
  * its last reference drops regardless of retention, and a failed fetch never
  * poisons the entry - the next acquire retries.
+ *
+ * `acquire()` returns a LEASE bound to the exact entry instance it was
+ * issued against, not a hash string a caller separately remembers. This
+ * closes an ABA hole a bare `release(hash)` had: `discard()` can delete an
+ * entry out from under still-mounted holders (a decode failure force-drops
+ * regardless of who else references it) and a LATER `acquire()` for the
+ * same hash then creates a genuinely new entry: a stale holder's release
+ * must affect only the (now orphaned, unreachable) entry it actually leased,
+ * never a same-hash replacement that happens to occupy the map afterward.
+ * `lease.release()` captures that entry directly, so it is a no-op the
+ * moment the map's occupant at that hash is no longer the same object -
+ * whether from `discard()`, `clear()`, or a prior `release()` already
+ * having dropped it.
  */
 
 export type ImageBlobRetention = "grace" | "session";
+
+export interface ImageBlobLease {
+  /** Resolves to the shared blob URL once the fetch (or cache hit) settles. */
+  readonly promise: Promise<string>;
+  /**
+   * Releases exactly the reference this lease represents. Idempotent, and a
+   * no-op once the entry it was issued against is no longer the hash's live
+   * occupant (see the file-level doc comment).
+   */
+  readonly release: () => void;
+}
 
 export type ImageBytesFetcher = (
   hash: string,
@@ -63,15 +87,16 @@ export interface ImageBlobCache {
    * is read only when this call CREATES the entry - later acquirers of the
    * same hash must agree with the first caller (the key already encodes
    * whether the content is immutable), so it is not re-applied on a hit.
+   * Returns a lease bound to the exact entry acquired - release it, not a
+   * remembered hash, when the caller is done (see the file-level doc
+   * comment on why a bare hash is unsafe here).
    */
   acquire: (
     hash: string,
     mediaType: string,
     fetcher: ImageBytesFetcher,
     retention: ImageBlobRetention,
-  ) => Promise<string>;
-  /** Release one reference; the URL is revoked once no references remain. */
-  release: (hash: string) => void;
+  ) => ImageBlobLease;
   /** Live entry count (diagnostics/tests). */
   size: () => number;
   /**
@@ -119,12 +144,35 @@ export function createImageBlobCache(
     entry.cancelRevoke = () => clearTimeout(handle);
   };
 
+  // Releases exactly `target` - the entry instance a lease was issued
+  // against - never whatever the map's CURRENT occupant of `hash` happens
+  // to be. This is the ABA fix: a `discard()`/prior-`release()` can already
+  // have removed `target` from `entries` and a later `acquire()` can already
+  // have installed an unrelated replacement there by the time this runs; the
+  // `entries.get(hash) !== target` check below is what stops this stale
+  // release from touching that live replacement.
+  const releaseEntry = (hash: string, target: CacheEntry): void => {
+    if (target.refCount > 0) target.refCount -= 1;
+    if (target.refCount > 0) return;
+    if (entries.get(hash) !== target) return;
+    if (target.inFlight !== null) {
+      // Nothing wants the bytes anymore - cancel the fetch and drop the entry so
+      // its observers/timers tear down; a re-acquire starts a fresh fetch.
+      target.abort?.abort();
+      target.abort = null;
+      target.inFlight = null;
+      entries.delete(hash);
+      return;
+    }
+    scheduleRevoke(hash, target);
+  };
+
   const acquire = (
     hash: string,
     mediaType: string,
     fetcher: ImageBytesFetcher,
     retention: ImageBlobRetention,
-  ): Promise<string> => {
+  ): ImageBlobLease => {
     let entry = entries.get(hash);
     if (entry === undefined) {
       entry = {
@@ -142,10 +190,22 @@ export function createImageBlobCache(
       entry.cancelRevoke();
       entry.cancelRevoke = null;
     }
-    if (entry.url !== null) return Promise.resolve(entry.url);
-    if (entry.inFlight !== null) return entry.inFlight;
 
     const target = entry;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      releaseEntry(hash, target);
+    };
+
+    if (target.url !== null) {
+      return { promise: Promise.resolve(target.url), release };
+    }
+    if (target.inFlight !== null) {
+      return { promise: target.inFlight, release };
+    }
+
     const controller = new AbortController();
     target.abort = controller;
     // `entries.get(hash) === target` guards every late callback: once an entry
@@ -173,24 +233,7 @@ export function createImageBlobCache(
         throw error;
       },
     );
-    return target.inFlight;
-  };
-
-  const release = (hash: string): void => {
-    const entry = entries.get(hash);
-    if (entry === undefined) return;
-    if (entry.refCount > 0) entry.refCount -= 1;
-    if (entry.refCount > 0) return;
-    if (entry.inFlight !== null) {
-      // Nothing wants the bytes anymore - cancel the fetch and drop the entry so
-      // its observers/timers tear down; a re-acquire starts a fresh fetch.
-      entry.abort?.abort();
-      entry.abort = null;
-      entry.inFlight = null;
-      entries.delete(hash);
-      return;
-    }
-    scheduleRevoke(hash, entry);
+    return { promise: target.inFlight, release };
   };
 
   const dropEntry = (hash: string, entry: CacheEntry): void => {
@@ -210,7 +253,7 @@ export function createImageBlobCache(
     for (const [hash, entry] of entries) dropEntry(hash, entry);
   };
 
-  return { acquire, release, size: () => entries.size, discard, clear };
+  return { acquire, size: () => entries.size, discard, clear };
 }
 
 /**
