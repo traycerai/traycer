@@ -150,10 +150,14 @@ export function useRpcShellConfigController(props: {
       await client.request("config.env.delete", { key: rename.oldKey });
     },
     onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-    onSuccess: (_data, _variables, context) => {
-      if (context.hostId === null) return;
+    // SETTLED, not success - the same two-write staleness the bridge twin has:
+    // a set that lands followed by a delete that rejects leaves both keys on
+    // the host with the editor showing the pre-rename list.
+    onSettled: (_data, _error, _variables, context) => {
+      const hostId = context?.hostId ?? null;
+      if (hostId === null) return;
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethodScope(context.hostId, "config.env.list"),
+        queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
       });
     },
     onError: (error) => {

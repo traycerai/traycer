@@ -1,11 +1,13 @@
 import { useMemo } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import type {
   ConfigShellProbeResponse,
   ConfigShellSetRequest,
 } from "@traycer/protocol/host/config/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
-import { runnerQueryKeys } from "@/lib/query-keys";
+import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerTraycerEnvOverrideDeleteMutation } from "@/hooks/runner/use-runner-traycer-env-override-delete-mutation";
 import { useRunnerTraycerEnvOverrideListQuery } from "@/hooks/runner/use-runner-traycer-env-override-list-query";
 import { useRunnerTraycerEnvOverrideSetMutation } from "@/hooks/runner/use-runner-traycer-env-override-set-mutation";
@@ -68,6 +70,47 @@ export function useBridgeShellConfigController(props: {
   const revertMutation = useRunnerTraycerShellRevertArgsMutation();
   const envSetMutation = useRunnerTraycerEnvOverrideSetMutation();
   const envDeleteMutation = useRunnerTraycerEnvOverrideDeleteMutation();
+  const queryClient = useQueryClient();
+
+  // Both writes inside ONE `mutationFn`, for the same reason the RPC path does
+  // it: the boundary that loses the second half is the OBSERVER, not the
+  // transport. Chained onto the set's per-`mutate` `onSuccess` - as this did -
+  // closing Settings while the set was in flight dropped the callback, so the
+  // old key was never removed and one rename left two live variables. That the
+  // bridge speaks IPC rather than RPC changes nothing about it.
+  const envRenameMutation = useMutation<
+    void,
+    Error,
+    {
+      readonly oldKey: string;
+      readonly newKey: string;
+      readonly value: string | null;
+    }
+  >({
+    mutationKey: runnerMutationKeys.traycerEnvOverrideRename(),
+    mutationFn: async (rename) => {
+      await traycerCli.envOverrideSet({
+        key: rename.newKey,
+        value: rename.value,
+      });
+      // Create first, then drop, so a failed delete leaves a harmless duplicate
+      // rather than a lost value.
+      if (rename.oldKey.length === 0) return;
+      await traycerCli.envOverrideDelete({ key: rename.oldKey });
+    },
+    // SETTLED, not success. A rename is two writes: if the set lands and the
+    // delete rejects, the store now holds BOTH keys while the editor still
+    // shows neither change - invalidating only on success leaves that stale
+    // view sitting over a config the host will actually read.
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.traycerEnvOverrideList(traycerCli),
+      });
+    },
+    onError: (error) => {
+      toastFromRunnerError(error, "Failed to rename env override");
+    },
+  });
 
   const probeSource = useMemo(
     () => bridgeShellProbeSource(traycerCli),
@@ -91,7 +134,10 @@ export function useBridgeShellConfigController(props: {
       addMutation.isPending ||
       removeMutation.isPending ||
       revertMutation.isPending,
-    envPending: envSetMutation.isPending || envDeleteMutation.isPending,
+    envPending:
+      envSetMutation.isPending ||
+      envDeleteMutation.isPending ||
+      envRenameMutation.isPending,
     probeSource,
     setShell: (request: ConfigShellSetRequest, callbacks) =>
       setMutation.mutate({ path: request.path, args: request.args }, callbacks),
@@ -102,25 +148,8 @@ export function useBridgeShellConfigController(props: {
     revertShellArgs: (path, callbacks) =>
       revertMutation.mutate({ path }, callbacks),
     setEnv: (entry, callbacks) => envSetMutation.mutate(entry, callbacks),
-    // The bridge writes the on-disk store through one IPC channel per call,
-    // so there is no cross-observer boundary to lose the delete at the way the
-    // RPC path had - but the sequencing still belongs here rather than at the
-    // call site, so both controllers expose the same one-shot verb.
-    renameEnv: (rename, callbacks) => {
-      envSetMutation.mutate(
-        { key: rename.newKey, value: rename.value },
-        {
-          onSuccess: () => {
-            if (rename.oldKey.length === 0) {
-              callbacks.onSuccess();
-              return;
-            }
-            envDeleteMutation.mutate({ key: rename.oldKey }, callbacks);
-          },
-          onError: callbacks.onError,
-        },
-      );
-    },
+    renameEnv: (rename, callbacks) =>
+      envRenameMutation.mutate(rename, callbacks),
     deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
   };
 }
