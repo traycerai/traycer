@@ -103,6 +103,17 @@ export type MentionStepChromeBanner = {
   readonly section: GithubMentionSection;
 };
 
+/**
+ * The appended row below the rows. `busy` decides the glyph: true is the
+ * `Loading…` idiom (spinning dots - work is in flight), false is a plain
+ * statement (a failed ask that has GIVEN UP must not spin - a spinner beside
+ * "Couldn't reach GitHub." would claim progress the read is not making).
+ */
+export type MentionStepChromeStatus = {
+  readonly label: string;
+  readonly busy: boolean;
+};
+
 export interface MentionStepChrome {
   readonly refresh: MentionStepChromeRefresh | null;
   readonly freshness: MentionStepChromeFreshness | null;
@@ -110,11 +121,12 @@ export interface MentionStepChrome {
   readonly filter: MentionStepChromeFilter | null;
   readonly banner: MentionStepChromeBanner | null;
   /**
-   * Label for an appended spinner row below the rows (the existing `Loading…`
-   * idiom with a different word). Null when nothing is running behind the
-   * already-rendered list.
+   * The appended status row below the rows. Null when nothing needs saying
+   * behind the already-rendered list. Non-null also suppresses the settled
+   * empty verdict: both of its states (searching, failed) mean the list on
+   * screen is not a settled answer.
    */
-  readonly appendedStatus: string | null;
+  readonly appendedStatus: MentionStepChromeStatus | null;
   /**
    * Replaces the provider's generic empty copy when the step can say something
    * truer - "No GitHub repositories found in this task's folders." beats "No
@@ -150,9 +162,19 @@ export function sameMentionStepChrome(
     sameNotice(left.notice, right.notice) &&
     sameFilter(left.filter, right.filter) &&
     sameBanner(left.banner, right.banner) &&
-    left.appendedStatus === right.appendedStatus &&
+    sameStatus(left.appendedStatus, right.appendedStatus) &&
     left.emptyLabel === right.emptyLabel
   );
+}
+
+// Field-wise like every object above: the chrome is rebuilt per render, so a
+// reference compare here would republish on every one.
+function sameStatus(
+  left: MentionStepChromeStatus | null,
+  right: MentionStepChromeStatus | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.label === right.label && left.busy === right.busy;
 }
 
 function sameRefresh(
@@ -209,6 +231,11 @@ function sameSelection(
   );
 }
 
+// Verbatim on purpose, unlike the FOLDED identity comparisons in
+// `github-mention-rows.ts` (here and in `sameRepositories` below): both sides
+// are successive publications of the same pipeline, not two provenances to
+// reconcile, and a casing change in what the chrome would PRINT is a real
+// change the chrome must republish.
 function sameRepository(
   left: GithubMentionRepository | null,
   right: GithubMentionRepository | null,

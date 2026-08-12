@@ -32,6 +32,7 @@ import type {
 import { formatCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
+import { foldGithubIdentitySegment } from "./github-mention-rows";
 import { MENU_ICON_CLASS } from "./mention-entry-display";
 
 /**
@@ -138,9 +139,29 @@ export function githubMentionCategoryIcon(
   return <Icon className={MENU_ICON_CLASS} aria-hidden />;
 }
 
-/** `org/repo#123`, the one canonical way to write a reference in prose. */
+/**
+ * The host a bare token implies, and the ONLY one it may omit.
+ *
+ * Shared with the node-attribute rebuild in `tiptap-json-content.ts`, which
+ * defaults a missing `githubHost` to the same value - the two have to agree or
+ * a chip restored from an older node gets a different identity than the one
+ * that produced it.
+ */
+export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
+
+/**
+ * `org/repo#123`, the one canonical way to write a reference in prose -
+ * host-prefixed when the host is not github.com. The same coordinates on two
+ * hosts are two different attachments, and every surface this feeds (the chip
+ * tooltip, the preview subtitle, the menu description, the token below) must
+ * not collapse them into one indistinguishable string. The default host is
+ * omitted for the same byte-stability reason `githubMentionToken` documents.
+ */
 export function githubMentionReference(row: GithubMentionRow): string {
-  return `${row.owner}/${row.repo}#${row.number}`;
+  const reference = `${row.owner}/${row.repo}#${row.number}`;
+  return row.githubHost === DEFAULT_GITHUB_MENTION_HOST
+    ? reference
+    : `${row.githubHost}/${reference}`;
 }
 
 /**
@@ -161,12 +182,19 @@ export function githubRepositoryQualification(
   repositories: ReadonlyArray<GithubMentionRepository>,
 ): GithubRepositoryQualification {
   if (repositories.length <= 1) return "none";
+  // Folded per segment: the row is API-cased while the scope's entries carry
+  // the remote's user-typed casing, so a verbatim compare under-counts the
+  // collisions and fails to escalate - the one job this function has.
   const sharingName = repositories.filter(
-    (repository) => repository.repo === row.repo,
+    (repository) =>
+      foldGithubIdentitySegment(repository.repo) ===
+      foldGithubIdentitySegment(row.repo),
   );
   if (sharingName.length <= 1) return "repo";
   const sharingOwner = sharingName.filter(
-    (repository) => repository.owner === row.owner,
+    (repository) =>
+      foldGithubIdentitySegment(repository.owner) ===
+      foldGithubIdentitySegment(row.owner),
   );
   return sharingOwner.length <= 1 ? "owner-repo" : "host-owner-repo";
 }
@@ -286,16 +314,6 @@ export function githubMentionTokenPrefix(row: GithubMentionRow): string {
 }
 
 /**
- * The host a bare token implies, and the ONLY one it may omit.
- *
- * Shared with the node-attribute rebuild in `tiptap-json-content.ts`, which
- * defaults a missing `githubHost` to the same value - the two have to agree or
- * a chip restored from an older node gets a different identity than the one
- * that produced it.
- */
-export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
-
-/**
  * The durable identity of an inserted GitHub mention.
  *
  * This token IS the attachment's `path`, which is also its node id, which is
@@ -315,13 +333,12 @@ export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
  * a non-default host - which could not previously be represented at all - adds
  * the segment. `segments.ts` accepts both shapes; its pattern already allows
  * further slashes after the first.
+ *
+ * The host segment comes from `githubMentionReference`, so the token and
+ * every prose surface apply the one omit-the-default rule from one place.
  */
 export function githubMentionToken(row: GithubMentionRow): string {
-  const prefix = githubMentionTokenPrefix(row);
-  const reference = githubMentionReference(row);
-  return row.githubHost === DEFAULT_GITHUB_MENTION_HOST
-    ? `${prefix}:${reference}`
-    : `${prefix}:${row.githubHost}/${reference}`;
+  return `${githubMentionTokenPrefix(row)}:${githubMentionReference(row)}`;
 }
 
 /**

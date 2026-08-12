@@ -211,15 +211,44 @@ export function githubMentionRowsWithinScope(
   rows: ReadonlyArray<GithubMentionRow>,
   repositories: ReadonlyArray<GithubMentionRepository>,
 ): ReadonlyArray<GithubMentionRow> {
-  const inScope = new Set(
-    repositories.map((entry) =>
-      [entry.githubHost, entry.owner, entry.repo].join("\x1f"),
-    ),
-  );
+  const inScope = new Set(repositories.map(githubRepositoryIdentityKey));
   const kept = rows.filter((row) =>
-    inScope.has([row.githubHost, row.owner, row.repo].join("\x1f")),
+    inScope.has(githubRepositoryIdentityKey(row)),
   );
   return kept.length === rows.length ? rows : kept;
+}
+
+/**
+ * One casing rule for a repository's identity. GitHub hosts, owners and repo
+ * names are case-insensitive, and the two sides of a comparison here can come
+ * from DIFFERENT pipelines with different casing: rows carry the API's
+ * canonical spelling, while the scope's repositories are parsed from the
+ * folder's configured remote - whatever casing the user happened to type
+ * there. Compared verbatim, a `TraycerAI/Traycer` remote dropped every row
+ * the API returned as `traycerai/traycer`, as if the repository had left the
+ * scope. Same rule `referenceMatchesRow` already applies to pasted URLs.
+ */
+export function githubRepositoryIdentityKey(entry: {
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+}): string {
+  return [
+    foldGithubIdentitySegment(entry.githubHost),
+    foldGithubIdentitySegment(entry.owner),
+    foldGithubIdentitySegment(entry.repo),
+  ].join("\x1f");
+}
+
+/**
+ * The fold behind `githubRepositoryIdentityKey`, exported on its own for the
+ * comparisons that are per-FIELD rather than whole-identity: the display
+ * qualification and the popover's labels count name collisions one segment at
+ * a time, and a verbatim segment compare there under-counts across the same
+ * two provenances the key exists to reconcile.
+ */
+export function foldGithubIdentitySegment(value: string): string {
+  return value.toLowerCase();
 }
 
 /**
@@ -417,10 +446,10 @@ function rowMatchesRepository(
   repository: GithubMentionRepository | null,
 ): boolean {
   if (repository === null) return true;
+  // Folded like the scope boundary: the row is API-cased, the selection came
+  // from the remote-parsed repositories list.
   return (
-    row.githubHost === repository.githubHost &&
-    row.owner === repository.owner &&
-    row.repo === repository.repo
+    githubRepositoryIdentityKey(row) === githubRepositoryIdentityKey(repository)
   );
 }
 

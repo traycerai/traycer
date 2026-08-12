@@ -134,6 +134,7 @@ export interface GithubMentionCatalogResult {
 }
 
 const EMPTY_ROWS: ReadonlyArray<GithubMentionRow> = [];
+const EMPTY_PENDING_REFRESHES: ReadonlySet<string> = new Set();
 const EMPTY_REPOSITORIES: ReadonlyArray<GithubMentionRepository> = [];
 
 /** The cache slot a refresh was issued against, captured at mutate time. */
@@ -154,6 +155,17 @@ export function useGithubMentionCatalog(
     params;
   const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
+
+  // The bound host as of NOW, for callbacks whose closure can outlive its
+  // render. A mutation REPLACED by a newer `mutate()` keeps the options it was
+  // built with - only the observer's current pending mutation is re-optioned
+  // on render - so a closure reading `readiness.hostId` inside a superseded
+  // mutation's callback holds whichever host was bound when it was replaced,
+  // not the one bound when it settles.
+  const boundHostIdRef = useRef(readiness.hostId);
+  useEffect(() => {
+    boundHostIdRef.current = readiness.hostId;
+  }, [readiness.hostId]);
 
   const cacheOnlyRequest = useMemo<MentionGithubCatalogRequest>(
     () => ({
@@ -205,8 +217,8 @@ export function useGithubMentionCatalog(
     [queryClient],
   );
 
-  // Which slot the in-flight manual refresh will land in, so `isChecking`
-  // can tell "this scope is being refreshed" from "some scope is".
+  // Which slots have an in-flight refresh, so `isChecking` can tell "this
+  // scope is being refreshed" from "some scope is".
   //
   // One mutation observer outlives every scope this hook is rendered for - the
   // section stays mounted while the roots, the epic and the bound host change
@@ -215,13 +227,19 @@ export function useGithubMentionCatalog(
   // claim it was checking and disabled its own Refresh button until a request
   // it never issued came back.
   //
+  // A SET of destinations, not the latest one: scope changes do not cancel
+  // requests, so refresh A, a switch to B that starts its own, and a return
+  // to A leaves BOTH in flight - and a single latest-key slot forgot A's, so
+  // A's button re-enabled mid-refresh and could spend a duplicate GitHub
+  // request racing the original. Same shape as the follow-up guard above.
+  //
   // State rather than a ref: this is read during render to derive `isChecking`,
   // and a ref read there is both a lint error here and genuinely wrong under
   // concurrent rendering. The two writes sit on the same edges `isPending`
   // already flips on, so they cost no render that was not happening anyway.
-  const [pendingRefreshKey, setPendingRefreshKey] = useState<string | null>(
-    null,
-  );
+  const [pendingRefreshKeys, setPendingRefreshKeys] = useState<
+    ReadonlySet<string>
+  >(EMPTY_PENDING_REFRESHES);
 
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
@@ -233,7 +251,13 @@ export function useGithubMentionCatalog(
     mapVariables: (variables) => variables,
     options: {
       onMutate: () => {
-        setPendingRefreshKey(hashKey(cacheKey));
+        const issued = hashKey(cacheKey);
+        setPendingRefreshKeys((current) => {
+          if (current.has(issued)) return current;
+          const next = new Set(current);
+          next.add(issued);
+          return next;
+        });
         return { destination: cacheKey, hostId: readiness.hostId };
       },
       onSuccess: (response, _variables, context) => {
@@ -252,9 +276,12 @@ export function useGithubMentionCatalog(
       // The host guard is the same rule as `destination` above, applied to the
       // other outcome: an app-wide composer can rebind while this request is in
       // flight, and the toast would then blame the host the user is now looking
-      // at for a refresh the one they LEFT rejected. `hostId` read here is the
-      // latest render's - the currently bound host - because that is exactly
-      // what the captured one has to be compared against.
+      // at for a refresh the one they LEFT rejected. The currently bound host
+      // comes from `boundHostIdRef`, NOT from `readiness.hostId` closed over
+      // at render: a superseded mutation's options are frozen at the render
+      // where a newer `mutate()` replaced it, so its closure would hold that
+      // intermediate host and suppress a toast the now-bound host should show
+      // after an away-and-back walk.
       //
       // A missing context still toasts. `onMutate` is a synchronous object
       // literal that cannot throw, so this is unreachable in practice, and
@@ -262,12 +289,15 @@ export function useGithubMentionCatalog(
       // path that drops a real rejection.
       onError: (error, variables, context) => {
         if (variables.refresh !== "manual") return;
-        if (context !== undefined && context.hostId !== readiness.hostId) {
+        if (
+          context !== undefined &&
+          context.hostId !== boundHostIdRef.current
+        ) {
           return;
         }
         toastFromHostError(error, "Could not refresh from GitHub");
       },
-      // Clears only if the settling refresh is the one being reported.
+      // Removes only the settling refresh's own destination.
       //
       // Two can be open at once: a scope change does not cancel the request
       // the previous scope issued, and the new scope can start its own while
@@ -283,9 +313,12 @@ export function useGithubMentionCatalog(
       onSettled: (_data, _error, _variables, context) => {
         if (context === undefined) return;
         const settled = hashKey(context.destination);
-        setPendingRefreshKey((current) =>
-          current === settled ? null : current,
-        );
+        setPendingRefreshKeys((current) => {
+          if (!current.has(settled)) return current;
+          const next = new Set(current);
+          next.delete(settled);
+          return next;
+        });
       },
     },
   });
@@ -406,10 +439,15 @@ export function useGithubMentionCatalog(
     // the query gives up.
     errored: enabled && catalogQuery.isError,
     isLoading: enabled && answered === undefined && catalogQuery.isFetching,
+    // The set alone decides the refresh half. `refreshMutation.isPending` is
+    // the OBSERVER's state, and the observer tracks only the latest `mutate()`
+    // call - the moment a newer refresh settles it reads false while an older
+    // one is still in flight, which re-forgot exactly the A→B→A walk the set
+    // exists to remember. The set needs no corroboration: it is maintained by
+    // the mutation-level callbacks, which fire for replaced mutations too.
     isChecking:
       enabled &&
-      (catalogQuery.isFetching ||
-        (refreshMutation.isPending && pendingRefreshKey === hashKey(cacheKey))),
+      (catalogQuery.isFetching || pendingRefreshKeys.has(hashKey(cacheKey))),
     refreshManually,
   };
 }

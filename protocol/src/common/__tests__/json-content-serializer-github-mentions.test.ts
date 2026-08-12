@@ -36,12 +36,42 @@ describe("GitHub mention serialization", () => {
   // `url` is still optional on the node, so nodes written before it existed -
   // and any caller that omits it - must serialize to the SAME complete
   // reference they always did. Emitting `[url=]` is malformed metadata that
-  // hands the agent an empty fallback rather than no fallback.
+  // hands the agent an empty fallback rather than no fallback. github.com
+  // stays bare here too - it is the default every unqualified reference
+  // already means, so qualifying it would churn every serialization that was
+  // already fine.
   it.each([
     [ContextType.GithubPullRequest, "github-pr", 42],
     [ContextType.GithubIssue, "github-issue", 7],
   ] as const)(
-    "omits the url metadata entirely for a %s node that carries no url",
+    "omits both the url and the host suffix for a %s node on github.com with no url",
+    (contextType, marker, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            id: `${marker}:acme/widgets#${number}`,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "github.com",
+          },
+          "llm",
+        ),
+      ).toBe(`See @${marker}:acme/widgets#${number} before merging.`);
+    },
+  );
+
+  // Without a url, the host is the only thing that can disambiguate an
+  // enterprise reference from the same coordinates on github.com: the node
+  // keeps `githubHost` even when no `url` was ever set, and dropping the
+  // suffix here would make an `acme/widgets#42` on ghe.example.com
+  // indistinguishable from the same coordinates on github.com.
+  it.each([
+    [ContextType.GithubPullRequest, "github-pr", 42],
+    [ContextType.GithubIssue, "github-issue", 7],
+  ] as const)(
+    "appends the host suffix for a %s node on an enterprise host with no url",
     (contextType, marker, number) => {
       expect(
         serialize(
@@ -55,7 +85,38 @@ describe("GitHub mention serialization", () => {
           },
           "llm",
         ),
-      ).toBe(`See @${marker}:acme/widgets#${number} before merging.`);
+      ).toBe(
+        `See @${marker}:acme/widgets#${number} [host=github.example.test] before merging.`,
+      );
+    },
+  );
+
+  // A url already disambiguates the reference on its own, so an enterprise
+  // host must not ALSO append its own suffix - that would double-qualify a
+  // reference the url alone already resolves unambiguously.
+  it.each([
+    [ContextType.GithubPullRequest, "github-pr", "pull/42"],
+    [ContextType.GithubIssue, "github-issue", "issues/7"],
+  ] as const)(
+    "prefers the url suffix and omits the host suffix for a %s node on an enterprise host with a url",
+    (contextType, marker, path) => {
+      const number = contextType === ContextType.GithubPullRequest ? 42 : 7;
+      expect(
+        serialize(
+          {
+            contextType,
+            id: `${marker}:acme/widgets#${number}`,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "github.example.test",
+            url: `https://github.example.test/acme/widgets/${path}`,
+          },
+          "llm",
+        ),
+      ).toBe(
+        `See @${marker}:acme/widgets#${number} [url=https://github.example.test/acme/widgets/${path}] before merging.`,
+      );
     },
   );
 
@@ -102,6 +163,61 @@ describe("GitHub mention serialization", () => {
       ),
     ).toBe(`See \`acme/widgets#${number}\` before merging.`);
   });
+
+  // Without a url, the host is the only thing that can disambiguate an
+  // enterprise reference from the same coordinates on github.com - the same
+  // rule the LLM form above follows. The display/user form is what a human
+  // reads in the chip and the sent message, so it must not read an
+  // enterprise reference as if it were the github.com repository it shares
+  // coordinates with.
+  it.each([
+    [ContextType.GithubPullRequest, 42],
+    [ContextType.GithubIssue, 7],
+  ] as const)(
+    "prefixes the enterprise host in the compact repository reference for display (%s)",
+    (contextType, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "github.example.test",
+            url: `https://github.example.test/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+          },
+          "user",
+        ),
+      ).toBe(
+        `See \`github.example.test/acme/widgets#${number}\` before merging.`,
+      );
+    },
+  );
+
+  // The control: an explicit github.com host must keep the compact reference
+  // byte-identical to what it has always been - qualifying the default host
+  // would churn every display serialization that was already fine.
+  it.each([
+    [ContextType.GithubPullRequest, 42],
+    [ContextType.GithubIssue, 7],
+  ] as const)(
+    "keeps the compact reference bare on github.com for display (%s)",
+    (contextType, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "github.com",
+            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+          },
+          "user",
+        ),
+      ).toBe(`See \`acme/widgets#${number}\` before merging.`);
+    },
+  );
 
   it("does not apply file-style validation markers to either GitHub context", () => {
     const validationResults = new Map([

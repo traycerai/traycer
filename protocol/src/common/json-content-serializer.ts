@@ -294,7 +294,15 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `${org}/${repo}#${issue}`;
+      const reference = `${org}/${repo}#${issue}`;
+      // Same default-host rule as the LLM form below: github.com is what an
+      // unqualified reference already means, while an enterprise reference
+      // with the same coordinates is a different thing and must not read
+      // identically to the human this string is for.
+      if (attrs.githubHost && attrs.githubHost !== "github.com") {
+        return `${attrs.githubHost}/${reference}`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       const { branchName, commitHash } = attrs;
@@ -421,7 +429,17 @@ function formatMentionForLLMQuery(
       // attribute - or for any caller that omits it - turns a reference that
       // used to serialize cleanly into malformed metadata, and hands the agent
       // an empty fallback instead of no fallback.
-      return attrs.url ? `${reference} [url=${attrs.url}]` : reference;
+      if (attrs.url) return `${reference} [url=${attrs.url}]`;
+      // Without a URL, the host is the only thing that can disambiguate an
+      // enterprise reference: `org/repo#123` on ghe.example.com is a different
+      // artifact from the same coordinates on github.com, and the node keeps
+      // `githubHost` even when no `url` was ever set. github.com stays bare -
+      // it is the default every unqualified reference already means, and
+      // qualifying it would churn every serialization that was fine.
+      if (attrs.githubHost && attrs.githubHost !== "github.com") {
+        return `${reference} [host=${attrs.githubHost}]`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       if (attrs.branchName)

@@ -7,11 +7,12 @@ import {
 import { githubMentionFiltersKey } from "@/lib/persist";
 import {
   reconcileRepositorySelection,
+  restoreUnrepresentedRepositorySelection,
   selectGithubMentionFilter,
   useGithubMentionFilterStore,
 } from "@/stores/composer/github-mention-filter-store";
 
-const STORAGE_KEY = githubMentionFiltersKey();
+const STORAGE_KEY = githubMentionFiltersKey(null);
 
 function resetStore(): void {
   window.localStorage.clear();
@@ -281,5 +282,85 @@ describe("reconcileRepositorySelection", () => {
         },
       ]),
     ).toBe(filter);
+  });
+
+  it("normalizes the returned repository to the scope's own entry when casing differs", () => {
+    // The stored selection and the scope's entry can be spelled with
+    // different casing for the same repository - a persisted selection may
+    // predate a remote being re-spelled. Matched case-insensitively, but the
+    // returned repository must be the scope's OWN entry object, not a
+    // rebuild of the stored one, so every downstream identity comparison
+    // (the popover's radio, the row filter's key) agrees on one spelling.
+    const scopeEntry = {
+      githubHost: "github.com",
+      owner: "TraycerAI",
+      repo: "Traycer",
+    };
+    const filter = {
+      ...DEFAULT_PULL_REQUEST_MENTION_FILTER,
+      repository: {
+        githubHost: "GitHub.COM",
+        owner: "traycerai",
+        repo: "traycer",
+      },
+    };
+
+    const reconciled = reconcileRepositorySelection("pull-requests", filter, [
+      scopeEntry,
+      { githubHost: "github.com", owner: "traycerai", repo: "other" },
+    ]);
+
+    expect(reconciled.repository).toBe(scopeEntry);
+  });
+});
+
+describe("restoreUnrepresentedRepositorySelection", () => {
+  it("returns next unchanged when nothing was stored", () => {
+    // No stored selection means there is nothing to restore - the write-path
+    // complement has no complement to apply.
+    const next = DEFAULT_PULL_REQUEST_MENTION_FILTER;
+    expect(
+      restoreUnrepresentedRepositorySelection("pull-requests", next, null, [
+        { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+      ]),
+    ).toBe(next);
+  });
+
+  it("returns next unchanged when the stored repository is still represented, matched case-insensitively", () => {
+    // Represented means the reconciled projection's decision stands: this
+    // function only restores a selection reconcile had to DROP, and a
+    // case-only spelling difference between the stored selection and the
+    // scope's own entry is not a drop.
+    const stored = {
+      githubHost: "github.com",
+      owner: "TraycerAI",
+      repo: "Traycer",
+    };
+    const next = DEFAULT_PULL_REQUEST_MENTION_FILTER;
+    expect(
+      restoreUnrepresentedRepositorySelection("pull-requests", next, stored, [
+        { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+      ]),
+    ).toBe(next);
+  });
+
+  it("restores the stored repository onto next when the scope no longer represents it", () => {
+    // The scope shrank or the folder detached, and `next` (the edit made
+    // through the reconciled projection) carries no repository - so the
+    // State/Involvement change must not also silently delete the stored
+    // selection reconcile was only hiding as a display fallback.
+    const stored = {
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "gone",
+    };
+    const next = DEFAULT_PULL_REQUEST_MENTION_FILTER;
+    const restored = restoreUnrepresentedRepositorySelection(
+      "pull-requests",
+      next,
+      stored,
+      [{ githubHost: "github.com", owner: "traycerai", repo: "traycer" }],
+    );
+    expect(restored.repository).toBe(stored);
   });
 });

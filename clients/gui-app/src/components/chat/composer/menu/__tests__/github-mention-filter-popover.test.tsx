@@ -229,21 +229,24 @@ describe("GithubMentionFilterPopover", () => {
     ).toBe("true");
   });
 
-  it("forwards a change from the reconciled selection, not the dead store repo", async () => {
-    // Dead repository still in the store. List (and chrome.selected) has
-    // already reconciled it to null. Changing State must persist repository:
-    // null — not re-spread the detached repo into every later write.
+  it("keeps a detached repository selection across a State change", async () => {
+    // Detached repository still in the store; the list (and chrome.selected)
+    // has reconciled it to null AS A DISPLAY FALLBACK. Changing State edits
+    // that projection, and writing it back verbatim would turn "remembered
+    // while unrepresented" into a permanent delete - the selection has to
+    // come back when its folder is re-attached.
+    const detached = {
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "detached",
+    };
     useGithubMentionFilterStore.getState().setFilter({
       epicId: "epic-1",
       section: "pull-requests",
       filter: {
         state: "open",
         involvement: "everyone",
-        repository: {
-          githubHost: "github.com",
-          owner: "traycerai",
-          repo: "detached",
-        },
+        repository: detached,
       },
     });
 
@@ -285,7 +288,61 @@ describe("GithubMentionFilterPopover", () => {
     expect(stored).toEqual({
       state: "merged",
       involvement: "everyone",
-      repository: null,
+      repository: detached,
     });
+  });
+
+  it("lets the Repository group replace a detached selection outright", async () => {
+    // The control for the test above: the preserve rule must not apply to the
+    // Repository group's own writes, or the one control that manages the
+    // selection would be the one place it cannot be changed.
+    useGithubMentionFilterStore.getState().setFilter({
+      epicId: "epic-1",
+      section: "pull-requests",
+      filter: {
+        state: "open",
+        involvement: "everyone",
+        repository: {
+          githubHost: "github.com",
+          owner: "traycerai",
+          repo: "detached",
+        },
+      },
+    });
+
+    const inScope = {
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+    };
+    const user = userEvent.setup();
+    render(
+      <GithubMentionFilterPopover
+        filter={{
+          section: "pull-requests",
+          epicId: "epic-1",
+          repositories: [
+            inScope,
+            {
+              githubHost: "github.com",
+              owner: "traycerai",
+              repo: "traycer-internal",
+            },
+          ],
+          selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
+        }}
+        onReturnFocus={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await user.click(await screen.findByRole("radio", { name: "traycer" }));
+
+    const stored = selectGithubMentionFilter(
+      useGithubMentionFilterStore.getState(),
+      "epic-1",
+      "pull-requests",
+    );
+    expect(stored.repository).toEqual(inScope);
   });
 });

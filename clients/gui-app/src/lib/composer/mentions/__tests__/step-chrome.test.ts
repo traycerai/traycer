@@ -48,7 +48,7 @@ describe("sameMentionStepChrome", () => {
         selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
       },
       banner: { kind: "gh-unavailable", section: "issues" },
-      appendedStatus: "Searching GitHub…",
+      appendedStatus: { label: "Searching GitHub…", busy: true },
       emptyLabel: "No GitHub repositories found in this task's folders.",
     });
     const right = chrome({
@@ -71,7 +71,7 @@ describe("sameMentionStepChrome", () => {
         selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
       },
       banner: { kind: "gh-unavailable", section: "issues" },
-      appendedStatus: "Searching GitHub…",
+      appendedStatus: { label: "Searching GitHub…", busy: true },
       emptyLabel: "No GitHub repositories found in this task's folders.",
     });
 

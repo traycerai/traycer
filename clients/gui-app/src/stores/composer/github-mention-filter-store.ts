@@ -8,6 +8,7 @@ import type {
 
 import {
   defaultGithubMentionFilter,
+  githubRepositoryIdentityKey,
   isDefaultGithubMentionFilter,
   withGithubMentionRepository,
   withGithubMentionSectionShape,
@@ -88,7 +89,9 @@ export const useGithubMentionFilterStore = create<GithubMentionFilterStore>()(
       },
     }),
     {
-      ...basePersistOptions(githubMentionFiltersKey()),
+      // Anonymous bucket until the lifecycle bridge retargets to the
+      // signed-in identity; see GithubMentionFiltersPersistLifecycleBridge.
+      ...basePersistOptions(githubMentionFiltersKey(null)),
       // Task-keyed rows persist; the landing composer's do not. Its filter is
       // adjustable for as long as that composer is on screen and starts from
       // defaults on the next launch - stickiness is keyed to the task, and
@@ -139,13 +142,17 @@ export function reconcileRepositorySelection(
 ): GithubMentionFilter {
   const selected = filter.repository;
   if (selected === null) return filter;
-  const present = repositories.some(
-    (repository) =>
-      repository.githubHost === selected.githubHost &&
-      repository.owner === selected.owner &&
-      repository.repo === selected.repo,
+  // Case-insensitive, because the two sides have different provenance: the
+  // scope's entries are parsed from the folder's configured remote, while a
+  // persisted selection may predate a remote being re-spelled. Matched
+  // case-insensitively but kept VERBATIM as the scope's own entry, so every
+  // downstream identity comparison (the popover's radio, the row filter's
+  // key) sees one spelling.
+  const selectedKey = githubRepositoryIdentityKey(selected);
+  const present = repositories.find(
+    (repository) => githubRepositoryIdentityKey(repository) === selectedKey,
   );
-  if (present) {
+  if (present !== undefined) {
     // A selection that IS the whole scope filters nothing, and the popover
     // only renders the Repository group for a multi-repository scope - so a
     // scope shrinking onto the selected repository would otherwise leave the
@@ -154,7 +161,39 @@ export function reconcileRepositorySelection(
     if (repositories.length === 1) {
       return withGithubMentionRepository(section, filter, null);
     }
-    return filter;
+    if (present === selected) return filter;
+    return withGithubMentionRepository(section, filter, present);
   }
   return withGithubMentionRepository(section, filter, null);
+}
+
+/**
+ * The write-path complement of `reconcileRepositorySelection`, for edits made
+ * THROUGH the reconciled projection. The popover edits the reconciled filter
+ * (that is what the list is applying, and what the funnel dot claims), but
+ * reconcile nulls an out-of-scope selection as a DISPLAY fallback - so a
+ * State or Involvement change written back verbatim would turn "remembered
+ * while unrepresented" into a permanent delete, breaking the contract above.
+ *
+ * Only the unrepresented case restores. A selection the scope still contains
+ * writes through as reconciled: the whole-scope null and the casing
+ * normalization are both decisions reconcile is entitled to make durable.
+ * The Repository group must NOT route its own writes through here - picking
+ * "All repositories" while the old selection is out of scope is the user
+ * explicitly clearing it, and restoring it over that click would make the
+ * one control that manages the selection the one place it cannot be changed.
+ */
+export function restoreUnrepresentedRepositorySelection(
+  section: GithubMentionSection,
+  next: GithubMentionFilter,
+  stored: GithubMentionRepository | null,
+  repositories: ReadonlyArray<GithubMentionRepository>,
+): GithubMentionFilter {
+  if (stored === null) return next;
+  const storedKey = githubRepositoryIdentityKey(stored);
+  const represented = repositories.some(
+    (repository) => githubRepositoryIdentityKey(repository) === storedKey,
+  );
+  if (represented) return next;
+  return withGithubMentionRepository(section, next, stored);
 }

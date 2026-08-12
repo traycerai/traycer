@@ -261,4 +261,121 @@ describe("useGithubMentionCatalog refresh pending scope", () => {
 
     await waitFor(() => expect(result.current.isChecking).toBe(false));
   });
+
+  it("still reports checking after walking scope A -> B -> A while both refreshes remain unsettled", async () => {
+    // `pendingRefreshKeys` is a SET, not a single latest key. A refreshes,
+    // then B refreshes while A is still open, then the folders go back to A -
+    // a single-key slot would have been overwritten by B's key on the way
+    // through, so A's return would wrongly read as settled and its Refresh
+    // button would re-enable mid-flight.
+    const refreshes = manualRefreshesByPath();
+    const { result, rerender } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-a");
+    });
+
+    rerender({ scope: REPO_B });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-b");
+    });
+
+    // Both A and B are unsettled at this point. Walk back to A.
+    rerender({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    expect(result.current.isChecking).toBe(true);
+  });
+
+  it("settling A's refresh clears only A's isChecking, leaving B's still-pending refresh reported as checking", async () => {
+    // The control for the test above: the Set must remove exactly the
+    // settling request's own key, not every key or none of them - otherwise
+    // either scope could report the wrong spinner state once a sibling's
+    // request lands.
+    const refreshes = manualRefreshesByPath();
+    const { result, rerender } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-a");
+    });
+
+    rerender({ scope: REPO_B });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-b");
+    });
+
+    // Settle A's request while the current scope is B.
+    await act(async () => {
+      refreshes.settle("/repo-a");
+      await Promise.resolve();
+    });
+    // B's own refresh is still open, so B must keep reporting checking.
+    expect(result.current.isChecking).toBe(true);
+
+    // Return to A: its key was removed by the settle above, so it must no
+    // longer report checking.
+    rerender({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+    expect(result.current.isChecking).toBe(false);
+  });
+
+  it("still reports checking for the older scope once a newer scope's refresh settles, even though the observer's own isPending has gone false", async () => {
+    // `refreshMutation.isPending` is the OBSERVER's state, and the observer
+    // tracks only the LATEST `mutate()` call: once B's refresh settles it is
+    // the observer's tracked mutation, so `isPending` reads false even though
+    // A's refresh - issued first, replaced as the observer's "current" one by
+    // B's - is still open. The old code ANDed the pending-keys set with that
+    // observer flag, so the walk back to A read `isChecking` as false right
+    // when the user's still-running refresh most needed to keep spinning.
+    const refreshes = manualRefreshesByPath();
+    const { result, rerender } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-a");
+    });
+
+    rerender({ scope: REPO_B });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    act(() => {
+      void result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued("/repo-b");
+    });
+
+    // B is the observer's latest tracked mutation. Settling it drops
+    // `refreshMutation.isPending` to false while A's request is still open.
+    await act(async () => {
+      refreshes.settle("/repo-b");
+      await Promise.resolve();
+    });
+
+    rerender({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+
+    expect(result.current.isChecking).toBe(true);
+  });
 });

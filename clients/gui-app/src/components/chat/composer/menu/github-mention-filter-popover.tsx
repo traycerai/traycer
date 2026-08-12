@@ -14,12 +14,17 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   asIssueMentionFilter,
   asPullRequestMentionFilter,
+  foldGithubIdentitySegment,
   isDefaultGithubMentionFilter,
   withGithubMentionRepository,
   type GithubMentionFilter,
 } from "@/lib/composer/mentions";
 import type { MentionStepChromeFilter } from "@/lib/composer/mentions";
-import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
+import {
+  restoreUnrepresentedRepositorySelection,
+  selectGithubMentionFilter,
+  useGithubMentionFilterStore,
+} from "@/stores/composer/github-mention-filter-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -74,10 +79,19 @@ export function GithubMentionFilterPopover(
   // it in the same interaction, and re-rendering on it would be noise.
   const resumeTypingRef = useRef<string | null>(null);
   const setFilter = useGithubMentionFilterStore((state) => state.setFilter);
+  // The STORED repository selection, read only so writes made through the
+  // reconciled projection can keep an out-of-scope one alive (see
+  // `applyKeepingHiddenSelection`). Selected down to the repository, which the
+  // section-shape coercion carries by reference, so the subscription is
+  // referentially stable across unrelated store writes.
+  const storedRepository = useGithubMentionFilterStore(
+    (state) =>
+      selectGithubMentionFilter(state, chrome.epicId, chrome.section)
+        .repository,
+  );
   // The RECONCILED selection the list is applying, not the raw store. Reading
   // the store here would let the dot claim a filter is active while the list
-  // shows everything, and would persist a dead repository selection forward
-  // through every later change.
+  // shows everything.
   const filter = chrome.selected;
   const isDefault = isDefaultGithubMentionFilter(chrome.section, filter);
 
@@ -87,6 +101,23 @@ export function GithubMentionFilterPopover(
     // still a real selection: a funnel that refused every click would be a
     // broken control, not a simpler one.
     setFilter({ epicId: chrome.epicId, section: chrome.section, filter: next });
+  };
+
+  // State/Involvement edits are made THROUGH the reconciled projection, whose
+  // `repository` may be a display fallback for a selection the scope cannot
+  // currently represent - written back verbatim, flipping State would delete
+  // the selection the store promised to remember across a detach/re-attach.
+  // The Repository group stays on the plain `apply`: its writes ARE
+  // repository decisions, including the explicit clear.
+  const applyKeepingHiddenSelection = (next: GithubMentionFilter): void => {
+    apply(
+      restoreUnrepresentedRepositorySelection(
+        chrome.section,
+        next,
+        storedRepository,
+        chrome.repositories,
+      ),
+    );
   };
 
   return (
@@ -155,9 +186,12 @@ export function GithubMentionFilterPopover(
         }}
       >
         {chrome.section === "pull-requests" ? (
-          <PullRequestGroups filter={filter} onApply={apply} />
+          <PullRequestGroups
+            filter={filter}
+            onApply={applyKeepingHiddenSelection}
+          />
         ) : (
-          <IssueGroups filter={filter} onApply={apply} />
+          <IssueGroups filter={filter} onApply={applyKeepingHiddenSelection} />
         )}
         {chrome.repositories.length > 1 ? (
           <FilterGroup
@@ -217,13 +251,20 @@ function repositoryLabel(
   repository: GithubMentionRepository,
   all: ReadonlyArray<GithubMentionRepository>,
 ): string {
+  // Folded like every identity comparison in this feature: two folders can
+  // spell the same repository differently in their remotes, and a verbatim
+  // compare would then offer `api` and `Api` as if they named two things.
   const sameName = all.filter(
-    (candidate) => candidate.repo === repository.repo,
+    (candidate) =>
+      foldGithubIdentitySegment(candidate.repo) ===
+      foldGithubIdentitySegment(repository.repo),
   );
   if (sameName.length === 1) return repository.repo;
   const qualified = `${repository.owner}/${repository.repo}`;
   const sameOwner = sameName.filter(
-    (candidate) => candidate.owner === repository.owner,
+    (candidate) =>
+      foldGithubIdentitySegment(candidate.owner) ===
+      foldGithubIdentitySegment(repository.owner),
   );
   if (sameOwner.length === 1) return qualified;
   return `${qualified} (${repository.githubHost})`;

@@ -12,6 +12,7 @@ import {
   githubMentionRowKey,
   githubMentionScopeKey,
   githubMentionRowsForSection,
+  githubMentionRowsWithinScope,
   mergeGithubMentionRows,
   parseGithubReferenceQuery,
   rankGithubMentionRows,
@@ -176,6 +177,60 @@ describe("githubMentionRowsForSection", () => {
       searchRows,
     );
     expect(catalogOnly.some((row) => row.kind === "pull-request")).toBe(true);
+  });
+});
+
+/**
+ * The scope boundary is case-insensitive because the two sides of the
+ * comparison have different provenance: rows carry the API's canonical
+ * casing, while a scope's repositories are parsed from the folder's
+ * configured remote - whatever casing the user happened to type there.
+ */
+describe("githubMentionRowsWithinScope", () => {
+  it("keeps a row when the scope's repository differs from the row only in casing", () => {
+    const row = pullRequest({
+      number: 1,
+      title: "Casing",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+    });
+    const rows = [row];
+
+    const kept = githubMentionRowsWithinScope(rows, [
+      { githubHost: "GitHub.com", owner: "TraycerAI", repo: "Traycer" },
+    ]);
+
+    expect(kept).toEqual([row]);
+    // Identity-preserving: nothing was actually dropped, so the input array
+    // itself comes back rather than a fresh-but-equal copy.
+    expect(kept).toBe(rows);
+  });
+
+  it("still drops a row whose repository is genuinely different despite case folding", () => {
+    // The control. Without it, folding the comparison could quietly widen
+    // into matching ANY casing of ANY repository rather than the same one.
+    const inScope = pullRequest({
+      number: 2,
+      title: "In scope",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+    });
+    const outOfScope = pullRequest({
+      number: 3,
+      title: "Out of scope",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+    });
+
+    const kept = githubMentionRowsWithinScope(
+      [inScope, outOfScope],
+      [{ githubHost: "GitHub.com", owner: "TraycerAI", repo: "TRAYCER" }],
+    );
+
+    expect(kept).toEqual([inScope]);
   });
 });
 
@@ -600,6 +655,32 @@ describe("filterGithubMentionRows", () => {
       },
     );
     expect(filtered).toEqual([]);
+  });
+
+  it("matches a repository selection that differs from the row only in casing", () => {
+    // The row is API-cased; the selection is parsed from the folder's
+    // configured remote, which can be spelled with different casing for the
+    // same repository - so the comparison must fold case like the scope
+    // boundary above it.
+    const row = pullRequest({
+      number: 100,
+      title: "Casing",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      state: "open",
+    });
+
+    const filtered = filterGithubMentionRows([row], "pull-requests", {
+      ...DEFAULT_PULL_REQUEST_MENTION_FILTER,
+      repository: {
+        githubHost: "GitHub.com",
+        owner: "TraycerAI",
+        repo: "Traycer",
+      },
+    });
+
+    expect(filtered).toEqual([row]);
   });
 
   it("filters issues by involvement bucket including mentions", () => {

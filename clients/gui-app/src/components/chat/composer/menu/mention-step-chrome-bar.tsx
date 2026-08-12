@@ -171,17 +171,26 @@ export function MentionStepChromeBanner(props: {
   );
 }
 
-/** The appended `Searching GitHub…` row - the `Loading…` idiom, different word. */
+/**
+ * The appended status row - the `Loading…` idiom while `busy`, a plain
+ * statement otherwise. The dots are conditional because they MEAN in-flight
+ * work: spinning beside "Couldn't reach GitHub." would claim progress a read
+ * that has given up is not making (the failed slash-command row above makes
+ * the same choice).
+ */
 export function MentionStepChromeStatusRow(props: {
   readonly label: string;
+  readonly busy: boolean;
 }): ReactNode {
   return (
     <div className="flex items-center gap-2 px-3 py-2 text-ui-xs text-muted-foreground/80">
-      <AgentSpinningDots
-        testId={undefined}
-        variant="orbit"
-        className="text-muted-foreground/80"
-      />
+      {props.busy ? (
+        <AgentSpinningDots
+          testId={undefined}
+          variant="orbit"
+          className="text-muted-foreground/80"
+        />
+      ) : null}
       {props.label}
     </div>
   );

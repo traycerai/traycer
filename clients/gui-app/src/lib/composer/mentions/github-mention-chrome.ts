@@ -8,7 +8,7 @@ import type {
 } from "@traycer/protocol/host/pr-schemas";
 
 import type { GithubMentionFilter } from "./github-mention-rows";
-import type { MentionStepChrome } from "./step-chrome";
+import type { MentionStepChrome, MentionStepChromeStatus } from "./step-chrome";
 
 /**
  * What a PR/Issue section's top bar and body affordances SAY, given what the
@@ -33,6 +33,13 @@ export const GITHUB_MENTION_REFRESH_TIMEOUT_MS = 20_000;
 
 /** The appended row's label - the `Loading…` idiom with a different word. */
 export const GITHUB_MENTION_SEARCHING_LABEL = "Searching GitHub…";
+
+// A REJECTED read's row. A rejection carries no response, so none of the
+// answered chrome - banner, ⓘ notice, freshness - can move on it; without a
+// row of its own the section renders the settled "No matching …" verdict over
+// a question GitHub was never successfully asked, or a bare cached list whose
+// live ask silently died. The adjacent Refresh button is the retry.
+export const GITHUB_MENTION_ERRORED_LABEL = "Couldn't reach GitHub.";
 
 // Distinct from "no matching pull requests" on purpose: one says the search
 // came back empty, the other says there was never anything to search.
@@ -73,6 +80,13 @@ export interface GithubMentionChromeInput {
   readonly searchSourceStatus: PrSourceStatus | null;
   readonly checking: boolean;
   readonly searching: boolean;
+  /**
+   * A REQUESTED read for THIS section failed outright - its cache-only
+   * catalog read or its live search rejected with no answer. Distinct from
+   * the degraded statuses above, which are answers: a rejection is the
+   * absence of one, and the only honest chrome for it is its own row.
+   */
+  readonly errored: boolean;
   readonly onRefresh: () => Promise<void>;
 }
 
@@ -113,7 +127,7 @@ export function githubMentionChromeFor(
     banner: ghUnavailable
       ? { kind: "gh-unavailable", section: input.section }
       : null,
-    appendedStatus: input.searching ? GITHUB_MENTION_SEARCHING_LABEL : null,
+    appendedStatus: appendedStatusFor(input),
     emptyLabel: emptyLabelFor(input),
   };
 }
@@ -139,6 +153,32 @@ function noticeFor(
 ): PrSourceNotice | null {
   if (ghUnavailable) return null;
   return input.catalogNotice ?? input.searchNotice;
+}
+
+/**
+ * The appended row below the rows, non-null whenever the list on screen is
+ * not a settled answer - which is also what suppresses the settled
+ * "No matching …" verdict in the menu.
+ *
+ * Searching wins over errored: retries keep the in-flight flags true, so the
+ * error row appears exactly when the ask has given up, and a new ask
+ * supersedes the old failure. The error row does double duty: with no rows it
+ * replaces the empty verdict for a question GitHub never answered, and over
+ * cached rows it is the in-menu report that the live ask died - the same
+ * degrade-in-place channel as the banner and the ⓘ, for the one outcome that
+ * carries no response. `busy` follows the meaning: a search is in-flight
+ * work, a failure that has given up must not spin.
+ */
+function appendedStatusFor(
+  input: GithubMentionChromeInput,
+): MentionStepChromeStatus | null {
+  if (input.searching) {
+    return { label: GITHUB_MENTION_SEARCHING_LABEL, busy: true };
+  }
+  if (input.errored) {
+    return { label: GITHUB_MENTION_ERRORED_LABEL, busy: false };
+  }
+  return null;
 }
 
 /**

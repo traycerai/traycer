@@ -27,6 +27,7 @@ import {
   mentionProviderRegistry,
   type MentionFlowStep,
   type MentionStepChrome,
+  type MentionStepChromeStatus,
 } from "@/lib/composer/mentions";
 import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
@@ -462,12 +463,12 @@ interface ComposerMenuBodyProps {
   readonly activeIndex: number;
   readonly pickerStore: ComposerPickerStore;
   /**
-   * Label for a spinner row appended BELOW the rows - `Searching GitHub…`.
-   * Distinct from `loading`, which means "nothing to show yet": local results
-   * are never blocked on a remote search, so this covers the wait without the
-   * list collapsing.
+   * A status row appended BELOW the rows - `Searching GitHub…` while busy, or
+   * a plain failure statement. Distinct from `loading`, which means "nothing
+   * to show yet": local results are never blocked on a remote search, so this
+   * covers the wait (or reports the failure) without the list collapsing.
    */
-  readonly appendedStatus: string | null;
+  readonly appendedStatus: MentionStepChromeStatus | null;
 }
 
 function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
@@ -518,7 +519,10 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
   }
   const statusRow =
     appendedStatus === null ? null : (
-      <MentionStepChromeStatusRow label={appendedStatus} />
+      <MentionStepChromeStatusRow
+        label={appendedStatus.label}
+        busy={appendedStatus.busy}
+      />
     );
   if (renderedItems.length === 0) {
     // Same rule as the Back-row-only branch below: a settled "nothing matched"
@@ -579,10 +583,11 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     );
   }
   if (showEmptyLabelWithItems) {
-    // `appendedStatus` is non-null only while a remote search is in flight, and
-    // "No matching pull requests" is a SETTLED claim. Rendering both at once
-    // told the user nothing matched and that the search was still running, in
-    // that order - so the honest-but-premature verdict is the one that waits.
+    // `appendedStatus` is non-null while a remote search is in flight OR after
+    // one failed, and "No matching pull requests" is a SETTLED claim - true in
+    // neither state. Rendering both at once told the user nothing matched and
+    // that the search was still running, in that order - so the
+    // honest-but-premature verdict is the one that waits.
     return (
       <>
         {rows}

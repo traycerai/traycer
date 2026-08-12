@@ -8,6 +8,7 @@ import type {
 import {
   githubMentionAttachmentFromRow,
   githubMentionDisplayState,
+  githubMentionReference,
   githubMentionRowTrailing,
   githubMentionToken,
   githubRepositoryQualification,
@@ -190,6 +191,54 @@ describe("githubRepositoryQualification", () => {
         1_000,
       ),
     ).toMatch(/^api · /);
+  });
+
+  it("still finds the collision when the two entries are spelled with different casing", () => {
+    // The row is API-cased ("contoso"/"api") while the scope's entries carry
+    // the remote's user-typed casing ("Contoso"/"Api") - a verbatim compare
+    // under-counts the collision and never escalates past "repo", so this row
+    // and an "acme/api" row in the same scope would both print the bare chip
+    // `api#123` for two different attachments.
+    const scope = [
+      repository("acme", "api", "github.com"),
+      repository("Contoso", "Api", "github.com"),
+    ];
+    expect(
+      githubRepositoryQualification(pullRequest("contoso", "api"), scope),
+    ).toBe("owner-repo");
+  });
+
+  it("does not escalate when the repositories are genuinely different, regardless of casing", () => {
+    // The control: folding must lowercase for comparison, not turn distinct
+    // repository names into a false collision.
+    const scope = [
+      repository("acme", "API", "github.com"),
+      repository("acme", "WEB", "github.com"),
+    ];
+    expect(
+      githubRepositoryQualification(pullRequest("acme", "api"), scope),
+    ).toBe("repo");
+  });
+});
+
+describe("githubMentionReference", () => {
+  it("stays bare on github.com", () => {
+    expect(githubMentionReference(pullRequest("acme", "api"))).toBe(
+      "acme/api#123",
+    );
+  });
+
+  it("prefixes a non-default host", () => {
+    // The same coordinates on two hosts are two different attachments, and
+    // every surface fed by this reference - the chip tooltip, the preview
+    // subtitle, the menu description - must not collapse them into one
+    // indistinguishable string.
+    expect(
+      githubMentionReference({
+        ...pullRequest("acme", "api"),
+        githubHost: "ghe.example.test",
+      }),
+    ).toBe("ghe.example.test/acme/api#123");
   });
 });
 

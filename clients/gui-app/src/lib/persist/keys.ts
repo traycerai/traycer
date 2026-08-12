@@ -60,11 +60,14 @@ export const lastSelectedHostKey = (): string =>
   persistKey("last-selected-host");
 
 // The composer's PR/Issue mention filters, sticky per (task, section).
-// Deliberately unscoped by identity, like the host picker above: this is a view
-// preference about the menu, never round-tripped to the host and carrying no
-// account-specific content of its own.
-export const githubMentionFiltersKey = (): string =>
-  persistKey(STORE_KEYS.githubMentionFilters);
+// Identity-scoped like the run settings above, NOT like the host picker: a
+// stored repository selection names a GitHub host, owner and repo - private
+// coordinates for a private repository - so an identity-free bucket would
+// leave them readable after sign-out and hand them to the next account on
+// this profile. The lifecycle bridge retargets on sign-in and wipes the
+// bucket on sign-out, same as composer run settings.
+export const githubMentionFiltersKey = (email: string | null): string =>
+  scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(email));
 
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not

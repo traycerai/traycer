@@ -155,6 +155,62 @@ function pendingManualRefresh(): {
   };
 }
 
+/**
+ * One controllable manual refresh per ISSUE ORDER, so two overlapping
+ * refreshes - the original and the one that replaces it as the mutation
+ * observer's current call - can each be rejected independently. Unlike
+ * `pendingManualRefresh` above, this does not overwrite a single `reject`
+ * slot on the second call: `index` is assigned in the order `client.request`
+ * is actually invoked, and the harness's own scope never varies, so call
+ * order is the only thing available to key on.
+ *
+ * `issued(index)` is created lazily the same way `manualRefreshesByPath`
+ * creates its per-path promise in the sibling suite, so the caller can await
+ * it whether the mock has already run or not yet.
+ */
+function sequentialManualRefreshes(): {
+  readonly issued: (index: number) => Promise<void>;
+  readonly reject: (index: number, error: Error) => void;
+} {
+  const issuedMarkers = new Map<number, () => void>();
+  const issuedPromises = new Map<number, Promise<void>>();
+  const rejectors = new Map<number, (error: Error) => void>();
+  let nextIndex = 0;
+  const issuedFor = (index: number): Promise<void> => {
+    const existing = issuedPromises.get(index);
+    if (existing !== undefined) return existing;
+    const created = new Promise<void>((resolve) => {
+      issuedMarkers.set(index, resolve);
+    });
+    issuedPromises.set(index, created);
+    return created;
+  };
+  request.mockImplementation(
+    (_method: string, payload: MentionGithubCatalogRequest) => {
+      if (payload.refresh !== "manual") return Promise.resolve(answer());
+      const index = nextIndex;
+      nextIndex += 1;
+      return new Promise<MentionGithubCatalogResponse>((_resolve, reject) => {
+        rejectors.set(index, reject);
+        void issuedFor(index);
+        issuedMarkers.get(index)?.();
+      });
+    },
+  );
+  return {
+    issued: issuedFor,
+    reject: (index, error) => {
+      const reject = rejectors.get(index);
+      if (reject === undefined) {
+        throw new Error(
+          `manual refresh ${index} never reached the host client`,
+        );
+      }
+      reject(error);
+    },
+  };
+}
+
 beforeEach(() => {
   readiness.hostId = "host-1";
   request.mockReset();
@@ -212,6 +268,64 @@ describe("useGithubMentionCatalog manual refresh rejection", () => {
 
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("toasts a rejection for the request it actually belongs to, even after a newer host's refresh replaced the mutation observer's current call", async () => {
+    // `boundHostIdRef` is what makes this true, not `readiness.hostId` closed
+    // over at render. Host X issues a refresh; the composer rebinds to host Y
+    // and issues its OWN refresh, which becomes the observer's "current"
+    // mutation and freezes X's onError closure holding whichever host was
+    // bound at that moment (Y). The composer then rebinds back to X and X's
+    // ORIGINAL request finally rejects - a render-closure comparison would
+    // still be checking against the frozen Y and wrongly suppress the toast
+    // the now-bound X should see; the ref reads the LIVE bound host instead.
+    const refreshes = sequentialManualRefreshes();
+    const { result, rerender } = renderCatalog();
+
+    let firstRefreshed: Promise<void> = Promise.resolve();
+    act(() => {
+      firstRefreshed = result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued(0);
+    });
+
+    // Rebind to host Y and issue a second manual refresh. This replaces the
+    // observer's current mutation, freezing the first one's options at
+    // whichever host is bound right now.
+    readiness.hostId = "host-2";
+    rerender();
+
+    let secondRefreshed: Promise<void> = Promise.resolve();
+    act(() => {
+      secondRefreshed = result.current.refreshManually();
+    });
+    await act(async () => {
+      await refreshes.issued(1);
+    });
+
+    // Rebind back to host X - the host the FIRST, still-open request was
+    // actually issued against.
+    readiness.hostId = "host-1";
+    rerender();
+
+    await act(async () => {
+      refreshes.reject(0, new Error("host-1 unreachable"));
+      await firstRefreshed;
+    });
+
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      "Could not refresh from GitHub",
+    );
+
+    // Settle the second request too, so it does not leak an unhandled
+    // rejection into a later test.
+    await act(async () => {
+      refreshes.reject(1, new Error("host-2 unreachable"));
+      await secondRefreshed;
     });
   });
 });

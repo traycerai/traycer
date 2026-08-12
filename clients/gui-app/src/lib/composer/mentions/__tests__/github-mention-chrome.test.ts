@@ -4,6 +4,7 @@ import type { PrSourceNotice } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PULL_REQUEST_MENTION_FILTER } from "../github-mention-rows";
 import {
   GITHUB_MENTION_EMPTY_SCOPE_LABEL,
+  GITHUB_MENTION_ERRORED_LABEL,
   GITHUB_MENTION_REFRESH_TIMEOUT_MS,
   GITHUB_MENTION_SEARCHING_LABEL,
   githubMentionChromeFor,
@@ -43,6 +44,7 @@ function baseInput(
     freshnessAt: 1_000,
     checking: false,
     searching: false,
+    errored: false,
     onRefresh: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
@@ -174,7 +176,7 @@ describe("githubMentionChromeFor — refresh, searching, and leash", () => {
   it("appends the searching label only while searching", () => {
     expect(
       githubMentionChromeFor(baseInput({ searching: true })).appendedStatus,
-    ).toBe(GITHUB_MENTION_SEARCHING_LABEL);
+    ).toEqual({ label: GITHUB_MENTION_SEARCHING_LABEL, busy: true });
     expect(
       githubMentionChromeFor(baseInput({ searching: false })).appendedStatus,
     ).toBeNull();
@@ -214,5 +216,43 @@ describe("githubMentionChromeFor — refresh, searching, and leash", () => {
       repositories: baseInput({}).repositories,
       selected,
     });
+  });
+});
+
+describe("githubMentionChromeFor — errored appended status", () => {
+  it("appends the errored row when the read failed outright and nothing is searching", () => {
+    // A rejection carries no response, so none of the answered chrome can
+    // move on it - the appended row is the only honest report that the ask
+    // died, and it must show whenever the section is not mid-retry.
+    const chrome = githubMentionChromeFor(
+      baseInput({ errored: true, searching: false }),
+    );
+    expect(chrome.appendedStatus).toEqual({
+      label: GITHUB_MENTION_ERRORED_LABEL,
+      busy: false,
+    });
+  });
+
+  it("lets a fresh search supersede the old failure", () => {
+    // Retries keep `searching` true for as long as they run, so the row that
+    // shows while a retry is in flight must be the searching row - a new ask
+    // supersedes the old one, and a spinning row must never claim `busy: false`.
+    const chrome = githubMentionChromeFor(
+      baseInput({ errored: true, searching: true }),
+    );
+    expect(chrome.appendedStatus).toEqual({
+      label: GITHUB_MENTION_SEARCHING_LABEL,
+      busy: true,
+    });
+  });
+
+  it("appends nothing once neither searching nor errored is true", () => {
+    // The control: `errored: false` (the default `baseInput` already carries)
+    // must not itself grow a row - only `searching` or a real `errored: true`
+    // do.
+    const chrome = githubMentionChromeFor(
+      baseInput({ errored: false, searching: false }),
+    );
+    expect(chrome.appendedStatus).toBeNull();
   });
 });

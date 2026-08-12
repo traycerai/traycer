@@ -434,12 +434,16 @@ export function useGithubMentionSections(
       freshnessAt: openCatalog.freshnessAt,
       checking: openCatalog.isChecking,
       searching,
+      // The OPEN section's own failures only - the sibling catalog's belong
+      // to the root dismissal union below, not to this section's chrome.
+      errored: openCatalog.errored || search.errored,
       onRefresh,
     });
   }, [
     currentEpicId,
     filter,
     onRefresh,
+    openCatalog.errored,
     openCatalog.freshnessAt,
     openCatalog.isChecking,
     openCatalog.notice,
@@ -449,6 +453,7 @@ export function useGithubMentionSections(
     scopeRepositories,
     searching,
     scope.workspacePaths,
+    search.errored,
     search.notice,
     search.sourceStatus,
     supported,
