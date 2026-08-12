@@ -32,7 +32,6 @@ import {
 const CREDS: StoredCredentials = {
   token: "access-token",
   refreshToken: "refresh-token",
-  authnBaseUrl: "http://localhost:21001",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
 };

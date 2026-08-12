@@ -5,9 +5,20 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
+import { useHostClient } from "@/lib/host";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -50,6 +61,7 @@ import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
   isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
@@ -63,6 +75,7 @@ import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-hos
 import { HOSTED_TILE_RECORD_SELECTOR } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import {
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
@@ -93,7 +106,15 @@ function positionFor(
 function panelIdForTabType(
   tabType: EpicCanvasTileRef["type"] | undefined,
 ): LeftPanelId {
-  if (tabType === "chat" || tabType === "terminal-agent") return "chats";
+  // A published chat is a chat: its row lives in the Chats tree, so "Reveal in
+  // sidebar" has to open that panel and not fall through to the default.
+  if (
+    tabType === "chat" ||
+    tabType === "terminal-agent" ||
+    tabType === TILE_KIND_PUBLISHED_CHAT
+  ) {
+    return "chats";
+  }
   if (tabType === "terminal") return "terminals";
   if (tabType === TILE_KIND_GIT_DIFF) return "git-diff";
   if (tabType === TILE_KIND_SNAPSHOT_DIFF) return "chats";
@@ -466,6 +487,210 @@ interface ActiveTabBodyProps {
   readonly globallyActive: boolean;
 }
 
+// Mirrors `ChatSessionAccessError`'s code on the host
+// (`traycer-host/src/domain/chat/chat-session-manager.ts`) - deliberately
+// the SAME code for "this chat does not exist" and "you are not its owner"
+// (an enumeration-oracle guard: a non-owner probing chat ids must not be
+// able to tell the two apart). Matching on it here does not weaken that -
+// both causes get the identical substitution below, exactly as the wire
+// already refuses to distinguish them.
+const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
+
+/**
+ * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
+ * whose bound host is unreachable renders what a fresh click on its row
+ * renders - the published copy, locked - instead of a dead dial wearing a
+ * live tab's face. The ref itself is untouched (bind-for-life protects DATA
+ * identity: we never show a different host's chat under this tab); only the
+ * SURFACE follows reachability, and it flips back to live the moment the
+ * owner returns. The copy ref binds a LIVE reading host - serving a cloud
+ * read through the dead bound host would just be the same dial with extra
+ * steps - so it needs a resolvable active host that differs from the bound
+ * one, and an owner user id derivable from the projection.
+ *
+ * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
+ *
+ * The bound host can be perfectly reachable and still have nothing to serve
+ * for this specific chat - a leased "machine" identity that never adopted
+ * this chat's rows, or any other case where `chat.subscribe` genuinely
+ * terminates `CHAT_NOT_VISIBLE`. There is deliberately NO separate
+ * pre-check RPC for this (an existence probe distinct from the wire's own
+ * collapsed signal would reopen the enumeration oracle noted above) - the
+ * only source of truth is `chat.subscribe`'s own terminate, already
+ * surfaced as `fatalClose` on the session store `chat-tile.tsx` creates via
+ * `useChatSessionHandle`. `useExistingChatSessionFatalClose` peeks that
+ * SAME session from here without acquiring a second one, so this is a
+ * two-phase decision (render live first, substitute once the terminate
+ * lands) rather than the reachability arm's upfront one - `chat-tile.tsx`
+ * must attempt the open before this can possibly fire.
+ *
+ * ## Extended AGAIN for a SAME-host chat with no local record (ticket 36)
+ *
+ * Ticket 35's `confirmedAbsent` needs `chat-tile.tsx` to have already
+ * attempted `chat.subscribe` - but `chat-tile.tsx`'s own `enabled` gate
+ * (`chatRecord !== null || isCrossHostOpen`) never even TRIES for a
+ * same-host tab with no local doc record, so `fatalClose` never fires for
+ * this case; without this arm the tile fell through to
+ * `computeIsRemoteDeleted`'s reap instead (a silent no-open, ticket 36's
+ * bug report). `cloudChatRecord` reads the SAME already-fetched
+ * `useCloudChatList` data `use-epic-route-synchronization.ts`'s reap
+ * exemption reads (`epic.listCloudChats`'s host-side filter already
+ * excludes anything this host's registry has tombstoned, so cloud presence
+ * alone is trustworthy here - no local-tombstone check needed client-side).
+ * `ownerUserId` comes off the cloud row instead of `liveArtifact` for this
+ * arm specifically, since a chat this arm targets by definition has no
+ * local projection to read it from.
+ */
+interface ChatFallbackDecision {
+  readonly substitute: boolean;
+  readonly reason: ChatDeadTileBannerReason;
+  readonly ownerUserId: string | null;
+}
+
+/**
+ * The three substitution causes, resolved in one place and kept OUT of the
+ * hook body below on purpose - `usePublishedChatFallbackRef` mixes React
+ * hook calls with this decision, and folding the branching in with them is
+ * what pushed its own complexity over this repo's lint ceiling. Pure
+ * function, easy to reason about (and test) independently of the hooks that
+ * feed it.
+ */
+function resolveChatFallbackDecision(args: {
+  readonly isChat: boolean;
+  readonly isSameHost: boolean;
+  readonly hostUnreachable: boolean;
+  readonly confirmedAbsent: boolean;
+  readonly cloudChatOwnerUserId: string | null;
+  readonly liveArtifactOwnerUserId: string | null;
+}): ChatFallbackDecision {
+  const sameHostCloudKnownAbsent = args.cloudChatOwnerUserId !== null;
+  // Same cross-host gate as ticket 35 for the reachability/confirmed-absent
+  // causes - a same-host confirmed-absent chat with no cloud fallback is a
+  // genuine local error, not a substitutable one. The cloud-known arm
+  // (ticket 36) is its own condition: same-host by construction, so it does
+  // not belong inside that cross-host gate.
+  const crossHostFallback =
+    !args.isSameHost && (args.hostUnreachable || args.confirmedAbsent);
+  const substitute =
+    args.isChat && (crossHostFallback || sameHostCloudKnownAbsent);
+  const reason: ChatDeadTileBannerReason =
+    !args.isSameHost && args.hostUnreachable
+      ? "host-offline"
+      : "chat-not-visible";
+  const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
+  return { substitute, reason, ownerUserId };
+}
+
+function usePublishedChatFallbackRef(args: {
+  readonly activeTab: EpicCanvasTileRef;
+  readonly epicId: string;
+  readonly liveArtifact:
+    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+  readonly activeHostId: string | null;
+}): {
+  readonly fallbackRef: EpicCanvasTileRef | null;
+  readonly ownerHostLabel: string;
+  readonly reason: ChatDeadTileBannerReason;
+  readonly isCloudKnown: boolean;
+} {
+  const { activeTab, epicId, liveArtifact, activeHostId } = args;
+  const isChat = activeTab.type === "chat";
+  const isSameHost = activeHostId === activeTab.hostId;
+  const reachability = useHostReachability(
+    isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const fatalClose = useExistingChatSessionFatalClose(epicId, activeTab.id);
+  const confirmedAbsent =
+    isChat &&
+    fatalClose !== null &&
+    fatalClose.code === CHAT_SESSION_NOT_VISIBLE_CODE;
+  const wantsCloudChatFallback = isChat && isSameHost && liveArtifact === null;
+  const appHostClient = useHostClient();
+  const cloudChats = useCloudChatList({
+    client: appHostClient,
+    taskId: epicId,
+    enabled: wantsCloudChatFallback,
+  });
+  const cloudChatRecord = wantsCloudChatFallback
+    ? (cloudChats.data?.chats.find(
+        // The OWNER is half the identity, not a refinement of the id: `chatId`
+        // is host-minted and the list deliberately carries every task-visible
+        // row including collaborators'. This arm targets a same-host local chat
+        // ref, which is the viewer's own by construction, so an id-only match
+        // could pick a collaborator's row on list order alone and open their
+        // transcript as this tab's fallback.
+        (chat) =>
+          chat.identity.chatId === activeTab.id && cloudRowIsViewersOwn(chat),
+      ) ?? null)
+    : null;
+  const liveArtifactOwnerUserId =
+    liveArtifact !== null && "userId" in liveArtifact
+      ? liveArtifact.userId
+      : null;
+  const decision = resolveChatFallbackDecision({
+    isChat,
+    isSameHost,
+    hostUnreachable: reachability.status === "unreachable",
+    confirmedAbsent,
+    cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
+    liveArtifactOwnerUserId,
+  });
+  const { substitute, reason, ownerUserId } = decision;
+  // The SERVING host is chosen once, when this fallback first opens, and then
+  // held. `activeHostId` has to stay reactive for the decision above it (the
+  // record gate and `isSameHost` are questions about the projection this render
+  // is reading), but it must not reach the REF: the ref's `hostId` is what
+  // `renderTile` binds its `TabHostProvider` to, so following the app-wide host
+  // would move an already-open copy's reads onto a different client mid-session -
+  // a readable tab turning loading, failed or unsupported with nothing about the
+  // tab or the chat having changed. Same rule the sidebar row follows by
+  // capturing its reading host at click time, and the one the published tile's
+  // own doc comment states.
+  //
+  // Captured once, when this tab body mounts - the same `useState` snapshot
+  // `chat-tile.tsx` takes for its own cross-host decision, and for the same
+  // reason: an app-wide host swap must not reach a tab that is already open. A
+  // swap does not remount this body, so the snapshot holds for the tab's life;
+  // activating the tab again is what re-takes it.
+  //
+  // A null snapshot (the binding was still resolving) yields no fallback for
+  // that mount, and the tab keeps the dead-tile banner and its clone CTA. That is
+  // the same "null is ignorance, not evidence" tradeoff `isCrossHostOpen`
+  // documents, and reopening the tab recovers it - where a latch that filled
+  // itself later would need either a render-time ref write or a
+  // set-state-in-effect, both unsafe under concurrent rendering and both refused
+  // by `react-hooks/*` here.
+  const [readingHostId] = useState<string | null>(() => activeHostId);
+  const fallbackRef = useMemo(
+    () =>
+      substitute && ownerUserId !== null && readingHostId !== null
+        ? makePublishedChatTileRef({
+            taskId: epicId,
+            chatId: activeTab.id,
+            ownerUserId,
+            ownerHostId: activeTab.hostId,
+            name: activeTab.name,
+            hostId: readingHostId,
+          })
+        : null,
+    [
+      substitute,
+      activeTab.id,
+      activeTab.name,
+      activeTab.hostId,
+      ownerUserId,
+      readingHostId,
+      epicId,
+    ],
+  );
+  return {
+    fallbackRef,
+    ownerHostLabel: reachability.hostLabel,
+    reason,
+    isCloudKnown: cloudChatRecord !== null,
+  };
+}
+
 function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
   const navigateNested = useEpicNestedFocusNavigation();
@@ -475,6 +700,22 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const liveArtifact = useEpicArtifact(activeTab.id);
+  // The projection feeding `liveArtifact` is served by the app-wide active
+  // host; cross-host CHAT refs are exempt from its record gate (see
+  // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
+  // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
+  const activeHostIdForRecordGate = useReactiveActiveHostId();
+  const {
+    fallbackRef: publishedFallbackRef,
+    ownerHostLabel,
+    reason: deadTileBannerReason,
+    isCloudKnown,
+  } = usePublishedChatFallbackRef({
+    activeTab,
+    epicId,
+    liveArtifact,
+    activeHostId: activeHostIdForRecordGate,
+  });
   // Per-tab membership selectors: each tab only re-renders when its own
   // entry flips, not when any other tab is marked/unmarked.
   const isSelfDeleted = useEpicCanvasStore((s) =>
@@ -498,6 +739,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     isBlankTileRef(activeTab) ||
     isManagedCommandOutputTileRef(activeTab) ||
     isCommGraphTileRef(activeTab) ||
+    isPublishedChatTileRef(activeTab) ||
     activeTab.type === WORKSPACE_FILE_TAB_KIND
       ? false
       : computeIsRemoteDeleted({
@@ -506,6 +748,8 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           liveArtifact,
           isSelfDeleted,
           isPendingCreate,
+          projectionHostId: activeHostIdForRecordGate,
+          isCloudKnown,
         });
   const isActive = role !== null && props.selected && props.globallyActive;
 
@@ -538,11 +782,28 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // observe this because it necessarily samples before that later commit).
   useLayoutEffect(() => {
     if (activeTab.type !== "chat") return undefined;
-    reportChatRemoteDeletionState(activeTab.instanceId, isRemoteDeleted);
+    // The published-copy fallback is folded in because the registry's real
+    // contract is "ActiveTabBody has taken this chat inline - drop the hosted
+    // surface", and the fallback branch below is a second inline takeover.
+    // Without it, membership keeps the instance, the environment registry
+    // ("removal only by membership") retains a stale visible/anchored
+    // snapshot from the unmounted slot, and the hosted live body paints over
+    // the copy - the exact two-owners drift design-review slice-4 finding 2
+    // exists to prevent. Reported through the deletion registry rather than a
+    // parallel one so membership has ONE inline-takeover input.
+    reportChatRemoteDeletionState(
+      activeTab.instanceId,
+      isRemoteDeleted || publishedFallbackRef !== null,
+    );
     return () => {
       reportChatRemoteDeletionState(activeTab.instanceId, false);
     };
-  }, [activeTab.type, activeTab.instanceId, isRemoteDeleted]);
+  }, [
+    activeTab.type,
+    activeTab.instanceId,
+    isRemoteDeleted,
+    publishedFallbackRef,
+  ]);
 
   if (isRemoteDeleted) {
     return (
@@ -557,6 +818,29 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           );
         }}
       />
+    );
+  }
+
+  if (publishedFallbackRef !== null) {
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <ChatDeadTileBannerContainer
+          epicId={epicId}
+          tabId={tabId}
+          chatId={activeTab.id}
+          sourceHostId={activeTab.hostId}
+          hostLabel={ownerHostLabel}
+          reason={deadTileBannerReason}
+          testId={`chat-dead-tile-${activeTab.id}`}
+        />
+        <EpicNodeTile
+          node={publishedFallbackRef}
+          viewTabId={tabId}
+          tileId={groupId}
+          epicId={epicId}
+          isActive={isActive}
+        />
+      </div>
     );
   }
 
@@ -625,6 +909,17 @@ interface ComputeIsRemoteDeletedArgs {
    * creation. The projection miss is "creation in flight", not deletion.
    */
   readonly isPendingCreate: boolean;
+  /** The host whose projection `liveArtifact` was resolved from. */
+  readonly projectionHostId: string | null;
+  /**
+   * Same-host counterpart of the cross-host exemption below (chat-sync-v2
+   * ticket 36): true when this SAME-host chat has no local record but is
+   * still known to `epic.listCloudChats` (whose host-side filter already
+   * excludes anything this host's own registry has tombstoned - see
+   * `usePublishedChatFallbackRef`, which computes this alongside the
+   * substitution ref so the two never disagree).
+   */
+  readonly isCloudKnown: boolean;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -634,11 +929,30 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
     liveArtifact,
     isSelfDeleted,
     isPendingCreate,
+    projectionHostId,
+    isCloudKnown,
   } = args;
   if (!snapshotLoaded) return false;
   if (leafArtifact === null) return false;
+  // A CHAT ref bound to another host is invisible to this device's
+  // projection by construction - chat records are host-authoritative, so a
+  // cross-host live tab (reachable owner opened from the unified sidebar)
+  // must not read as "remotely deleted". Its record lives in the OWNER
+  // host's registry, which this projection cannot see. Chat-only: artifact
+  // and terminal-agent records are doc-shared, so their projection miss
+  // still means deleted regardless of the ref's bound host. Mirrors
+  // `isTileRefRecordLive`'s exemption - the two record-liveness gates must
+  // agree or a click opens a tile the surface refuses to mount.
+  if (
+    leafArtifact.type === "chat" &&
+    projectionHostId !== null &&
+    leafArtifact.hostId !== projectionHostId
+  ) {
+    return false;
+  }
   if (liveArtifact !== null) return false;
   if (isSelfDeleted) return false;
   if (isPendingCreate) return false;
+  if (leafArtifact.type === "chat" && isCloudKnown) return false;
   return true;
 }

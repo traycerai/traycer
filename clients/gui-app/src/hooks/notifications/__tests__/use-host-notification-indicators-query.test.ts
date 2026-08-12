@@ -84,6 +84,7 @@ describe("useHostNotificationIndicators recovery", () => {
       epics: {
         "epic-a": {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,

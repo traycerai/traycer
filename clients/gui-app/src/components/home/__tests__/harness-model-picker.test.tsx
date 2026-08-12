@@ -623,6 +623,7 @@ function providerCliState(input: {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     managedInstallState: null,
     versionVisibility: null,
@@ -671,6 +672,7 @@ function providerCliStateWithProfiles(input: {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     managedInstallState: null,
     versionVisibility: null,
@@ -1604,10 +1606,9 @@ describe("<HarnessModelPicker />", () => {
   // where a number that changes every 1.5s belongs. It used to be the name, so
   // arrowing across a converging rail announced thirteen nine-word sentences.
   const PREPARING_TAB_NAME = "Claude";
-  // The same fact, as the rail's non-blocking SHORT copy: it leads with what
-  // matters to the user (the provider works right now) and reports the
-  // download second.
-  const PREPARING_TAB_DESCRIPTION = "Ready · installing… 30%";
+  // The same fact, as the rail's non-blocking SHORT copy: one subject (the
+  // managed copy updating), no percentage theatre.
+  const PREPARING_TAB_DESCRIPTION = "Updating in background";
 
   function tabDescription(tab: HTMLElement): string {
     const id = tab.getAttribute("aria-describedby");

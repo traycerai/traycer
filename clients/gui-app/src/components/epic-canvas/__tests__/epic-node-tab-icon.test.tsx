@@ -51,6 +51,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
+      hostId: TERMINAL_NODE.hostId,
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -76,6 +77,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(
+          TERMINAL_NODE.hostId,
           { epicId: "epic-1", chatId: TERMINAL_NODE.id },
           Date.now(),
         );
@@ -97,6 +99,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
               pendingInterview: false,
               unreadFailure: false,
               unreadDone: true,
+              pendingFork: false,
             },
           },
         }}

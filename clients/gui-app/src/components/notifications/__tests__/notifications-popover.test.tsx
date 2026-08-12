@@ -72,6 +72,8 @@ const hostBindingState = vi.hoisted(() => ({
     readonly directory?: {
       readonly findById: (hostId: string) => typeof mockLocalHostEntry | null;
       readonly selectById: (hostId: string) => void;
+      readonly getLocalEntry: () => typeof mockLocalHostEntry | null;
+      readonly onChange: (listener: () => void) => { dispose: () => void };
     };
   } | null,
 }));
@@ -102,12 +104,19 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostIdRef.value,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) => {
-    if (hostId.length === 0 || directoryRef.value === null) return null;
-    return directoryRef.value.findById(hostId);
-  },
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string) => {
+      if (hostId.length === 0 || directoryRef.value === null) return null;
+      return directoryRef.value.findById(hostId);
+    },
+  };
+});
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
@@ -465,6 +474,10 @@ function bindHostClient(): void {
       findById: (hostId: string) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       selectById: () => {},
+      // Locality (D7) reads the local entry through useReactiveLocalHostEntry;
+      // keep this mock honest for the desktop shell under test.
+      getLocalEntry: () => mockLocalHostEntry,
+      onChange: () => ({ dispose: () => {} }),
     },
   };
 }
@@ -1992,6 +2005,9 @@ describe("NotificationsPopover", () => {
       throw new Error("expected dismissed row in Recent");
     }
     expect(live.dataset.notificationRead).toBe("true");
+    expect(
+      within(live).getByTestId("notification-relocation-highlight"),
+    ).not.toBeNull();
     expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
     const dismissed =
       useHostNotificationsStore.getState().byId["prompt-dismiss"];

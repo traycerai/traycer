@@ -26,6 +26,7 @@ import {
   EpicLeftPanelStaticRail,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { SidebarKeybindingBridge } from "@/components/epic-canvas/sidebar/sidebar-keybinding-bridge";
+import { EpicBackupStatusIndicator } from "@/components/epic-canvas/sidebar/epic-backup-status-indicator";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import {
   useEpicSnapshotFetchError,
@@ -120,6 +121,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
               />
             )}
           </div>
+          <EpicBackupStatusIndicator epicId={epicId} />
         </SidebarProvider>
       </div>
       <SidebarWidthResizeHandle hidden={mainCollapsed} />

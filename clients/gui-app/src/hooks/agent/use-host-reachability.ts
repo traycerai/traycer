@@ -59,12 +59,19 @@ export function useHostReachability(hostId: string): HostReachability {
     if (entry === undefined) {
       return { status: "unreachable", hostLabel: hostId };
     }
-    if (entry.kind === "remote") {
-      return {
-        status: "reachable",
-        hostLabel: entry.label.length > 0 ? entry.label : hostId,
-      };
-    }
+    // Remote entries answer from their directory STATUS, same as local ones.
+    // This used to hardwire "reachable" for any remote entry, on the theory
+    // that presence leases are My-Hosts evidence rather than tab-death proof.
+    // The two-slot live check (2026-08-08) showed where that lie lands: an
+    // UNAVAILABLE owner's rows carried no lock, the unified sidebar routed
+    // them to a LIVE tab, and the tile dialed a dead host forever - an
+    // eternal spinner instead of the locked published copy. A populated
+    // directory explicitly marking a host unavailable is high-confidence
+    // evidence, and every consumer of "unreachable" degrades recoverably
+    // (lock badge and copy routing flip back on the next refresh; the
+    // dead-tile banner is reactive, not a tab kill). The 2026-07-14
+    // incident's protection is untouched: it lives in the EMPTY-directory
+    // arm above ("host-starting"), never here.
     const reachable = entry.status === "available";
     return {
       status: reachable ? "reachable" : "unreachable",

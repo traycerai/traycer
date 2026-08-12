@@ -48,10 +48,12 @@ export {
   nativeSkillsListParams,
   providersNativeQueryKeys,
 } from "@/lib/query-keys/providers-native-query-keys";
+export { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

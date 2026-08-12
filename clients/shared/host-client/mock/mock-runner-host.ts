@@ -423,7 +423,6 @@ export class MockRunnerHost implements IRunnerHost {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: identity,
       });
@@ -512,7 +511,6 @@ export class MockRunnerHost implements IRunnerHost {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: refreshed.token,
         refreshToken: refreshed.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: credentialsIdentityFromAuthenticatedUser(lProbe.user),
       });

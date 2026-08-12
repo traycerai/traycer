@@ -1,8 +1,13 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
+  displayAppLocalNotification,
+  displayCloudSnapshotArrivals,
   displayForwardedForegroundNotification,
   displayHostChannelEmission,
   displayNotificationRows,
@@ -21,6 +26,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
+import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 
 interface CapturedToast {
   readonly title: ReactNode;
@@ -45,6 +51,7 @@ function row(title: string): MergedNotificationRow {
     source: "host",
     sourceId: "n-1",
     originHostId: null,
+    providerPackAttribution: null,
     createdAt: 10,
     readAt: null,
     title,
@@ -112,6 +119,45 @@ describe("notification display", () => {
     expect(toastCalls[0]?.options.id).toBe("host:chat:chat-1");
     expect(toastCalls[0]?.options.description).toBeUndefined();
     expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("carries the app-local origin host through native display", async () => {
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
+    const entry: AppLocalNotificationEntry = {
+      id: "stream.transport.error:host-b:chat-1:lost",
+      originHostId: "host-b",
+      updatedAt: 10,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-1",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      message: "Agent stream closed unexpectedly",
+      detail: "Connection lost",
+      displayedUpdatedAt: null,
+    };
+
+    await displayAppLocalNotification(
+      entry,
+      {
+        showNotification,
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+      },
+      "delivery-1",
+      "user-1",
+    );
+
+    expect(showNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: buildNotificationActivationEnvelope({
+          route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+          feed: { source: "app-local", id: entry.id },
+          originHostId: "host-b",
+        }),
+      }),
+    );
   });
 
   it("derives replacement keys from notification entities", () => {
@@ -533,6 +579,20 @@ function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
   };
 }
 
+function cloudRow(
+  id: string,
+  chatId: string,
+  originHostId: string,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId: id,
+    originHostId,
+    coalesceKey: id,
+    entry: hostEntry(id, chatId),
+    presentation: { epicTitle: null, chatTitle: null },
+  };
+}
+
 const EMISSION_N1_N2_DELIVERY_KEY = JSON.stringify([
   JSON.stringify(["host:n-1", 10, "n-1"]),
   JSON.stringify(["host:n-2", 10, "n-2"]),
@@ -565,7 +625,7 @@ describe("host channel emission focus gate", () => {
         instanceId: `${chatId}-instance`,
         type: "chat",
         name: "Chat",
-        hostId: "host-1",
+        hostId: "stream-host-1",
       }),
     );
   }
@@ -633,6 +693,33 @@ describe("host channel emission focus gate", () => {
     });
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
+  });
+
+  it("still displays the same chat when it arrives from another host", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayHostChannelEmission(
+      [hostEntry("host-b-chat", "chat-1")],
+      target,
+      "stream-host-2",
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
+  });
+
+  it("keeps cloud focus suppression scoped to the row's origin host", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayCloudSnapshotArrivals(
+      [cloudRow("cloud-host-b-chat", "chat-1", "stream-host-2")],
+      target,
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
   });
 
   it("keys an emission identically whether or not this window filtered it", () => {
@@ -725,7 +812,7 @@ describe("forwarded foreground display gate", () => {
         instanceId: `${chatId}-instance`,
         type: "chat",
         name: "Chat",
-        hostId: "host-1",
+        hostId: "origin-host-1",
       }),
     );
   }

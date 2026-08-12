@@ -177,6 +177,7 @@ beforeEach(() => {
     // Mirrors the real reader, which now always reports the host's Layer 0
     // verdict. `null` = this fixture's host recorded no attempt.
     layer0: null,
+    layer0Slot: null,
   });
 });
 
@@ -236,6 +237,7 @@ describe("runMonitor recovery", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
       processStartIdentity: null,
       layer0: null,
+      layer0Slot: null,
     });
 
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);

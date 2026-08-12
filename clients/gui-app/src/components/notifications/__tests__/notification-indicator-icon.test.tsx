@@ -15,6 +15,7 @@ import {
 
 const DEFAULT_STATE = {
   unreadFailure: false,
+  pendingFork: false,
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: false,
@@ -27,9 +28,10 @@ describe("<NotificationIndicatorIcon />", () => {
     const { rerender } = renderIcon(
       {
         unreadFailure: true,
+        pendingFork: true,
         pendingApproval: true,
         pendingInterview: true,
-        unreadDone: true,
+        unreadDone: false,
       },
       "turn",
     );
@@ -47,6 +49,25 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: true,
+          pendingApproval: true,
+          pendingInterview: true,
+          unreadDone: true,
+        },
+        "turn",
+      ),
+    );
+    expect(
+      screen.getByTestId("indicator-fork-subject-1").getAttribute("class"),
+    ).toContain("text-warning-foreground");
+    expect(
+      screen.getByTestId("indicator-fork-subject-1").getAttribute("class"),
+    ).toContain("lucide-git-fork");
+    rerender(
+      renderIconContent(
+        {
+          unreadFailure: false,
+          pendingFork: false,
           pendingApproval: true,
           pendingInterview: true,
           unreadDone: true,
@@ -56,15 +77,13 @@ describe("<NotificationIndicatorIcon />", () => {
     );
     expect(
       screen.getByTestId("indicator-interview-subject-1").getAttribute("class"),
-    ).toContain("text-warning-foreground");
-    expect(
-      screen.getByTestId("indicator-interview-subject-1").getAttribute("class"),
     ).toContain("lucide-message-square-question-mark");
 
     rerender(
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: true,
           pendingInterview: false,
           unreadDone: true,
@@ -83,6 +102,7 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
@@ -97,6 +117,7 @@ describe("<NotificationIndicatorIcon />", () => {
       renderIconContent(
         {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
@@ -128,6 +149,22 @@ describe("<NotificationIndicatorIcon />", () => {
       />,
     );
     expect(screen.getByTestId("default-icon")).toBeDefined();
+  });
+
+  it("keeps failure above a done tone retained from another descendant", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: true,
+      },
+      false,
+    );
+
+    expect(screen.getByTestId("indicator-failure-subject-1")).toBeDefined();
+    expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
   });
 
   it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {
@@ -201,6 +238,7 @@ describe("<NotificationIndicatorIcon />", () => {
 function renderIcon(
   state: {
     readonly unreadFailure: boolean;
+    readonly pendingFork: boolean;
     readonly pendingApproval: boolean;
     readonly pendingInterview: boolean;
     readonly unreadDone: boolean;
@@ -213,6 +251,7 @@ function renderIcon(
 function renderIconContent(
   state: {
     readonly unreadFailure: boolean;
+    readonly pendingFork: boolean;
     readonly pendingApproval: boolean;
     readonly pendingInterview: boolean;
     readonly unreadDone: boolean;

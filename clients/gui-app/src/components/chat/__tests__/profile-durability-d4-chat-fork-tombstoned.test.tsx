@@ -232,6 +232,7 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     managedInstallState: null,
     versionVisibility: null,
@@ -349,6 +350,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     expect(request).toEqual(
       expect.objectContaining({
         forkSource: {
+          boundary: "assistantMessage",
           sourceChatId: "source-chat",
           assistantMessageId: "assistant-message-1",
           interviewBlockId: "question-tool:interview",

@@ -17,6 +17,7 @@ import {
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createChatSessionStore,
@@ -227,6 +228,7 @@ export function useChatSessionHandle(
       scopeKey,
       (factoryEpicId, factoryChatId) =>
         createChatSessionStore({
+          hostId,
           epicId: factoryEpicId,
           chatId: factoryChatId,
           userId,
@@ -275,6 +277,35 @@ export function useExistingChatSessionHandle(
   const getSnapshot = useCallback(
     () => registry.peek(epicId, chatId),
     [chatId, epicId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
+
+/**
+ * Peeks an already-open session's `fatalClose`, for a caller (the canvas-
+ * altitude published-copy fallback, `tab-group-view.tsx`) that is NOT itself
+ * the one holding the handle - `chat-tile.tsx`'s own `useChatSessionHandle`
+ * is. Composed from `useExistingChatSessionHandle` (registry-membership
+ * reactivity: re-renders when a session for this pair is created/destroyed)
+ * plus a second `useSyncExternalStore` over the handle's own store (state-
+ * reactivity: re-renders when `fatalClose` itself flips within an existing
+ * session) - the registry's own subscription does not fire on that inner
+ * state change, only on membership changes, so one subscription alone would
+ * miss the transition this hook exists to observe.
+ */
+export function useExistingChatSessionFatalClose(
+  epicId: string,
+  chatId: string,
+): FatalErrorDetails | null {
+  const handle = useExistingChatSessionHandle(epicId, chatId);
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      handle === null ? () => undefined : handle.store.subscribe(listener),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    () => handle?.store.getState().fatalClose ?? null,
+    [handle],
   );
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }

@@ -180,7 +180,6 @@ function fileCreds(over: Partial<StoredCredentials>): StoredCredentials {
   return {
     token: "F-access",
     refreshToken: "F-refresh",
-    authnBaseUrl: AUTHN_BASE_URL,
     savedAt: "2024-01-01T00:00:00.000Z",
     user: { id: "user-a", email: "a@example.com", name: "A" },
     ...over,
@@ -202,6 +201,7 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
     const store = new FileTokenStore({
       environment: ENVIRONMENT,
       authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
     });
     stores.push(store);
     return store;
@@ -342,7 +342,6 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
     const onDisk = await readCredentialsFile(credentialsPath());
     expect(onDisk?.token).toBe("L-refresh-tok");
     expect(onDisk?.user.id).toBe("user-b");
-    expect(onDisk?.authnBaseUrl).toBe(AUTHN_BASE_URL);
   });
 
   it("step 4: F absent, L refresh explicitly rejected → terminal-dead, no file created", async () => {

@@ -467,7 +467,11 @@ function emptyQueue(): ChatSessionState["queue"] {
 
 function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const runtime: ChatLowerRuntimeState = { snapshotLoaded: true };
-  const access: ChatLowerAccessState = { isViewer: true, canAct: false };
+  const access: ChatLowerAccessState = {
+    isViewer: true,
+    canAct: false,
+    readOnlyNotice: null,
+  };
   const turn: ChatLowerTurnState = {
     activeTurnStatus: null,
     stopDisabled: true,

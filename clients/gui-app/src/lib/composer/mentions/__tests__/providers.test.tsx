@@ -65,6 +65,7 @@ function chatAgent(
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "chat",
     runtimeSupportsMessageDelivery: true,
   };
@@ -96,6 +97,7 @@ function terminalAgent(fields: {
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "terminal",
     runtimeSupportsMessageDelivery,
   };
@@ -312,14 +314,105 @@ describe("mention provider registry", () => {
       )
       .slice(1);
 
+    // The row detail carries harness and reference-only capability, never an
+    // interface label; the trailing slot's time rides `updatedAt` separately.
     expect(rows.map((row) => row.detail)).toEqual([
-      "Chat",
-      "Terminal · Claude Code",
-      "Terminal · Codex · Reference only",
-      "Terminal · OpenCode · Reference only",
+      "",
+      "Claude Code",
+      "Codex · Reference only",
+      "OpenCode · Reference only",
     ]);
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, 9, 8, 7]);
     // Reference-only Agents stay selectable - only delivery is unavailable.
     expect(rows.every((row) => row.action.kind === "complete")).toBe(true);
+  });
+
+  it("ranks archived Agents below live ones at equal match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          agentEntries: [
+            // The archived record is the more recent one: archived-ness must
+            // outweigh recency, not just tie-break it.
+            { ...chatAgent("chat-arch", "Archived run", 100), archived: true },
+            chatAgent("chat-live", "Live run", 10),
+          ],
+        }),
+      )
+      .slice(1);
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+    ]);
+    expect(rows.map((row) => row.archived)).toEqual([false, true]);
+    // Archived rows carry no time: the record clock is bumped by the archive
+    // write itself, so a label would always claim the archive action as
+    // activity. The badge alone marks them.
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, null]);
+  });
+
+  it("never lets archived-ness override match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          query: "auth",
+          agentEntries: [
+            chatAgent("chat-live", "my oauth notes", 10),
+            { ...chatAgent("chat-arch", "auth runner", 5), archived: true },
+          ],
+        }),
+      )
+      .slice(1);
+
+    // The archived prefix hit still beats the live substring hit: demotion
+    // applies within a match-quality band, never across bands.
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-live",
+    ]);
+  });
+
+  it("carries the archived demotion into root search within a match tier", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        currentEpicId: "epic-1",
+        query: "auth",
+        agentEntries: [
+          // Same label = same fuzzy score and same prefix tier: the tie falls
+          // back to the provider's input order, where archived sorts last.
+          { ...chatAgent("chat-arch", "auth runner", 100), archived: true },
+          chatAgent("chat-live", "auth runner", 10),
+          // A live substring hit sits in a LOWER tier than the archived
+          // prefix hits - demotion never lifts it above them.
+          chatAgent("chat-sub", "my auth helper", 200),
+        ],
+      }),
+    );
+
+    const agentIds = entries
+      .map((entry) => entry.id)
+      .filter((id) => id.startsWith("chat:epic-1:"));
+    expect(agentIds).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-sub",
+    ]);
   });
 
   it("filters mixed-interface Agents by query and falls back to untitled labels", () => {

@@ -21,12 +21,14 @@ import {
   backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  imageGenerationResultSchema,
   providerNoticeDetailSchema,
   providerNoticeKindSchema,
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
   workflowActivityEntrySchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
 
 export {
   agentMessageSendSchema,
@@ -380,10 +382,31 @@ export const toolCallCompletedEventSchema = z.object({
   // Reinforces the persistent background marker at terminal (the runtime now
   // knows for certain this was a backgrounded task). Optional/preserved.
   backgroundTask: z.boolean().optional(),
+  // Images this call produced (`chat.subscribe@1.7`). The accumulator stamps
+  // this explicitly in both completion branches (started-then-completed and
+  // completion-without-start) so a persisted block always carries the same
+  // shape the live broadcast did. Defaulted so an old emitter that never
+  // sends this reproduces today's shipped (image-free) behavior.
+  imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` from before
+// `imageResults` existed. Bound (via `runtimeEventSchemaPreImage` /
+// `runtimeEventSchemaV12PreInReplyTo`) to every released `chat.subscribe`
+// minor so those lines can never observe image data. Hand-frozen, NOT
+// derived from the live shape.
+export const toolCallCompletedEventSchemaPreImage = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("tool_call.completed"),
+  toolName: z.string(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  backgroundStartedAt: z.number().optional(),
+  backgroundTask: z.boolean().optional(),
+});
 
 export const toolCallErroredEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1095,6 +1118,30 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  */
 export const AUTH_ERROR_CODE = "auth";
 
+/**
+ * Upserts the image resolution record for a markdown-referenced image in an
+ * assistant message (`chat.subscribe@1.7`) - both the initial resolution and
+ * any later mid-turn watcher change (see the shared image ingestion
+ * service). The accumulator/blockDelta consumers depend on this shape, so it
+ * is part of the versioned union, not implementer discretion. `messageId`
+ * addresses the assistant row whose `imageResolutions` this entry upserts
+ * (keyed by `entry.canonicalSource`); `entry` is the same shape persisted on
+ * the message - see `imageResolutionEntrySchema`. `blockId` remains the
+ * runtime envelope identity and equals `messageId`; consumers must not treat it
+ * as a content-block address. `turnId` lets a live renderer reject a delayed
+ * update after the addressed assistant row has left its message snapshot.
+ */
+export const imageResolutionUpdatedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("image_resolution.updated"),
+  turnId: z.string().nullable(),
+  messageId: z.string(),
+  entry: imageResolutionEntrySchema,
+});
+export type ImageResolutionUpdatedEvent = z.infer<
+  typeof imageResolutionUpdatedEventSchema
+>;
+
 // ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.2`) ────
 //
 // Kept so `chat.subscribe@1.2`'s frozen `blockDelta` frame schema (see
@@ -1152,8 +1199,65 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
   providerNoticeUpsertEventSchema,
+  imageResolutionUpdatedEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
+
+// Wire-freeze copy of the live runtime-event union from before image support
+// existed (`chat.subscribe@1.4-1.6`): every live member EXCEPT
+// `image_resolution.updated` (which cannot exist on these lines at all), with
+// `tool_call.completed` swapped for its pre-image freeze
+// (`tool_call.progress` needs no freeze - it carries no image field).
+// Bound to `chat.subscribe@1.4-1.6`'s `blockDelta` frame - those
+// minors shipped after `inReplyTo` (so they keep the live sender-bearing
+// `steerSubmittedEventSchema`, unlike `runtimeEventSchemaPreInReplyTo`) but
+// before image support. Explicitly listed (not derived from the live union)
+// so the freeze can't silently absorb a future event, and to keep the
+// discriminated-union typing intact.
+export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
+  textDeltaEventSchema,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchemaPreImage,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchema,
+  planUpdatedEventSchema,
+  planCompletedEventSchema,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchema,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchema,
+  sessionResumedEventSchema,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchema,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchema,
+  steerSubmittedEventSchema,
+  usageUpdatedEventSchema,
+  errorEventSchema,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchema,
+]);
 
 // Wire-freeze copies of the runtime-event unions with `steer.submitted` swapped
 // for its pre-`inReplyTo` freeze — bound to the `blockDelta` frame on the
@@ -1167,7 +1271,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
   toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
+  toolCallCompletedEventSchemaPreImage,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
   approvalRequestedEventSchema,

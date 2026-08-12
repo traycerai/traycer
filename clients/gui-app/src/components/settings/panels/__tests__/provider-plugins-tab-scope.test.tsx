@@ -180,6 +180,7 @@ function multiScopeCaps(over: {
         },
       },
       skills: null,
+      modelProviders: null,
     },
     selected: { kind: "bundled" },
     candidates: [],
@@ -397,6 +398,7 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
           },
         },
         skills: null,
+        modelProviders: null,
       },
     };
 

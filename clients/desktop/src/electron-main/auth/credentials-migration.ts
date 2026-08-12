@@ -44,7 +44,6 @@ export interface MigrationMutationStore {
     readonly candidate: {
       readonly token: string;
       readonly refreshToken: string;
-      readonly authnBaseUrl: string;
     };
     readonly identity: StoredCredentials["user"];
     readonly expectedFile: StoredCredentials | null;
@@ -67,8 +66,8 @@ export interface LegacyCredentialsPair {
 
 export interface RunLegacyCredentialsMigrationArgs {
   readonly store: MigrationMutationStore;
-  // Env-scoped authn origin from main's config; stamped onto a migrated pair and
-  // used to probe L (the legacy slots never persisted an origin).
+  // Env-scoped authn origin from main's config; used to probe L and F. Never
+  // persisted - the credentials file carries no authn URL.
   readonly authnBaseUrl: string;
   readonly legacy: LegacyCredentialsPair;
   readonly probe: MigrationIdentityProbe;
@@ -105,7 +104,6 @@ export async function runLegacyCredentialsMigration(
     if (file === null) {
       const step = await migrateOntoAbsentFile({
         store,
-        authnBaseUrl,
         legacy,
         lProbe,
         legacyRefreshDead,
@@ -118,8 +116,9 @@ export async function runLegacyCredentialsMigration(
 
     // Probe F's access leg. F's identity is already known (stored `user.id`);
     // this only decides liveness (valid → steps 2/3; rejected → step 4-invalid).
+    // Probed against THIS process's configured authn - the file carries no URL.
     const fProbe = await probe({
-      authnBaseUrl: file.authnBaseUrl,
+      authnBaseUrl,
       token: file.token,
       signal,
     });
@@ -153,7 +152,6 @@ export async function runLegacyCredentialsMigration(
     }
     const step = await migrateOntoAbsentFile({
       store,
-      authnBaseUrl,
       legacy,
       lProbe,
       legacyRefreshDead,
@@ -173,22 +171,14 @@ export async function runLegacyCredentialsMigration(
 // refreshed pair, stamped with the pre-validated identity.
 async function migrateOntoAbsentFile(args: {
   readonly store: MigrationMutationStore;
-  readonly authnBaseUrl: string;
   readonly legacy: LegacyCredentialsPair;
   readonly lProbe: AuthIdentityValidationResult;
   readonly legacyRefreshDead: boolean;
   readonly expectedFile: StoredCredentials | null;
   readonly signal: AbortSignal | null;
 }): Promise<StepResult> {
-  const {
-    store,
-    authnBaseUrl,
-    legacy,
-    lProbe,
-    legacyRefreshDead,
-    expectedFile,
-    signal,
-  } = args;
+  const { store, legacy, lProbe, legacyRefreshDead, expectedFile, signal } =
+    args;
 
   // Identity must be known before the spend (invariant 2). L's access expired →
   // unknowable → decline auto-migration (measured-rare; start() still owns any
@@ -205,7 +195,6 @@ async function migrateOntoAbsentFile(args: {
     candidate: {
       token: legacy.token,
       refreshToken: legacy.refreshToken,
-      authnBaseUrl,
     },
     identity: credentialsIdentityFromAuthenticatedUser(lProbe.user),
     expectedFile,
@@ -220,6 +209,7 @@ async function migrateOntoAbsentFile(args: {
       return "terminal-dead";
     case "refresh-network":
     case "lock-busy":
+    case "spend-pending":
       return "retryable";
     case "commit-failed":
       return "commit-failed";
@@ -293,6 +283,7 @@ async function reconcileLiveFile(args: {
       return { kind: "outcome", outcome: "fallback-file-validated" };
     case "refresh-network":
     case "lock-busy":
+    case "spend-pending":
       return { kind: "outcome", outcome: "retryable" };
     case "commit-failed":
       return { kind: "outcome", outcome: "commit-failed" };

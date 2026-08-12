@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { m, useReducedMotion } from "motion/react";
 import {
   Bell,
   Check,
@@ -17,11 +18,20 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
+import {
+  classifyProviderPackNotificationLocality,
+  presentProviderPackNotificationBody,
+  providerPackNotificationAllowsLocalAction,
+  providerPackViewingLocalityFromShell,
+  type ProviderPackNotificationLocality,
+} from "@/lib/notifications/provider-pack-notification-attribution";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
   useMergedNotificationRow,
@@ -33,6 +43,8 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
+  /** Briefly identifies a row that just moved from Attention into Recent. */
+  readonly highlightRelocation: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   /** Dismiss an unresolved `needs_action` Attention row (stamps `resolvedAt`).
@@ -51,6 +63,33 @@ function isOriginUnavailable(input: {
   if (!requiresOriginHost) return false;
   if (input.row.originHostId === null) return true;
   return input.originStatus !== "available";
+}
+
+/**
+ * The motion props the row's `layout` animation needs, or their inert forms.
+ *
+ * Extracted rather than inlined as four ternaries because this row now carries
+ * both the reduced-motion branches and the pack-attribution presentation, and
+ * the union of the two pushed `NotificationRow` past the module's complexity
+ * ceiling. The reduced-motion answer is one decision, so it reads better as
+ * one function than as the same conditional spelled four times.
+ */
+function rowMotionProps(options: {
+  readonly feedId: string;
+  readonly shouldReduceMotion: boolean;
+}): {
+  readonly layout: "position" | false;
+  readonly layoutId: string | undefined;
+  readonly exit: { readonly opacity: number } | undefined;
+} {
+  if (options.shouldReduceMotion) {
+    return { layout: false, layoutId: undefined, exit: undefined };
+  }
+  return {
+    layout: "position",
+    layoutId: `notification-row-${options.feedId}`,
+    exit: { opacity: 0 },
+  };
 }
 
 function isBlockingAttentionRow(row: MergedNotificationRow): boolean {
@@ -80,9 +119,22 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   // Hooks must remain unconditional while an exact-removal frame makes this
   // row disappear between renders.
   const originHost = useHostDirectoryEntry(row?.originHostId ?? "");
+  // This machine — not the ambient active host (G8 / D7). Pack-store events
+  // are machine-local; comparing against active would mis-caption when the
+  // user has a remote host selected.
+  const localHost = useReactiveLocalHostEntry();
+  const runnerHost = useRunnerHostOrNull();
+  const shouldReduceMotion = useReducedMotion() === true;
   if (row === null) return null;
+
+  const packPresentation = resolvePackRowPresentation({
+    attribution: row.providerPackAttribution,
+    hasLocalHost: runnerHost?.hasLocalHost ?? false,
+    localHostId: localHost?.hostId ?? null,
+    body: row.body,
+    hasPayload: row.payload !== null,
+  });
   const isRead = row.readAt !== null;
-  const isNavigable = row.payload !== null;
   const originUnavailable = isOriginUnavailable({
     row,
     originStatus: originHost?.status,
@@ -91,14 +143,33 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
+  const motionProps = rowMotionProps({
+    feedId: row.feedId,
+    shouldReduceMotion,
+  });
+
   return (
-    <li
+    <m.li
+      layout={motionProps.layout}
+      layoutId={motionProps.layoutId}
+      exit={motionProps.exit}
+      transition={{
+        layout: { duration: 0.24, ease: "easeOut" },
+        opacity: { duration: 0.12, ease: "easeOut" },
+      }}
       // hover:/has-[:focus-visible]: give the whole row a subtle tint
       // whenever any of its interactive controls is hovered or keyboard-
       // focused, so the user can see what they're targeting - distinct from
       // the unread rail, which is a persistent state marker, not a hover
       // affordance (no persistent row tint).
-      className="relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-muted/70 has-[:focus-visible]:bg-muted/70"
+      //
+      // Remote pack-store entries stay fully listed (needs_action evidence)
+      // but are visually de-emphasised so this machine's actionable items
+      // lead — de-emphasis, not filter-out (D7).
+      className={cn(
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-muted/70 has-[:focus-visible]:bg-muted/70",
+        packPresentation.packRemote && "opacity-60",
+      )}
       data-testid="notification-entry"
       data-notification-id={row.feedId}
       data-notification-read={isRead ? "true" : "false"}
@@ -106,7 +177,21 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       data-notification-origin-state={
         originUnavailable ? "unavailable" : "available"
       }
+      data-notification-pack-remote={
+        packPresentation.packRemote ? "true" : "false"
+      }
+      data-notification-pack-locality={packPresentation.locality}
     >
+      {props.highlightRelocation && !shouldReduceMotion ? (
+        <m.span
+          aria-hidden
+          data-testid="notification-relocation-highlight"
+          className="pointer-events-none absolute inset-0 bg-primary/15"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      ) : null}
       {!isRead ? (
         <span
           aria-hidden
@@ -120,39 +205,121 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       >
         <Icon className={cn("size-4", glyph.colorClassName)} />
       </span>
-      {isNavigable && !originUnavailable ? (
-        <button
-          type="button"
-          onClick={() => props.onActivate(row)}
-          className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <NotificationRowBody row={row} isRead={isRead} />
-        </button>
-      ) : (
-        <div className="min-w-0 flex-1">
-          <NotificationRowBody row={row} isRead={isRead} />
-          {originUnavailable ? (
-            <span
-              data-testid="notification-origin-unavailable"
-              className="block text-ui-xs text-muted-foreground"
-            >
-              The originating host is unavailable.
-            </span>
-          ) : null}
-        </div>
-      )}
+      <NotificationRowMain
+        row={row}
+        displayBody={packPresentation.displayBody}
+        isRead={isRead}
+        isNavigable={packPresentation.isNavigable}
+        originUnavailable={originUnavailable}
+        packRemote={packPresentation.packRemote}
+        remoteHostLabel={packPresentation.remoteHostLabel}
+        onActivate={props.onActivate}
+      />
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
           row={row}
-          isNavigable={isNavigable}
+          isNavigable={packPresentation.isNavigable}
           isRead={isRead}
           isBlockingAttention={isBlockingAttention}
           onAcknowledge={props.onAcknowledge}
           onResolve={props.onResolve}
         />
       </div>
-    </li>
+    </m.li>
+  );
+}
+
+function resolvePackRowPresentation(options: {
+  readonly attribution: MergedNotificationRow["providerPackAttribution"];
+  readonly hasLocalHost: boolean;
+  readonly localHostId: string | null;
+  readonly body: string;
+  readonly hasPayload: boolean;
+}): {
+  readonly locality: ProviderPackNotificationLocality;
+  readonly packRemote: boolean;
+  readonly displayBody: string;
+  readonly isNavigable: boolean;
+  readonly remoteHostLabel: string | null;
+} {
+  const viewing = providerPackViewingLocalityFromShell({
+    hasLocalHost: options.hasLocalHost,
+    localHostId: options.localHostId,
+  });
+  const locality = classifyProviderPackNotificationLocality({
+    attribution: options.attribution,
+    viewing,
+  });
+  return {
+    locality,
+    packRemote: locality === "remote",
+    displayBody: presentProviderPackNotificationBody({
+      body: options.body,
+      attribution: options.attribution,
+      locality,
+    }),
+    isNavigable:
+      options.hasPayload && providerPackNotificationAllowsLocalAction(locality),
+    remoteHostLabel: options.attribution?.hostLabel ?? null,
+  };
+}
+
+function NotificationRowMain(props: {
+  readonly row: MergedNotificationRow;
+  readonly displayBody: string;
+  readonly isRead: boolean;
+  readonly isNavigable: boolean;
+  readonly originUnavailable: boolean;
+  readonly packRemote: boolean;
+  readonly remoteHostLabel: string | null;
+  readonly onActivate: (row: MergedNotificationRow) => void;
+}): ReactNode {
+  const body = (
+    <NotificationRowBody
+      title={props.row.title}
+      body={props.displayBody}
+      isRead={props.isRead}
+    />
+  );
+
+  if (props.isNavigable && !props.originUnavailable) {
+    return (
+      <button
+        type="button"
+        onClick={() => props.onActivate(props.row)}
+        className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  const remoteHint =
+    props.remoteHostLabel === null
+      ? "Act on this from that machine — it cannot be applied here."
+      : `Act on this from ${props.remoteHostLabel} — it cannot be applied here.`;
+
+  return (
+    <div className="min-w-0 flex-1">
+      {body}
+      {props.originUnavailable ? (
+        <span
+          data-testid="notification-origin-unavailable"
+          className="block text-ui-xs text-muted-foreground"
+        >
+          The originating host is unavailable.
+        </span>
+      ) : null}
+      {props.packRemote ? (
+        <span
+          data-testid="notification-pack-remote-hint"
+          className="block text-ui-xs text-muted-foreground"
+        >
+          {remoteHint}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -234,19 +401,19 @@ function NotificationRowControlButton(
 }
 
 interface NotificationRowBodyProps {
-  readonly row: MergedNotificationRow;
+  readonly title: string;
+  readonly body: string;
   readonly isRead: boolean;
 }
 
 function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
-  const { row, isRead } = props;
-  const { ref: titleRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
-    row.title,
-  );
+  const { title, body, isRead } = props;
+  const { ref: titleRef, isTruncated } =
+    useIsTextTruncated<HTMLSpanElement>(title);
   return (
     <>
       <TooltipWrapper
-        label={isTruncated ? row.title : null}
+        label={isTruncated ? title : null}
         side="bottom"
         sideOffset={6}
         align="start"
@@ -261,14 +428,14 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
               : "font-semibold text-foreground",
           )}
         >
-          {row.title}
+          {title}
         </span>
       </TooltipWrapper>
       <span
         data-testid="notification-body"
         className="block truncate text-ui-xs text-muted-foreground"
       >
-        {row.body}
+        {body}
       </span>
     </>
   );

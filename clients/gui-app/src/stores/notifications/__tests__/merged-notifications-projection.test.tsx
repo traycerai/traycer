@@ -77,12 +77,19 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostIdRef.value,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) => {
-    if (hostId.length === 0 || directoryRef.value === null) return null;
-    return directoryRef.value.findById(hostId);
-  },
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string) => {
+      if (hostId.length === 0 || directoryRef.value === null) return null;
+      return directoryRef.value.findById(hostId);
+    },
+  };
+});
 
 function hostPrompt(
   id: string,
@@ -215,6 +222,36 @@ function cloudDone(
         epicId: "epic-cloud",
         chatId: "chat-cloud",
         outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
+function cloudFailure(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "failure",
+      outcome: "errored",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        outcome: "errored",
       },
     },
     presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
@@ -604,6 +641,23 @@ describe("cloud feed projection authority", () => {
     expect(result.current.unreadCount).toBe(1);
     expect(result.current.bell).toEqual({ kind: "quietDot" });
     expect(result.current.hostState.isPartial).toBe(false);
+  });
+
+  it("never keeps the attention bell after optimistically marking every cloud failure read", () => {
+    const failure = cloudFailure("entry-failure", 7, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 7,
+    });
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 1 });
+
+    act(() => {
+      useCloudNotificationsStore.getState().markAllReadLocally(8);
+    });
+
+    expect(result.current).toEqual({ kind: "clear" });
   });
 
   it("keys a row by entryId alone - originHostId is display metadata, not identity", () => {

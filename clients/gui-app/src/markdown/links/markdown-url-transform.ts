@@ -19,6 +19,8 @@ const FILE_URL_PATTERN = /^file:/i;
 // `defaultUrlTransform`, which emptied the href - and an empty href is a real
 // navigation to the current document, i.e. a full renderer reload.
 const DRIVE_LETTER_PATTERN = /^[a-zA-Z]:(?:[\\/]|%5c)/i;
+const ASSISTANT_IMAGE_DATA_PATTERN =
+  /^data:image\/(?:png|jpeg|gif|webp|svg\+xml)(?:[;,])/i;
 
 export function markdownUrlTransform(url: string, key: string): string {
   if (url === INCOMPLETE_LINK_PLACEHOLDER) return url;
@@ -29,4 +31,19 @@ export function markdownUrlTransform(url: string, key: string): string {
     return url;
   }
   return defaultUrlTransform(url);
+}
+
+export function assistantMarkdownUrlTransform(
+  url: string,
+  key: string,
+): string {
+  if (
+    key === "src" &&
+    (ASSISTANT_IMAGE_DATA_PATTERN.test(url) ||
+      FILE_URL_PATTERN.test(url) ||
+      DRIVE_LETTER_PATTERN.test(url))
+  ) {
+    return url;
+  }
+  return markdownUrlTransform(url, key);
 }

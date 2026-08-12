@@ -82,6 +82,7 @@ function pluginsState(): ProviderCliState {
         },
       },
       skills: null,
+      modelProviders: null,
     },
     selected: { kind: "bundled" },
     candidates: [],

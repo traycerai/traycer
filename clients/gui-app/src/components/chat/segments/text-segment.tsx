@@ -1,10 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ComponentType } from "react";
 import {
   parseTraycerNextStepsMarkdown,
   type TraycerNextStepsPart,
 } from "@/markdown/traycer-next-steps";
 import { withMemberAdded } from "@/lib/immutable-set";
+import type { AssistantMarkdownImageContext } from "@/stores/composer/chat-store";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
+import {
+  AssistantMarkdownImageNode,
+  AssistantMarkdownImageProvider,
+} from "./assistant-markdown-image";
 import {
   NextStepsActionGroup,
   type NextStepActionHandler,
@@ -15,13 +20,24 @@ interface TextSegmentProps {
   markdown: string;
   isStreaming: boolean;
   nextStepActions: NextStepActionHandler | null;
+  imageContext?: AssistantMarkdownImageContext;
 }
+
+const ASSISTANT_IMAGE_COMPONENTS: Record<
+  string,
+  ComponentType<Record<string, unknown>>
+> = {
+  img: AssistantMarkdownImageNode as ComponentType<Record<string, unknown>>,
+};
 
 function nextStepOptionLockKey(blockId: string, optionId: string): string {
   return `${blockId}:${optionId}`;
 }
 
 export function TextSegment(props: TextSegmentProps) {
+  const imageContext = props.imageContext ?? null;
+  const markdownComponents =
+    imageContext === null ? null : ASSISTANT_IMAGE_COMPONENTS;
   const parts = useMemo(
     () => parseTraycerNextStepsMarkdown(props.markdown, props.isStreaming),
     [props.isStreaming, props.markdown],
@@ -36,21 +52,25 @@ export function TextSegment(props: TextSegmentProps) {
   }, []);
 
   return (
-    <div
-      data-chat-find-unit={props.findUnitId ?? undefined}
-      className="text-ui leading-7 text-foreground"
-    >
-      {parts.map((part) => (
-        <TextSegmentPart
-          key={part.id}
-          part={part}
-          lockedOptionKeys={lockedOptionKeys}
-          isStreaming={props.isStreaming}
-          nextStepActions={props.nextStepActions}
-          onLockOption={lockOption}
-        />
-      ))}
-    </div>
+    <AssistantMarkdownImageProvider context={imageContext}>
+      <div
+        data-chat-find-unit={props.findUnitId ?? undefined}
+        className="text-ui leading-7 text-foreground"
+      >
+        {parts.map((part) => (
+          <TextSegmentPart
+            key={part.id}
+            part={part}
+            lockedOptionKeys={lockedOptionKeys}
+            isStreaming={props.isStreaming}
+            nextStepActions={props.nextStepActions}
+            onLockOption={lockOption}
+            markdownComponents={markdownComponents}
+            imageRendering={imageContext === null ? "standard" : "assistant"}
+          />
+        ))}
+      </div>
+    </AssistantMarkdownImageProvider>
   );
 }
 
@@ -60,6 +80,11 @@ interface TextSegmentPartProps {
   readonly isStreaming: boolean;
   readonly nextStepActions: NextStepActionHandler | null;
   readonly onLockOption: (blockId: string, optionId: string) => void;
+  readonly markdownComponents: Record<
+    string,
+    ComponentType<Record<string, unknown>>
+  > | null;
+  readonly imageRendering: "assistant" | "standard";
 }
 
 function TextSegmentPart(props: TextSegmentPartProps) {
@@ -71,7 +96,8 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         markdown={part.markdown}
         proseSize="normal"
         quotable
-        components={null}
+        components={props.markdownComponents}
+        imageRendering={props.imageRendering}
       />
     );
   }
@@ -97,7 +123,8 @@ function TextSegmentPart(props: TextSegmentPartProps) {
           markdown={part.prose}
           proseSize="normal"
           quotable
-          components={null}
+          components={props.markdownComponents}
+          imageRendering={props.imageRendering}
         />
       )}
       <NextStepsActionGroup

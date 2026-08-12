@@ -88,7 +88,6 @@ function buildFakeBridge(
           stored = {
             token: tokens.token,
             refreshToken: tokens.refreshToken,
-            authnBaseUrl: "http://localhost:5005",
             savedAt: new Date().toISOString(),
             user: identity,
           };
@@ -704,7 +703,6 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(await host.tokenStore.get()).toEqual({
       token: "jwt-1",
       refreshToken: "refresh-1",
-      authnBaseUrl: "http://localhost:5005",
       savedAt: expect.any(String),
       user: { id: "u1", email: "u1@example.com", name: "U One" },
     });
