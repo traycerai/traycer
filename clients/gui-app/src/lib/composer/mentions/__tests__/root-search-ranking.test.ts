@@ -38,6 +38,21 @@ function candidate(
   return { entry: entry(fields), providerId };
 }
 
+/** A PR/issue row: identity in `labelPrefix`, title in `label`. */
+function githubCandidate(fields: {
+  id: string;
+  labelPrefix: string;
+  label: string;
+}): RootSearchCandidate {
+  return {
+    entry: {
+      ...entry({ id: fields.id, label: fields.label }),
+      labelPrefix: fields.labelPrefix,
+    },
+    providerId: "pull-requests",
+  };
+}
+
 function rankedLabels(
   candidates: ReadonlyArray<RootSearchCandidate>,
   query: string,
@@ -168,5 +183,37 @@ describe("rankRootSearchEntries", () => {
       "first.bin",
       "second-dir",
     ]);
+  });
+
+  // A PR/issue row carries its identity in `labelPrefix` and its TITLE in
+  // `label`, because the two truncate differently. Tiering on `label` alone
+  // put the row a query names exactly in the bottom tier.
+  it("ranks an exact GitHub reference above a title that merely contains it", () => {
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "#4917 postmortem draft" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#4917",
+        label: "Stop the busy-loop",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "#4917")[0]).toBe("Stop the busy-loop");
+  });
+
+  it("still ranks a GitHub row by its title when the query is a title", () => {
+    // The control. The fix must not buy the reference case by demoting the
+    // title case - which is what tiering on `labelPrefix + label` joined
+    // together would have done, since that no longer STARTS with the title.
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "Notes about stopping" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#4917",
+        label: "Stop the busy-loop",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
   });
 });

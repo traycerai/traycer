@@ -89,19 +89,23 @@ const PR_STEP: MentionFlowStep = {
   workspacePath: null,
 };
 
-function renderSections(query: string) {
+function renderWithRoots(query: string, mentionRoots: ReadonlyArray<string>) {
   return renderHook(() =>
     useGithubMentionSections({
       client: {} as HostClient<HostRpcRegistry>,
       active: true,
       step: PR_STEP,
       currentEpicId: "epic-1",
-      mentionRoots: ["/repo"],
+      mentionRoots,
       query,
       debouncedQuery: query,
       limit: 20,
     }),
   );
+}
+
+function renderSections(query: string) {
+  return renderWithRoots(query, ["/repo"]);
 }
 
 beforeEach(() => {
@@ -165,6 +169,15 @@ describe("useGithubMentionSections refresh", () => {
     support.github = false;
 
     const { result } = renderSections("auth");
+
+    expect(result.current.chrome).toBeNull();
+  });
+
+  it("publishes no chrome once the last folder is detached", () => {
+    // An empty scope is a WIRE error rather than a quiet no-op: the request
+    // schema requires `workspacePaths.min(1)`, so a surviving refresh button
+    // fails validation instead of returning nothing.
+    const { result } = renderWithRoots("auth", []);
 
     expect(result.current.chrome).toBeNull();
   });

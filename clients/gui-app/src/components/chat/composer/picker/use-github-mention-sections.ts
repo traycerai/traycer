@@ -394,13 +394,25 @@ export function useGithubMentionSections(
   }, [refreshManually, refreshSearch]);
 
   const chrome = useMemo<MentionStepChrome | null>(() => {
-    // `supported` gates the chrome for the same reason it gates the reads.
-    // Method support is reactive - an app-wide composer can rebind to an older
-    // host, or the bound host can re-handshake after an in-place downgrade,
-    // while a GitHub step is still open. The reads go quiet on their own; the
-    // chrome would not, leaving a refresh button that calls a method this
-    // handshake negotiated away.
-    if (openSection === null || !supported) return null;
+    // The chrome is gated on everything the READS are gated on, because its
+    // refresh button reaches the host directly and would otherwise outlive
+    // them both:
+    //
+    // - `supported` is reactive. An app-wide composer can rebind to an older
+    //   host, or the bound host can re-handshake after an in-place downgrade,
+    //   while a GitHub step is open; the button would then call a method this
+    //   handshake negotiated away.
+    // - an empty scope is a WIRE error, not a quiet no-op:
+    //   `mentionGithubCatalogRequestSchema` requires `workspacePaths.min(1)`,
+    //   so refreshing after the last folder is detached fails validation
+    //   rather than returning nothing.
+    if (
+      openSection === null ||
+      !supported ||
+      scope.workspacePaths.length === 0
+    ) {
+      return null;
+    }
     // Every decision below - ⓘ suppression, banner, empty-scope copy - lives in
     // `githubMentionChromeFor`, which is pure and directly tested. This hook
     // only supplies what the host said.
@@ -431,6 +443,7 @@ export function useGithubMentionSections(
     openSection,
     scopeRepositories,
     search.isSearching,
+    scope.workspacePaths,
     search.notice,
     search.sourceStatus,
     supported,

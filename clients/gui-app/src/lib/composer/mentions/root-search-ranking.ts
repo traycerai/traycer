@@ -63,6 +63,34 @@ export interface RankedRootSearch {
  * rather than dropped - the source's match may live in text the menu row does
  * not carry (e.g. a deep path segment).
  */
+/**
+ * Which of a row's two name fields the tiering should judge it on.
+ *
+ * `resortByNameTier` tiers one string per row - prefix hit, substring hit,
+ * neither - and for most rows `label` is the only name there is. A PR or issue
+ * row has two: `label` is the TITLE, and its identity (`#4917`) lives in
+ * `labelPrefix` because the two truncate differently. Tiering on `label` alone
+ * therefore put the row a query names EXACTLY in the bottom tier, below any
+ * unrelated row whose title merely contains those characters - so `#4917` +
+ * Enter could insert something else entirely.
+ *
+ * Returns whichever field earns the better tier for this query, which is the
+ * per-row minimum rather than a preference for one field. Concatenating the
+ * two instead would fix the reference case and break the title case: `#4917
+ * Stop the busy-loop` no longer STARTS with `stop`, so typing a title would
+ * fall from the prefix tier to the substring one.
+ */
+function tierTextFor(candidate: RootSearchCandidate, query: string): string {
+  const { labelPrefix, label } = candidate.entry;
+  if (labelPrefix === null) return label;
+  const lowerQuery = query.toLowerCase();
+  const lowerPrefix = labelPrefix.toLowerCase();
+  if (lowerPrefix.startsWith(lowerQuery)) return labelPrefix;
+  if (label.toLowerCase().startsWith(lowerQuery)) return label;
+  if (lowerPrefix.includes(lowerQuery)) return labelPrefix;
+  return label;
+}
+
 export function rankRootSearchEntries(
   candidates: ReadonlyArray<RootSearchCandidate>,
   query: string,
@@ -87,7 +115,7 @@ export function rankRootSearchEntries(
       (candidate, score) => score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
     ),
     trimmedQuery,
-    (candidate) => candidate.entry.label,
+    (candidate) => tierTextFor(candidate, trimmedQuery),
   );
   const matchedIndices = new Set(matches.map((match) => match.refIndex));
   const unmatched = candidates.filter(
