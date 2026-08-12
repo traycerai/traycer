@@ -1953,9 +1953,11 @@ aria-live="polite"` carrying the equivalent text for
     the scoped host's own logs from `diagnostics.logs.list`. `diagnostics.logs.tail`
     answers a discriminated union, so a file that vanished between list and tail
     reads "This log file is no longer there." rather than an empty tail. A
-    tail-read failure shows inline error text plus a report-issue action; the
-    top-level list-load failure shows inline error text with **no** report-issue
-    action - a real asymmetry, not by design.
+    Both failures - a tail read and the top-level list load - show inline error
+    text plus a report-issue action. They were asymmetric until 2026-08-12,
+    which made the panel harder to report from the worse the failure was: one
+    log that would not open could be filed, while the read that lists every log
+    failing left the user with text and nothing to do.
   - **Each unavailable state stays inside the group it affects.** The desktop
     log-levels bridge, the desktop support bridge and the host client are three
     independent sources; no one of them gates the panel as a whole. A group with

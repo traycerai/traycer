@@ -531,7 +531,10 @@ describe("traycer CLI entrypoint registration", () => {
     ]);
   });
 
-  it("preserves the six root/global/local option parsing contracts", async () => {
+  // Split one contract per `it`, deliberately. As a single case these eight
+  // shared a `try`/`finally` and a stdout spy, so the first failure hid the
+  // rest and the title named a count that had already drifted from the body.
+  it("root --version prints the program version and exits zero", async () => {
     const write = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
@@ -545,106 +548,114 @@ describe("traycer CLI entrypoint registration", () => {
         `${rootVersion.version()}\n`,
         expect.any(Function),
       );
+    } finally {
+      write.mockRestore();
+    }
+  });
 
-      const hostInterleaved = buildProgram();
-      hostInterleaved.exitOverride();
-      await expect(
-        hostInterleaved.parseAsync(["host", "--json", "status"], {
-          from: "user",
-        }),
-      ).resolves.toBeDefined();
-
-      const configInterleaved = buildProgram();
-      configInterleaved.exitOverride();
-      await expect(
-        configInterleaved.parseAsync(["config", "--quiet", "env", "list"], {
-          from: "user",
-        }),
-      ).resolves.toBeDefined();
-
-      const leafFinal = buildProgram();
-      leafFinal.exitOverride();
-      await expect(
-        leafFinal.parseAsync(["host", "status", "--json"], { from: "user" }),
-      ).resolves.toBeDefined();
-
-      mocks.downloadCalls.length = 0;
-      const explicit = buildProgram();
-      explicit.exitOverride();
-      await explicit.parseAsync(["host", "update", "--version", "2.2.0"], {
+  it("accepts a global option interleaved before its subcommand", async () => {
+    const hostInterleaved = buildProgram();
+    hostInterleaved.exitOverride();
+    await expect(
+      hostInterleaved.parseAsync(["host", "--json", "status"], {
         from: "user",
-      });
-      const bare = buildProgram();
-      bare.exitOverride();
-      await bare.parseAsync(["host", "update"], { from: "user" });
-      expect(mocks.downloadCalls).toEqual([
-        {
-          environment: "production",
-          versionRequest: "2.2.0",
-          automatic: false,
-        },
-        { environment: "production", versionRequest: null, automatic: false },
-      ]);
+      }),
+    ).resolves.toBeDefined();
 
-      const shellPassthrough = buildProgram();
-      shellPassthrough.exitOverride();
-      const shellSet = expectCommand(shellPassthrough, [
-        "config",
-        "shell",
-        "set",
-      ]);
-      let observedShellArgs: readonly string[] = [];
-      shellSet.action((shellArgs: readonly string[]) => {
-        observedShellArgs = shellArgs;
-      });
-      await shellPassthrough.parseAsync(
-        [
-          "config",
-          "shell",
-          "set",
-          "--",
-          "host",
-          "update",
-          "--version",
-          "2.6.0",
-        ],
+    const configInterleaved = buildProgram();
+    configInterleaved.exitOverride();
+    await expect(
+      configInterleaved.parseAsync(["config", "--quiet", "env", "list"], {
+        from: "user",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("accepts a global option after the leaf command", async () => {
+    const leafFinal = buildProgram();
+    leafFinal.exitOverride();
+    await expect(
+      leafFinal.parseAsync(["host", "status", "--json"], { from: "user" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("host update forwards an explicit --version and a bare invocation as latest", async () => {
+    mocks.downloadCalls.length = 0;
+    const explicit = buildProgram();
+    explicit.exitOverride();
+    await explicit.parseAsync(["host", "update", "--version", "2.2.0"], {
+      from: "user",
+    });
+    const bare = buildProgram();
+    bare.exitOverride();
+    await bare.parseAsync(["host", "update"], { from: "user" });
+    expect(mocks.downloadCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "2.2.0",
+        automatic: false,
+      },
+      { environment: "production", versionRequest: null, automatic: false },
+    ]);
+  });
+
+  it("config shell set passes everything after -- through untouched", async () => {
+    const shellPassthrough = buildProgram();
+    shellPassthrough.exitOverride();
+    const shellSet = expectCommand(shellPassthrough, [
+      "config",
+      "shell",
+      "set",
+    ]);
+    let observedShellArgs: readonly string[] = [];
+    shellSet.action((shellArgs: readonly string[]) => {
+      observedShellArgs = shellArgs;
+    });
+    await shellPassthrough.parseAsync(
+      ["config", "shell", "set", "--", "host", "update", "--version", "2.6.0"],
+      { from: "user" },
+    );
+    expect(observedShellArgs).toEqual(["host", "update", "--version", "2.6.0"]);
+  });
+
+  it("host update rejects a -- passthrough as excess arguments", async () => {
+    const updatePassthrough = buildProgram();
+    updatePassthrough.exitOverride();
+    await expect(
+      updatePassthrough.parseAsync(
+        ["host", "update", "--", "--version", "2.6.0"],
         { from: "user" },
-      );
-      expect(observedShellArgs).toEqual([
-        "host",
-        "update",
-        "--version",
-        "2.6.0",
-      ]);
+      ),
+    ).rejects.toMatchObject({
+      code: "commander.excessArguments",
+      message: expect.stringContaining("--version"),
+    });
+  });
 
-      const updatePassthrough = buildProgram();
-      updatePassthrough.exitOverride();
-      await expect(
-        updatePassthrough.parseAsync(
-          ["host", "update", "--", "--version", "2.6.0"],
-          { from: "user" },
-        ),
-      ).rejects.toMatchObject({
-        code: "commander.excessArguments",
-        message: expect.stringContaining("--version"),
-      });
-      const updateCommand = expectCommand(updatePassthrough, [
-        "host",
-        "update",
-      ]);
-      expect(updateCommand.helpInformation()).not.toContain(
-        "--host-update-version",
-      );
-      // ...but the spelling users actually type has to be discoverable, or the
-      // command advertises "a registry version" and gives no way to name one.
-      // It cannot be a registered option (root `--version` owns that token -
-      // that collision is why the rewrite exists), so help TEXT carries it.
-      //
-      // Asserted against what `--help` actually prints, not
-      // `helpInformation()`: the latter renders only the built-in sections, so
-      // `addHelpText` content is invisible to it and this pin would pass while
-      // the user still saw nothing.
-      write.mockClear();
+  it("host update never advertises the internal --host-update-version spelling", () => {
+    const program = buildProgram();
+    const updateCommand = expectCommand(program, ["host", "update"]);
+    expect(updateCommand.helpInformation()).not.toContain(
+      "--host-update-version",
+    );
+  });
+
+  it("host update --help prints the --version <version> spelling users type", () => {
+    // The spelling users actually type has to be discoverable, or the command
+    // advertises "a registry version" and gives no way to name one. It cannot
+    // be a registered option (root `--version` owns that token - that
+    // collision is why the rewrite exists), so help TEXT carries it.
+    //
+    // Asserted against what `--help` actually prints, not `helpInformation()`:
+    // the latter renders only the built-in sections, so `addHelpText` content
+    // is invisible to it and this pin would pass while the user still saw
+    // nothing.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const updateCommand = expectCommand(program, ["host", "update"]);
       updateCommand.outputHelp();
       const printedHelp = write.mock.calls
         .map(([chunk]) => String(chunk))

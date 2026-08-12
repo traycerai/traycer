@@ -670,8 +670,26 @@ function HostRecentLogsSection(props: {
       {client !== null && listQuery.isPending ? (
         <LogInfoLine>Loading logs…</LogInfoLine>
       ) : null}
+      {/*
+        Carries the same report-issue affordance a failed TAIL read offers.
+        Without it the panel was harder to report from the worse the failure
+        was: a single log that would not open could be filed, while the read
+        that lists every log failing left the user with text and nothing to do.
+      */}
       {listQuery.isError ? (
-        <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>
+        <div className="flex items-start gap-2">
+          <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load log details",
+              message: null,
+              code: null,
+              source: "Diagnostics",
+            })}
+            presentation="icon"
+            className={undefined}
+          />
+        </div>
       ) : null}
       {listQuery.isSuccess && hostLogs.length === 0 ? (
         <LogInfoLine>No log files on {props.hostName}.</LogInfoLine>
