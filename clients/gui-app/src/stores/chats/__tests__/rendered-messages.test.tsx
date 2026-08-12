@@ -2101,6 +2101,55 @@ describe("useRenderedMessages", () => {
     expect(child.command).toBe("rg TODO");
   });
 
+  it("keeps a nested image generation visible as a top-level card", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "artist",
+          task: "Create an image.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "tool_call",
+          blockId: "image-1",
+          toolName: "image_generation",
+          ...toolCallInputFields("image_generation", { prompt: "a cat" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+          imageResults: [],
+          parentBlockId: "agent-1",
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent", "tool"]);
+    const image = top[1];
+    if (image.kind !== "tool") throw new Error("expected image tool segment");
+    expect(image.toolName).toBe("image_generation");
+    expect(image.parentId).toBe("agent-1");
+  });
+
   it("folds a depth-3 nested subagent chain via parentBlockId", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),

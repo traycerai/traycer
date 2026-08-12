@@ -2866,8 +2866,10 @@ function isSubagentChildSegment(
   // provider_notice IS eligible too - a notice on a subagent's own thread
   // nests under that card instead of interrupting the top-level transcript;
   // one with no matching parent (or none) falls through to topLevel below.
+  // Image-generation cards stay top-level so SubagentChildrenSection cannot
+  // swallow a nested generation while rendering only child agents.
   return (
-    segment.kind === "tool" ||
+    (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
     segment.kind === "subagent" ||

@@ -266,7 +266,7 @@ export function useArtifactImagePaste(
         return null;
       }
       const bookmark = editor.state.selection.getBookmark();
-      const mapping = new Mapping();
+      let mapping = new Mapping();
       let released = false;
       const onTransaction = ({
         transaction,
@@ -283,14 +283,27 @@ export function useArtifactImagePaste(
       };
       return {
         insert: (images) => {
-          release();
-          if (editor.isDestroyed || !editor.isEditable) return 0;
+          if (editor.isDestroyed || !editor.isEditable) {
+            release();
+            return 0;
+          }
           const selection = bookmark.map(mapping).resolve(editor.state.doc);
+          mapping = new Mapping();
+          const activeBookmark = editor.state.selection.getBookmark();
           editor.commands.setTextSelection({
             from: selection.from,
             to: selection.to,
           });
-          return insertAttrs(images);
+          const inserted = insertAttrs(images);
+          const activeSelection = activeBookmark
+            .map(mapping)
+            .resolve(editor.state.doc);
+          editor.commands.setTextSelection({
+            from: activeSelection.from,
+            to: activeSelection.to,
+          });
+          release();
+          return inserted;
         },
         release,
       };

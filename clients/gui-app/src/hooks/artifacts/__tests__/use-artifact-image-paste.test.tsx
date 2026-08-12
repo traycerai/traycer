@@ -263,6 +263,9 @@ describe("useArtifactImagePaste", () => {
     await waitFor(() => expect(countImages(editor)).toBe(1));
     expect(editor.state.doc.firstChild?.type.name).toBe("image");
     expect(editor.getText()).toContain("typed after paste");
+    expect(editor.state.selection.$from.parent.textContent).toBe(
+      "typed after paste",
+    );
     editor.destroy();
   });
 
