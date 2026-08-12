@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,10 +35,21 @@ const client = Object.assign({} as HostClient<HostRpcRegistry>, {
   requestWithSignal: request,
 });
 
-function wrapper(props: { readonly children: ReactNode }): ReactNode {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+// `Wrapper` is a COMPONENT, so a bare `new QueryClient(...)` in its body mints
+// a fresh one on every render - four per test here, measured - and each one
+// publishes an empty cache and an empty mutation cache through the provider.
+// Held in state instead, so the client is the one thing in this harness that
+// does not change while the scope and the bound host do.
+function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      }),
+  );
   return (
     <QueryClientProvider client={queryClient}>
       {props.children}
@@ -86,7 +98,7 @@ function renderCatalog(initialProps: { readonly scope: GithubMentionScope }) {
         allowStaleFollowUp: false,
         pickerActive: true,
       }),
-    { wrapper, initialProps },
+    { wrapper: Wrapper, initialProps },
   );
 }
 
