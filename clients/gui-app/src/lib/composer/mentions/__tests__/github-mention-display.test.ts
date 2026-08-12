@@ -9,6 +9,7 @@ import {
   githubMentionAttachmentFromRow,
   githubMentionDisplayState,
   githubMentionRowTrailing,
+  githubMentionToken,
   githubRepositoryQualification,
 } from "../github-mention-display";
 
@@ -189,5 +190,45 @@ describe("githubRepositoryQualification", () => {
         1_000,
       ),
     ).toMatch(/^api · /);
+  });
+});
+
+describe("githubMentionToken", () => {
+  function onHost(githubHost: string): GithubPullRequestMentionRow {
+    return { ...pullRequest("acme", "api"), githubHost };
+  }
+
+  it("keeps the default host implicit", () => {
+    // Compatibility, not brevity. This token is the attachment's durable
+    // `path`; writing `github.com/` into it would give the same pull request a
+    // different identity before and after this change, so one message holding
+    // both inserts would render it twice.
+    expect(githubMentionToken(onHost("github.com"))).toBe(
+      "github-pr:acme/api#123",
+    );
+  });
+
+  it("names a non-default host", () => {
+    expect(githubMentionToken(onHost("ghe.acme.dev"))).toBe(
+      "github-pr:ghe.acme.dev/acme/api#123",
+    );
+  });
+
+  it("distinguishes the same reference on two hosts", () => {
+    // The defect: `path` is the node id, what `buildAttachmentsFromJSONContent`
+    // dedupes on, and what the sent-message renderer indexes by - so one token
+    // for two rows dropped or aliased an attachment.
+    expect(githubMentionToken(onHost("github.com"))).not.toBe(
+      githubMentionToken(onHost("ghe.acme.dev")),
+    );
+  });
+
+  it("stays a token `segments.ts` recognizes on either host", () => {
+    // The entity-token pattern requires a `/` after the prefix and allows more
+    // after it, so the host segment must not need a grammar change.
+    const pattern =
+      /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
+    expect(pattern.test(githubMentionToken(onHost("github.com")))).toBe(true);
+    expect(pattern.test(githubMentionToken(onHost("ghe.acme.dev")))).toBe(true);
   });
 });

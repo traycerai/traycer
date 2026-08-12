@@ -14,6 +14,7 @@ import type {
   SlashCommandTrigger,
 } from "@/lib/composer/types";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
+import { DEFAULT_GITHUB_MENTION_HOST } from "@/lib/composer/mentions/github-mention-display";
 
 // Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
 // particular matches far more prose than it should (`$20`, `$PATH`), so what a
@@ -173,7 +174,9 @@ export function mentionAttrsFromAttachment(
     return {
       contextType: mention.contextType,
       // The entity token doubles as the node id, exactly as it does for every
-      // other entity mention: `github-pr:org/repo#123` is already unique.
+      // other entity mention. `org/repo#123` alone is NOT unique - the same
+      // one can be served by two GitHub hosts - so the token carries the host
+      // whenever it is not the default. See `githubMentionToken`.
       id: mention.path,
       path: mention.path,
       pathKind: null,
@@ -769,10 +772,19 @@ function githubMentionAttachmentFromAttrs(
   }
   const prefix =
     contextType === "github_pull_request" ? "github-pr" : "github-issue";
+  // github.com is the host a node without the field means; see
+  // `DEFAULT_GITHUB_MENTION_HOST`.
+  const githubHost =
+    stringValue(attrs.githubHost) ?? DEFAULT_GITHUB_MENTION_HOST;
+  const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
+  // Rebuilt on the SAME rule as `githubMentionToken`, default host omitted, so
+  // a chip restored from its node keeps the identity the picker gave it. Only
+  // reached when the node carries no `path` of its own.
   const path =
     stringValue(attrs.path) ??
-    `${prefix}:${organizationLogin}/${repositoryName}#${issueNumber}`;
-  const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
+    (githubHost === DEFAULT_GITHUB_MENTION_HOST
+      ? `${prefix}:${reference}`
+      : `${prefix}:${githubHost}/${reference}`);
   return {
     kind: "mention",
     contextType,
@@ -783,9 +795,7 @@ function githubMentionAttachmentFromAttrs(
     workspacePath: null,
     label: stringValue(attrs.label) ?? `#${issueNumber}`,
     description: stringValue(attrs.description) ?? reference,
-    // github.com is the only host the picker can produce today; an older or
-    // hand-edited node without the field still names a resolvable reference.
-    githubHost: stringValue(attrs.githubHost) ?? "github.com",
+    githubHost,
     organizationLogin,
     repositoryName,
     issueNumber,

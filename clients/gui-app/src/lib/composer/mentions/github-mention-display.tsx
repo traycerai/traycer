@@ -285,8 +285,43 @@ export function githubMentionTokenPrefix(row: GithubMentionRow): string {
   return row.kind === "pull-request" ? "github-pr" : "github-issue";
 }
 
+/**
+ * The host a bare token implies, and the ONLY one it may omit.
+ *
+ * Shared with the node-attribute rebuild in `tiptap-json-content.ts`, which
+ * defaults a missing `githubHost` to the same value - the two have to agree or
+ * a chip restored from an older node gets a different identity than the one
+ * that produced it.
+ */
+export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
+
+/**
+ * The durable identity of an inserted GitHub mention.
+ *
+ * This token IS the attachment's `path`, which is also its node id, which is
+ * what `buildAttachmentsFromJSONContent` dedupes on and what the sent-message
+ * renderer indexes by. `owner/repo#123` is therefore not enough: the catalog
+ * identity includes `githubHost`, so the same `owner/repo#123` served by
+ * github.com and by an enterprise host collapsed to one token - inserting both
+ * dropped or aliased an attachment, and both chips then rendered from whichever
+ * metadata survived.
+ *
+ * The default host is OMITTED rather than always written. Emitting
+ * `github.com/...` for everything would be simpler, but it would also change
+ * the token for every mention that already exists: the same pull request
+ * inserted before and after this change would carry two different identities,
+ * so one message holding both would show it twice. Omitting the default keeps
+ * every github.com token byte-identical to what it has always been, and only
+ * a non-default host - which could not previously be represented at all - adds
+ * the segment. `segments.ts` accepts both shapes; its pattern already allows
+ * further slashes after the first.
+ */
 export function githubMentionToken(row: GithubMentionRow): string {
-  return `${githubMentionTokenPrefix(row)}:${githubMentionReference(row)}`;
+  const prefix = githubMentionTokenPrefix(row);
+  const reference = githubMentionReference(row);
+  return row.githubHost === DEFAULT_GITHUB_MENTION_HOST
+    ? `${prefix}:${reference}`
+    : `${prefix}:${row.githubHost}/${reference}`;
 }
 
 /**
