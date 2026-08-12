@@ -860,20 +860,6 @@ function renderSkeleton(aspectRatio: number | null): ReactNode {
   );
 }
 
-// Temporary ticket-07 trace state: tags each real DOM `<img>` node with a
-// stable id so the console trace can distinguish "same element, effect
-// replayed" (StrictMode) from "a genuinely different element mounted".
-// Removed together with the rest of this instrumentation.
-let ticket07NodeIdCounter = 0;
-const ticket07NodeIds = new WeakMap<HTMLImageElement, number>();
-function ticket07NodeId(el: HTMLImageElement): number {
-  const existing = ticket07NodeIds.get(el);
-  if (existing !== undefined) return existing;
-  ticket07NodeIdCounter += 1;
-  ticket07NodeIds.set(el, ticket07NodeIdCounter);
-  return ticket07NodeIdCounter;
-}
-
 function ImageStageImg(props: {
   readonly url: string;
   readonly fileName: string;
@@ -912,16 +898,10 @@ function ImageStageImg(props: {
   const localImgRef = useRef<HTMLImageElement | null>(null);
   const setImgEl = useCallback(
     (el: HTMLImageElement | null): void => {
-      // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
-      console.debug("[ticket07-trace] img-ref", {
-        phase: el === null ? "detach" : "attach",
-        nodeId: el === null ? null : ticket07NodeId(el),
-        url: props.url,
-      });
       setImgRef(el);
       localImgRef.current = el;
     },
-    [setImgRef, props.url],
+    [setImgRef],
   );
   const reportNaturalSizeIfKnown = useCallback((): void => {
     const el = localImgRef.current;
@@ -933,10 +913,6 @@ function ImageStageImg(props: {
     // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
     console.debug("[ticket07-trace] image-stage-img-layout-effect", {
       url: props.url,
-      nodeId:
-        localImgRef.current === null
-          ? null
-          : ticket07NodeId(localImgRef.current),
       servedFromCache,
       imgComplete: localImgRef.current?.complete,
       resolvedComplete: complete,
@@ -944,20 +920,6 @@ function ImageStageImg(props: {
     setLoaded(complete);
     if (complete) reportNaturalSizeIfKnown();
   }, [props.url, servedFromCache, reportNaturalSizeIfKnown]);
-  // Ground truth, every commit (no deps): what's actually on the DOM node
-  // right now, independent of what the skip-decision effect above computed.
-  useLayoutEffect(() => {
-    // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
-    console.debug("[ticket07-trace] dom-commit", {
-      url: props.url,
-      nodeId:
-        localImgRef.current === null
-          ? null
-          : ticket07NodeId(localImgRef.current),
-      loaded,
-      actualClassName: localImgRef.current?.className,
-    });
-  });
   const handleLoad = useCallback((): void => {
     setLoaded(true);
     reportNaturalSizeIfKnown();
