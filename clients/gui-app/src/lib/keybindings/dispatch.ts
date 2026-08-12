@@ -48,6 +48,7 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { isThanosHiddenSettingsSection } from "@/lib/thanos-flags";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
 const SELECTED_GROUP_TAB_SELECTOR =
@@ -451,7 +452,9 @@ function switchToSettingsSection(
   index: number,
 ): boolean {
   if (index < 0 || index >= SETTINGS_SECTIONS.length) return false;
-  router.navigateSettingsSection(SETTINGS_SECTIONS[index].id);
+  const section = SETTINGS_SECTIONS[index];
+  if (isThanosHiddenSettingsSection(section.id)) return false;
+  router.navigateSettingsSection(section.id);
   return true;
 }
 

@@ -111,14 +111,14 @@ export function UserMenu(props: UserMenuProps) {
             data-testid="user-menu-manage-subscription"
             onSelect={() => {
               setOpen(false);
-              void runnerHost.openExternalLink(manageSubscriptionUrl).then(
-                () => {
+              void runnerHost
+                .openExternalLink(manageSubscriptionUrl)
+                .then(() => {
                   Analytics.getInstance().track(
                     AnalyticsEvent.SubscriptionManagementOpened,
                     { source: "direct_ui" },
                   );
-                },
-              );
+                });
             }}
           >
             <ExternalLink className="size-3.5" />

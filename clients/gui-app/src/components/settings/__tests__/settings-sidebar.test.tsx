@@ -131,7 +131,9 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    expect(await screen.findByTestId("settings-sidebar-item-general")).toBeTruthy();
+    expect(
+      await screen.findByTestId("settings-sidebar-item-general"),
+    ).toBeTruthy();
     expect(screen.queryByText("Account")).toBeNull();
     expect(screen.queryByTestId("settings-sidebar-item-devices")).toBeNull();
     expect(screen.queryByTestId("settings-sidebar-item-usage")).toBeNull();
