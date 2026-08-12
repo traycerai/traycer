@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildHarnessModelRows,
+  buildSourceEntries,
   buildSubproviderEntries,
 } from "@/components/home/data/harness-model-search";
 import type {
@@ -12,8 +13,10 @@ import {
   cascadeBack,
   cascadePathLabels,
   cascadeSelectModel,
+  cascadeSelectSource,
   cascadeSelectSubprovider,
   resolveCascadeForProvider,
+  shouldShowSourceLevel,
   shouldShowSubproviderLevel,
   type CascadeState,
 } from "@/components/home/pickers/harness-model-picker-cascade";
@@ -38,6 +41,18 @@ const CODEX_HARNESS: HarnessOption = {
   error: null,
   modes: ["gui", "tui"],
   requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
+};
+
+const HERMES_HARNESS: HarnessOption = {
+  id: "hermes",
+  label: "Hermes Agent",
+  enabled: true,
+  available: true,
+  error: null,
+  modes: ["gui"],
+  requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
   availabilityPending: false,
 };
@@ -100,7 +115,7 @@ function multiGroupRows() {
 
 describe("shouldShowSubproviderLevel", () => {
   it("is true only for 2+ groups when not profile-scoped", () => {
-    const multi = buildSubproviderEntries(multiGroupRows());
+    const multi = buildSubproviderEntries(multiGroupRows(), null);
     expect(shouldShowSubproviderLevel(multi, false)).toBe(true);
     expect(shouldShowSubproviderLevel(multi, true)).toBe(false);
     expect(shouldShowSubproviderLevel(multi.slice(0, 1), false)).toBe(false);
@@ -119,6 +134,7 @@ describe("resolveCascadeForProvider", () => {
       }),
     ).toEqual({
       level: "subproviders",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     });
@@ -136,6 +152,7 @@ describe("resolveCascadeForProvider", () => {
       }),
     ).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: "clinepass",
       pendingEffortModelId: null,
     });
@@ -151,6 +168,7 @@ describe("resolveCascadeForProvider", () => {
       }),
     ).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     });
@@ -168,6 +186,7 @@ describe("resolveCascadeForProvider", () => {
       }),
     ).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     });
@@ -198,6 +217,7 @@ describe("resolveCascadeForProvider", () => {
       }),
     ).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     });
@@ -206,8 +226,9 @@ describe("resolveCascadeForProvider", () => {
 
 describe("cascadeSelectSubprovider / cascadeSelectModel / cascadeBack", () => {
   it("drills subprovider → models", () => {
-    expect(cascadeSelectSubprovider("clinepass")).toEqual({
+    expect(cascadeSelectSubprovider("clinepass", null)).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: "clinepass",
       pendingEffortModelId: null,
     });
@@ -226,6 +247,7 @@ describe("cascadeSelectSubprovider / cascadeSelectModel / cascadeBack", () => {
       kind: "drillEffort",
       state: {
         level: "efforts",
+        activeSourceId: null,
         activeGroupId: "clinepass",
         pendingEffortModelId: withEffort.id,
       },
@@ -235,33 +257,53 @@ describe("cascadeSelectSubprovider / cascadeSelectModel / cascadeBack", () => {
   it("backs efforts → models → subproviders → null at root", () => {
     const effort: CascadeState = {
       level: "efforts",
+      activeSourceId: null,
       activeGroupId: "clinepass",
       pendingEffortModelId: "opencode:clinepass:kimi",
     };
-    const models = cascadeBack(effort, true);
+    const models = cascadeBack(effort, {
+      canShowSources: false,
+      canShowSubproviders: true,
+    });
     expect(models).toEqual({
       level: "models",
+      activeSourceId: null,
       activeGroupId: "clinepass",
       pendingEffortModelId: null,
     });
     if (models === null) return;
-    const sub = cascadeBack(models, true);
+    const sub = cascadeBack(models, {
+      canShowSources: false,
+      canShowSubproviders: true,
+    });
     expect(sub).toEqual({
       level: "subproviders",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     });
     if (sub === null) return;
-    expect(cascadeBack(sub, true)).toBeNull();
+    expect(
+      cascadeBack(sub, {
+        canShowSources: false,
+        canShowSubproviders: true,
+      }),
+    ).toBeNull();
   });
 
   it("backs models to null when subproviders are not shown", () => {
     const models: CascadeState = {
       level: "models",
+      activeSourceId: null,
       activeGroupId: null,
       pendingEffortModelId: null,
     };
-    expect(cascadeBack(models, false)).toBeNull();
+    expect(
+      cascadeBack(models, {
+        canShowSources: false,
+        canShowSubproviders: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -271,10 +313,12 @@ describe("cascadePathLabels", () => {
       cascadePathLabels({
         state: {
           level: "models",
+          activeSourceId: null,
           activeGroupId: "clinepass",
           pendingEffortModelId: null,
         },
         providerLabel: "Oh My Pi",
+        sourceLabel: null,
         subproviderLabel: "ClinePass",
         pendingModelLabel: null,
       }),
@@ -284,10 +328,12 @@ describe("cascadePathLabels", () => {
       cascadePathLabels({
         state: {
           level: "efforts",
+          activeSourceId: null,
           activeGroupId: "clinepass",
           pendingEffortModelId: "x",
         },
         providerLabel: "Oh My Pi",
+        sourceLabel: null,
         subproviderLabel: "ClinePass",
         pendingModelLabel: "Kimi K3",
       }),
@@ -297,13 +343,130 @@ describe("cascadePathLabels", () => {
       cascadePathLabels({
         state: {
           level: "subproviders",
+          activeSourceId: null,
           activeGroupId: null,
           pendingEffortModelId: null,
         },
         providerLabel: "Oh My Pi",
+        sourceLabel: null,
         subproviderLabel: null,
         pendingModelLabel: null,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("composite source cascade (Hermes/OMP)", () => {
+  function compositeRows() {
+    return buildHarnessModelRows(HERMES_HARNESS, [
+      model({
+        harnessId: "hermes",
+        slug: "anthropic/claude-opus",
+        label: "Claude Opus",
+        metadata: {
+          openCodeProviderId: "openrouter:anthropic",
+          openCodeProviderLabel: "Openrouter:anthropic",
+        },
+      }),
+      model({
+        harnessId: "hermes",
+        slug: "openai/gpt-5",
+        label: "GPT-5",
+        metadata: {
+          openCodeProviderId: "openrouter:openai",
+          openCodeProviderLabel: "Openrouter:openai",
+        },
+      }),
+    ]);
+  }
+
+  it("shows the source level for a single gateway with 2+ vendors", () => {
+    const rows = compositeRows();
+    const sources = buildSourceEntries(rows);
+    expect(shouldShowSourceLevel(sources, false)).toBe(true);
+    expect(shouldShowSourceLevel(sources, true)).toBe(false);
+    expect(
+      resolveCascadeForProvider({
+        providerRows: rows,
+        selectedRowId: "",
+        profileScoped: false,
+      }),
+    ).toEqual({
+      level: "sources",
+      activeSourceId: null,
+      activeGroupId: null,
+      pendingEffortModelId: null,
+    });
+  });
+
+  it("reopens on models inside the selected source and vendor", () => {
+    const rows = compositeRows();
+    const selected = rows.find((row) => row.value === "openai/gpt-5");
+    expect(selected).toBeDefined();
+    expect(
+      resolveCascadeForProvider({
+        providerRows: rows,
+        selectedRowId: selected?.id ?? "",
+        profileScoped: false,
+      }),
+    ).toEqual({
+      level: "models",
+      activeSourceId: "openrouter",
+      activeGroupId: "openrouter:openai",
+      pendingEffortModelId: null,
+    });
+  });
+
+  it("drills source → vendors, then back sources ← vendors ← models", () => {
+    const rows = compositeRows();
+    const vendors = buildSubproviderEntries(rows, "openrouter");
+    expect(cascadeSelectSource("openrouter", vendors)).toEqual({
+      level: "subproviders",
+      activeSourceId: "openrouter",
+      activeGroupId: null,
+      pendingEffortModelId: null,
+    });
+    const models = cascadeSelectSubprovider(
+      "openrouter:anthropic",
+      "openrouter",
+    );
+    expect(models).toEqual({
+      level: "models",
+      activeSourceId: "openrouter",
+      activeGroupId: "openrouter:anthropic",
+      pendingEffortModelId: null,
+    });
+    const flags = { canShowSources: true, canShowSubproviders: true };
+    const backVendors = cascadeBack(models, flags);
+    expect(backVendors).toEqual({
+      level: "subproviders",
+      activeSourceId: "openrouter",
+      activeGroupId: null,
+      pendingEffortModelId: null,
+    });
+    if (backVendors === null) return;
+    expect(cascadeBack(backVendors, flags)).toEqual({
+      level: "sources",
+      activeSourceId: null,
+      activeGroupId: null,
+      pendingEffortModelId: null,
+    });
+  });
+
+  it("includes the source in path crumbs", () => {
+    expect(
+      cascadePathLabels({
+        state: {
+          level: "models",
+          activeSourceId: "openrouter",
+          activeGroupId: "openrouter:anthropic",
+          pendingEffortModelId: null,
+        },
+        providerLabel: "Hermes Agent",
+        sourceLabel: "OpenRouter",
+        subproviderLabel: "Anthropic",
+        pendingModelLabel: null,
+      }),
+    ).toEqual(["Hermes Agent", "OpenRouter", "Anthropic"]);
   });
 });

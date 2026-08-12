@@ -30,6 +30,7 @@ import {
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   buildAllHarnessModelRows,
+  buildSourceEntries,
   buildSubproviderEntries,
   createModelRowSearchIndex,
   filterModelRows,
@@ -37,14 +38,17 @@ import {
   sectionModelRowsByProviderRank,
   selectedModelRowId,
   type HarnessModelRow,
+  type HarnessSourceEntry,
   type HarnessSubproviderEntry,
 } from "@/components/home/data/harness-model-search";
 import {
   cascadeBack,
   cascadePathLabels,
   cascadeSelectModel,
+  cascadeSelectSource,
   cascadeSelectSubprovider,
   resolveCascadeForProvider,
+  shouldShowSourceLevel,
   shouldShowSubproviderLevel,
   type CascadeState,
 } from "@/components/home/pickers/harness-model-picker-cascade";
@@ -665,14 +669,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
     [resolvedActiveProviderId, rows],
   );
-  const subproviderEntries = useMemo(
-    () => buildSubproviderEntries(providerRows),
+  const sourceEntries = useMemo(
+    () => buildSourceEntries(providerRows),
     [providerRows],
   );
+  const subproviderEntries = useMemo(
+    () => buildSubproviderEntries(providerRows, cascade.activeSourceId),
+    [cascade.activeSourceId, providerRows],
+  );
   // Profile-scoped rail entry (multi-profile harness with a concrete profile
-  // selected) skips the subprovider level per cascade skip rules.
+  // selected) skips the source/subprovider levels per cascade skip rules.
   const profileScoped =
     activePanelProfileId !== null && activeProviderProfiles.length >= 2;
+  const canShowSources = shouldShowSourceLevel(sourceEntries, profileScoped);
   const canShowSubproviders = shouldShowSubproviderLevel(
     subproviderEntries,
     profileScoped,
@@ -693,17 +702,24 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     }
     if (
       cascade.level === "models" &&
-      cascade.activeGroupId !== null &&
-      canShowSubproviders
+      cascade.activeGroupId !== null
     ) {
       return providerRows.filter(
         (row) => row.providerGroupId === cascade.activeGroupId,
       );
     }
+    if (
+      cascade.level === "models" &&
+      cascade.activeSourceId !== null
+    ) {
+      return providerRows.filter(
+        (row) => row.sourceGroupId === cascade.activeSourceId,
+      );
+    }
     return providerRows;
   }, [
-    canShowSubproviders,
     cascade.activeGroupId,
+    cascade.activeSourceId,
     cascade.level,
     hasQuery,
     providerRows,
@@ -754,11 +770,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         id: entry.providerGroupId,
       }));
     }
+    if (cascade.level === "sources") {
+      return sourceEntries.map((entry) => ({
+        id: entry.sourceGroupId,
+      }));
+    }
     return effortOptions.map((option) => ({ id: option.id }));
   }, [
     cascade.level,
     effortOptions,
     hasQuery,
+    sourceEntries,
     subproviderEntries,
     visibleRows,
   ]);
@@ -771,7 +793,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       ? selectedRowId
       : cascade.level === "subproviders"
         ? (selectedRowGroupId(selectedRowId, providerRows) ?? "")
-        : selectedEffortForPending;
+        : cascade.level === "sources"
+          ? (selectedRowSourceId(selectedRowId, providerRows) ?? "")
+          : selectedEffortForPending;
   const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
     visibleItemIds: cascadeNavItems.map((item) => item.id),
     selectedItemId: anchorSelectedId,
@@ -786,6 +810,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeProviderId: resolvedActiveProviderId,
     cascadeLevel: cascade.level,
     activeGroupId: cascade.activeGroupId,
+    activeSourceId: cascade.activeSourceId,
   });
 
   const resolveCascadeFor = useCallback(
@@ -864,11 +889,21 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
 
+  const selectSource = useCallback(
+    (entry: HarnessSourceEntry) => {
+      const vendors = buildSubproviderEntries(providerRows, entry.sourceGroupId);
+      setCascade(cascadeSelectSource(entry.sourceGroupId, vendors));
+    },
+    [providerRows, setCascade],
+  );
+
   const selectSubprovider = useCallback(
     (entry: HarnessSubproviderEntry) => {
-      setCascade(cascadeSelectSubprovider(entry.providerGroupId));
+      setCascade(
+        cascadeSelectSubprovider(entry.providerGroupId, cascade.activeSourceId),
+      );
     },
-    [setCascade],
+    [cascade.activeSourceId, setCascade],
   );
 
   const selectEffort = useCallback(
@@ -899,13 +934,23 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
 
   const handleCascadeBack = useCallback(() => {
-    const next = cascadeBack(cascade, canShowSubproviders && !hasQuery);
+    const next = cascadeBack(cascade, {
+      canShowSources: canShowSources && !hasQuery,
+      canShowSubproviders: canShowSubproviders && !hasQuery,
+    });
     if (next === null) {
       closeOnly();
       return;
     }
     setCascade(next);
-  }, [canShowSubproviders, cascade, closeOnly, hasQuery, setCascade]);
+  }, [
+    canShowSources,
+    canShowSubproviders,
+    cascade,
+    closeOnly,
+    hasQuery,
+    setCascade,
+  ]);
 
   const handleRailEntryChange = useCallback(
     (providerId: ProviderId) => {
@@ -987,6 +1032,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       if (activeRow !== null) selectRow(activeRow);
       return;
     }
+    if (cascade.level === "sources") {
+      const entry = sourceEntries.find(
+        (candidate) => candidate.sourceGroupId === effectiveActiveRowId,
+      );
+      if (entry !== undefined) selectSource(entry);
+      return;
+    }
     if (cascade.level === "subproviders") {
       const entry = subproviderEntries.find(
         (candidate) => candidate.providerGroupId === effectiveActiveRowId,
@@ -1005,14 +1057,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     hasQuery,
     selectEffort,
     selectRow,
+    selectSource,
     selectSubprovider,
+    sourceEntries,
     subproviderEntries,
   ]);
 
   // Can go up a cascade level (ArrowLeft / Escape-empty / Backspace-empty).
   const canNavigateCascade =
     !hasQuery &&
-    cascadeBack(cascade, canShowSubproviders) !== null;
+    cascadeBack(cascade, {
+      canShowSources,
+      canShowSubproviders,
+    }) !== null;
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
@@ -1149,6 +1206,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     />
   );
 
+  const sourceLabelForPath =
+    cascade.activeSourceId === null
+      ? null
+      : (sourceEntries.find(
+          (entry) => entry.sourceGroupId === cascade.activeSourceId,
+        )?.sourceGroupLabel ?? cascade.activeSourceId);
   const subproviderLabelForPath =
     cascade.activeGroupId === null
       ? null
@@ -1160,6 +1223,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     : cascadePathLabels({
         state: cascade,
         providerLabel: activePanelLabel,
+        sourceLabel: sourceLabelForPath,
         subproviderLabel: subproviderLabelForPath,
         pendingModelLabel:
           pendingEffortModel === null ? null : pendingEffortModel.browseLabel,
@@ -1167,17 +1231,24 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const cascadeBackAriaLabel =
     cascade.level === "efforts"
       ? "Back to models"
-      : cascade.level === "models"
-        ? "Back to subproviders"
-        : "Back";
+        : cascade.level === "models"
+        ? canShowSubproviders
+          ? "Back to subproviders"
+          : "Back to sources"
+        : cascade.level === "subproviders"
+          ? "Back to sources"
+          : "Back";
   // Highlight the selected model's group on the subprovider list.
   const selectedSubproviderId = selectedRowGroupId(selectedRowId, providerRows);
+  const selectedSourceId = selectedRowSourceId(selectedRowId, providerRows);
   // Suppress group headers when drilled into a specific subprovider (or when
   // search is off and we're past the subprovider step).
   const suppressSectionHeaders =
     !hasQuery &&
     cascade.level === "models" &&
-    (cascade.activeGroupId !== null || !canShowSubproviders);
+    (cascade.activeGroupId !== null ||
+      cascade.activeSourceId !== null ||
+      !canShowSubproviders);
 
   return (
     <Popover open={visibleOpen} onOpenChange={onOpenChange}>
@@ -1257,6 +1328,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         cascadePathLabels={pathLabels}
         cascadeBackAriaLabel={cascadeBackAriaLabel}
         onCascadeBack={handleCascadeBack}
+        sourceEntries={sourceEntries}
+        selectedSourceId={selectedSourceId}
+        onSelectSource={selectSource}
         subproviderEntries={subproviderEntries}
         selectedSubproviderId={selectedSubproviderId}
         onSelectSubprovider={selectSubprovider}
@@ -1547,6 +1621,16 @@ function selectedRowGroupId(
   );
 }
 
+function selectedRowSourceId(
+  selectedRowId: string,
+  providerRows: ReadonlyArray<HarnessModelRow>,
+): string | null {
+  if (selectedRowId.length === 0) return null;
+  return (
+    providerRows.find((row) => row.id === selectedRowId)?.sourceGroupId ?? null
+  );
+}
+
 interface ModelRowsListKeyInput {
   readonly openVersion: number;
   readonly hasQuery: boolean;
@@ -1554,6 +1638,7 @@ interface ModelRowsListKeyInput {
   readonly activeProviderId: ProviderId;
   readonly cascadeLevel: string;
   readonly activeGroupId: string | null;
+  readonly activeSourceId: string | null;
 }
 
 // Note: `selectedRowId` is deliberately NOT part of the key. Selecting a model
@@ -1569,9 +1654,10 @@ function modelRowsListKey(input: ModelRowsListKeyInput): string {
     activeProviderId,
     cascadeLevel,
     activeGroupId,
+    activeSourceId,
   } = input;
   const modeKey = hasQuery
     ? `search:${activeProviderId}:${query}`
-    : `browse:${activeProviderId}:${cascadeLevel}:${activeGroupId ?? ""}`;
+    : `browse:${activeProviderId}:${cascadeLevel}:${activeSourceId ?? ""}:${activeGroupId ?? ""}`;
   return `${openVersion}:${modeKey}`;
 }

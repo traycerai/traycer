@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildAllHarnessModelRows,
   buildHarnessModelRows,
+  buildSourceEntries,
   buildSubproviderEntries,
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
+  modelRowSectionLabel,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
 } from "@/components/home/data/harness-model-search";
@@ -73,6 +75,18 @@ const KILOCODE_HARNESS: HarnessOption = {
   error: null,
   modes: ["gui", "tui"],
   requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
+};
+
+const HERMES_HARNESS: HarnessOption = {
+  id: "hermes",
+  label: "Hermes Agent",
+  enabled: true,
+  available: true,
+  error: null,
+  modes: ["gui"],
+  requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
   availabilityPending: false,
 };
@@ -622,18 +636,20 @@ describe("harness model search", () => {
       ]);
 
       // First-seen order (after builder's group sort: ClinePass then Command Code).
-      expect(buildSubproviderEntries(rows)).toEqual([
+      expect(buildSubproviderEntries(rows, null)).toEqual([
         {
           providerGroupId: "clinepass",
           providerGroupLabel: "ClinePass",
           modelCount: 2,
           capacityLabel: "128k ctx",
+          iconId: "clinepass",
         },
         {
           providerGroupId: "command-code",
           providerGroupLabel: "Command Code",
           modelCount: 1,
           capacityLabel: null,
+          iconId: "command-code",
         },
       ]);
     });
@@ -643,7 +659,7 @@ describe("harness model search", () => {
         model({ slug: "gpt-5.5", label: "GPT-5.5" }),
         model({ slug: "gpt-4.1", label: "GPT-4.1" }),
       ]);
-      expect(buildSubproviderEntries(rows)).toEqual([]);
+      expect(buildSubproviderEntries(rows, null)).toEqual([]);
     });
 
     it("returns a single entry when all rows share one group", () => {
@@ -667,12 +683,13 @@ describe("harness model search", () => {
           },
         }),
       ]);
-      expect(buildSubproviderEntries(rows)).toEqual([
+      expect(buildSubproviderEntries(rows, null)).toEqual([
         {
           providerGroupId: "anthropic",
           providerGroupLabel: "Anthropic",
           modelCount: 2,
           capacityLabel: null,
+          iconId: "anthropic",
         },
       ]);
     });
@@ -760,12 +777,116 @@ describe("slug-derived vendor groups (OpenRouter-style)", () => {
         label: "OpenRouter · openai/gpt 5.6 Sol",
       }),
     ]);
-    const entries = buildSubproviderEntries(rows);
+    const entries = buildSubproviderEntries(rows, null);
     expect(
       entries.map((entry) => [entry.providerGroupId, entry.modelCount]),
     ).toEqual([
       ["anthropic", 2],
       ["openai", 1],
     ]);
+  });
+});
+
+describe("composite source:vendor groups (Hermes/OMP)", () => {
+  function hermesCompositeModels(): ReadonlyArray<ModelOption> {
+    return [
+      model({
+        harnessId: "hermes",
+        slug: "anthropic/claude-opus",
+        label: "Claude Opus",
+        metadata: {
+          openCodeProviderId: "openrouter:anthropic",
+          openCodeProviderLabel: "Openrouter:anthropic",
+        },
+      }),
+      model({
+        harnessId: "hermes",
+        slug: "anthropic/claude-sonnet",
+        label: "Claude Sonnet",
+        metadata: {
+          openCodeProviderId: "openrouter:anthropic",
+          openCodeProviderLabel: "Openrouter:anthropic",
+        },
+      }),
+      model({
+        harnessId: "hermes",
+        slug: "openai/gpt-5",
+        label: "GPT-5",
+        metadata: {
+          openCodeProviderId: "openrouter:openai",
+          openCodeProviderLabel: "Openrouter:openai",
+        },
+      }),
+      model({
+        harnessId: "hermes",
+        slug: "groq/llama",
+        label: "Llama",
+        metadata: {
+          openCodeProviderId: "groq:meta",
+          openCodeProviderLabel: "Groq:meta",
+        },
+      }),
+    ];
+  }
+
+  it("splits concatenated host ids into source + vendor labels", () => {
+    const rows = buildHarnessModelRows(HERMES_HARNESS, hermesCompositeModels());
+    expect(
+      rows.map((row) => [
+        row.sourceGroupId,
+        row.sourceGroupLabel,
+        row.providerGroupId,
+        row.providerGroupLabel,
+      ]),
+    ).toEqual([
+      ["groq", "Groq", "groq:meta", "Meta"],
+      ["openrouter", "OpenRouter", "openrouter:anthropic", "Anthropic"],
+      ["openrouter", "OpenRouter", "openrouter:anthropic", "Anthropic"],
+      ["openrouter", "OpenRouter", "openrouter:openai", "OpenAI"],
+    ]);
+    expect(modelRowSectionLabel(rows[1] ?? rows[0])).toBe(
+      "OpenRouter · Anthropic",
+    );
+  });
+
+  it("rolls sources and filters vendors by the selected gateway", () => {
+    const rows = buildHarnessModelRows(HERMES_HARNESS, hermesCompositeModels());
+    expect(
+      buildSourceEntries(rows).map((entry) => [
+        entry.sourceGroupId,
+        entry.sourceGroupLabel,
+        entry.vendorCount,
+        entry.modelCount,
+      ]),
+    ).toEqual([
+      ["groq", "Groq", 1, 1],
+      ["openrouter", "OpenRouter", 2, 3],
+    ]);
+    expect(
+      buildSubproviderEntries(rows, "openrouter").map((entry) => [
+        entry.providerGroupLabel,
+        entry.modelCount,
+        entry.iconId,
+      ]),
+    ).toEqual([
+      ["Anthropic", 2, "anthropic"],
+      ["OpenAI", 1, "openai"],
+    ]);
+  });
+
+  it("does not invent a source level for flat OpenCode groups", () => {
+    const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
+      model({
+        harnessId: "opencode",
+        slug: "clinepass:kimi",
+        label: "ClinePass: Kimi K3",
+        metadata: {
+          openCodeProviderId: "clinepass",
+          openCodeProviderLabel: "ClinePass",
+        },
+      }),
+    ]);
+    expect(rows[0]?.sourceGroupId).toBeNull();
+    expect(buildSourceEntries(rows)).toEqual([]);
   });
 });

@@ -15,7 +15,7 @@ interface HarnessModelPickerState {
   readonly activeRowId: string;
   readonly hoveredRowId: string;
   readonly openVersion: number;
-  /** Cascade drill-down (Provider → Subprovider → Model → Effort). Query
+  /** Cascade drill-down (Source → Provider → Model → Effort). Query
    *  non-empty forces flat search display without clearing these fields. */
   readonly cascade: CascadeState;
 }
