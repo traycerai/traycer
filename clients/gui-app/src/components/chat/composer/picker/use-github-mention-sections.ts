@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -383,6 +383,16 @@ export function useGithubMentionSections(
     ],
   );
 
+  // One button over a list that is two reads merged. The catalog alone leaves
+  // a typed query's rows, and the search's own notice and status, untouched -
+  // so a refresh pressed BECAUSE the section reports `gh` unavailable would
+  // leave that report standing.
+  const { refreshManually } = openCatalog;
+  const { refresh: refreshSearch } = search;
+  const onRefresh = useCallback(async () => {
+    await Promise.all([refreshManually(), refreshSearch()]);
+  }, [refreshManually, refreshSearch]);
+
   const chrome = useMemo<MentionStepChrome | null>(() => {
     if (openSection === null) return null;
     // Every decision below - ⓘ suppression, banner, empty-scope copy - lives in
@@ -401,15 +411,15 @@ export function useGithubMentionSections(
       freshnessAt: openCatalog.freshnessAt,
       checking: openCatalog.isChecking,
       searching: search.isSearching,
-      onRefresh: openCatalog.refreshManually,
+      onRefresh,
     });
   }, [
     currentEpicId,
     filter,
+    onRefresh,
     openCatalog.freshnessAt,
     openCatalog.isChecking,
     openCatalog.notice,
-    openCatalog.refreshManually,
     openCatalog.scopeResolved,
     openCatalog.sourceStatus,
     openSection,

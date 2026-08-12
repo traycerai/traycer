@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -61,6 +61,21 @@ export interface GithubMentionSearchResult {
   readonly notice: PrSourceNotice | null;
   /** True while a remote search is in flight - the appended row's condition. */
   readonly isSearching: boolean;
+  /**
+   * Re-runs the live search, for the section's refresh button.
+   *
+   * The button is one control over a list that is two reads merged, so
+   * refreshing the catalog alone leaves a typed query's rows - and this
+   * observer's own `sourceStatus` and `notice` - exactly as they were. A user
+   * who hits Refresh because the section says `gh` is unavailable would watch
+   * that message survive the refresh that was supposed to clear it.
+   *
+   * No-ops when this observer is disabled, for the same reason every projected
+   * field is gated on `wanted`: with the query cleared and the default filter
+   * back, the catalog owns the list and a search here would be a GitHub call
+   * for rows the section is not showing.
+   */
+  readonly refresh: () => Promise<void>;
 }
 
 export function useGithubMentionSearch(
@@ -128,11 +143,17 @@ export function useGithubMentionSearch(
   // that is no longer running would keep its banner on the section chrome with
   // nothing behind it.
   const answer = wanted ? searchQuery.data : undefined;
+  const { refetch } = searchQuery;
+  const refresh = useCallback(
+    () => (wanted ? refetch().then(() => undefined) : Promise.resolve()),
+    [refetch, wanted],
+  );
   return {
     rows: answer?.rows ?? EMPTY_ROWS,
     sourceStatus: answer?.sourceStatus ?? null,
     notice: answer?.notice ?? null,
     isSearching: wanted && searchQuery.isFetching,
+    refresh,
   };
 }
 

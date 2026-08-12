@@ -244,6 +244,21 @@ export function createComposerSuggestionRender<
           return true;
         }
         if (event.key === "Tab") {
+          // Shift+Tab is FOCUS, not commit: the backward direction is the only
+          // keyboard route to the picker's own chrome, and nothing else in the
+          // menu claims it.
+          //
+          // Defensive rather than a verified repair. A review flagged this
+          // branch as swallowing Shift+Tab, and by inspection it did - it
+          // matched `Tab` without reading `shiftKey`, and a section always has
+          // a Back row so `items` is never empty. But instrumenting the handler
+          // (throw on `Tab`) shows it is never REACHED with Shift held: plain
+          // Tab arrives, Shift+Tab does not, so something upstream already
+          // discriminates. That was measured under jsdom, which cannot be
+          // trusted for ProseMirror key handling, so this stays as the correct
+          // behaviour for the case if it ever does arrive. It is deliberately
+          // untested: a test here passes identically with and without the line.
+          if (event.shiftKey) return false;
           if (state.items.length === 0) return false;
           if (activePickerItemDisabledReason(state) !== null) return true;
           return state.commitActiveItem();

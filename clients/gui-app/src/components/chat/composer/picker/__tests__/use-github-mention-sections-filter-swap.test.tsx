@@ -85,6 +85,7 @@ vi.mock("@/hooks/composer/use-github-mention-search", () => ({
     sourceStatus: null,
     notice: null,
     isSearching: mocks.search.isSearching,
+    refresh: () => Promise.resolve(),
   }),
 }));
 
