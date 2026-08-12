@@ -110,8 +110,51 @@ export function createComposerSuggestionRender<
       exitPluginSession(editor);
     };
 
+    // Returning to ROOT re-arms root's prose rules on a query the section
+    // exempted, which nothing else re-evaluates.
+    //
+    // This is the mirror of the note on `inGithubMentionSection`: the step
+    // lives in the store and moves without the editor moving, so no `onUpdate`
+    // follows a Back. Only the drill-IN direction was covered. A real title the
+    // section legitimately allowed - `fix(relay): stop the busy-loop, again` -
+    // therefore survived the return to root, where the comma is prose, leaving
+    // the root menu open on it and its workspace and epic providers fetching
+    // for a query root would never have opened for.
+    //
+    // Store-subscribed rather than hooked into the Back row, because Back is
+    // one of several ways the step returns to root (click, keyboard commit)
+    // and the rule belongs to the STEP, not to the control that changed it.
+    let unwatchStep: (() => void) | null = null;
+
+    const stopWatchingStep = (): void => {
+      if (unwatchStep === null) return;
+      unwatchStep();
+      unwatchStep = null;
+    };
+
+    const watchStepForProse = (): void => {
+      stopWatchingStep();
+      if (args.kind !== "mention") return;
+      unwatchStep = args.pickerStore.subscribe(() => {
+        const props = latestProps;
+        // `dismissed` also breaks the re-entry `dismissOccurrence` would cause
+        // by writing to the very store this listens to.
+        if (props === null || dismissed) return;
+        const state = args.pickerStore.getState();
+        if (!state.open || state.sessionId !== sessionId) return;
+        if (state.kind !== "mention") return;
+        if (githubMentionSectionForStep(state.step) !== null) return;
+        // The store's own query, which is what the picker is actually showing
+        // rows for - and `false` because this branch has already established
+        // the step is not a section.
+        if (!isDismissedMentionQuery(state.query, false)) return;
+        dismissOccurrence(props.editor);
+      });
+    };
+
     const startSession = (props: SuggestionProps<unknown, TItem>): void => {
       dismissed = false;
+      watchStepForProse();
       // Cancel any exit still queued for a previous occurrence - it must not
       // fire into the session that starts here.
       exitEpoch += 1;
@@ -211,6 +254,7 @@ export function createComposerSuggestionRender<
       },
 
       onExit() {
+        stopWatchingStep();
         latestProps = null;
         dismissed = false;
         // The plugin session is over; a queued exit has nothing left to end,
