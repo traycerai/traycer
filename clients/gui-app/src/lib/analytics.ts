@@ -957,6 +957,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     host: true,
     keybindings: true,
     notifications: true,
+    orchestrations: true,
     providers: true,
     shell: true,
     usage: true,
