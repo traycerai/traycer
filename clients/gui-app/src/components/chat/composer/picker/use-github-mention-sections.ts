@@ -121,19 +121,25 @@ export function useGithubMentionSections(
   // during render stays pure.
   const now = useSampledNow();
 
+  // `pickerActive` is the menu session, and it is deliberately NOT `enabled`:
+  // each read is disabled while the other section is open, and the follow-up
+  // guard must outlive that - see `UseGithubMentionCatalogParams.pickerActive`.
+  const pickerActive = supported && active;
   const pullRequestCatalog = useGithubMentionCatalog({
     client,
     scope,
     section: "pull-requests",
-    enabled: supported && active && (atRoot || openSection === "pull-requests"),
+    enabled: pickerActive && (atRoot || openSection === "pull-requests"),
     allowStaleFollowUp: openSection === "pull-requests",
+    pickerActive,
   });
   const issueCatalog = useGithubMentionCatalog({
     client,
     scope,
     section: "issues",
-    enabled: supported && active && (atRoot || openSection === "issues"),
+    enabled: pickerActive && (atRoot || openSection === "issues"),
     allowStaleFollowUp: openSection === "issues",
+    pickerActive,
   });
 
   const catalogStore = useGithubMentionCatalogStore(

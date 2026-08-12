@@ -66,6 +66,18 @@ export interface UseGithubMentionCatalogParams {
    * sections the user has not opened.
    */
   readonly allowStaleFollowUp: boolean;
+  /**
+   * Whether the picker is open at all - the lifetime of the one-per-session
+   * follow-up guard below, and the ONLY thing that resets it.
+   *
+   * Neither `enabled` nor `allowStaleFollowUp` can play that role: both flip
+   * while a single menu session walks between root and a section (root turns
+   * the follow-up off, opening the OTHER section disables this read entirely),
+   * and clearing the guard on either edge turned "one sweep per session" into
+   * one sweep per re-entry - so a user stepping in and out of a section whose
+   * answer is still `stale: true` enqueues a GitHub sweep every time.
+   */
+  readonly pickerActive: boolean;
 }
 
 export interface GithubMentionCatalogResult {
@@ -114,7 +126,8 @@ interface CatalogRefreshContext {
 export function useGithubMentionCatalog(
   params: UseGithubMentionCatalogParams,
 ): GithubMentionCatalogResult {
-  const { client, scope, section, enabled, allowStaleFollowUp } = params;
+  const { client, scope, section, enabled, allowStaleFollowUp, pickerActive } =
+    params;
   const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
 
@@ -202,13 +215,19 @@ export function useGithubMentionCatalog(
   // One automatic follow-up per (scope, section) per menu session. The ref is
   // what keeps a re-render, or the response arriving still `stale`, from
   // turning "fetch once because the cache is old" into a fetch loop.
+  //
+  // It is CLEARED on exactly one edge - the picker closing - and the scope and
+  // section live in the stored value instead, so a change to either fails the
+  // comparison below without anything having to notice the transition. See
+  // `pickerActive` for why the two narrower flags cannot own this lifetime.
   const autoFollowedRef = useRef<string | null>(null);
   const followKey = `${scope.epicId ?? ""}\x1f${[...scope.workspacePaths].toSorted().join("\x1f")}\x1f${section}`;
   useEffect(() => {
-    if (!enabled || !allowStaleFollowUp) {
+    if (!pickerActive) {
       autoFollowedRef.current = null;
       return;
     }
+    if (!enabled || !allowStaleFollowUp) return;
     // `keepPreviousData` hands over the PREVIOUS scope's response while the
     // new scope's cache-only read is in flight. Following its `stale` flag
     // would spend a GitHub request - and rate-limit budget - deciding for a
@@ -235,6 +254,7 @@ export function useGithubMentionCatalog(
     enabled,
     followKey,
     mutateAsync,
+    pickerActive,
     scope.epicId,
     scope.workspacePaths,
     section,

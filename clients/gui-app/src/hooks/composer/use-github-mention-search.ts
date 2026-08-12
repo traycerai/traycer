@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { keepPreviousData } from "@tanstack/react-query";
+import type { QueryKey } from "@tanstack/react-query";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mentionGithubSearchRequestSchema } from "@traycer/protocol/host/mention-schemas";
 import type {
   GithubMentionRow,
   GithubMentionSection,
@@ -13,6 +14,8 @@ import type {
 } from "@traycer/protocol/host/pr-schemas";
 
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { queryKeys } from "@/lib/query-keys";
 import type { GithubMentionFilter } from "@/lib/composer/mentions/github-mention-rows";
 import {
   asIssueMentionFilter,
@@ -64,6 +67,7 @@ export function useGithubMentionSearch(
   params: UseGithubMentionSearchParams,
 ): GithubMentionSearchResult {
   const { client, scope, section, debouncedQuery, filter, enabled } = params;
+  const readiness = useReactiveHostReadiness(client);
 
   const query = debouncedQuery.trim();
   // A default filter with no query is exactly what the catalog already
@@ -78,6 +82,26 @@ export function useGithubMentionSearch(
     [filter, query, scope, section],
   );
 
+  // The LANE this observer's answer belongs to - host, epic, roots, section -
+  // and deliberately nothing else. `query` and `filter` are the axes the
+  // previous answer is held ACROSS: they are what the user is changing while
+  // the next one lands, and the merged list corrects for both one layer up
+  // (the funnel re-filters, the ranker re-ranks against the new query).
+  //
+  // The scope terms are the ones nothing downstream can correct. Held across
+  // a host, epic or roots change, the previous scope's rows are merged into
+  // the new one and stay SELECTABLE, so the user can commit a mention naming
+  // a pull request the current scope cannot resolve - the same rule the
+  // catalog read already applies to its own placeholder.
+  const lane = useMemo(
+    () =>
+      searchLane(
+        queryKeys.hostMethodScope(readiness.hostId, "mention.githubSearch"),
+        request,
+      ),
+    [readiness.hostId, request],
+  );
+
   const searchQuery = useHostQuery<HostRpcRegistry, "mention.githubSearch">({
     client,
     method: "mention.githubSearch",
@@ -86,7 +110,14 @@ export function useGithubMentionSearch(
     options: {
       enabled: wanted,
       staleTime: SEARCH_STALE_TIME_MS,
-      placeholderData: keepPreviousData,
+      // `keepPreviousData` narrowed to one lane, rather than `keepPreviousData`
+      // itself, which keeps whatever the observer answered last regardless of
+      // which question it was.
+      placeholderData: (previous, previousQuery) =>
+        previousQuery !== undefined &&
+        searchLaneOfKey(previousQuery.queryKey) === lane
+          ? previous
+          : undefined,
     },
   });
 
@@ -103,6 +134,41 @@ export function useGithubMentionSearch(
     notice: answer?.notice ?? null,
     isSearching: wanted && searchQuery.isFetching,
   };
+}
+
+/**
+ * The scope lane a `mention.githubSearch` cache entry belongs to.
+ *
+ * `prefix` is whatever precedes the request in the key (`["host", hostId,
+ * method]`), so the two sides of the placeholder comparison never have to
+ * agree on where the host id sits - both build the lane the same way, from
+ * the same two ingredients.
+ */
+function searchLane(
+  prefix: ReadonlyArray<unknown>,
+  request: MentionGithubSearchRequest,
+): string {
+  return JSON.stringify([
+    prefix,
+    request.section,
+    request.epicId,
+    request.workspacePaths,
+  ]);
+}
+
+/**
+ * The lane of an EXISTING key, read back out of it.
+ *
+ * Fails closed: a key whose last element is not a search request - a
+ * `cacheKeyIdentity` appended later, say - yields a string the current lane
+ * cannot match, so the placeholder is dropped rather than accepted across a
+ * boundary this function could not read. That costs the anti-flicker hold,
+ * never correctness.
+ */
+function searchLaneOfKey(key: QueryKey): string {
+  const parsed = mentionGithubSearchRequestSchema.safeParse(key.at(-1));
+  if (!parsed.success) return JSON.stringify({ unreadableKey: key });
+  return searchLane(key.slice(0, -1), parsed.data);
 }
 
 /**
