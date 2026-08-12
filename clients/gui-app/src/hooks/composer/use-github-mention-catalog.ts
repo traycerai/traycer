@@ -121,6 +121,12 @@ const EMPTY_REPOSITORIES: ReadonlyArray<GithubMentionRepository> = [];
 /** The cache slot a refresh was issued against, captured at mutate time. */
 interface CatalogRefreshContext {
   readonly destination: QueryKey;
+  /**
+   * The host the request was ISSUED against, which the destination key already
+   * encodes but does not expose - `onError` has to compare hosts, and digging
+   * one back out of a `QueryKey` would depend on that key's shape.
+   */
+  readonly hostId: string | null;
 }
 
 export function useGithubMentionCatalog(
@@ -189,7 +195,7 @@ export function useGithubMentionCatalog(
     method: "mention.githubCatalog",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ destination: cacheKey }),
+      onMutate: () => ({ destination: cacheKey, hostId: readiness.hostId }),
       onSuccess: (response, _variables, context) => {
         applyResponse(response, context.destination);
       },
@@ -203,8 +209,22 @@ export function useGithubMentionCatalog(
       // found nothing new. Only the MANUAL lane reports it - the user asked
       // for that one - while the automatic follow-up stays silent rather than
       // nagging about a background sweep nobody requested.
-      onError: (error, variables) => {
+      // The host guard is the same rule as `destination` above, applied to the
+      // other outcome: an app-wide composer can rebind while this request is in
+      // flight, and the toast would then blame the host the user is now looking
+      // at for a refresh the one they LEFT rejected. `hostId` read here is the
+      // latest render's - the currently bound host - because that is exactly
+      // what the captured one has to be compared against.
+      //
+      // A missing context still toasts. `onMutate` is a synchronous object
+      // literal that cannot throw, so this is unreachable in practice, and
+      // preserving the old behaviour there is better than minting a silent
+      // path that drops a real rejection.
+      onError: (error, variables, context) => {
         if (variables.refresh !== "manual") return;
+        if (context !== undefined && context.hostId !== readiness.hostId) {
+          return;
+        }
         toastFromHostError(error, "Could not refresh from GitHub");
       },
     },

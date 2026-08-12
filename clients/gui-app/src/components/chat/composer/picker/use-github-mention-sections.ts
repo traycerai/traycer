@@ -288,7 +288,22 @@ export function useGithubMentionSections(
     // to `hostId`, so a host swap - or an in-place downgrade that re-handshakes
     // - can negotiate the method away while this section stays open. Without
     // it, typing would keep calling a method the current host never declared.
-    enabled: supported && active && openSection !== null,
+    //
+    // The scope clause covers the window `filter` above deliberately leaves
+    // unreconciled. A selection is kept through an unresolved scope so a cold
+    // open does not blank it for one paint - correct for the radios and the
+    // funnel dot, which only DISPLAY it, and wrong for this read, which SENDS
+    // it. A repository selection is non-default, so `wanted` is satisfied with
+    // no query typed at all: the roots changing under an open section is on its
+    // own enough to spend a request qualified by a repository that may have
+    // just left the scope, and to offer its rows as insertable. Withheld only
+    // while something is selected, so the common unfiltered open still searches
+    // the moment the user types.
+    enabled:
+      supported &&
+      active &&
+      openSection !== null &&
+      (scopeResolved || filter.repository === null),
   });
 
   // The section's list: cached rows first (identity preserved), remote hits
@@ -554,16 +569,43 @@ function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
  * first unconditionally left the Repository group, the empty-scope copy and
  * the `repo#123` chip label on scope data an Issues refresh had already
  * invalidated. The other section is the fallback for the window before the
- * open one has answered at all - including at root, where neither is open.
+ * open one has answered at all.
+ *
+ * At ROOT there is no open section to prefer, and a fixed pull-requests-first
+ * order there throws away the same reasoning one navigation later: refresh
+ * Issues, observe the changed repositories, press Back, and the disabled
+ * pull-request query's older answer wins and is written straight back over the
+ * store. Root falls to whichever side answered most recently instead, which is
+ * the same question - who can have seen the change - asked without a section.
  */
 function preferredScopeAnswer(
   openSection: GithubMentionSection | null,
   pullRequests: GithubMentionCatalogResult,
   issues: GithubMentionCatalogResult,
 ): GithubMentionCatalogResult {
+  if (openSection === null) return freshestScopeAnswer(pullRequests, issues);
   const preferred = openSection === "issues" ? issues : pullRequests;
   if (preferred.scopeResolved) return preferred;
   return openSection === "issues" ? pullRequests : issues;
+}
+
+/**
+ * The more recently refreshed of two answers, preferring a resolved one.
+ *
+ * `freshnessAt` is the host's own stamp for when it last reached GitHub, so it
+ * orders the two answers by what each can have SEEN rather than by which query
+ * happens to be mounted. A null stamp sorts oldest, and two nulls keep the
+ * historical pull-requests-first order rather than inventing a new one.
+ */
+function freshestScopeAnswer(
+  pullRequests: GithubMentionCatalogResult,
+  issues: GithubMentionCatalogResult,
+): GithubMentionCatalogResult {
+  if (!pullRequests.scopeResolved) return issues;
+  if (!issues.scopeResolved) return pullRequests;
+  return (issues.freshnessAt ?? 0) > (pullRequests.freshnessAt ?? 0)
+    ? issues
+    : pullRequests;
 }
 
 /**

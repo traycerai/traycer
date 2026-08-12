@@ -153,6 +153,12 @@ const ONE_REPO = {
   owner: "traycerai",
   repo: "traycer-internal",
 } as const;
+/** Present in the older answer only: the repository a refresh saw leave. */
+const DEPARTED_REPO = {
+  githubHost: "github.com",
+  owner: "traycerai",
+  repo: "detached",
+} as const;
 
 const fakeClient = {} as HostClient<HostRpcRegistry>;
 
@@ -376,5 +382,55 @@ describe("useGithubMentionSections catalog write path", () => {
       true,
     );
     expect(result.current.context.issues.singleRepositoryScope).toBe(true);
+  });
+
+  it("records the more recently refreshed section's repositories at root", async () => {
+    // Refresh Issues, which observes that a repository left the scope, then
+    // press Back. At root there is no open section to prefer, and taking
+    // pull-requests by POSITION writes its older answer straight back over the
+    // store - reviving the departed repository for the reconciliation set and
+    // the chip labelling until the disabled pull-request query refetches.
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 1_000;
+    catalogMocks.pullRequests.repositories = [ONE_REPO, DEPARTED_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 2_000;
+    catalogMocks.issues.repositories = [ONE_REPO];
+
+    renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionScopeRepositories(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+      ),
+    ).toEqual([ONE_REPO]);
+  });
+
+  it("still records the pull-request repositories at root when they are fresher", async () => {
+    // The control: the fix orders the two answers, it does not swap which
+    // section root reads. Reversing the preference would pass the case above
+    // and fail this one.
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 2_000;
+    catalogMocks.pullRequests.repositories = [ONE_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 1_000;
+    catalogMocks.issues.repositories = [ONE_REPO, DEPARTED_REPO];
+
+    renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionScopeRepositories(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+      ),
+    ).toEqual([ONE_REPO]);
   });
 });
