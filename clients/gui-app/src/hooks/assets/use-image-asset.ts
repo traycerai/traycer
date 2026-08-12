@@ -372,11 +372,6 @@ export function useImageAsset(
     let settleFetch: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
     let rejectFetch: ((error: Error) => void) | null = null;
     let usedForFetch = false;
-    // Threads the human-readable reason through the cache's generic
-    // Promise rejection: `onFailure` knows WHY (`describeFailure`), but the
-    // `imageBlobCache.acquire(...).catch` below only sees that the fetcher's
-    // promise rejected, not the `AssetStreamFailure` that caused it.
-    let pendingFailureMessage: string | null = null;
 
     const callbacks: AssetStreamCallbacks = {
       onHeader: (header: AssetStreamHeader) => {
@@ -469,7 +464,7 @@ export function useImageAsset(
               },
             });
           },
-          () => {
+          (error: unknown) => {
             if (!active) return;
             setResolved({
               key: requestKey,
@@ -478,7 +473,9 @@ export function useImageAsset(
                 url: null,
                 meta: null,
                 reason:
-                  pendingFailureMessage ?? "This image could not be loaded.",
+                  error instanceof Error
+                    ? error.message
+                    : "This image could not be loaded.",
                 totalBytes: header.sizeBytes,
                 servedFromCache: false,
               },
@@ -495,8 +492,7 @@ export function useImageAsset(
       },
       onFailure: (failure: AssetStreamFailure) => {
         if (rejectFetch !== null) {
-          pendingFailureMessage = describeFailure(failure);
-          rejectFetch(new Error(failure.message));
+          rejectFetch(new Error(describeFailure(failure)));
           return;
         }
         if (!active) return;
