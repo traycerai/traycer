@@ -13,11 +13,10 @@ import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import { NO_HIGHLIGHT } from "@/lib/git/path-highlight";
 import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
-import { gitImageDiffSides } from "@/lib/git/git-diff-tile";
 import {
-  isImageAssetPath,
-  isSvgAssetPath,
-} from "@/lib/assets/image-extension-allowlist";
+  gitImageDiffRouting,
+  gitImageDiffSides,
+} from "@/lib/git/git-diff-tile";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
@@ -152,30 +151,9 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // `.svg` is never `isBinary` to git (image-preview decision log, decision
   // #5) but still has no searchable diff text once it routes to the image
   // view, so it shares the same "binary" find-coverage state as a true
-  // binary image. A rename's current path alone can miss the old side
-  // (pre-landing review, P0: `old.png -> new.txt` must still route) - route
-  // when either the current or previous path is allowlisted; each side
-  // validates against its own effective path inside `ImageDiffView`. The
-  // svg text-exemption has the same shape (re-review P1): `old.svg ->
-  // new.txt` is text to git, so the previous path must also OR into the
-  // svg check, not just the current one. A conflicted file is exempted from
-  // the `isBinary` check entirely (live E2E finding, ticket 06): the host's
-  // bulk listChangedFiles numstat pipeline has no MERGE_HEAD-aware fallback
-  // for unmerged paths, so a real binary conflict can report `isBinary:
-  // false` here even though decision #10 routes every conflicted image
-  // unconditionally.
-  const isPreviousImage =
-    props.file.previousPath !== null &&
-    isImageAssetPath(props.file.previousPath);
-  const isPreviousSvg =
-    props.file.previousPath !== null && isSvgAssetPath(props.file.previousPath);
-  const isConflicted = props.file.stage === "conflicted";
-  const routeToImageDiff =
-    (isImageAssetPath(props.file.path) || isPreviousImage) &&
-    (props.file.isBinary ||
-      isSvgAssetPath(props.file.path) ||
-      isPreviousSvg ||
-      isConflicted);
+  // binary image - see `gitImageDiffRouting` for the routing decision
+  // itself, shared with the single-file diff tile.
+  const { routeToImageDiff } = gitImageDiffRouting(props.file);
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff) return;
     bundleFindRegistration.registerCoverageState(

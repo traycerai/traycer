@@ -23,14 +23,11 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import {
   gitBundleGroupLabel,
+  gitImageDiffRouting,
   gitImageDiffSides,
   gitStageLabel,
 } from "@/lib/git/git-diff-tile";
 import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-rendering";
-import {
-  isImageAssetPath,
-  isSvgAssetPath,
-} from "@/lib/assets/image-extension-allowlist";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import { DiffBundleLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-bundle-loading-skeleton";
@@ -657,45 +654,17 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 }
 
 /**
- * Extension gate before any diff-text fetch (image-preview decision log,
- * decision #6): a binary image extension, or `.svg` (never `isBinary` to
- * git - decision #5), routes to `ImageDiffView` by default. SVG keeps a
- * per-tile, non-persisted toggle back to the existing text-diff path,
- * portaled into the tile's shared header (mirrors `editStatus` below).
- *
- * A rename's CURRENT path alone is not enough to decide routing (pre-landing
- * review, P0): `old.png -> new.txt` must still route to image mode for its
- * old side even though `file.path` is `.txt`. Route when EITHER the current
- * or previous path is allowlisted; each side then validates against its own
- * effective path inside `ImageDiffView`. The SVG text-exemption (`isBinary`
- * stays `false` for svg per decision #5) has the SAME either-path shape
- * (re-review P1): `old.svg -> new.txt` is a renamed diff git reports as
- * text, so `isSvg` must also OR in the previous path, not just the current
- * one, for both the routing gate and the toggle's presence.
- *
- * A conflicted file (`file.stage === "conflicted"`) is exempted from the
- * `isBinary` check entirely (live E2E finding, ticket 06): the host's bulk
- * `listChangedFiles` numstat pipeline has no `MERGE_HEAD`-aware fallback for
- * unmerged paths the way its single-file `getFileDiff` path does, so a real
- * two-sided binary conflict can report `isBinary: false` here even though
- * decision #10 says every conflicted image routes to `ImageDiffView`
- * unconditionally - the extension gate alone is the correct signal for this
- * one state, since the host still validates via magic bytes once fetched.
+ * SVG keeps a per-tile, non-persisted toggle back to the existing text-diff
+ * path, portaled into the tile's shared header (mirrors `editStatus` below)
+ * - the routing decision itself is shared with bundle sections, see
+ * `gitImageDiffRouting`.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
   readonly showImageDiff: boolean;
   readonly svgToggle: ReactNode;
 } {
-  const isImage = isImageAssetPath(file.path);
-  const isPreviousImage =
-    file.previousPath !== null && isImageAssetPath(file.previousPath);
-  const isSvg =
-    isSvgAssetPath(file.path) ||
-    (file.previousPath !== null && isSvgAssetPath(file.previousPath));
-  const isConflicted = file.stage === "conflicted";
+  const { routeToImageDiff, isSvg } = gitImageDiffRouting(file);
   const [viewAsSource, setViewAsSource] = useState(false);
-  const routeToImageDiff =
-    (isImage || isPreviousImage) && (file.isBinary || isSvg || isConflicted);
   const showImageDiff = routeToImageDiff && !(isSvg && viewAsSource);
   const svgToggle = isSvg ? (
     <DiffTabHeaderPortal>

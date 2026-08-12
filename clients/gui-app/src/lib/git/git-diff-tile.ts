@@ -9,6 +9,10 @@ import type {
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { createDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
+import {
+  isImageAssetPath,
+  isSvgAssetPath,
+} from "@/lib/assets/image-extension-allowlist";
 
 /**
  * Deterministic tile id derived from the host + diff payload - mirrors
@@ -79,6 +83,41 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
   }
   const stage = file.stage === "staged" ? "staged" : "unstaged";
   return { oldStage: stage, newStage: stage, conflicted: false };
+}
+
+export interface GitImageDiffRouting {
+  readonly routeToImageDiff: boolean;
+  readonly isSvg: boolean;
+}
+
+/**
+ * Extension gate before any diff-text fetch (image-preview decision log,
+ * decision #6): a binary image extension, or `.svg` (never `isBinary` to
+ * git - decision #5), routes to `ImageDiffView`. A rename's CURRENT path
+ * alone is not enough (pre-landing review, P0: `old.png -> new.txt` must
+ * still route for its old side) - route when EITHER the current or previous
+ * path is allowlisted, and (re-review P1) OR the previous path into the SVG
+ * check too (`old.svg -> new.txt` is text to git on the rename). A
+ * conflicted file is exempted from the `isBinary` check entirely (live E2E
+ * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline
+ * has no `MERGE_HEAD`-aware fallback for unmerged paths, so a real two-sided
+ * binary conflict can report `isBinary: false` here even though decision
+ * #10 routes every conflicted image unconditionally - the extension gate
+ * alone is the correct signal for this one state. Shared between the
+ * single-file diff tile (which also drives a per-tile SVG source/image
+ * toggle from `isSvg`) and bundle sections (which only need the boolean).
+ */
+export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
+  const isImage = isImageAssetPath(file.path);
+  const isPreviousImage =
+    file.previousPath !== null && isImageAssetPath(file.previousPath);
+  const isSvg =
+    isSvgAssetPath(file.path) ||
+    (file.previousPath !== null && isSvgAssetPath(file.previousPath));
+  const isConflicted = file.stage === "conflicted";
+  const routeToImageDiff =
+    (isImage || isPreviousImage) && (file.isBinary || isSvg || isConflicted);
+  return { routeToImageDiff, isSvg };
 }
 
 export function gitDiffRepositoryContextLabel(
