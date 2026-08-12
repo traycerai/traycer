@@ -142,7 +142,10 @@ export interface MergedNotificationsActions {
    * provider, because there the host's own SQLite is the authority being
    * consumed. No-op in every other mode.
    */
-  readonly markEntityAsRead: (entity: HostNotificationsEntityRef) => void;
+  readonly markEntityAsRead: (
+    originHostId: string | null,
+    entity: HostNotificationsEntityRef,
+  ) => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
   readonly isLoadingMoreHost: boolean;
@@ -1138,13 +1141,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           }
         }
       },
-      markEntityAsRead: (entity) => {
+      markEntityAsRead: (originHostId, entity) => {
         if (feedMode !== "cloud") return;
         // Selection, single-flight, backoff and the retry timer all live in
         // the driver: they have to outlive this render and stay single-flight
         // across every caller. There is no cloud mark-many RPC, so the driver
         // serializes per entry the way `markAllAsRead` does.
-        requestCloudEntityRead(entity, {
+        requestCloudEntityRead(originHostId, entity, {
           markRead: async (entryId) => {
             const result = await cloudMarkRead.mutateAsync({ entryId });
             // `unavailable` is a refusal, not a transport failure - the
@@ -1345,7 +1348,7 @@ export function rowFromAppLocalEntry(
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
-    originHostId: null,
+    originHostId: entry.originHostId ?? null,
     category: categoryForNotificationSource("app-local"),
   };
 }

@@ -39,6 +39,7 @@ export function installManagedCommandChatSession(args: {
 
   registry.acquire(epicId, chatId, TEST_SCOPE_KEY, (storeEpicId, storeChatId) =>
     createChatSessionStore({
+      hostId: "host-a",
       epicId: storeEpicId,
       chatId: storeChatId,
       userId: null,

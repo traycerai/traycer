@@ -44,7 +44,12 @@ export interface CloudEntityReadDeps {
  */
 let inFlight = false;
 let retryTimer: TimerHandle | null = null;
-let queuedEntity: HostNotificationsEntityRef | null = null;
+interface CloudEntityReadScope {
+  readonly originHostId: string | null;
+  readonly entity: HostNotificationsEntityRef;
+}
+
+let queuedScope: CloudEntityReadScope | null = null;
 /**
  * Bumped by every reset. Both continuations that can outlive the caller - the
  * armed retry timer and the in-flight loop's own re-entry - capture it and
@@ -83,22 +88,23 @@ export function cloudEntityReadBackoffMs(
  * and coalesces into the in-flight pass rather than starting a second one.
  */
 export function requestCloudEntityRead(
+  originHostId: string | null,
   entity: HostNotificationsEntityRef,
   deps: CloudEntityReadDeps,
 ): void {
   if (inFlight) {
-    queuedEntity = entity;
+    queuedScope = { originHostId, entity };
     return;
   }
   const state = useCloudNotificationsStore.getState();
   const { due, dropped } = selectCloudEntityReadRetries(state, deps.now());
   state.clearEntityReadRetries(dropped);
-  const discovered = selectCloudEntityReadTargets(state, entity);
+  const discovered = selectCloudEntityReadTargets(state, entity, originHostId);
   const entryIds = [...due, ...discovered];
   // Nothing to do: return WITHOUT touching the store. This runs on every
   // accepted snapshot, and a no-op that still wrote would re-trigger itself.
   if (entryIds.length === 0) {
-    scheduleNextAttempt(entity, deps);
+    scheduleNextAttempt({ originHostId, entity }, deps);
     return;
   }
   // Atomic claim + optimistic markers: the in-flight claim is visible to any
@@ -135,11 +141,11 @@ export function requestCloudEntityRead(
       // timer holding its dead `deps`.
       if (generation === passGeneration) {
         inFlight = false;
-        const next = queuedEntity ?? entity;
-        queuedEntity = null;
+        const next = queuedScope ?? { originHostId, entity };
+        queuedScope = null;
         // Re-enter once: picks up anything that arrived mid-pass, and
         // otherwise falls through to arming the backoff timer.
-        requestCloudEntityRead(next, deps);
+        requestCloudEntityRead(next.originHostId, next.entity, deps);
       }
     }
   })();
@@ -148,7 +154,7 @@ export function requestCloudEntityRead(
 /** Arms a single timer for the soonest parked entry, so a retry happens even
  * if no snapshot or presence change ever comes. */
 function scheduleNextAttempt(
-  entity: HostNotificationsEntityRef,
+  scope: CloudEntityReadScope,
   deps: CloudEntityReadDeps,
 ): void {
   if (retryTimer !== null) return;
@@ -168,7 +174,7 @@ function scheduleNextAttempt(
     // cannot be cancelled, so it has to check for itself.
     if (generation !== armedGeneration) return;
     retryTimer = null;
-    requestCloudEntityRead(entity, deps);
+    requestCloudEntityRead(scope.originHostId, scope.entity, deps);
   }, delayMs);
 }
 
@@ -185,7 +191,7 @@ function scheduleNextAttempt(
 export function resetCloudEntityReadDriver(): void {
   generation += 1;
   inFlight = false;
-  queuedEntity = null;
+  queuedScope = null;
   if (retryTimer !== null) {
     globalThis.clearTimeout(retryTimer);
     retryTimer = null;
