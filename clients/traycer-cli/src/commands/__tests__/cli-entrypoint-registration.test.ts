@@ -66,6 +66,25 @@ vi.mock("../../installer/download-stage", () => ({
   },
 }));
 
+// Keep `host update`'s commander parse assertion on the real command wiring
+// while making its no-op backfill deterministic and side-effect free.
+vi.mock("../../manifest/host-install", () => ({
+  readHostInstallRecord: async () => ({
+    installId: "install-test",
+    version: "1.0.0",
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: "1.0.0" },
+    archiveSha256: null,
+    signatureVerifiedAt: null,
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: "/tmp/traycer-host",
+  }),
+}));
+
 // `host apply`'s registration also goes through `withCliLock` - mocking it
 // alongside the installer core (rather than only `commands/host-apply.ts`)
 // keeps the --force/--no-service forwarding and `ctx.progress` wiring
@@ -140,6 +159,18 @@ vi.mock("../../host/stamp-runtime", () => ({
       installGeneration: "id:test",
     };
   },
+}));
+
+vi.mock("../../commands/host-status", () => ({
+  hostStatusCommand: async () => ({ data: null, human: null, exitCode: 0 }),
+}));
+
+vi.mock("../../commands/config-env-list", () => ({
+  buildConfigEnvListCommand: () => async () => ({
+    data: [],
+    human: null,
+    exitCode: 0,
+  }),
 }));
 
 // Replaces only `runCommand` (which owns `process.exit` - see
@@ -429,6 +460,131 @@ describe("traycer CLI entrypoint registration", () => {
     // event per invocation above.
     expect(mocks.progressEvents).toHaveLength(3);
     expect(mocks.progressEvents[0]).toMatchObject({ stage: "resolve" });
+  });
+
+  it("host update parses --version/--force and forwards both explicit and latest requests", async () => {
+    mocks.downloadCalls.length = 0;
+
+    const explicit = buildProgram();
+    explicit.exitOverride();
+    await explicit.parseAsync(
+      ["host", "update", "--version", "2.1.0", "--force"],
+      { from: "user" },
+    );
+
+    const latest = buildProgram();
+    latest.exitOverride();
+    await latest.parseAsync(["host", "update"], { from: "user" });
+
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "2.1.0", automatic: false },
+      { environment: "production", versionRequest: null, automatic: false },
+    ]);
+  });
+
+  it("preserves the six root/global/local option parsing contracts", async () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const rootVersion = buildProgram();
+      rootVersion.exitOverride();
+      await expect(
+        rootVersion.parseAsync(["--version"], { from: "user" }),
+      ).rejects.toMatchObject({ code: "commander.version", exitCode: 0 });
+      expect(write).toHaveBeenCalledWith(
+        `${rootVersion.version()}\n`,
+        expect.any(Function),
+      );
+
+      const hostInterleaved = buildProgram();
+      hostInterleaved.exitOverride();
+      await expect(
+        hostInterleaved.parseAsync(["host", "--json", "status"], {
+          from: "user",
+        }),
+      ).resolves.toBeDefined();
+
+      const configInterleaved = buildProgram();
+      configInterleaved.exitOverride();
+      await expect(
+        configInterleaved.parseAsync(["config", "--quiet", "env", "list"], {
+          from: "user",
+        }),
+      ).resolves.toBeDefined();
+
+      const leafFinal = buildProgram();
+      leafFinal.exitOverride();
+      await expect(
+        leafFinal.parseAsync(["host", "status", "--json"], { from: "user" }),
+      ).resolves.toBeDefined();
+
+      mocks.downloadCalls.length = 0;
+      const explicit = buildProgram();
+      explicit.exitOverride();
+      await explicit.parseAsync(["host", "update", "--version", "2.2.0"], {
+        from: "user",
+      });
+      const bare = buildProgram();
+      bare.exitOverride();
+      await bare.parseAsync(["host", "update"], { from: "user" });
+      expect(mocks.downloadCalls).toEqual([
+        {
+          environment: "production",
+          versionRequest: "2.2.0",
+          automatic: false,
+        },
+        { environment: "production", versionRequest: null, automatic: false },
+      ]);
+
+      const shellPassthrough = buildProgram();
+      shellPassthrough.exitOverride();
+      const shellSet = expectCommand(shellPassthrough, [
+        "config",
+        "shell",
+        "set",
+      ]);
+      let observedShellArgs: readonly string[] = [];
+      shellSet.action((shellArgs: readonly string[]) => {
+        observedShellArgs = shellArgs;
+      });
+      await shellPassthrough.parseAsync(
+        [
+          "config",
+          "shell",
+          "set",
+          "--",
+          "host",
+          "update",
+          "--version",
+          "2.6.0",
+        ],
+        { from: "user" },
+      );
+      expect(observedShellArgs).toEqual([
+        "host",
+        "update",
+        "--version",
+        "2.6.0",
+      ]);
+
+      const updatePassthrough = buildProgram();
+      updatePassthrough.exitOverride();
+      await expect(
+        updatePassthrough.parseAsync(
+          ["host", "update", "--", "--version", "2.6.0"],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({
+        code: "commander.excessArguments",
+        message: expect.stringContaining("--version"),
+      });
+      expect(
+        expectCommand(updatePassthrough, ["host", "update"]).helpInformation(),
+      ).not.toContain("--host-update-version");
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("host apply exposes --force and a hidden --no-service option, wired to the shared runner", () => {

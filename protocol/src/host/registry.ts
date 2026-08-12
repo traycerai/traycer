@@ -200,6 +200,16 @@ import {
 } from "@traycer/protocol/host/status/contracts";
 import { hostRestartV10 } from "@traycer/protocol/host/restart/contracts";
 import {
+  hostIdentityGetV10,
+  hostIdentitySetV10,
+} from "@traycer/protocol/host/identity/contracts";
+import {
+  hostDoctorV10,
+  hostGetInstallationInfoV10,
+  hostUpdateCheckV10,
+  hostUpdateInstallV10,
+} from "@traycer/protocol/host/maintenance/contracts";
+import {
   lifecycleClaimShutdownV10,
   lifecycleCommitShutdownV10,
   lifecycleReleaseShutdownV10,
@@ -3432,6 +3442,89 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostRestartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.identity.get": {
+    // The host is the master copy of its own name. An older host has no reader
+    // for `host-name.json` at all, so there is nothing to degrade to on-box -
+    // clients fall back to the registry `displayName` instead.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostIdentityGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.identity.set": {
+    // Renaming over RPC requires the host-side writer; on an older host the
+    // desktop's direct-file path is the only writer, and it is local-only.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostIdentitySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.doctor": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostDoctorV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.update.check": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUpdateCheckV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.update.install": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUpdateInstallV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.getInstallationInfo": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetInstallationInfoV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -9,6 +9,7 @@ import {
   CommanderError,
   Option,
   type Command as CommanderCommand,
+  type ParseOptions,
 } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
@@ -207,10 +208,16 @@ export function buildProgramWithAgentRoles(
   agentRolesEnabled: boolean,
 ): Command {
   const program = new Command();
+  const cliVersion = resolveCliVersion(readonlyEnv());
+  // Commander resolves the root's built-in `--version` before any child
+  // option. `installHostUpdateVersionParser` below rewrites only the exact
+  // `host update --version X` spelling to a hidden local flag, preserving the
+  // root's established version output and every other command's normal
+  // positional/global-option parsing.
   program
     .name("traycer")
     .description("Traycer CLI - auth, host supervisor, and config surface")
-    .version(resolveCliVersion(readonlyEnv()));
+    .version(cliVersion);
 
   // Global runner flags so `traycer --json <subcommand>` works even when
   // the subcommand declares its own copy. Commander merges globals via
@@ -229,7 +236,63 @@ export function buildProgramWithAgentRoles(
   // entry can wrap it in a single `result/ok` envelope instead of leaking
   // raw prose onto an NDJSON stream.
   applyRunnerErrorRouting(program);
+  installHostUpdateVersionParser(program);
   return program;
+}
+
+/**
+ * Confine Commander’s root `--version` collision workaround to the one
+ * compatibility spelling that needs a version argument. This intentionally
+ * leaves `host --json status`, `config --quiet env list`, and all unrelated
+ * option placement under Commander’s unmodified parsing rules.
+ */
+function installHostUpdateVersionParser(program: Command): void {
+  const parseAsync = program.parseAsync.bind(program);
+  program.parseAsync = (...args: unknown[]) => {
+    const argv = args[0];
+    const options = args[1];
+    if (!Array.isArray(argv)) return parseAsync();
+    const rewrittenArgv = rewriteHostUpdateVersion(argv);
+    return isParseOptions(options)
+      ? parseAsync(rewrittenArgv, options)
+      : parseAsync(rewrittenArgv);
+  };
+}
+
+function rewriteHostUpdateVersion(argv: readonly string[]): string[] {
+  const commandOffset =
+    argv[0] === process.argv[0] && argv[1] === process.argv[1] ? 2 : 0;
+  const commandArgs = argv.slice(commandOffset);
+  const separatorIndex = commandArgs.indexOf("--");
+  const beforeSeparator =
+    separatorIndex === -1 ? commandArgs : commandArgs.slice(0, separatorIndex);
+  const commandPath = beforeSeparator.filter((token) => !token.startsWith("-"));
+  if (commandPath[0] !== "host" || commandPath[1] !== "update") {
+    return [...argv];
+  }
+  const updateTokenIndex = beforeSeparator.indexOf("update");
+  return argv.map((token, index) => {
+    const commandIndex = index - commandOffset;
+    if (
+      commandIndex < 0 ||
+      commandIndex <= updateTokenIndex ||
+      (separatorIndex !== -1 && commandIndex >= separatorIndex)
+    ) {
+      return token;
+    }
+    if (token === "--version") return "--host-update-version";
+    return token.startsWith("--version=")
+      ? `--host-update-version=${token.slice("--version=".length)}`
+      : token;
+  });
+}
+
+function isParseOptions(value: unknown): value is ParseOptions {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const from = Reflect.get(value, "from");
+  return from === "node" || from === "user" || from === "electron";
 }
 
 // Commander stdout (help/version) captured under `--json` so the entry catch
@@ -489,13 +552,10 @@ function registerHostCommands(program: Command): void {
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from",
       )
-      // `--release <version>` rather than `--version <version>` because
-      // the latter collides with commander's top-level program
-      // `--version` (set via `program.version(...)`) - commander
-      // resolves the option name globally first, so a subcommand
-      // `--version` ends up printing the CLI version and exiting.
-      // `--release` conveys the same intent (which registry release
-      // to install) without the collision.
+      // Keep the published installer spelling stable. The update command uses
+      // `--version` because the host's cloud/RPC spawners already use that
+      // exact contract; the entrypoint rewrites only that command path to its
+      // hidden local parser flag before Commander handles the argv.
       .option(
         "--release <version>",
         "Registry version to install (defaults to 'latest'). Mutually exclusive with --from.",
@@ -740,7 +800,15 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("update")
-      .description("Update the installed host to the latest registry version")
+      .description(
+        "Update the installed host to a registry version (defaults to latest)",
+      )
+      .addOption(
+        new Option(
+          "--host-update-version <version>",
+          "Update to this exact registry version",
+        ).hideHelp(),
+      )
       .option(
         "--force",
         "Update the host even if it has work in progress (skips the busy check).",
@@ -748,6 +816,10 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostUpdateCommand({
         force: opts.force === true,
+        versionRequest:
+          typeof opts.hostUpdateVersion === "string"
+            ? opts.hostUpdateVersion
+            : null,
       }),
   );
 
@@ -1050,10 +1122,9 @@ function registerCliCommands(program: Command): void {
         "--binary-path <path>",
         "Absolute path to the installed CLI binary",
       )
-      // NOT `--version`: that collides with the program-level `program.version()`
-      // global flag (commander resolves it first, printing the CLI version and
-      // exiting 0 before this command's action runs). See the same rename on
-      // `host install` (`--release`). Package-manager hooks must pass
+      // Package-manager hooks retain their published `--installed-version`
+      // spelling; `host update` is the one compatibility path which takes a
+      // direct `--version` pin. Package-manager hooks must pass
       // `--installed-version` (see scripts/native-packaging/publish-cli-package-managers.cjs).
       .requiredOption(
         "--installed-version <version>",

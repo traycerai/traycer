@@ -272,6 +272,25 @@ export const HOST_METHOD_POLL_TABLE = {
   "host.status": { ...LATEST_SCHEDULING, poll: null },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The host's own name: a bounded read that can coalesce. It has no poll —
+  // the host watches `host-name.json`, so a rename made anywhere else lands on
+  // the next read (or the next explicit invalidation) rather than needing one.
+  "host.identity.get": { ...LATEST_SCHEDULING, poll: null },
+  // Renaming persists a file the heartbeat then publishes; rapid edits must
+  // land in the order the user made them, so this is never coalesced.
+  "host.identity.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.doctor": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.check": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.install": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
