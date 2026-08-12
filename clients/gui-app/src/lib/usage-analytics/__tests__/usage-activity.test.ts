@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildUsageActivityCalendar } from "@/lib/usage-analytics/usage-activity";
+import {
+  buildUsageActivityCalendar,
+  isWindowTooWideError,
+} from "@/lib/usage-analytics/usage-activity";
 import type { UsageBucket } from "@/lib/usage-analytics/usage-chart-data";
 
 function bucket(
@@ -162,6 +165,23 @@ describe("buildUsageActivityCalendar", () => {
     expect(calendar.stats.longestStreakDays).toBe(3);
   });
 
+  it("names a most-active month even when every active day is unpriced", () => {
+    // All-unpriced year under the Cost metric: every month sums to $0, but
+    // the tiles/streaks/table all recognize the work - "—" beside them
+    // reads as a contradiction. Fact counts break the all-zero tie.
+    const days = dayRange("2026-07-28", "2026-08-05");
+    const calendar = buildUsageActivityCalendar(
+      days,
+      [
+        bucket("2026-07-29", 0, { costProvenance: "unpriced", factCount: 1 }),
+        bucket("2026-08-02", 0, { costProvenance: "unpriced", factCount: 3 }),
+        bucket("2026-08-03", 0, { costProvenance: "unpriced", factCount: 2 }),
+      ],
+      "cost",
+    );
+    expect(calendar.stats.mostActiveMonth).toBe("Aug 2026");
+  });
+
   it("names the most active day by value", () => {
     const days = dayRange("2026-08-02", "2026-08-04");
     const calendar = buildUsageActivityCalendar(
@@ -170,5 +190,18 @@ describe("buildUsageActivityCalendar", () => {
       "cost",
     );
     expect(calendar.stats.mostActiveDay).toBe("Aug 3, 2026");
+  });
+});
+
+describe("isWindowTooWideError", () => {
+  it("recognizes the legacy validator's rejection and nothing else", () => {
+    expect(
+      isWindowTooWideError({
+        message: "windowDays must be an integer between 1 and 90, got 365",
+      }),
+    ).toBe(true);
+    // A transient failure is NOT a reason to quietly shrink the calendar.
+    expect(isWindowTooWideError({ message: "socket hang up" })).toBe(false);
+    expect(isWindowTooWideError(null)).toBe(false);
   });
 });

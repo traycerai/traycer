@@ -44,6 +44,7 @@ import { UsageHostSplit } from "@/components/usage-analytics/usage-host-split";
 import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
 import {
   buildUsageActivityCalendar,
+  isWindowTooWideError,
   USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
   USAGE_ACTIVITY_WINDOW_DAYS,
 } from "@/lib/usage-analytics/usage-activity";
@@ -127,10 +128,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     false,
   );
   // Hosts update independently of the app: one released before ticket 15
-  // caps `windowDays` at 90 and rejects the year outright. Only then does
-  // this narrower read run, so the calendar degrades to a shorter span
-  // instead of the section showing an error for a host that can never
-  // answer it.
+  // caps `windowDays` at 90 and rejects the year outright. ONLY that
+  // classified rejection arms this narrower read - a transient failure on
+  // the year read must surface as an error, not be quietly replaced by a
+  // quarter of the calendar that happened to succeed.
   const activityFallbackRequest = useMemo(
     () =>
       buildUsageSummaryRequest({
@@ -143,7 +144,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const activityFallbackQuery = useUsageSummaryForClient(
     props.client,
     activityFallbackRequest,
-    activityQuery.error !== null,
+    isWindowTooWideError(activityQuery.error),
     false,
   );
   const days = useMemo(() => daysForResponse(query.data), [query.data]);
@@ -182,12 +183,16 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const responseHostIds = useMemo(
     () =>
       unionHostIds(
-        (query.data?.summary.hostBuckets ?? []).map((bucket) => bucket.hostId),
-        (activityQuery.data?.summary.hostBuckets ?? []).map(
-          (bucket) => bucket.hostId,
-        ),
+        [
+          ...(query.data?.summary.hostBuckets ?? []),
+          ...(activityQuery.data?.summary.hostBuckets ?? []),
+          // The fallback calendar is a real read too: an old host that
+          // rejected the year can still surface a host (active e.g. 60 days
+          // ago) that neither the directory nor the 30-day window knows.
+          ...(activityFallbackQuery.data?.summary.hostBuckets ?? []),
+        ].map((bucket) => bucket.hostId),
       ),
-    [query.data, activityQuery.data],
+    [query.data, activityQuery.data, activityFallbackQuery.data],
   );
   // Host ids learned from the last UNFILTERED response.
   //
@@ -258,13 +263,8 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
  * first - {@link sameHostIds} compares position-wise, and an unsorted union
  * would flip-flop as the two queries settle.
  */
-function unionHostIds(
-  a: readonly string[],
-  b: readonly string[],
-): readonly string[] {
-  return [...new Set([...a, ...b])].sort((left, right) =>
-    left.localeCompare(right),
-  );
+function unionHostIds(ids: readonly string[]): readonly string[] {
+  return [...new Set(ids)].sort((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -477,7 +477,9 @@ function UsageActivitySection(props: {
 }): ReactNode {
   const { query, fallbackQuery, metric } = props;
   // A host too old for the year window answers the narrower read instead -
-  // a shorter calendar, not an error.
+  // a shorter calendar, not an error. The fallback query is only ever
+  // ENABLED for that classified rejection (see `isWindowTooWideError`), so
+  // its data can't paper over an unrelated year-read failure.
   const data = query.data ?? fallbackQuery.data;
   if (data !== undefined) {
     return (
@@ -498,9 +500,14 @@ function UsageActivitySection(props: {
       </div>
     );
   }
-  // Both reads failed (or the fallback is still in flight after the first
-  // failed): only now is there nothing to show.
-  if (query.error !== null && fallbackQuery.error !== null) {
+  // The year read failed for a reason the fallback does not exist for, or
+  // the fallback itself failed too - either way the section owes the
+  // reader an explanation and a way back, never a silent gap.
+  const windowTooWide = isWindowTooWideError(query.error);
+  if (
+    query.error !== null &&
+    (!windowTooWide || fallbackQuery.error !== null)
+  ) {
     return (
       <div className="flex flex-col gap-2" data-testid="usage-activity-section">
         <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>

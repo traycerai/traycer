@@ -226,16 +226,18 @@ function currentStreak(cells: readonly UsageActivityCell[]): number {
 }
 
 function buildStats(cells: readonly UsageActivityCell[]): UsageActivityStats {
-  const byMonth = new Map<string, number>();
+  const byMonth = new Map<string, { value: number; factCount: number }>();
   let bestDay: UsageActivityCell | null = null;
   let longest = 0;
   let run = 0;
   for (const cell of cells) {
     if (cell.factCount > 0) {
-      byMonth.set(
-        cell.day.slice(0, 7),
-        (byMonth.get(cell.day.slice(0, 7)) ?? 0) + cell.value,
-      );
+      const month = cell.day.slice(0, 7);
+      const prior = byMonth.get(month) ?? { value: 0, factCount: 0 };
+      byMonth.set(month, {
+        value: prior.value + cell.value,
+        factCount: prior.factCount + cell.factCount,
+      });
       if (bestDay === null || cell.value > bestDay.value) bestDay = cell;
       run += 1;
       if (run > longest) longest = run;
@@ -244,11 +246,20 @@ function buildStats(cells: readonly UsageActivityCell[]): UsageActivityStats {
     }
   }
   const current = currentStreak(cells);
+  // Value first; fact counts break the all-zero case. An all-unpriced year
+  // (every active month sums to $0 under the Cost metric) must still name
+  // its busiest month - the tiles, streaks and table all recognize that
+  // work, and "—" beside them reads as a contradiction.
   let mostActiveMonth: string | null = null;
-  let bestMonthValue = 0;
-  for (const [month, value] of byMonth) {
-    if (value > bestMonthValue) {
-      bestMonthValue = value;
+  let bestMonth = { value: 0, factCount: 0 };
+  for (const [month, totals] of byMonth) {
+    const wins =
+      totals.value > bestMonth.value ||
+      (bestMonth.value === 0 &&
+        totals.value === 0 &&
+        totals.factCount > bestMonth.factCount);
+    if (wins) {
+      bestMonth = totals;
       mostActiveMonth = month;
     }
   }
@@ -283,3 +294,22 @@ export const USAGE_ACTIVITY_WINDOW_DAYS = 365;
  * section degrades to a shorter calendar instead of an error card.
  */
 export const USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS = 90;
+
+/**
+ * Recognizes the ONE failure the 90-day fallback exists for: a host whose
+ * shared validator still caps `windowDays` (pre-ticket-15 releases cap at
+ * 90) rejecting the year read. Matched on the validator's message shape
+ * because the rejection reaches the client as a generic RPC error - and
+ * deliberately NOT on "any error at all": a transient transport failure on
+ * the year read followed by a lucky 90-day success would otherwise
+ * silently present a quarter of the calendar as if it were the whole
+ * thing. Other errors surface through the section's error card instead.
+ */
+export function isWindowTooWideError(
+  error: { readonly message: string } | null,
+): boolean {
+  return (
+    error !== null &&
+    /windowDays must be an integer between 1 and \d+/i.test(error.message)
+  );
+}

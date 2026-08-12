@@ -186,6 +186,64 @@ describe("<UsageSummaryPanel /> activity section", () => {
     expect(seen).toContain(90);
   });
 
+  it("does NOT shrink the calendar for a transient year-read failure", async () => {
+    // The 90-day fallback exists for ONE failure: an old host's window cap.
+    // A transient error on the year read followed by a lucky 90-day success
+    // must surface as an error, not quietly present a quarter of the
+    // calendar as if it were the whole thing.
+    const seen: number[] = [];
+    renderPanel({
+      response: (request) => {
+        seen.push(request.windowDays);
+        if (request.windowDays === 365) {
+          throw new Error("socket hang up");
+        }
+        return response({
+          servedBy: "cloud",
+          hostBuckets: [hostBucket("host-a", 3)],
+        });
+      },
+      hostNames: new Map([["host-a", "Studio Mac"]]),
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    const section = await screen.findByTestId("usage-activity-section");
+    expect(await within(section).findByTestId("usage-error-card")).toBeTruthy();
+    expect(screen.queryByTestId("usage-activity-heatmap")).toBeNull();
+    // And the narrower read never even fired.
+    expect(seen).not.toContain(90);
+  });
+
+  it("offers hosts that only the FALLBACK calendar read knows about", async () => {
+    // An old host that rejects the year can still surface a host (active
+    // e.g. 60 days ago) that neither the directory nor the 30-day window
+    // knows - the filter has to learn it from the fallback response too.
+    const user = userEvent.setup();
+    renderPanel({
+      response: (request) => {
+        if (request.windowDays === 365) {
+          throw new Error(
+            "windowDays must be an integer between 1 and 90, got 365",
+          );
+        }
+        return response({
+          servedBy: "cloud",
+          hostBuckets:
+            request.windowDays === 90
+              ? [hostBucket("host-a", 3), hostBucket("host-sixty-days", 2)]
+              : [hostBucket("host-a", 3)],
+        });
+      },
+      hostNames: new Map(),
+    });
+
+    await screen.findByTestId("usage-activity-heatmap");
+    await user.click(await screen.findByTestId("usage-host-filter"));
+    expect(
+      await screen.findByTestId("usage-host-filter-option-host-sixty-days"),
+    ).toBeTruthy();
+  });
+
   it("shows an error with a retry only once BOTH activity reads fail", async () => {
     // The page's own Retry refetches the window query alone, so a dropped
     // activity error would leave the section silently absent with no way
