@@ -457,6 +457,15 @@ export function startHostHealthMonitor(
           { pid: surfaced.pid },
         );
         unreachableSince = null;
+        // Convergence ends the current stall just as a direct reachable probe
+        // does, so the once-per-stall log latches and the liveness-read
+        // throttle reset with it. Without this, a host that answers exactly
+        // one probe (this reload's) and then stalls again would serve its next
+        // long stall silently - the WARN latched by the previous outage never
+        // cleared.
+        busyLogged = false;
+        longStallLogged = false;
+        nextLivenessCheckAt = 0;
         // One reachable observation starts the sustained-health clock; it does
         // not by itself forgive the attempt budget. A freshly spawned host
         // answers exactly one probe before stalling again, and treating that as

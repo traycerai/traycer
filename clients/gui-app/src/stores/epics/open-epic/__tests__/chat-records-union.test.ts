@@ -580,7 +580,9 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
 
     const projection =
       session.handle.store.getState().chats.byId["foreign-archived"];
-    expect(projection.archivedAt).not.toBeNull();
+    // Exactly the row's `updatedAt`: the derivation's documented fallback for
+    // an archived row with no timestamp, not just "some non-null time".
+    expect(projection.archivedAt).toBe(900);
     // An own row still reports its real timestamp - the derivation adds a
     // floor, it does not overwrite what the registry knows.
     session.handle.store.getState().applyChatRecordDelta({

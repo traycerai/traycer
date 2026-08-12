@@ -42,6 +42,16 @@ const streamState = vi.hoisted((): StreamState => ({
   hasClient: true,
 }));
 
+/**
+ * ONE stable client object across renders. The mount keys its effect on the
+ * client's identity, so a mock that minted `{ stub: true }` per render would
+ * re-run the effect on EVERY rerender - and the host-change test below could
+ * then pass because the client changed, not because `hostId` did.
+ */
+const stubWsStreamClient = vi.hoisted((): { readonly stub: true } => ({
+  stub: true,
+}));
+
 vi.mock(
   "@traycer-clients/shared/host-transport/chat-records-stream-client",
   () => ({
@@ -60,8 +70,9 @@ vi.mock(
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   // Only its NULL-ness is read by the mount; the stub client is handed to the
-  // stubbed stream class above, which ignores it.
-  useWsStreamClient: () => (streamState.hasClient ? { stub: true } : null),
+  // stubbed stream class above, which ignores it. Referentially stable on
+  // purpose - see `stubWsStreamClient`.
+  useWsStreamClient: () => (streamState.hasClient ? stubWsStreamClient : null),
   useStreamMethodSupport: () => streamState.support,
 }));
 

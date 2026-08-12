@@ -38,7 +38,12 @@ const {
   forceReleaseChatSession,
 } = vi.hoisted(() => ({
   archiveChatMutateAsync: vi.fn(),
-  epicSessionHostClient: { request: vi.fn() },
+  epicSessionHostClient: {
+    request: vi.fn(),
+    // The archive hook's `onMutate` captures this at mutate time, per the
+    // host-swap convention; the lifecycle tests below invoke it for real.
+    getActiveHostId: () => "host-test",
+  },
   forceReleaseChatSession: vi.fn(),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -93,6 +98,7 @@ import {
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostQueryKeys } from "@/lib/query-keys";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type {
   SetChatArchivedRequest,
@@ -109,12 +115,22 @@ function makeError(code: RpcErrorCode): HostRpcError {
   });
 }
 
-function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
+function makeWrapperWithClient(): {
+  readonly wrapper: ({ children }: { children: ReactNode }) => ReactNode;
+  readonly queryClient: QueryClient;
+} {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
-  return ({ children }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
+  return {
+    wrapper: ({ children }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+    queryClient,
+  };
+}
+
+function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
+  return makeWrapperWithClient().wrapper;
 }
 
 function getCapturedMutation(method: string): CapturedMutationArgs {
@@ -366,15 +382,45 @@ describe("useEpicArchiveChat", () => {
   });
 
   it("treats { updated: false } as success and does not toast (B9)", () => {
-    renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const invalidateQueries = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue();
+    renderHook(() => useEpicArchiveChat(), { wrapper });
     const opts = getCapturedMutation("epic.setChatArchived").options as {
-      onSuccess: ((data: SetChatArchivedResponse) => void) | undefined;
+      onMutate: (() => { readonly hostId: string | null }) | undefined;
+      onSuccess:
+        | ((
+            data: SetChatArchivedResponse,
+            variables: SetChatArchivedRequest,
+            ctx: { readonly hostId: string | null },
+            mutationContext: MutationFunctionContext,
+          ) => void)
+        | undefined;
       onError: (e: HostRpcError) => void;
     };
-    // Idempotent "already in requested state" is a success response. The
-    // success handler only invalidates the record list - it has no toast of
-    // its own - and no onError path is taken, so nothing is announced.
-    expect(opts.onSuccess).toBeDefined();
+    if (opts.onMutate === undefined || opts.onSuccess === undefined) {
+      throw new Error("expected setChatArchived lifecycle handlers");
+    }
+
+    // Idempotent "already in requested state" is a success response, DRIVEN
+    // here rather than merely present: `onMutate` captures the session host
+    // at mutate time, and `onSuccess` for `{ updated: false }` must still
+    // refresh that host's record list (the row may have been archived by
+    // another client - the refetch is the correction) while announcing
+    // nothing.
+    const ctx = opts.onMutate();
+    expect(ctx).toEqual({ hostId: "host-test" });
+    opts.onSuccess(
+      { updated: false },
+      { epicId: "epic-1", chatId: "chat-1", archived: true },
+      ctx,
+      { client: queryClient, meta: undefined },
+    );
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
+    });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
   });

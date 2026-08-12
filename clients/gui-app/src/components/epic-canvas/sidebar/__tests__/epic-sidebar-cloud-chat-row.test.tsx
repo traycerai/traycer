@@ -62,7 +62,10 @@ afterEach(() => {
   cleanup();
   reachability.status = "unreachable";
   openedRefs.length = 0;
-  useSettingsStore.setState({ artifactIconColorMode: "byType" });
+  useSettingsStore.setState({
+    artifactIconColorMode: "byType",
+    artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
+  });
 });
 
 const CHAT: CloudChatSummary = {
@@ -308,6 +311,38 @@ describe("EpicSidebarCloudChatRow", () => {
       // hardcoding one serialization.
       const probe = document.createElement("span");
       probe.style.color = DEFAULT_EPIC_NODE_ICON_COLORS.chat;
+      expect(glyph.style.color).toBe(probe.style.color);
+      expect(glyph.classList.contains("text-muted-foreground")).toBe(false);
+    });
+
+    it("follows a USER-CUSTOMIZED chat color, not a hardcoded default", () => {
+      // The default-color case above cannot tell "resolves the settings-driven
+      // color" apart from "hardcodes the default" - they render identically
+      // until the user actually customizes the color.
+      useSettingsStore.setState({
+        artifactIconColors: {
+          ...DEFAULT_EPIC_NODE_ICON_COLORS,
+          chat: "#ff0000",
+        },
+      });
+      render(
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          epicId={CHAT.identity.taskId}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />,
+      );
+      const row = screen.getByTestId(
+        `epic-sidebar-cloud-item-${CHAT.identity.chatId}`,
+      );
+      const glyph = row.querySelector(".lucide-message-square");
+      if (!(glyph instanceof SVGElement)) {
+        throw new Error("cloud row rendered no chat glyph");
+      }
+      const probe = document.createElement("span");
+      probe.style.color = "#ff0000";
       expect(glyph.style.color).toBe(probe.style.color);
       expect(glyph.classList.contains("text-muted-foreground")).toBe(false);
     });

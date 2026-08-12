@@ -135,6 +135,25 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
     if (!epicReady(snapshotLoaded, connectionStatus, permissionRole)) return;
     const timeoutId = window.setTimeout(
       () => {
+        // The deadline belongs to the handoff that ARMED it. `markFailed` is
+        // scope-keyed, and a second create can REPLACE the handoff under this
+        // same {host,user,epic} scope in the gap between the store write and
+        // this effect's cleanup (the timer is a macrotask; React's cleanup
+        // lands on commit) - so re-read the scope and fail only the exact
+        // still-pending handoff this timer was armed for, never a
+        // replacement's fresh one.
+        const current = selectInitialChatHandoff(
+          useInitialChatHandoffStore.getState(),
+          scope,
+        );
+        if (
+          current === null ||
+          current.chatId !== handoffChatId ||
+          current.createdAt !== handoffCreatedAt ||
+          current.status !== "pending"
+        ) {
+          return;
+        }
         useInitialChatHandoffStore
           .getState()
           .markFailed(scope, "The agent was never created.");

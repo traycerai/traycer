@@ -28,14 +28,30 @@ const LIST_CLOUD_CHATS_METHOD = "epic.listCloudChats" as const;
 const EMPTY_CHAT_ID_SET: ReadonlySet<string> = new Set<string>();
 
 /**
+ * The `cacheKeyIdentity` `useCloudChatList` declares, as its ONE owner.
+ *
+ * `useHostQuery` appends this to its own base key, and `cloudChatListQueryKey`
+ * below appends it to the same base rebuilt imperatively - so the identity
+ * component must have exactly one spelling, consumed by both sides, or the two
+ * keys drift apart at a seam no type checker watches. The viewer rides every
+ * cloud-chat key because these responses are ACL-filtered per viewer: two
+ * viewers on one installation have different correct answers, so a reader that
+ * dropped the viewer component would happily serve one account's chats to the
+ * other.
+ */
+export function cloudChatListCacheKeyIdentity(
+  viewerUserId: string,
+): ReadonlyArray<string> {
+  return [viewerUserId];
+}
+
+/**
  * The exact cache slot `useCloudChatList` writes.
  *
  * Assembled from the same builder `useHostQuery` uses (`queryKeys.hostMethod`)
- * plus that hook's declared `cacheKeyIdentity` - the signed-in viewer, which
- * rides every cloud-chat key because these responses are ACL-filtered per
- * viewer. Two viewers on one installation have different correct answers, so a
- * reader that dropped the viewer component would happily serve one account's
- * chats to the other.
+ * plus that hook's declared `cacheKeyIdentity` - which the hook imports from
+ * {@link cloudChatListCacheKeyIdentity} above, so the shared component has one
+ * owner rather than two spellings agreed in prose.
  *
  * A key format agreed in prose is the classic fail-safe bug: both sides compile,
  * both sides look right, and the lookup silently answers "nothing" forever. The
@@ -53,7 +69,7 @@ export function cloudChatListQueryKey(args: {
       LIST_CLOUD_CHATS_METHOD,
       { taskId: args.taskId },
     ),
-    args.viewerUserId,
+    ...cloudChatListCacheKeyIdentity(args.viewerUserId),
   ];
 }
 

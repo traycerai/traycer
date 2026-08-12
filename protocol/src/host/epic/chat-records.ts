@@ -118,11 +118,15 @@ export const chatRecordSummarySchema = z.object({
    * same `chatId` within one task. Anything that keys, caches, dedupes or
    * unions these rows must key on the owner too - dropping it collapses two
    * different people's chats into one entry, which is a privacy bug wearing a
-   * UI costume.
+   * UI costume. Non-empty for the same reason `chatId` is: an empty owner
+   * would give every owner-less row one shared record key, so the wire
+   * boundary rejects it rather than letting a consumer discover the collision.
    */
-  ownerUserId: z.string(),
-  /** The host that MINTED the chat - the registry's `originHostId`. */
-  originHostId: z.string(),
+  ownerUserId: z.string().min(1),
+  /** The host that MINTED the chat - the registry's `originHostId`. Identity
+   * for host-scoped keying (a chat is bound to its minting host for life), so
+   * non-empty like the other two identity components. */
+  originHostId: z.string().min(1),
   title: z.string(),
   isTitleEditedByUser: z.boolean(),
   parentChatId: z.string().nullable(),

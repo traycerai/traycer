@@ -138,16 +138,26 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
   return { queryClient, hosts };
 }
 
-function Probe(props: { readonly chatId: string }): ReactNode {
+/**
+ * One tab's indicator read, host-qualified end to end: the probe reads with
+ * its tab's bound host (the same `originHostId` a real host-bound tab icon
+ * passes), and its key and test id carry the host too - `chatId` is
+ * host-minted, so two tabs can legitimately share one under different hosts
+ * and a chatId-only key would collide in that exact test.
+ */
+function Probe(props: {
+  readonly hostId: string;
+  readonly chatId: string;
+}): ReactNode {
   const state = useSurfaceNotificationIndicatorState(
     {
       epicId: "epic-1",
       chatId: props.chatId,
     },
-    null,
+    props.hostId,
   );
   return (
-    <span data-testid={`probe-${props.chatId}`}>
+    <span data-testid={`probe-${props.hostId}-${props.chatId}`}>
       {[
         state.pendingFork ? "fork" : "",
         state.pendingApproval ? "approval" : "",
@@ -168,7 +178,11 @@ function renderStrip(
       { client: harness.queryClient },
       <ChatIndicatorHostScopes scopes={chatIndicatorHostScopes(tabs)}>
         {tabs.map((tab) => (
-          <Probe key={tab.chatId} chatId={tab.chatId} />
+          <Probe
+            key={`${tab.hostId}:${tab.chatId}`}
+            hostId={tab.hostId}
+            chatId={tab.chatId}
+          />
         ))}
       </ChatIndicatorHostScopes>,
     ),
@@ -198,8 +212,12 @@ describe("ChatIndicatorHostScopes", () => {
     // Host B is not the app-wide active host. Before the partition it was
     // never asked, so `chat-b` could not light whatever its own host knew.
     await waitFor(() => {
-      expect(screen.getByTestId("probe-chat-a").textContent).toBe("fork");
-      expect(screen.getByTestId("probe-chat-b").textContent).toBe("fork");
+      expect(screen.getByTestId(`probe-${HOST_A}-chat-a`).textContent).toBe(
+        "fork",
+      );
+      expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe(
+        "fork",
+      );
     });
   });
 
@@ -223,19 +241,31 @@ describe("ChatIndicatorHostScopes", () => {
   it("does not let one host light a tab bound to another that shares its host-minted id", async () => {
     const harness = createHarness([
       // Both hosts have a chat called `shared` - `chatId` is host-minted and
-      // not unique across hosts. Only host A's is lit, and no tab here is
-      // bound to host A.
+      // not unique across hosts. Only host A's is lit, and BOTH tabs are on
+      // screen at once: the collision is only real when the two same-id tabs
+      // render together, and each probe must read its own host's answer.
       [HOST_A, { shared: lit({ pendingApproval: true }) }],
       [HOST_B, { shared: lit({}) }],
     ]);
 
-    renderStrip(harness, [{ hostId: HOST_B, chatId: "shared" }]);
+    renderStrip(harness, [
+      { hostId: HOST_A, chatId: "shared" },
+      { hostId: HOST_B, chatId: "shared" },
+    ]);
 
     await waitFor(() => {
+      expect(harness.hosts.get(HOST_A)?.asked).toEqual([["shared"]]);
       expect(harness.hosts.get(HOST_B)?.asked).toEqual([["shared"]]);
     });
-    expect(harness.hosts.get(HOST_A)?.asked).toEqual([]);
-    expect(screen.getByTestId("probe-shared").textContent).toBe("");
+    // Host A's flag lights host A's tab and ONLY host A's tab - the same-id
+    // tab bound to host B stays dark even though the aggregate map now holds
+    // an OR of both answers under this one chatId.
+    await waitFor(() => {
+      expect(screen.getByTestId(`probe-${HOST_A}-shared`).textContent).toBe(
+        "approval",
+      );
+    });
+    expect(screen.getByTestId(`probe-${HOST_B}-shared`).textContent).toBe("");
   });
 
   it("issues no read at all for a surface with no chat tabs", async () => {

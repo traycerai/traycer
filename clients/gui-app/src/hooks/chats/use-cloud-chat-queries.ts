@@ -22,6 +22,7 @@ import {
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
 import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
@@ -79,7 +80,11 @@ export function useCloudChatList(
   const viewerUserId = useCloudChatViewerId();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
   return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
-    cacheKeyIdentity: [viewerUserId],
+    // The one shared spelling of this key's viewer component -
+    // `cloudChatListQueryKey` (the imperative reader's builder) appends the
+    // same call to the same base, which is what keeps the two sides of that
+    // seam from drifting.
+    cacheKeyIdentity: cloudChatListCacheKeyIdentity(viewerUserId),
     client: args.client,
     method: "epic.listCloudChats",
     params,
