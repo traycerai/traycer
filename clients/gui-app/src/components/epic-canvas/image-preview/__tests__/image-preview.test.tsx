@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -150,5 +150,25 @@ describe("<ImagePreview />", () => {
 
     fireEvent.load(streamedImage);
     expect(streamedImage.className).toContain("opacity-100");
+  });
+
+  it("commits cache-hit opacity-100 before any opacity-0 class is assigned", () => {
+    const classNameSetter = vi.spyOn(Element.prototype, "className", "set");
+    const setAttribute = vi.spyOn(Element.prototype, "setAttribute");
+
+    renderPreview("ready", META, false, true);
+
+    const imageClasses = [
+      ...classNameSetter.mock.calls.map(([value]) => String(value)),
+      ...setAttribute.mock.calls
+        .filter(([name]) => name === "class")
+        .map(([, value]) => String(value)),
+    ].filter((value) => value.includes("image-preview-outline"));
+
+    expect(imageClasses.length).toBeGreaterThan(0);
+    expect(imageClasses[0]).toContain("opacity-100");
+    expect(imageClasses.some((value) => value.includes("opacity-0"))).toBe(
+      false,
+    );
   });
 });
