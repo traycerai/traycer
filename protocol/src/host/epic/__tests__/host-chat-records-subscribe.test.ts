@@ -117,15 +117,18 @@ describe("chat record row", () => {
 });
 
 describe("host.chatRecords.subscribe@1.0 contract", () => {
-  it("declares the method at 1.0 and registers it in the stream registry", () => {
+  it("declares the method at 1.0 and the registry advertises the latest minor", () => {
     expect(hostChatRecordsSubscribeV10.method).toBe(METHOD);
     expect(hostChatRecordsSubscribeV10.schemaVersion).toEqual({
       major: 1,
       minor: 0,
     });
+    // The manifest names the newest installed minor - @1.1 since the
+    // terminal-agent delta frames joined the stream. @1.0 stays installed
+    // beneath it for clients that negotiated the frozen set.
     expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
       major: 1,
-      minor: 0,
+      minor: 1,
     });
   });
 
