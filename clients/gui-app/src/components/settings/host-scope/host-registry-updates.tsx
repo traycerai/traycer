@@ -97,18 +97,26 @@ export function HostRegistryUpdates(props: {
           {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
               saying "Installs new versions when no sessions are running."
               locally — which was fiction. The pin is applied by the HOST's own
-              update reconciler, on its own independent ~20s poll, reading the
-              coordination snapshot its check-in populates
-              (`update-reconciler.ts` — no locality branch anywhere in it). The
-              local machine's CLI controller is a different mechanism entirely:
-              it backs the MANUAL apply button, not this policy. The fork
-              therefore described a path that does not exist, omitted the
+              update reconciler, reading the coordination snapshot its check-in
+              populates (`update-reconciler.ts` — no locality branch anywhere in
+              it). The local machine's CLI controller is a different mechanism
+              entirely: it backs the MANUAL apply button, not this policy. The
+              fork therefore described a path that does not exist, omitted the
               latency that does, and — because the two variants render the same
               component — made the Overview visibly differ for local and remote
-              hosts on a page whose whole premise is that it does not. */}
+              hosts on a page whose whole premise is that it does not.
+
+              The stated latency is an UPPER bound, and deliberately so. It used
+              to read "~20s", the cadence of the host→cloud heartbeat that fed
+              the snapshot; that heartbeat is gone and the ~10-minute token
+              refresh carries the same fields now. A host with a live session
+              picks it up in seconds instead (the room nudge), but a person
+              cannot tell from this row which case they are in, so the copy
+              promises the slower one and lets the faster one be a pleasant
+              surprise. */}
           <p className="text-ui-xs text-muted-foreground">
-            Applied on this host&apos;s next check-in (~20s), when no sessions
-            are running.
+            Applied on this host&apos;s next check-in — within ~10 minutes, and
+            only when no sessions are running.
           </p>
         </div>
         {pill === null ? null : (
@@ -197,8 +205,8 @@ function UpdateNowControl(props: {
         <PopoverHeader>
           <PopoverTitle>Update to version</PopoverTitle>
           <PopoverDescription>
-            Applied on the host&apos;s next check-in (~20s) — no live session
-            required.
+            Applied on the host&apos;s next check-in — within ~10 minutes. No
+            live session required.
           </PopoverDescription>
         </PopoverHeader>
         <form
