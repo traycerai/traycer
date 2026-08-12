@@ -40,6 +40,13 @@ interface EpicAgentMentionEntryBase {
   readonly description: string;
   readonly parentId: string | null;
   readonly updatedAt: number;
+  /**
+   * Whether the Agent's record is archived. Archived Agents stay
+   * referenceable - the picker lists them - but rank below live Agents at
+   * equal match quality and carry a visible badge, so a stale record never
+   * shadows the active one the user almost certainly means.
+   */
+  readonly archived: boolean;
   readonly agentInterface: AgentMentionInterface;
   /**
    * Whether this Agent's RUNTIME supports agent-to-agent delivery at all - the

@@ -83,6 +83,19 @@ export interface MentionMenuEntry {
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
   /**
+   * Last-activity timestamp rendered at the row's trailing edge (compact
+   * relative form, static per render - menu rows do not tick). Null for rows
+   * with no meaningful activity clock (files, categories, terminals - whose
+   * `updatedAt` is really a start time).
+   */
+  readonly updatedAt: number | null;
+  /**
+   * Renders the row's "Archived" badge. A flag rather than text baked into
+   * `detail` so the badge can be a styled element and never truncates away
+   * with the detail string.
+   */
+  readonly archived: boolean;
+  /**
    * Full, untruncated preview content for the side preview panel. `null` for
    * `Back` and category-navigate rows, which have nothing to preview.
    */
@@ -898,6 +911,8 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     description: args.description,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -910,6 +925,8 @@ function backEntry(description: string): MentionMenuEntry {
     description,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -917,6 +934,11 @@ function backEntry(description: string): MentionMenuEntry {
 function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   const mention = mentionAttachmentFromSuggestion(entry);
   if (mention === null) return [];
+  // Agent rows are the only ones whose `updatedAt` means last activity (it
+  // bumps on streaming ticks); a terminal's is its start time, so terminals
+  // keep a null clock and no badge semantics apply outside Agents.
+  const isAgent =
+    entry.kind === "epic-chat" || entry.kind === "epic-terminal-agent";
   return [
     {
       id: entry.id,
@@ -925,6 +947,8 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       description: descriptionForSuggestion(entry),
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
+      updatedAt: isAgent ? entry.updatedAt : null,
+      archived: isAgent ? entry.archived : false,
       preview: previewForSuggestion(entry),
     },
   ];
@@ -951,12 +975,42 @@ function terminalSuggestionEntries(
   ).flatMap((entry) => suggestionEntry(entry));
 }
 
+/**
+ * Agent-specific ranking: `rankByLabelAndId`'s match scoring, with
+ * archived-ness slotted BETWEEN match quality and recency. An archived Agent
+ * never outranks a live one of equal match quality, but archived-ness never
+ * overrides relevance either - an archived exact/prefix hit still beats a
+ * live substring hit. This provider-level order also feeds the root `@`
+ * search as the candidates' input order, where the fuzzy pass breaks equal
+ * scores by input index and the prefix/substring tiers are a stable resort -
+ * so the same rule carries through there: demotion applies within a match
+ * tier, never across tiers.
+ */
 function rankAgentEntries(
   entries: ReadonlyArray<EpicAgentMentionEntry>,
   query: string,
   limit: number,
 ): ReadonlyArray<EpicAgentMentionEntry> {
-  return rankByLabelAndId(entries, agentEntryRecordId, query, limit);
+  const normalizedQuery = query.trim().toLowerCase();
+  return entries
+    .flatMap((entry) => {
+      const score = scoreLabelAndId(
+        entry.label,
+        agentEntryRecordId(entry),
+        normalizedQuery,
+      );
+      if (score === null) return [];
+      return [{ entry, score }];
+    })
+    .toSorted((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+      if (left.entry.archived !== right.entry.archived) {
+        return left.entry.archived ? 1 : -1;
+      }
+      return right.entry.updatedAt - left.entry.updatedAt;
+    })
+    .map((item) => item.entry)
+    .slice(0, limit);
 }
 
 /** The Agent's durable record id, whichever interface it uses. */
