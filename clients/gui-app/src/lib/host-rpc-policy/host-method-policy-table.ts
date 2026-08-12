@@ -270,6 +270,8 @@ const LATEST_SCHEDULING = {
 
 export const HOST_METHOD_POLL_TABLE = {
   "host.status": { ...LATEST_SCHEDULING, poll: null },
+  // Restart commits host admission state before its deferred teardown.
+  "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,

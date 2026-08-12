@@ -20,6 +20,7 @@ import {
 } from "../host-start";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
+import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
   CRASH_REPORT_SPAWN_SLACK_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
@@ -29,7 +30,10 @@ import {
   type CrashReportMatch,
   type StderrTee,
 } from "../../host/crash-diagnostics";
-import { SHUTDOWN_FORCE_EXIT_MS } from "@traycer/protocol/host/lifecycle-constants";
+import {
+  RESTART_EXIT_CODE,
+  SHUTDOWN_FORCE_EXIT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
 import type { StopIntentIdentity } from "../../host/stop-intent";
 import { hostHomeDir } from "../../store/paths";
@@ -162,13 +166,21 @@ describe("resolveHostStartTarget", () => {
 interface StubChild extends EventEmitter {
   pid: number | undefined;
   kill: (signal: NodeJS.Signals) => boolean;
+  stderr: PassThrough | null;
 }
 
 function makeStubChild(): StubChild {
   const emitter = new EventEmitter() as StubChild;
   emitter.pid = 4242;
   emitter.kill = () => true;
+  emitter.stderr = null;
   return emitter;
+}
+
+function makeStubChildWithStderr(): StubChild {
+  const child = makeStubChild();
+  child.stderr = new PassThrough();
+  return child;
 }
 
 /**
@@ -223,6 +235,7 @@ interface Recorded {
   /** When set, findCrashReport rejects (must not skip marker/exit). */
   findCrashReportRejects: boolean;
   lastStderrTee: MemoryStderrTee | null;
+  readonly stderrTees: MemoryStderrTee[];
   readonly loggerErrors: Array<{
     message: string;
     fields: Record<string, unknown>;
@@ -234,6 +247,7 @@ interface Recorded {
  * cast is required (concrete StderrLogTee private fields stay out of deps).
  */
 class MemoryStderrTee implements StderrTee {
+  readonly flushTimeouts: number[] = [];
   readonly capture = new StderrCaptureBuffer(
     STDERR_HEAD_MAX_BYTES,
     STDERR_TAIL_MAX_BYTES,
@@ -248,6 +262,7 @@ class MemoryStderrTee implements StderrTee {
   }
 
   flush(_timeoutMs: number): Promise<void> {
+    this.flushTimeouts.push(_timeoutMs);
     return Promise.resolve();
   }
 }
@@ -286,6 +301,7 @@ function makeRunStubs(
     findCrashReportHangs: false,
     findCrashReportRejects: false,
     lastStderrTee: null,
+    stderrTees: [],
     loggerErrors: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
@@ -435,6 +451,7 @@ function makeRunStubs(
     createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
       recorded.lastStderrTee = tee;
+      recorded.stderrTees.push(tee);
       return tee;
     },
   };
@@ -1625,6 +1642,45 @@ function withScriptedAttempts(
   };
 }
 
+function withRestartAttempts(deps: Partial<RunHostStartDeps>): {
+  deps: Partial<RunHostStartDeps>;
+  children: StubChild[];
+} {
+  const originalSpawn = deps.spawn;
+  if (originalSpawn === undefined) {
+    throw new Error("test spawn dependency missing");
+  }
+  const outcomes = [
+    { code: RESTART_EXIT_CODE, signal: null },
+    { code: 0, signal: null },
+  ] as const;
+  const children: StubChild[] = [];
+  return {
+    children,
+    deps: {
+      ...deps,
+      spawn: (command, args, options) => {
+        const index = children.length;
+        const child = makeStubChildWithStderr();
+        const status = new PassThrough();
+        Object.assign(child, { stdio: [null, null, null, status] });
+        children.push(child);
+        originalSpawn(command, args, options);
+        const outcome = outcomes[index] ?? outcomes[outcomes.length - 1];
+        setImmediate(() => {
+          if (index === 0) {
+            child.stderr?.write("first-attempt-restart-stderr\n");
+          }
+          status.end();
+          child.stderr?.end();
+          child.emit("exit", outcome.code, outcome.signal);
+        });
+        return asChildProcess(child);
+      },
+    },
+  };
+}
+
 function startingAttemptIds(recorded: Recorded): string[] {
   return recorded.markers
     .filter((m) => m.phase === "starting")
@@ -1633,6 +1689,90 @@ function startingAttemptIds(recorded: Recorded): string[] {
 
 describe("runHostStart - crash relaunch loop", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("relaunches an intentional restart immediately without budget or crash evidence", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const sleepCalls: number[] = [];
+    const probeMarkers: ProbeMarker[] = [];
+    const scripted = withRestartAttempts(deps);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.restart-test",
+          },
+          {
+            ...scripted.deps,
+            maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
+            sleep: async (ms) => {
+              sleepCalls.push(ms);
+            },
+            readLiveProbeContextForServiceLabel: async () => ({
+              kind: "authorised" as const,
+              context: {
+                transitionId: "restart-transition",
+                probeNonce: "restart-nonce",
+                serviceLabel: "ai.traycer.host.restart-test",
+              },
+            }),
+            readLayer0Frame: async (): Promise<Layer0FrameRead> => {
+              const attemptId = recorded.markers
+                .filter((marker) => marker.phase === "starting")
+                .at(-1)?.fields.attemptId;
+              if (typeof attemptId !== "string") {
+                return { kind: "indeterminate", reason: "missing-attempt" };
+              }
+              return {
+                kind: "frame",
+                frame: { attemptId, layer0: "acquired" },
+              };
+            },
+            attestProbeSupervisor: async (serviceLabel, supervisorPid) => ({
+              serviceLabel,
+              supervisorPid,
+              capturedAt: "2026-08-12T00:00:00.000Z",
+            }),
+            writeProbeMarker: async (_environment, marker) => {
+              probeMarkers.push(marker);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // Exit 87 is the host's explicit restart handshake. It must not consume
+    // the crash budget or wait through crash backoff before starting again.
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(sleepCalls).toEqual([]);
+    expect(recorded.exited).toBe(0);
+    expect(
+      recorded.markers.filter((marker) => marker.phase === "crashed"),
+    ).toHaveLength(0);
+    expect(recorded.findCrashReportCalls).toHaveLength(0);
+
+    const firstChild = scripted.children[0];
+    expect(firstChild?.stderr?.destroyed).toBe(true);
+    expect(firstChild?.stderr?.listenerCount("data")).toBe(0);
+    const firstTee = recorded.stderrTees[0];
+    expect(firstTee).toBeDefined();
+    expect(firstTee?.flushTimeouts).toHaveLength(1);
+    expect(firstTee?.capture.escapedForMarker()).toContain(
+      "first-attempt-restart-stderr",
+    );
+    expect(probeMarkers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          outcome: {
+            kind: "terminal",
+            reason: "child-exit-87",
+          },
+        }),
+      ]),
+    );
+  });
 
   it("does not relaunch a host that exits cleanly", async () => {
     // exit 0 is the host standing down on purpose - and is also the

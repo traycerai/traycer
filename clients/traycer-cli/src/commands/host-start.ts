@@ -28,6 +28,7 @@ import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { withHostNodeOptions } from "../service/host-node-options";
 import {
+  RESTART_EXIT_CODE,
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
@@ -1494,6 +1495,38 @@ export async function runHostStart(
     // relaunch for the life of the machine.
     await deps.closeLogFd(logFd);
 
+    // `host.restart` is a deliberate process hand-off, not a crash. Its
+    // non-zero code tells outer service supervisors to relaunch if this CLI
+    // supervisor itself dies, while THIS supervisor replaces its child
+    // immediately. Do this before terminal-marker persistence: crash markers
+    // are diagnostic evidence and recording one here would make the doctor's
+    // recent-crash signal lie about an operator-requested restart.
+    if (ending.signal === null && ending.code === RESTART_EXIT_CODE) {
+      // This is not crash persistence, but it is still the end of an attempt.
+      // In particular, an adapter/grandchild can retain the old stderr pipe
+      // after the host exits. Carrying its data listener into the replacement
+      // would bleed old bytes into the new attempt's tee and retain one stream
+      // graph per requested restart. Finalize the bounded diagnostic resources
+      // and one-shot probe without writing crash evidence before relaunching.
+      await finalizeIntentionalRestartAttempt({
+        code: ending.code,
+        signal: ending.signal,
+        deps,
+        logger,
+        environment: opts.environment,
+        probeObservation,
+        stderrTee,
+        stderrEnded,
+      });
+      disposeAttemptStderr(child.stderr);
+      logger.info("Host child requested an intentional restart", {
+        environment: opts.environment,
+        exitCode: RESTART_EXIT_CODE,
+        attemptId,
+      });
+      continue;
+    }
+
     const outcome = await persistChildExit({
       code: ending.code,
       signal: ending.signal,
@@ -1522,15 +1555,7 @@ export async function runHostStart(
     //
     // Best-effort and deliberately last: the marker and the capture have both
     // already been written from this stream by the time we get here.
-    const attemptStderr = child.stderr;
-    if (attemptStderr !== null && attemptStderr !== undefined) {
-      attemptStderr.removeAllListeners("data");
-      try {
-        attemptStderr.destroy();
-      } catch {
-        // A stream that is already closed must not end the supervisor.
-      }
-    }
+    disposeAttemptStderr(child.stderr);
 
     // A clean exit is the host standing down on purpose - never relaunch it.
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
@@ -1759,6 +1784,106 @@ async function persistAsyncChildSpawnFailure(input: {
   );
 }
 
+/**
+ * Finalizes the non-crash state of an intentional host replacement.
+ *
+ * Exit 87 deliberately skips crash classification and crash markers, but it
+ * cannot skip attempt cleanup: the supervisor keeps running and may otherwise
+ * retain a grandchild-held stderr pipe and an unresolved first-attempt probe
+ * across every requested restart. The stderr waits are bounded by the same
+ * limits as the crash path, while the probe's framed read owns its own 3s
+ * bound. A restart therefore remains intentional without leaking per-attempt
+ * resources or abandoning an attested probe verdict.
+ */
+async function finalizeIntentionalRestartAttempt(input: {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly probeObservation: Promise<ProbeObservation> | null;
+  readonly stderrTee: StderrTee;
+  readonly stderrEnded: Promise<void>;
+}): Promise<void> {
+  await finalizeAttemptProbe({
+    code: input.code,
+    signal: input.signal,
+    deps: input.deps,
+    logger: input.logger,
+    environment: input.environment,
+    probeObservation: input.probeObservation,
+  });
+  await flushAttemptStderr({
+    stderrEnded: input.stderrEnded,
+    stderrTee: input.stderrTee,
+  });
+}
+
+async function finalizeAttemptProbe(input: {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly probeObservation: Promise<ProbeObservation> | null;
+}): Promise<void> {
+  if (input.probeObservation === null) return;
+  try {
+    const observation = await input.probeObservation;
+    if (
+      observation.marker !== null &&
+      observation.marker.outcome.kind === "awaiting-readiness"
+    ) {
+      await input.deps.writeProbeMarker(input.environment, {
+        ...observation.marker,
+        outcome: {
+          kind: "terminal",
+          reason:
+            input.signal === null
+              ? `child-exit-${input.code ?? 0}`
+              : `child-signal-${input.signal}`,
+        },
+      });
+    }
+  } catch (error) {
+    input.logger.warn("Host probe marker finalization failed", {
+      environment: input.environment,
+      errorName: errorFromUnknown(error).name,
+      errorMessage: errorFromUnknown(error).message,
+    });
+  }
+}
+
+/**
+ * Wait for the child pipe and its path-addressed tee exactly once per attempt.
+ * Both calls are bounded: an inherited stderr descriptor must not make a
+ * restart (or a crash exit) wait forever.
+ */
+async function flushAttemptStderr(input: {
+  readonly stderrEnded: Promise<void>;
+  readonly stderrTee: StderrTee;
+}): Promise<void> {
+  await withDeadline(input.stderrEnded, STDERR_END_WAIT_TIMEOUT_MS);
+  await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
+}
+
+/**
+ * Detaches the tee callback before destroying the attempt's pipe. Other
+ * listeners settle the already-awaited end wait; removing `data` is what
+ * releases this attempt's tee/capture from a grandchild-held pipe.
+ */
+function disposeAttemptStderr(
+  attemptStderr: Readable | null | undefined,
+): void {
+  if (attemptStderr === null || attemptStderr === undefined) return;
+  attemptStderr.removeAllListeners("data");
+  try {
+    attemptStderr.destroy();
+  } catch {
+    // A stream that is already closed must not end the supervisor.
+  }
+}
+
 async function persistChildExit(input: {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -1775,32 +1900,14 @@ async function persistChildExit(input: {
   readonly crashReportsDirPath: string;
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<ChildExitOutcome> {
-  if (input.probeObservation !== null) {
-    try {
-      const observation = await input.probeObservation;
-      if (
-        observation.marker !== null &&
-        observation.marker.outcome.kind === "awaiting-readiness"
-      ) {
-        await input.deps.writeProbeMarker(input.environment, {
-          ...observation.marker,
-          outcome: {
-            kind: "terminal",
-            reason:
-              input.signal === null
-                ? `child-exit-${input.code ?? 0}`
-                : `child-signal-${input.signal}`,
-          },
-        });
-      }
-    } catch (error) {
-      input.logger.warn("Host probe marker finalization failed", {
-        environment: input.environment,
-        errorName: errorFromUnknown(error).name,
-        errorMessage: errorFromUnknown(error).message,
-      });
-    }
-  }
+  await finalizeAttemptProbe({
+    code: input.code,
+    signal: input.signal,
+    deps: input.deps,
+    logger: input.logger,
+    environment: input.environment,
+    probeObservation: input.probeObservation,
+  });
 
   const {
     code,
@@ -1812,15 +1919,10 @@ async function persistChildExit(input: {
     bundle,
     deps,
   } = input;
-  // TWO waits, and they are not interchangeable. First: let the stderr pipe
-  // reach `end` - `exit` does not imply drained pipes, so without this the
-  // capture can be empty precisely when the child died hard. Second: drain
-  // the tee's queued `appendFile` writes, which `process.exit()` below would
-  // otherwise abandon. Both are bounded, because a grandchild holding the
-  // inherited stderr fd can keep the stream open indefinitely and a
-  // diagnostics path must never hang the supervisor's exit.
-  await withDeadline(input.stderrEnded, STDERR_END_WAIT_TIMEOUT_MS);
-  await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
+  await flushAttemptStderr({
+    stderrEnded: input.stderrEnded,
+    stderrTee: input.stderrTee,
+  });
   // `process.exit()` is synchronous. Terminal markers are therefore written
   // synchronously before exit rather than scheduling an append that the
   // process could abandon. Desktop uses these as fail-now readiness evidence.

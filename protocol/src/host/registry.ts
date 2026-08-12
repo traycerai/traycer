@@ -198,6 +198,7 @@ import {
   hostStatusV11,
   hostStatusUpgradeV10ToV11,
 } from "@traycer/protocol/host/status/contracts";
+import { hostRestartV10 } from "@traycer/protocol/host/restart/contracts";
 import {
   lifecycleClaimShutdownV10,
   lifecycleCommitShutdownV10,
@@ -3416,6 +3417,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostStatusV11,
           upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.restart": {
+    // Restart authority is meaningful only on hosts that can atomically close
+    // work admission before testing drain state; older hosts must not emulate
+    // it with a racy activity read.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRestartV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
