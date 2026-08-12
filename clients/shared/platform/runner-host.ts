@@ -745,10 +745,10 @@ export interface StoredAuthTokens {
 }
 
 /**
- * The identity block a caller supplies on interactive sign-in. The `authnBaseUrl`
- * and `savedAt` are NOT supplied here — the main-process `FileTokenStore` stamps
- * them (env-scoped `authnBaseUrl` from its own config, `savedAt` at write time),
- * so the renderer can never write a mismatched authn origin into the shared file.
+ * The identity block a caller supplies on interactive sign-in. `savedAt` is NOT
+ * supplied here — the main-process `FileTokenStore` stamps it at write time.
+ * The file carries no authn URL at all: every refresh/probe targets the
+ * consuming process's own configured authn origin.
  */
 export type StoredCredentialsIdentity = StoredCredentials["user"];
 
@@ -762,6 +762,8 @@ export type StoredCredentialsIdentity = StoredCredentials["user"];
  *   - `deleted`         → the file was signed out mid-rotate (sign-out wins);
  *   - `user-mismatch`   → the file now holds a different account (`pair` is theirs);
  *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
+ *   - `spend-pending`   → a sibling process spent this base and is still landing
+ *                         the successor; transient exactly like `lock-busy`;
  *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
  *   - `refresh-network` → transient; the access token in hand stays valid, retry;
  *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
@@ -774,6 +776,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "spend-pending"
   | "refresh-rejected"
   | "refresh-network"
   | "commit-failed";
@@ -783,7 +786,7 @@ export interface TokenRotateResult {
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
   // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
-  // `refresh-rejected`/`refresh-network`).
+  // `spend-pending`/`refresh-rejected`/`refresh-network`).
   readonly pair: StoredCredentials | null;
 }
 

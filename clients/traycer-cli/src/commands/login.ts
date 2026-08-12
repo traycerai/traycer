@@ -143,7 +143,6 @@ function loginWithToken(rawToken: string): CommandFn {
       // self-refresh. Read fresh under the same lock that performs the write,
       // so a concurrent rotate can't race this fallback.
       refreshToken,
-      authnBaseUrl,
       savedAt: new Date().toISOString(),
       user,
     };

@@ -23,13 +23,12 @@ import {
   createTuiAgentRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
-  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListRequestSchemaV70,
-  providersListResponseSchema,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
-import type { NativeListQueryV70 } from "@traycer/protocol/host/provider-native-schemas";
+import type { NativeListQuery } from "@traycer/protocol/host/provider-native-schemas";
 
 const createTuiRegistry = hostRpcRegistry["epic.createTuiAgent"];
 const providersListRegistry = hostRpcRegistry["providers.list"];
@@ -140,12 +139,18 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
         forceAuthRefresh: true,
         native: null,
       });
-      expect(() => providersListRequestSchema.parse(canonical)).not.toThrow();
+      // Asserted against the frozen v7.0 schema specifically, not merely the
+      // canonical one - the registered `providers.list` v7.0 contract is
+      // pinned to `providersListRequestSchemaV70`, so this is the schema a
+      // real peer negotiating v7.0 actually decodes against.
+      expect(() =>
+        providersListRequestSchemaV70.parse(canonical),
+      ).not.toThrow();
     }
   });
 
-  it("a v7.0 client downgrades its request to every older major without leaking native", () => {
-    const canonical = providersListRequestSchema.parse({
+  it("a new 7.0 client downgrades its request to every released major without leaking native", () => {
+    const canonical = providersListRequestSchemaV70.parse({
       forceAuthRefresh: true,
       native: {
         kind: "mcp",
@@ -172,7 +177,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   });
 
   // One payload per arm of the frozen v7.0 query union, keyed BY DISCRIMINANT
-  // so the type system owns the coverage: `Record<NativeListQueryV70["kind"],
+  // so the type system owns the coverage: `Record<NativeListQuery["kind"],
   // …>` does not compile until every arm has an entry, so a sixth arm added to
   // the union fails here rather than quietly going untested.
   //
@@ -186,7 +191,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     // the latter accepts ANY arm under ANY key, so a payload filed under the
     // wrong `kind` would type-check and quietly test one arm twice while
     // reporting the other's name.
-    [K in NativeListQueryV70["kind"]]: Extract<NativeListQueryV70, { kind: K }>;
+    [K in NativeListQuery["kind"]]: Extract<NativeListQuery, { kind: K }>;
   } = {
     mcp: {
       kind: "mcp",
@@ -229,12 +234,11 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   it.each(Object.entries(V70_QUERY_CASES))(
     "the inactive v7.0 request pin round-trips a %s native query losslessly",
     (_kind, native) => {
-      // NOT a bridge test. v7.0 is the newest line, so there is no hop into
-      // it - `providersListV70` serves the live schemas and the `...V70`
-      // copies are the snapshot it gets pinned to later. What has to hold now
-      // is that the snapshot can carry every arm, because the day it goes
-      // live is the day an arm it mangles starts mangling real traffic.
-      const canonical = providersListRequestSchema.parse({
+      // NOT a bridge test. The registered v7.0 contract decodes requests
+      // through this pin, and its `native` deliberately stays the live query
+      // schema (see the pin's comment) - so what has to hold is that the pin
+      // carries every arm losslessly; an arm it mangles mangles real traffic.
+      const canonical = providersListRequestSchemaV70.parse({
         forceAuthRefresh: true,
         native,
       });
@@ -250,7 +254,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   );
 
   it("response round-trip 7.0 -> 6.0 -> 7.0 still parses at both ends", () => {
-    const canonicalResponse = providersListResponseSchema.parse({
+    const canonicalResponse = providersListResponseSchemaV70.parse({
       providers: [],
       native: null,
     });
@@ -273,6 +277,6 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       providersListResponseSchemaV60.parse(down.value),
     );
     expect(back.native).toBeNull();
-    expect(providersListResponseSchema.safeParse(back).success).toBe(true);
+    expect(providersListResponseSchemaV70.safeParse(back).success).toBe(true);
   });
 });

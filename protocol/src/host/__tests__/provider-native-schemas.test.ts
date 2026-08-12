@@ -368,7 +368,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
       native: { ok: true, kind: "mcp", servers: [] },
     });
-    const result = providersListDowngradeV7ToV6.downgradeResponse(v70);
+    const result = providersListDowngradeV7ToV6.downgradeResponse(
+      providersListResponseSchemaV70.parse(v70),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -403,7 +405,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV3.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV3.downgradeResponse(
+      providersListResponseSchemaV70.parse(v31),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -426,7 +430,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV2.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV2.downgradeResponse(
+      providersListResponseSchemaV70.parse(v31),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
@@ -459,7 +465,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     const list = providersListResponseSchema.parse({
       providers: [latest],
     });
-    const listResult = providersListDowngradeV7ToV1.downgradeResponse(list);
+    const listResult = providersListDowngradeV7ToV1.downgradeResponse(
+      providersListResponseSchemaV70.parse(list),
+    );
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;
     expect(listResult.value.providers[0]).not.toHaveProperty(

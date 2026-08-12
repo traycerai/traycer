@@ -31,7 +31,6 @@ const readMock = vi.mocked(readCredentials);
 const storedCreds = {
   token: "stored-token",
   refreshToken: "stored-refresh",
-  authnBaseUrl: "https://authn.test",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "a@b.c", name: "A" },
 };
@@ -53,7 +52,7 @@ afterEach(() => {
 });
 
 describe("resolveHostAuth", () => {
-  it("returns token, effective authnBaseUrl, and userId from the stored credentials during a dev-desktop run", async () => {
+  it("returns token, the configured authnBaseUrl, and userId from the stored credentials during a dev-desktop run", async () => {
     readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth()).toEqual({
       token: "stored-token",
@@ -62,12 +61,12 @@ describe("resolveHostAuth", () => {
     });
   });
 
-  it("keeps the serialized authnBaseUrl when no dev-desktop run slot is active", async () => {
+  it("uses the configured authnBaseUrl outside a dev-desktop run slot too (the file carries no URL)", async () => {
     delete process.env[DEV_DESKTOP_SLOT_ENV];
     readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth()).toEqual({
       token: "stored-token",
-      authnBaseUrl: storedCreds.authnBaseUrl,
+      authnBaseUrl: config.authnBaseUrl,
       userId: "u1",
     });
   });

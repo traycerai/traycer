@@ -20,21 +20,11 @@ import {
   modelProviderPromptSchema,
   modelProvidersListResultSchema,
   nativeListQuerySchema,
-  nativeListQuerySchemaV70,
   nativeListResultSchema,
-  nativeListResultSchemaV70,
   providerMcpCapabilitiesSchema,
   providerMcpCapabilitiesSchemaV70,
-  providerMcpServerSchema,
-  providerMcpServerSchemaV70,
-  providerMcpToolSchema,
-  providerMcpToolSchemaV70,
-  providerPluginSchema,
-  providerPluginSchemaV70,
-  providerSkillSchema,
-  providerSkillSchemaV70,
   providerModelProvidersCapabilitiesSchema,
-  providerModelProvidersCapabilitiesSchemaV70,
+  projectNativeCapabilitiesToV70,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70,
   providerEnvOverrideScopeSchema,
@@ -48,11 +38,12 @@ import {
   providerSettingsTabSchemaV70,
   type ProviderNativeCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { providerIdSchema, providerIdSchemaV70 } from "@traycer/protocol/host/provider-ids";
+import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import {
   PROVIDER_AUTH_SCHEMA_V20,
   providerCliStateSchema,
   providerCliStateSchemaV70,
+  providerIdSchemaV70,
   providersAwaitModelProviderAuthRequestSchema,
   providersAwaitModelProviderAuthResponseSchema,
   providersCancelModelProviderAuthRequestSchema,
@@ -209,16 +200,15 @@ const liveResponse = providersListResponseSchema.parse({
 });
 
 describe("modelProviders tab id and capability block", () => {
-  it("is on the live tab enum and mirrored onto the frozen v7.0 one", () => {
-    // Mirrored, not projected away: v7.0 is unreleased, so growing it in place
-    // costs nobody a bridge - the same call `config_unreadable` and
-    // `huggingface` got.
+  it("is on the live tab enum and NOT on the frozen v7.0 one", () => {
+    // The tab rides the head line. v7.0 is frozen; a v7.0 peer receives
+    // `supportedTabs` through the projection, never the raw member.
     expect(providerSettingsTabSchema.safeParse("modelProviders").success).toBe(
       true,
     );
     expect(
       providerSettingsTabSchemaV70.safeParse("modelProviders").success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("requires the capability key rather than tolerating an absent one", () => {
@@ -258,40 +248,55 @@ describe("modelProviders tab id and capability block", () => {
     ).toBe(false);
   });
 
-  it("carries modelProviders: null on both defaults", () => {
-    // Both, now that the member rides v7.0. The two defaults stay separate
-    // objects so the frozen line keeps its own snapshot the day they diverge.
+  it("carries modelProviders: null on the live default and no key on the frozen one", () => {
+    // The live default is what the head line serves; the v7.0 default is the
+    // frozen line's own snapshot, which predates the member.
     expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES.modelProviders).toBeNull();
-    expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70.modelProviders).toBeNull();
+    expect(
+      Object.keys(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70),
+    ).not.toContain("modelProviders");
   });
 });
 
 
 describe("the tab id can only reach a decoder that knows it", () => {
-  it("carries modelProviders on v7.0, which is the only line that models tabs", () => {
-    // No projection, because there is nothing below to project onto: v7.0 is
-    // the first and only `providers.list` line that models
-    // `nativeCapabilities` at all.
+  it("carries modelProviders on the live head line", () => {
     const opencodeRow = liveResponse.providers.find(
       (provider) => provider.providerId === "opencode",
     );
     expect(opencodeRow?.nativeCapabilities.supportedTabs).toContain(
       "modelProviders",
     );
-    expect(
-      providersListResponseSchemaV70.safeParse(liveResponse).success,
-    ).toBe(true);
+  });
+
+  it("projects the tab away for a v7.0 peer WITHOUT wiping its capabilities", () => {
+    // The trap this projection exists for: the frozen tab enum rejects a
+    // whole `supportedTabs` array over one unknown member, and the state's
+    // `.catch()` would then serve the empty default - costing the peer MCP,
+    // Plugins and Skills over one tab id. Filter, never reparse.
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      8,
+      7,
+      liveResponse,
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    const row = downgraded.value.providers.find(
+      (provider) => provider.providerId === "opencode",
+    );
+    expect(row?.nativeCapabilities.supportedTabs).toContain("mcp");
+    expect(row?.nativeCapabilities.mcp).not.toBeNull();
+    expect(JSON.stringify(downgraded.value)).not.toContain("modelProviders");
   });
 
   it("drops the whole capability object for a v6.0 client, tab and all", () => {
-    // The hazard the tab id posed was never the id itself - it was a decoder
-    // that models `supportedTabs` and cannot read a member. v6.0 models no
-    // capability object, so the reparse takes the entire field, and the string
-    // cannot reach the wire at any older major.
+    // v6.0 models no capability object, so the reparse takes the entire
+    // field, and the string cannot reach the wire at any older major.
     for (const targetMajor of [1, 2, 3, 4, 5, 6] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         liveResponse,
       );
@@ -308,7 +313,7 @@ describe("the tab id can only reach a decoder that knows it", () => {
   });
 });
 
-describe("providers.list 7.0 -> every older major", () => {
+describe("providers.list head line -> every older major", () => {
   const FROZEN_RESPONSES = {
     1: providersListResponseSchemaV10,
     2: providersListResponseSchemaV20,
@@ -319,20 +324,20 @@ describe("providers.list 7.0 -> every older major", () => {
     7: providersListResponseSchemaV70,
   } as const;
 
-  it.each([1, 2, 3, 4, 5, 6] as const)(
-    "7.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
+  it.each([1, 2, 3, 4, 5, 6, 7] as const)(
+    "8.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
     (targetMajor) => {
       // Every major gets a DIRECT path (the registry composes nothing), so a
       // missing key here is not a degraded response - it is no response that
       // peer can decode at all.
       expect(
-        hostRpcRegistry["providers.list"][7].downgradePathsFromLatest[
-          targetMajor as 1 | 2 | 3 | 4 | 5 | 6
+        hostRpcRegistry["providers.list"][8].downgradePathsFromLatest[
+          targetMajor as 1 | 2 | 3 | 4 | 5 | 6 | 7
         ],
       ).toBeDefined();
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         liveResponse,
       );
@@ -351,7 +356,7 @@ describe("providers.list 7.0 -> every older major", () => {
     // drop it wholesale and the ids survive untouched.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       6,
       liveResponse,
     );
@@ -366,13 +371,12 @@ describe("providers.list 7.0 -> every older major", () => {
   });
 });
 
-describe("providers.list every older major -> 7.0", () => {
-  it("fills modelProviders: null as an OWN key on the v6 -> v7 hop", () => {
-    // A missing key and an explicit null are what a consumer gate has to tell
-    // apart, and `upgradeResponseToVersion` chains bridges by cast with no
-    // re-parse - so the fill has to be real, not a schema default that never
-    // runs. v6.0 models no capability object at all, so this hop invents the
-    // whole thing from the v7.0-shaped default.
+describe("providers.list every older major -> the head line", () => {
+  it("fills the v7.0-shaped default on the v6 -> v7 hop, with no modelProviders key", () => {
+    // v6.0 models no capability object at all, so this hop invents the whole
+    // thing from the v7.0-shaped default - which predates `modelProviders`.
+    // `upgradeResponseToVersion` chains bridges by cast with no re-parse, so
+    // the fill has to be real, not a schema default that never runs.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 6, minor: 0 },
@@ -382,16 +386,34 @@ describe("providers.list every older major -> 7.0", () => {
       }),
     );
     const capabilities = upgraded.providers[0].nativeCapabilities;
-    expect(Object.keys(capabilities)).toContain("modelProviders");
-    expect(capabilities.modelProviders).toBeNull();
+    expect(Object.keys(capabilities)).not.toContain("modelProviders");
     expect(capabilities).toEqual(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70);
     expect(
       providersListResponseSchemaV70.safeParse(upgraded).success,
     ).toBe(true);
   });
 
+  it("fills modelProviders: null as an OWN key on the v7 -> v8 hop", () => {
+    // A missing key and an explicit null are what a consumer gate has to tell
+    // apart. A v7.0 host predates the feature, so the hop reports exactly
+    // that - null, present.
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 7, minor: 0 },
+      { major: 8, minor: 0 },
+      providersListResponseSchemaV70.parse({
+        providers: [providerState("opencode")],
+        native: null,
+      }),
+    );
+    const capabilities = upgraded.providers[0].nativeCapabilities;
+    expect(Object.keys(capabilities)).toContain("modelProviders");
+    expect(capabilities.modelProviders).toBeNull();
+    expect(providersListResponseSchema.safeParse(upgraded).success).toBe(true);
+  });
+
   it.each([1, 2, 3, 4, 5, 6] as const)(
-    "upgrades a v%i.0 response to 7.0 with modelProviders null",
+    "upgrades a v%i.0 response to the head line with modelProviders null",
     (sourceMajor) => {
       const frozen = {
         1: providersListResponseSchemaV10,
@@ -404,7 +426,7 @@ describe("providers.list every older major -> 7.0", () => {
       const upgraded = upgradeResponseToVersion(
         hostRpcRegistry["providers.list"],
         { major: sourceMajor, minor: 0 },
-        { major: 7, minor: 0 },
+        { major: 8, minor: 0 },
         frozen.parse({ providers: [providerState("codex")] }),
       );
       expect(
@@ -1842,219 +1864,17 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 });
 
-/**
- * Every zod schema reachable from `root`, by identity.
- *
- * Walks `def` generically rather than switching on schema kind: the point is
- * to be exhaustive, and a per-kind walker silently stops at the first kind
- * nobody remembered to handle - which is the same class of miss this test
- * exists to catch.
- */
-function collectReachableSchemas(root: z.ZodType): Set<z.ZodType> {
-  const schemas = new Set<z.ZodType>();
-  const containers = new WeakSet<object>();
-  const pending: z.ZodType[] = [root];
-
-  function walk(value: unknown): void {
-    if (value instanceof z.ZodType) {
-      pending.push(value);
-      return;
-    }
-    if (typeof value !== "object" || value === null) return;
-    if (containers.has(value)) return;
-    containers.add(value);
-    for (const child of Object.values(value)) walk(child);
-  }
-
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === undefined || schemas.has(current)) continue;
-    schemas.add(current);
-    walk(current.def);
-  }
-  return schemas;
-}
-
-/**
- * Every export name each schema object answers to, used only to make a failure
- * readable - not the guard itself. A LIST per object, not one name: several
- * schemas are exported twice under an alias (`PROVIDER_AUTH_SCHEMA` is the
- * same object as `PROVIDER_AUTH_SCHEMA_V20`), and keeping only the last one
- * seen would make a frozen node look live purely by declaration order.
- */
-const SCHEMA_EXPORT_NAMES = new Map<z.ZodType, string[]>();
-for (const [name, value] of [
-  ...Object.entries(nativeSchemaModule),
-  ...Object.entries(providerSchemaModule),
-  ...Object.entries(providerIdModule),
-]) {
-  if (!(value instanceof z.ZodType)) continue;
-  const names = SCHEMA_EXPORT_NAMES.get(value);
-  if (names === undefined) {
-    SCHEMA_EXPORT_NAMES.set(value, [name]);
-    continue;
-  }
-  names.push(name);
-}
-
-/** A name is a freeze marker when it ends in a version suffix (`V70`, `V20`, …). */
-const FROZEN_NAME = /V\d0$/;
-
-function describeSchema(schema: z.ZodType): string {
-  const names = SCHEMA_EXPORT_NAMES.get(schema);
-  if (names !== undefined) return names.join(" / ");
-  const def: unknown = schema.def;
-  const kind =
-    typeof def === "object" && def !== null && "type" in def
-      ? String(def.type)
-      : "schema";
-  try {
-    const shape = JSON.stringify(
-      z.toJSONSchema(schema, { unrepresentable: "any" }),
-    );
-    return `<unexported ${kind}: ${shape.slice(0, 160)}>`;
-  } catch {
-    return `<unexported ${kind}>`;
-  }
-}
-
-function unionOfClosures(roots: readonly z.ZodType[]): Set<z.ZodType> {
-  const all = new Set<z.ZodType>();
-  for (const root of roots) {
-    for (const schema of collectReachableSchemas(root)) all.add(schema);
-  }
-  return all;
-}
-
-/**
- * Every schema object the LIVE `providers.list` contracts reach - the closure,
- * not the export list.
- *
- * The export list was this guard's first form and it had a hole: "live" meant
- * "exported", so a PRIVATE live node (`nativeListSuccessResultSchema` is one)
- * could be wired into a V70 schema and pass. Worse, the JSON-schema equality
- * tests below would pass too, because both sides would be comparing one shared
- * object with itself - leaving only the regeneratable catalog snapshot to
- * notice a later widening.
- *
- * A closure has no such hole: reachability does not care whether a node has a
- * name.
- */
-const LIVE_SCHEMA_CLOSURE = unionOfClosures([
-  providerCliStateSchema,
-  providersListRequestSchema,
-  providersListResponseSchema,
-  providerNativeCapabilitiesSchema,
-]);
-
-/**
- * The one deliberate sharing between the live and v7.0 trees:
- * `PROVIDER_AUTH_SCHEMA_V20` is already frozen under its own version name, so
- * both lines legitimately point at it. Subtracted as a CLOSURE, not a single
- * node - its children (`PROVIDER_AUTH_STATUS_SCHEMA_V20`) are shared for
- * exactly the same reason.
- *
- * This is the entire allowlist. Anything else in the intersection is a leak,
- * and the fix is a V70 copy - never another entry here.
- */
-const PERMITTED_SHARED_CLOSURE = collectReachableSchemas(
-  PROVIDER_AUTH_SCHEMA_V20,
-);
-
-describe("the v7.0 freeze goes all the way down", () => {
-  // A `...V70` schema that still points into the live tree is a freeze-shaped
-  // alias, not a freeze: the outer object is pinned while everything inside it
-  // stays free to grow, and growth in a closed enum or union is the half that
-  // is FATAL to a peer that decodes v7.0 rather than merely leaked.
-  //
-  // Two rounds of review found a missed subtree each time, one level deeper
-  // than the last fix. So the primary guard below is not a list of the
-  // subtrees anyone remembered - it is an exhaustive walk of the schema graph,
-  // which makes the NEXT missed subtree fail here instead of in a review.
-
-  const V70_ROOTS: readonly { name: string; schema: z.ZodType }[] = [
-    { name: "providerCliStateSchemaV70", schema: providerCliStateSchemaV70 },
-    {
-      name: "providersListRequestSchemaV70",
-      schema: providersListRequestSchemaV70,
-    },
-    {
-      name: "providersListResponseSchemaV70",
-      schema: providersListResponseSchemaV70,
-    },
-    {
-      name: "providerNativeCapabilitiesSchemaV70",
-      schema: providerNativeCapabilitiesSchemaV70,
-    },
-  ];
-
-  it.each(V70_ROOTS)(
-    "$name shares no node with the live contracts at any depth",
-    ({ schema }) => {
-      // The whole contract in one assertion: closure ∩ closure, minus the one
-      // deliberately shared frozen subtree. If this fails, the nodes it
-      // reports are live schemas sitting on the v7.0 wire - give each a V70
-      // hand-copy and rewire. Do NOT add them to the allowlist; the reason
-      // they are reachable IS the defect.
-      const leaks = [...collectReachableSchemas(schema)]
-        .filter(
-          (node) =>
-            LIVE_SCHEMA_CLOSURE.has(node) &&
-            !PERMITTED_SHARED_CLOSURE.has(node),
-        )
-        .map(describeSchema);
-      expect(leaks).toEqual([]);
-    },
-  );
-
-  it("actually has live nodes to catch, and a graph deep enough to find them", () => {
-    // Guards the guard. A walker that silently stopped at depth 1, or a live
-    // closure that came back empty, would make every assertion above vacuously
-    // green.
-    expect(LIVE_SCHEMA_CLOSURE.size).toBeGreaterThan(100);
-    expect(
-      collectReachableSchemas(providerCliStateSchemaV70).size,
-    ).toBeGreaterThan(100);
-    expect(
-      collectReachableSchemas(providerCliStateSchemaV70).has(
-        providerNativeCapabilitiesSchemaV70,
-      ),
-    ).toBe(true);
-  });
-
-  it("covers UNEXPORTED live nodes, which is the hole the export list had", () => {
-    // The concrete reason this guard is a closure rather than a name list. If
-    // every live node happened to be exported the two would be equivalent and
-    // the rewrite pointless - so assert they are not: the live contracts do
-    // reach nodes no name can address, and those are now in scope.
-    const unexported = [...LIVE_SCHEMA_CLOSURE].filter(
-      (node) => !SCHEMA_EXPORT_NAMES.has(node),
-    );
-    expect(unexported.length).toBeGreaterThan(0);
-  });
-
-  it("permits exactly one shared subtree, and every node in it is frozen", () => {
-    // Pins the allowlist so a future "just add it to the permitted set" fix
-    // cannot pass quietly: every NAMED node in it must carry a version suffix.
-    expect(PERMITTED_SHARED_CLOSURE.has(PROVIDER_AUTH_SCHEMA_V20)).toBe(true);
-    const liveNamed = [...PERMITTED_SHARED_CLOSURE]
-      .map((node) => SCHEMA_EXPORT_NAMES.get(node))
-      .filter((names): names is string[] => names !== undefined)
-      // An object exported under several names is frozen if ANY of them says
-      // so - the alias is a second door onto the same frozen schema.
-      .filter((names) => !names.some((name) => FROZEN_NAME.test(name)))
-      .map((names) => names.join(" / "));
-    expect(liveNamed).toEqual([]);
-  });
-
-  // Live-vs-frozen equality per subtree. Green today because the copies agree;
-  // red the day a live subtree grows, which routes the "what does a v7.0
-  // client see?" decision to whoever grew it. Do NOT satisfy a failure by
-  // editing the V70 copy - while v7.0 is unreleased the answer is to mirror
-  // the growth into it, and once it is released, to write the projection that
-  // says what a v7.0 peer sees instead.
+describe("the v7.0 capability freeze around the model-provider surface", () => {
+  // Hand-frozen copies that still deep-equal their live counterparts. Green
+  // today; red the day a live subtree grows past the frozen line - and the
+  // answer to red is main's freeze rule: keep the copy frozen and extend the
+  // v8->v7 projection/bridge to say what a v7.0 peer sees instead.
   const PAIRS = [
-    ["mcp capabilities", providerMcpCapabilitiesSchema, providerMcpCapabilitiesSchemaV70],
+    [
+      "mcp capabilities",
+      providerMcpCapabilitiesSchema,
+      providerMcpCapabilitiesSchemaV70,
+    ],
     [
       "plugins capabilities",
       providerPluginsCapabilitiesSchema,
@@ -2065,34 +1885,10 @@ describe("the v7.0 freeze goes all the way down", () => {
       providerSkillsCapabilitiesSchema,
       providerSkillsCapabilitiesSchemaV70,
     ],
-    ["native list query", nativeListQuerySchema, nativeListQuerySchemaV70],
-    ["native list result", nativeListResultSchema, nativeListResultSchemaV70],
-    // The row schemas the list result is BUILT from. Covered by the result
-    // pair transitively, and named individually anyway: a failure on the
-    // aggregate points at a 300-line union diff, while a failure here points
-    // at the row that moved.
-    ["mcp tool row", providerMcpToolSchema, providerMcpToolSchemaV70],
-    ["mcp server row", providerMcpServerSchema, providerMcpServerSchemaV70],
-    ["plugin row", providerPluginSchema, providerPluginSchemaV70],
-    ["skill row", providerSkillSchema, providerSkillSchemaV70],
     [
       "env override scope",
       providerEnvOverrideScopeSchema,
       providerEnvOverrideScopeSchemaV70,
-    ],
-    // The two that now carry `modelProviders` on both sides. They are the
-    // reason no new major was needed: mirrored while unreleased, and held
-    // identical here so the mirror cannot rot.
-    ["settings tab ids", providerSettingsTabSchema, providerSettingsTabSchemaV70],
-    [
-      "model-providers capabilities",
-      providerModelProvidersCapabilitiesSchema,
-      providerModelProvidersCapabilitiesSchemaV70,
-    ],
-    [
-      "native capabilities",
-      providerNativeCapabilitiesSchema,
-      providerNativeCapabilitiesSchemaV70,
     ],
   ] as const;
 
@@ -2105,83 +1901,36 @@ describe("the v7.0 freeze goes all the way down", () => {
     },
   );
 
-  it("carries config_unreadable on the v7.0 native result - v7.0 is unreleased", () => {
-    // Versions protect peers in the FIELD. No non-RC host/cli/desktop tag
-    // ships `providers.list@7.0`, so there is no peer that negotiated v7.0 and
-    // cannot read this code - the release that first ships v7.0 ships it too.
-    // The v7.0 snapshot therefore mirrors the live enum, and a projection here
-    // would protect nobody.
-    //
-    // That stops holding the day a release ships v7.0. After it, a code added
-    // to the live enum needs a projection decision, and the equality guard is
-    // what asks for one.
-    expect(
-      nativeListResultSchemaV70.safeParse({
-        ok: false,
-        code: "config_unreadable",
-        detail: "redacted parse error",
-      }).success,
-    ).toBe(true);
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      7,
-      7,
-      {
-        providers: [],
-        native: {
-          ok: false,
-          code: "config_unreadable",
-          detail: "redacted parse error",
-        },
-      },
+  it("frozen tabs = live tabs minus modelProviders, exactly", () => {
+    // Pins BOTH directions of the projection's premise: the frozen enum has
+    // no member the live one lacks, and `modelProviders` is the only member
+    // the live one adds. A second live-only tab would land here first, as a
+    // prompt to extend the projection's coverage tests.
+    expect([...providerSettingsTabSchema.options].sort()).toEqual(
+      [...providerSettingsTabSchemaV70.options, "modelProviders"].sort(),
     );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    expect(downgraded.value.native).toEqual({
-      ok: false,
-      code: "config_unreadable",
-      detail: "redacted parse error",
-    });
   });
 
-  it("has no tab the frozen v7.0 line cannot decode", () => {
-    // There is no tab PROJECTION because there is nothing to project onto: no
-    // `providers.list` line below v7.0 models `nativeCapabilities` at all, so
-    // every downgrade drops the whole capability object and the tab enum's
-    // only decoder is v7.0 itself.
-    //
-    // What has to hold instead is that the two enums agree. The day a line
-    // above v7.0 opens, this test goes red for every tab that line adds - and
-    // THAT is when a projection has to be written, filtering the array rather
-    // than reparsing it.
-    expect(providerSettingsTabSchemaV70.options).toEqual(
-      providerSettingsTabSchema.options,
+  it("frozen capability keys = live keys minus modelProviders, exactly", () => {
+    expect([...Object.keys(providerNativeCapabilitiesSchema.shape)].sort()).toEqual(
+      [
+        ...Object.keys(providerNativeCapabilitiesSchemaV70.shape),
+        "modelProviders",
+      ].sort(),
     );
-    for (const tab of providerSettingsTabSchema.options) {
-      expect(
-        providerSettingsTabSchemaV70.safeParse(tab).success,
-        tab,
-      ).toBe(true);
-    }
   });
 
-  it("keeps the v7.0 provider-id copy in lockstep with the live enum", () => {
-    // While the v7.0 line is unreleased its copy mirrors the live enum, so a
-    // provider added to one without the other goes red here and the drift is
-    // resolved deliberately instead of shipping half-wired.
-    expect(providerIdSchemaV70.options).toEqual(providerIdSchema.options);
+  it("projects a full live descriptor without losing a sibling capability", () => {
+    const projected = projectNativeCapabilitiesToV70(OPENCODE_CAPABILITIES);
+    expect(projected.supportedTabs).not.toContain("modelProviders");
+    expect(projected.mcp).toEqual(OPENCODE_CAPABILITIES.mcp);
+    expect(projected.plugins).toEqual(OPENCODE_CAPABILITIES.plugins);
+    expect(projected.skills).toEqual(OPENCODE_CAPABILITIES.skills);
   });
 
-  it("wires the v7.0 contracts to the frozen tree by identity", () => {
-    // Spot checks that name the seams a reader cares about. The exhaustive
-    // walk above is the guarantee; these say out loud which schema each v7.0
-    // field is supposed to be.
-    expect(unwrapSchema(providersListRequestSchemaV70.shape.native)).toBe(
-      nativeListQuerySchemaV70,
-    );
-    expect(unwrapSchema(providersListResponseSchemaV70.shape.native)).toBe(
-      nativeListResultSchemaV70,
-    );
+  it("wires the v7.0 state to the frozen capability descriptor by identity", () => {
+    // Spot checks that name the seams a reader cares about; the deep
+    // frozen-catalog snapshot is the exhaustive guarantee.
     expect(
       unwrapSchema(providerCliStateSchemaV70.shape.nativeCapabilities),
     ).toBe(providerNativeCapabilitiesSchemaV70);
@@ -2193,7 +1942,6 @@ describe("the v7.0 freeze goes all the way down", () => {
     ).toBe(providerEnvOverrideScopeSchemaV70);
   });
 });
-
 
 describe("no downgrade hop fails a whole response over one unsupported provider", () => {
   // The class the v7 -> v6 hop belongs to. `z.array` fails WHOLE on one bad
@@ -2226,7 +1974,7 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         { providers: [newestProvider, claudeState], native: null },
       );

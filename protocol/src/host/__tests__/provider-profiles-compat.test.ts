@@ -7,6 +7,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  providersListResponseSchemaV70,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providerCliStateSchemaV10,
@@ -336,7 +337,10 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
       hostRpcRegistry["providers.list"],
       7,
       2,
-      { providers: [stateWithProfile], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithProfile],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -393,7 +397,10 @@ describe("providers.list v3.0 line predates profiles[]", () => {
       hostRpcRegistry["providers.list"],
       7,
       3,
-      { providers: [stateWithProfile], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithProfile],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

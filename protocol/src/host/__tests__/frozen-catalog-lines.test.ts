@@ -18,6 +18,8 @@ import {
   listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
+  providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -64,7 +66,14 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@4.0": providersListResponseSchemaV40,
   "providers.list@5.0": providersListResponseSchemaV50,
   "providers.list@6.0": providersListResponseSchemaV60,
+  // v7.0 is pinned here while it is still the head line, so this row fails on
+  // the FIRST attempt to grow the live shape rather than on the release that
+  // ships the growth. The dump is deep, which is what covers the sub-schemas
+  // `providerCliStateBaseShapeV70` still references live - see the freeze
+  // comment on that shape for the list and for what to do when this goes red.
   "providers.list@7.0": providersListResponseSchemaV70,
+  "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
+  "providers.list@7.0 request": providersListRequestSchemaV70,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

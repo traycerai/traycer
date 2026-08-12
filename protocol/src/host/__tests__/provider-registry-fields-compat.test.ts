@@ -6,6 +6,7 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  providersListResponseSchemaV70,
   downgradeProviderCliStateToV10,
   providerAdvisoryKindSchema,
   providerAdvisorySchema,
@@ -138,7 +139,10 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
         hostRpcRegistry["providers.list"],
         7,
         target,
-        { providers: [state], native: null },
+        providersListResponseSchemaV70.parse({
+          providers: [state],
+          native: null,
+        }),
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) continue;
@@ -331,7 +335,10 @@ describe("old-client behavior on the error arm", () => {
         hostRpcRegistry["providers.list"],
         7,
         targetMajor,
-        { providers: [erroredState], native: null },
+        providersListResponseSchemaV70.parse({
+          providers: [erroredState],
+          native: null,
+        }),
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) return;
@@ -523,7 +530,10 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       7,
       2,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithRegistryFields],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -539,7 +549,10 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       7,
       3,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithRegistryFields],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -648,7 +661,10 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
       // `native` is required here and absent from the major-6 cases above
       // because the live response shape carries it - v6.0 froze before it
       // existed. Same reason the registry fields only ride v7.0 and up.
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithRegistryFields],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -686,7 +702,10 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
       hostRpcRegistry["providers.list"],
       7,
       5,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+          providers: [stateWithRegistryFields],
+          native: null,
+        }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

@@ -1,4 +1,5 @@
 import { validateStoredCredentials } from "../auth/validate";
+import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
@@ -51,7 +52,9 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
     data: {
       status: "valid" as const,
       user: creds.user,
-      authnBaseUrl: creds.authnBaseUrl,
+      // The authority the token was just validated against - this build's
+      // configured authn, not file content (the file carries no URL).
+      authnBaseUrl: config.authnBaseUrl,
     },
     human: ctx.runtime.json
       ? null
