@@ -19,6 +19,8 @@ function entry(fields: {
     description: fields.description ?? "",
     icon: createElement("span"),
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
