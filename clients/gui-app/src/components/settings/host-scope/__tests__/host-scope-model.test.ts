@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   buildHostScopeOptions,
   resolveScopedHost,
@@ -195,6 +196,78 @@ describe("buildHostScopeOptions planRestricted", () => {
         remoteHostsPlanRestricted: false,
       }).planRestricted,
     ).toBe(false);
+  });
+});
+
+describe("buildHostScopeOptions planRestricted — composed against a real local-only mapped entry", () => {
+  // `entry()` above and `buildOne`'s hard-coded `hasLiveSession: () => false`
+  // are exactly what hid the original bug: a synthetic literal has no
+  // `remoteStatus`, so `hostUnavailability` falls straight to its
+  // non-remote-entry branch (`"offline"`) no matter what `status` says, and
+  // the CLOUD half of `isPlanRestrictedRoute` — `connectivity: "local-only"`
+  // ⇒ `"plan-restricted"` — never gets exercised at all. This composes the
+  // REAL mapper output instead, and varies `hasLiveSession` (irrelevant to
+  // this particular derivation, but varying it is what the review asked for
+  // and it costs nothing to prove it stays irrelevant here).
+  function realLocalOnlyEntry(): HostDirectoryEntry {
+    return hostListItemToDirectoryEntry(
+      {
+        hostId: "host-a",
+        displayName: "Free Tier Laptop",
+        platform: "darwin-arm64",
+        kind: "personal",
+        publicKey: "pk-a",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatePolicy: "manual",
+        status: {
+          connectivity: "local-only",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: "2026-01-01T00:00:00Z",
+        },
+      },
+      "wss://relay.example.test/attach",
+    );
+  }
+
+  it("is planRestricted even with the account's OWN plan gate off — the cloud's local-only verdict is sufficient on its own", () => {
+    // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old
+    // body could never reach: `remoteHostsPlanRestricted: false` but the row
+    // is STILL not connectable, because the mapper marks a `local-only`
+    // connectivity `status: "unavailable"` regardless of the client's own
+    // plan flag. Requiring `status === "available"` (the old body) can never
+    // be true for this entry, so a free-tier user's own host used to fall
+    // through to generic "unreachable" with no upgrade path.
+    const [option] = buildHostScopeOptions({
+      directory: [realLocalOnlyEntry()],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => false,
+      viewerCheck: () => null,
+      remoteHostsPlanRestricted: false,
+      nowMs: 0,
+    });
+    expect(option.connectable).toBe(false);
+    expect(option.planRestricted).toBe(true);
+  });
+
+  it("stays planRestricted regardless of live-session evidence — the plan gate is not a liveness question", () => {
+    const [option] = buildHostScopeOptions({
+      directory: [realLocalOnlyEntry()],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => true,
+      viewerCheck: () => null,
+      remoteHostsPlanRestricted: false,
+      nowMs: 0,
+    });
+    expect(option.planRestricted).toBe(true);
   });
 });
 

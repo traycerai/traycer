@@ -143,8 +143,9 @@ describe("hostListItemToDirectoryEntry", () => {
     };
     const entry = hostListItemToDirectoryEntry(item, RELAY_BASE_URL);
     expect(entry.status).toBe("unavailable");
-    // Still connectable — the reachability probe at tab-open time is the real
-    // gate, not this coarse directory snapshot.
+    // `websocketUrl` is the relay's fixed attach endpoint, carried through
+    // regardless of dialability — production rejects this entry as
+    // unconnectable via `status`/`hostUnavailability`, not via the URL.
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
   });
 

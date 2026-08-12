@@ -3,9 +3,10 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  RemoteHostFetchOutcome,
-  RemoteHostFetcher,
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostFetchOutcome,
+  type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostDirectoryService,
@@ -33,7 +34,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
+// Matches the production constant of the same name in `host-directory-service.ts`
+// — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
+// 60s to actually match the Settings observer's poll (see that file's comment).
+const HOST_DIRECTORY_REFRESH_POLL_MS = 60_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
@@ -2257,6 +2261,142 @@ describe("HostDirectoryService", () => {
       expect(directory.getSelected()?.hostId).toBe(
         secondRemoteHostEntry.hostId,
       );
+    });
+
+    /**
+     * `isConfirmedHostDeath` composition — the P0 the review named directly.
+     *
+     * `asNonDialable` above is a SYNTHETIC literal with no `remoteStatus`, so
+     * `hostUnavailability` falls straight to its non-remote branch
+     * (`"offline"`) regardless of what it is meant to represent — every
+     * existing D7 test above is, without knowing it, only ever exercising the
+     * genuinely-dead case. These compose REAL entries from
+     * `hostListItemToDirectoryEntry` instead, so the `connectivity: "unknown"`
+     * case is actually reachable: a degraded liveness read maps `status` to
+     * the exact same `"unavailable"` `asNonDialable` fakes, but
+     * `isConfirmedHostDeath` must refuse to treat it as evidence.
+     *
+     * This is also the case the old per-poll debounce could never catch: a
+     * degraded cloud read re-polls to the SAME degraded answer, so two
+     * consecutive reads agree and the streak completes anyway. Only gating on
+     * the REASON (not just "two non-dialable reads in a row") fixes it.
+     */
+    describe("isConfirmedHostDeath composition — real mapped connectivity, not a synthetic unavailable literal", () => {
+      function realRemoteEntry(
+        hostId: string,
+        displayName: string,
+        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+      ): HostDirectoryEntry {
+        return hostListItemToDirectoryEntry(
+          {
+            hostId,
+            displayName,
+            platform: "Ubuntu",
+            kind: "personal",
+            publicKey: `pk-${hostId}`,
+            createdAt: "2026-07-01T12:00:00.000Z",
+            status: {
+              connectivity,
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt: "2026-07-03T11:59:50.000Z",
+            },
+            updatePolicy: "manual",
+          },
+          "wss://relay.example.test/attach",
+        );
+      }
+
+      it("does NOT fail over a selected remote host across two consecutive 'unknown' reads — a degraded read is not evidence of death", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        // The cloud goes blind on this host. Both this entry's mapped `status`
+        // ("unavailable") AND its dialability are identical to the genuinely-dead
+        // case above — the only thing that differs is `remoteStatus.connectivity`.
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "unknown"),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        // A second consecutive genuine read, still "unknown" — re-polling a
+        // degraded read returns the same degraded answer, which is exactly why
+        // the old debounce alone could not have protected this case.
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+      });
+
+      it("DOES fail over the same selected host across two consecutive genuinely 'offline' reads", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "offline"),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("does NOT fail over a 'local-only' (plan-restricted) selection either — it is not dead, it is billing", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "local-only"),
+          second,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+      });
     });
 
     it("toasts on failover and on re-adoption of the origin host", async () => {

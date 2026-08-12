@@ -291,11 +291,22 @@ function ApplyNowControl(props: {
   const [armedHostId, setArmedHostId] = useState<string | null>(null);
   // The COUNT is captured with the target, for the same reason and against a
   // sharper failure. This dialog names a number and then destroys that many
-  // sessions, and it can stand open while the number moves underneath it — a
-  // session opens, or the live read is lost and the count becomes unknown.
+  // sessions, and it can stand open while the number moves underneath it.
   // Confirming then ends a quantity nobody was shown. Re-checking at confirm
   // time against what was ARMED is what makes "ends 2 sessions" a promise
   // rather than an estimate.
+  //
+  // Of the two ways the number can move, only ONE reaches this guard today.
+  // A changed count (2 → 3) does. A LOST count does not: `deriveUpdateAffordance`
+  // nulls `applyNowLabel` the moment the live read goes away, and
+  // `HostRegistryUpdates` gates this whole control on that label — so losing the
+  // source unmounts the trigger, this component and any open dialog with it,
+  // which is a stronger outcome than refusing at confirm time. The `null` arms
+  // below are therefore SECOND-LINE and currently unreachable through the
+  // composed tree. They stay because the thing they protect is destructive and
+  // the gate above them is a rendering decision two files away: if that gate is
+  // ever relaxed so an armed dialog outlives its label, this is what keeps the
+  // promise honest. Do not read their presence as evidence that path is live.
   const [armedCount, setArmedCount] = useState<number | null>(null);
   const open = armedHostId !== null;
   const targetMoved = armedHostId !== null && armedHostId !== hostId;

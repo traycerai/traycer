@@ -12,7 +12,9 @@ import {
   formatHostMeta,
   formatLastSeen,
   isValidHostVersion,
+  liveBusySessionCount,
   type HostPresenceView,
+  type LiveBusySessionCountOptions,
   type ViewerReachabilityCheckLike,
 } from "@/components/settings/panels/my-hosts-model";
 
@@ -426,14 +428,83 @@ describe("deriveUpdateAffordance", () => {
       expect(zeroView.waitingForSessionsLabel).toBeNull();
     });
 
-    it("still shows the Update now input while pending with no live session source", () => {
+    it("still hides the Update now input while pending with no live session source", () => {
       // `showUpdateNowInput` is registry-backed and gates purely on
-      // `updateState`, independent of the live-count question.
+      // `updateState` (hidden for `pending`/`updating`), independent of the
+      // live-count question — a missing live source does not reopen it.
       const view = deriveUpdateAffordance({
         updateState: "pending",
         liveBusySessionCount: null,
       });
       expect(view.showUpdateNowInput).toBe(false);
     });
+  });
+});
+
+describe("liveBusySessionCount", () => {
+  function options(
+    overrides: Partial<LiveBusySessionCountOptions>,
+  ): LiveBusySessionCountOptions {
+    return {
+      reportedCount: 2,
+      isError: false,
+      fetchStatus: "idle",
+      isStale: false,
+      ...overrides,
+    };
+  }
+
+  it("passes the reported count through on a healthy, fresh read", () => {
+    expect(liveBusySessionCount(options({ reportedCount: 4 }))).toBe(4);
+  });
+
+  it("passes a reported zero through unchanged — a positive statement of 'no sessions'", () => {
+    expect(liveBusySessionCount(options({ reportedCount: 0 }))).toBe(0);
+  });
+
+  it("demotes to null when the last read errored, even with a count still cached", () => {
+    // The TanStack-retains-data hazard this function exists to close: a
+    // refetch error does not clear `data`, so a caller reading only
+    // `reportedCount` would keep showing (and destroying) a stale number.
+    expect(
+      liveBusySessionCount(options({ reportedCount: 5, isError: true })),
+    ).toBeNull();
+  });
+
+  it("demotes to null while fetching is paused (offline; nothing will correct it)", () => {
+    expect(
+      liveBusySessionCount(
+        options({ reportedCount: 3, fetchStatus: "paused" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("demotes to null once the value has gone stale and is not actively refetching", () => {
+    expect(
+      liveBusySessionCount(
+        options({ reportedCount: 1, isStale: true, fetchStatus: "idle" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("does NOT demote a stale value that is actively refetching — the fresh answer is in flight", () => {
+    expect(
+      liveBusySessionCount(
+        options({ reportedCount: 1, isStale: true, fetchStatus: "fetching" }),
+      ),
+    ).toBe(1);
+  });
+
+  it("an errored AND stale read still demotes to null (error takes precedence, not that it matters here)", () => {
+    expect(
+      liveBusySessionCount(
+        options({
+          reportedCount: 2,
+          isError: true,
+          isStale: true,
+          fetchStatus: "idle",
+        }),
+      ),
+    ).toBeNull();
   });
 });

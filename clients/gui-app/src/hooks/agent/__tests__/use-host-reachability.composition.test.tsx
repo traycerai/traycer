@@ -1,0 +1,233 @@
+/**
+ * Composition coverage for `useHostReachability`: fed REAL entries from
+ * `hostListItemToDirectoryEntry` — not synthetic `HostDirectoryEntry`
+ * literals — through the REAL `useHostDirectoryList` + the mapper the
+ * directory service actually uses. This is the layer the previous round's
+ * unit tests (mapper alone, hook alone) never composed, which is exactly how
+ * a `connectivity: "unknown"` host with an open E2E session shipped as
+ * "unreachable" while both halves stayed green in isolation.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import type {
+  HostConnectivity,
+  HostListItem,
+} from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+
+interface DirectoryListener {
+  (): void;
+}
+
+const directoryRef = vi.hoisted(() => ({
+  value: null as {
+    list(): Promise<readonly HostDirectoryEntry[]>;
+    onChange(listener: DirectoryListener): { dispose(): void };
+  } | null,
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () =>
+    directoryRef.value === null ? null : { directory: directoryRef.value },
+}));
+
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+
+const RELAY_BASE_URL = "wss://relay.example.test/attach";
+
+function listItem(
+  hostId: string,
+  connectivity: HostConnectivity,
+): HostListItem {
+  return {
+    hostId,
+    displayName: `label-${hostId}`,
+    platform: "Ubuntu",
+    kind: "personal",
+    publicKey: `pk-${hostId}`,
+    createdAt: "2026-07-01T12:00:00.000Z",
+    status: {
+      connectivity,
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: "2026-07-03T11:59:50.000Z",
+    },
+    updatePolicy: "manual",
+  };
+}
+
+/** Mirrors the directory service's own projection — a REAL mapped entry. */
+function directoryEntry(
+  hostId: string,
+  connectivity: HostConnectivity,
+): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    listItem(hostId, connectivity),
+    RELAY_BASE_URL,
+  );
+}
+
+function makeDirectory(entries: readonly HostDirectoryEntry[]) {
+  const listeners = new Set<DirectoryListener>();
+  return {
+    directory: {
+      list: () => Promise.resolve(entries),
+      onChange: (listener: DirectoryListener) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+  };
+}
+
+function wrapper(queryClient: QueryClient) {
+  return function Wrapper(props: { readonly children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+  };
+}
+
+function makeQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+afterEach(() => {
+  cleanup();
+  directoryRef.value = null;
+  readySessionHosts.value = new Set();
+});
+
+describe("useHostReachability — composed against real hostListItemToDirectoryEntry output", () => {
+  it("does NOT report unreachable for a degraded ('unknown') liveness read", async () => {
+    const entry = directoryEntry("host-unknown", "unknown");
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(() => useHostReachability("host-unknown"), {
+      wrapper: wrapper(queryClient),
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).not.toBe("checking");
+    });
+    // The false-Offline-when-blind bug, one layer below the mapper: a blind
+    // liveness read is not evidence of death, so the tile keeps rendering
+    // live instead of falling back to a dead-tile banner.
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.unavailability).toBeNull();
+  });
+
+  it("reports unreachable with unavailability: 'offline' for a genuinely offline host", async () => {
+    const entry = directoryEntry("host-offline", "offline");
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(() => useHostReachability("host-offline"), {
+      wrapper: wrapper(queryClient),
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
+    expect(result.current.unavailability).toBe("offline");
+  });
+
+  it("reports unreachable with unavailability: 'plan-restricted' for a local-only (free-tier) host", async () => {
+    const entry = directoryEntry("host-local-only", "local-only");
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-local-only"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
+    // NOT "offline": the plan gate is a billing fact, not an outage, and a
+    // consumer that collapsed this into "offline" would send a free-tier user
+    // to restart a machine that is working fine.
+    expect(result.current.unavailability).toBe("plan-restricted");
+  });
+
+  it("a live E2E session outranks an 'offline' cloud verdict — reachable, not unreachable", async () => {
+    const entry = directoryEntry("host-offline-but-live", "offline");
+    directoryRef.value = makeDirectory([entry]).directory;
+    readySessionHosts.value = new Set(["host-offline-but-live"]);
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-offline-but-live"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).not.toBe("checking");
+    });
+    // Firsthand proof of life beats a cloud verdict reached minutes ago
+    // through a different leg — this is the tab-open gate the review named
+    // directly ("honours a live session as firsthand proof").
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.unavailability).toBeNull();
+  });
+
+  it("still reports unreachable/offline without a live session, for the same host", async () => {
+    // The counterpart to the override above: absent live-session evidence,
+    // `offline` still gates the tile. Guards against a broad mock making
+    // every host look alive.
+    const entry = directoryEntry("host-offline-no-session", "offline");
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-offline-no-session"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
+    expect(result.current.unavailability).toBe("offline");
+  });
+
+  it("reports reachable for a connectable host, with no unavailability reason", async () => {
+    const entry = directoryEntry("host-online", "connectable");
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(() => useHostReachability("host-online"), {
+      wrapper: wrapper(queryClient),
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("reachable");
+    });
+    expect(result.current.unavailability).toBeNull();
+  });
+});
