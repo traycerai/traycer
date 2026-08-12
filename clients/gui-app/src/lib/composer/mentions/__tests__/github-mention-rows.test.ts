@@ -417,6 +417,66 @@ describe("githubMentionMatchScore", () => {
     expect(githubMentionMatchScore(row, "#812")).toBe(0);
   });
 
+  it("does not treat a pull-request URL as an exact match for an issue", () => {
+    // GitHub numbers PRs and issues from one sequence, so issue 4917 can exist
+    // beside pull request 4917. A URL says which KIND it names; scoring the
+    // wrong-kind row 0 floated it to the top of the Issues section and let
+    // Enter insert a `github_issue` chip for a `/pull/` link.
+    const wrongKind = issue({ number: 4917, title: "Stop the busy-loop" });
+
+    expect(
+      githubMentionMatchScore(
+        wrongKind,
+        "https://github.com/traycerai/traycer/pull/4917",
+      ),
+    ).not.toBe(0);
+  });
+
+  it("does not treat an issue URL as an exact match for a pull request", () => {
+    const wrongKind = pullRequest({
+      number: 4917,
+      title: "Stop the busy-loop",
+    });
+
+    expect(
+      githubMentionMatchScore(
+        wrongKind,
+        "https://github.com/traycerai/traycer/issues/4917",
+      ),
+    ).not.toBe(0);
+  });
+
+  it("still matches the URL's own kind exactly", () => {
+    // The control. The section check must not cost a URL its exact rank on the
+    // row it actually names.
+    const rightKind = issue({ number: 4917, title: "Stop the busy-loop" });
+
+    expect(
+      githubMentionMatchScore(
+        rightKind,
+        "https://github.com/traycerai/traycer/issues/4917",
+      ),
+    ).toBe(0);
+  });
+
+  it("keeps a kind-agnostic reference matching both kinds", () => {
+    // The other control, and the reason the check is URL-only: `#123` and
+    // `org/repo#123` genuinely can name either, so narrowing them by kind
+    // would break the bare-number lookup this feature is built around.
+    expect(
+      githubMentionMatchScore(
+        issue({ number: 812, title: "Magic link" }),
+        "#812",
+      ),
+    ).toBe(0);
+    expect(
+      githubMentionMatchScore(
+        pullRequest({ number: 812, title: "Magic link" }),
+        "traycerai/traycer#812",
+      ),
+    ).toBe(0);
+  });
+
   it("matches a pasted URL whose host differs only in case", () => {
     // Hostnames are case-insensitive, and `owner`/`repo` are already compared
     // case-folded. A host compared exactly would drop this URL out of the

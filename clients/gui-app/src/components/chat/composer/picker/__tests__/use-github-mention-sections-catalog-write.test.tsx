@@ -162,6 +162,28 @@ const DEPARTED_REPO = {
 
 const fakeClient = {} as HostClient<HostRpcRegistry>;
 
+const ISSUES_STEP = {
+  kind: "provider",
+  providerId: "issues",
+  stepId: "issues",
+  workspacePath: null,
+} as const;
+
+function renderIssuesSection() {
+  return renderHook(() =>
+    useGithubMentionSections({
+      client: fakeClient,
+      active: true,
+      step: ISSUES_STEP,
+      currentEpicId: "epic-1",
+      mentionRoots: ROOTS,
+      query: "",
+      debouncedQuery: "",
+      limit: 20,
+    }),
+  );
+}
+
 function renderSections(query: string) {
   return renderHook(
     (props: { readonly query: string }) =>
@@ -433,5 +455,91 @@ describe("useGithubMentionSections catalog write path", () => {
         SCOPE_KEY,
       ),
     ).toEqual([ONE_REPO]);
+  });
+
+  it("keeps the fresher answer when stepping into the staler section", async () => {
+    // Refresh Pull requests, then open Issues straight after. The Issues query
+    // is inside its 60s staleTime so it does not refetch, and preferring the
+    // OPEN section outright wrote its older repositories back over the store -
+    // the same regression as the root case, one navigation earlier.
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 2_000;
+    catalogMocks.pullRequests.repositories = [ONE_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 1_000;
+    catalogMocks.issues.repositories = [ONE_REPO, DEPARTED_REPO];
+
+    renderIssuesSection();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionScopeRepositories(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+      ),
+    ).toEqual([ONE_REPO]);
+  });
+
+  it("still believes the open section when it is the fresher answer", async () => {
+    // The control: being open still wins the tie and wins when it is newer.
+    // Only a strictly fresher other answer overrides it.
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 1_000;
+    catalogMocks.pullRequests.repositories = [ONE_REPO, DEPARTED_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 2_000;
+    catalogMocks.issues.repositories = [ONE_REPO];
+
+    renderIssuesSection();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionScopeRepositories(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+      ),
+    ).toEqual([ONE_REPO]);
+  });
+
+  it("ranks root rows from the catalog on the render it resolves", () => {
+    // The store is written by a passive effect, so on the resolving render it
+    // still holds the previous answer. If the catalog was the last source to
+    // settle, that same render also reads as settled - an authoritative
+    // zero-match verdict over rows that had already arrived, and React does
+    // not re-render between the publication effect and the dismissal one.
+    catalogMocks.pullRequests.rows = [
+      pullRequest({ number: 4917, title: "Stop the busy-loop" }),
+    ];
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.repositories = [ONE_REPO];
+
+    // Recorded DURING render rather than read off `result.current`:
+    // `renderHook` is act-wrapped, so by the time it returns the publication
+    // effect has already run and the store is populated - which is exactly the
+    // render this test is not about. Only the first pass can show whether the
+    // rows were available before that effect.
+    const perRender: number[][] = [];
+    renderHook(() => {
+      const sections = useGithubMentionSections({
+        client: fakeClient,
+        active: true,
+        step: ROOT_MENTION_STEP,
+        currentEpicId: "epic-1",
+        mentionRoots: ROOTS,
+        query: "busy-loop",
+        debouncedQuery: "busy-loop",
+        limit: 20,
+      });
+      perRender.push(
+        sections.context.pullRequests.rows.map((row) => row.number),
+      );
+      return sections;
+    });
+
+    expect(perRender[0]).toEqual([4917]);
   });
 });

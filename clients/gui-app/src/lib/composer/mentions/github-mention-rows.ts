@@ -516,6 +516,16 @@ function referenceNumber(raw: string): number | null {
   return parsed > 0 ? parsed : null;
 }
 
+/** The row kind a URL reference's section names. */
+function referenceSectionMatchesKind(
+  section: GithubMentionSection,
+  kind: GithubMentionRow["kind"],
+): boolean {
+  return section === "pull-requests"
+    ? kind === "pull-request"
+    : kind === "issue";
+}
+
 function referenceMatchesRow(
   reference: GithubReferenceQuery,
   row: GithubMentionRow,
@@ -528,7 +538,16 @@ function referenceMatchesRow(
   // so a pasted `https://GitHub.com/org/repo/pull/1` must still match the row
   // it names rather than losing its exact-reference rank to text scoring.
   if (reference.kind === "url") {
-    return reference.githubHost.toLowerCase() === row.githubHost.toLowerCase();
+    if (reference.githubHost.toLowerCase() !== row.githubHost.toLowerCase()) {
+      return false;
+    }
+    // A URL says WHICH KIND it names, and only a URL does. `#123` and
+    // `org/repo#123` are deliberately kind-agnostic - GitHub numbers pull
+    // requests and issues from one sequence, so a bare number legitimately
+    // resolves to either - but `/pull/123` cannot name issue 123. Ignoring the
+    // parsed section scored that issue an exact 0, floated it to the top, and
+    // let Enter insert a `github_issue` chip for a `/pull/` URL.
+    return referenceSectionMatchesKind(reference.section, row.kind);
   }
   return true;
 }

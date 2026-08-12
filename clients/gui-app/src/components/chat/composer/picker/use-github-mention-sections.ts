@@ -360,14 +360,16 @@ export function useGithubMentionSections(
   // control, and a narrowing set there must not quietly hide rows from the
   // flat cross-source list the user gets by typing at `@`.
   const rootPullRequestRows = useRootRows({
-    rows: catalogStore.pullRequests,
+    catalog: pullRequestCatalog,
+    stored: catalogStore.pullRequests,
     section: "pull-requests",
     atRoot,
     query,
     limit,
   });
   const rootIssueRows = useRootRows({
-    rows: catalogStore.issues,
+    catalog: issueCatalog,
+    stored: catalogStore.issues,
     section: "issues",
     atRoot,
     query,
@@ -433,6 +435,7 @@ export function useGithubMentionSections(
     // only supplies what the host said.
     return githubMentionChromeFor({
       section: openSection,
+      scopeKey,
       epicId: currentEpicId,
       repositories: scopeRepositories,
       selected: filter,
@@ -462,6 +465,7 @@ export function useGithubMentionSections(
     search.notice,
     search.sourceStatus,
     supported,
+    scopeKey,
   ]);
 
   return {
@@ -563,49 +567,41 @@ function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
 /**
  * Whichever catalog's `repositories` answer should be believed right now.
  *
- * Both sections are asked about the same folders, so either one's answer is
- * valid - but only the OPEN one is being refreshed, so it is the one that can
- * have observed an added, removed or renamed repository. Reading pull-requests
- * first unconditionally left the Repository group, the empty-scope copy and
- * the `repo#123` chip label on scope data an Issues refresh had already
- * invalidated. The other section is the fallback for the window before the
- * open one has answered at all.
+ * Both sections are asked about the same folders, so either answer is valid -
+ * the question is only which one can have SEEN a repository added, removed or
+ * renamed. `freshnessAt` is the host's own stamp for when it last reached
+ * GitHub, so it answers that directly, and position never does: reading
+ * pull-requests first unconditionally left the Repository group, the
+ * empty-scope copy and the `repo#123` chip label on scope data an Issues
+ * refresh had already invalidated.
  *
- * At ROOT there is no open section to prefer, and a fixed pull-requests-first
- * order there throws away the same reasoning one navigation later: refresh
- * Issues, observe the changed repositories, press Back, and the disabled
- * pull-request query's older answer wins and is written straight back over the
- * store. Root falls to whichever side answered most recently instead, which is
- * the same question - who can have seen the change - asked without a section.
+ * Which section is open only breaks the TIE. Preferring the open one outright
+ * has the same failure in a different place - refresh Pull requests, step
+ * straight into Issues, and the older Issues answer wins on being open and is
+ * written back over the store, with nothing to correct it because a 60s
+ * `staleTime` covers exactly that window and suppresses the refetch.
+ *
+ * The unresolved cases come first because an answer that does not exist cannot
+ * be compared: `freshnessAt` is null there, and treating null as oldest would
+ * confuse "not yet answered" with "answered long ago".
  */
 function preferredScopeAnswer(
   openSection: GithubMentionSection | null,
   pullRequests: GithubMentionCatalogResult,
   issues: GithubMentionCatalogResult,
 ): GithubMentionCatalogResult {
-  if (openSection === null) return freshestScopeAnswer(pullRequests, issues);
   const preferred = openSection === "issues" ? issues : pullRequests;
-  if (preferred.scopeResolved) return preferred;
-  return openSection === "issues" ? pullRequests : issues;
-}
-
-/**
- * The more recently refreshed of two answers, preferring a resolved one.
- *
- * `freshnessAt` is the host's own stamp for when it last reached GitHub, so it
- * orders the two answers by what each can have SEEN rather than by which query
- * happens to be mounted. A null stamp sorts oldest, and two nulls keep the
- * historical pull-requests-first order rather than inventing a new one.
- */
-function freshestScopeAnswer(
-  pullRequests: GithubMentionCatalogResult,
-  issues: GithubMentionCatalogResult,
-): GithubMentionCatalogResult {
-  if (!pullRequests.scopeResolved) return issues;
-  if (!issues.scopeResolved) return pullRequests;
-  return (issues.freshnessAt ?? 0) > (pullRequests.freshnessAt ?? 0)
-    ? issues
-    : pullRequests;
+  const other = openSection === "issues" ? pullRequests : issues;
+  if (!preferred.scopeResolved) return other;
+  if (!other.scopeResolved) return preferred;
+  // Freshness decides between two resolved answers, INCLUDING when one of them
+  // is the open section's. Being open earns the tie, not the comparison: the
+  // other query can be sitting on a newer sweep and still not refetch, because
+  // a 60s `staleTime` covers exactly the window in which a user refreshes one
+  // section and steps straight into the other.
+  return (other.freshnessAt ?? 0) > (preferred.freshnessAt ?? 0)
+    ? other
+    : preferred;
 }
 
 /**
@@ -640,17 +636,53 @@ function useCatalogRowPublication(input: {
 }
 
 interface RootRowsInput {
-  readonly rows: ReadonlyArray<GithubMentionRow>;
+  readonly catalog: GithubMentionCatalogResult;
+  /** The session store's rows: what `useCatalogRowPublication` last wrote. */
+  readonly stored: ReadonlyArray<GithubMentionRow>;
   readonly section: GithubMentionSection;
   readonly atRoot: boolean;
   readonly query: string;
   readonly limit: number;
 }
 
+/**
+ * Root's rows for one section: the catalog's own answer as soon as it has one,
+ * and the session store until then.
+ *
+ * The store is written by `useCatalogRowPublication`, a passive effect, so on
+ * the render where the catalog resolves the store still holds the PREVIOUS
+ * answer. Reading only the store made that render rank the old rows, and if
+ * the catalog was the last source to settle the same render also has
+ * `loading` and `fetching` false - an authoritative zero-match verdict built
+ * on rows that had already arrived. The publication effect runs first and
+ * schedules the right rows, but React does not re-render between passive
+ * effects, so the dismissal effect in that same commit closes the picker on
+ * the stale verdict anyway.
+ *
+ * The three guards below are the publication effect's, restated: same
+ * `isPlaceholder`, same `scopeResolved`, same section narrowing. That is the
+ * point - this render ranks exactly what that effect is about to store, so the
+ * store stays the warm fallback for the cold case (menu reopened after the
+ * observers unmounted) rather than a second source of truth.
+ */
 function useRootRows(input: RootRowsInput): ReadonlyArray<GithubMentionRow> {
-  const { rows, section, atRoot, query, limit } = input;
+  const { catalog, stored, section, atRoot, query, limit } = input;
+  const { rows: catalogRows, isPlaceholder, scopeResolved } = catalog;
   return useMemo(() => {
     if (!atRoot || query.trim().length === 0) return EMPTY_ROWS;
+    const rows =
+      isPlaceholder || !scopeResolved
+        ? stored
+        : githubMentionRowsForSection(catalogRows, section);
     return rankGithubMentionRows({ rows, section, query, limit });
-  }, [atRoot, limit, query, rows, section]);
+  }, [
+    atRoot,
+    catalogRows,
+    isPlaceholder,
+    limit,
+    query,
+    scopeResolved,
+    section,
+    stored,
+  ]);
 }

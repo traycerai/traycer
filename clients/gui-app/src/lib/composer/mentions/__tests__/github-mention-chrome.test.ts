@@ -25,6 +25,7 @@ function baseInput(
 ): GithubMentionChromeInput {
   return {
     section: "pull-requests",
+    scopeKey: "scope-1",
     epicId: "epic-1",
     searchSourceStatus: null,
     repositories: [

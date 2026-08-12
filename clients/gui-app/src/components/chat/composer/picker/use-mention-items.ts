@@ -464,6 +464,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     githubChrome: github.chrome,
     artifactRefetch: refetchEpicMentions,
     artifactFetching: epicFetching,
+    epicId: epicIdOrEmpty,
   });
 
   useEffect(() => {
@@ -576,6 +577,8 @@ interface MentionStepChromeInput {
   readonly githubChrome: MentionStepChrome | null;
   readonly artifactRefetch: () => Promise<void>;
   readonly artifactFetching: boolean;
+  /** Artifacts are per-epic, so the epic is this refresh button's target. */
+  readonly epicId: string;
 }
 
 /**
@@ -591,8 +594,14 @@ interface MentionStepChromeInput {
 function useMentionStepChrome(
   input: MentionStepChromeInput,
 ): MentionStepChrome | null {
-  const { active, step, githubChrome, artifactRefetch, artifactFetching } =
-    input;
+  const {
+    active,
+    step,
+    githubChrome,
+    artifactRefetch,
+    artifactFetching,
+    epicId,
+  } = input;
   // `refetch` is rebuilt every render (it closes over the current query array),
   // so publishing it directly would change the chrome's identity on every pass
   // and republish forever. The ref holds ONE stable closure over the latest.
@@ -612,6 +621,9 @@ function useMentionStepChrome(
         refreshing: artifactFetching,
         label: "Refresh artifacts",
         timeoutMs: ARTIFACT_REFRESH_TIMEOUT_MS,
+        // Artifacts are per-epic and answer from local state, so the epic is
+        // the whole of this button's target identity.
+        targetKey: `artifacts\x1f${epicId}`,
       },
       freshness: null,
       notice: null,
@@ -620,7 +632,7 @@ function useMentionStepChrome(
       appendedStatus: null,
       emptyLabel: null,
     };
-  }, [active, artifactFetching, githubChrome, refreshArtifacts, step]);
+  }, [active, artifactFetching, epicId, githubChrome, refreshArtifacts, step]);
 }
 
 interface MentionNoMatchVerdictInput {

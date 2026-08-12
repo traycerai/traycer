@@ -33,6 +33,7 @@ describe("sameMentionStepChrome", () => {
         onRefresh,
         refreshing: false,
         label: "Refresh artifacts",
+        targetKey: "scope-1\x1fpull-requests",
         timeoutMs: 10_000,
       },
       freshness: { updatedAt: 1_234, checking: false },
@@ -55,6 +56,7 @@ describe("sameMentionStepChrome", () => {
         onRefresh,
         refreshing: false,
         label: "Refresh artifacts",
+        targetKey: "scope-1\x1fpull-requests",
         timeoutMs: 10_000,
       },
       freshness: { updatedAt: 1_234, checking: false },
@@ -82,6 +84,7 @@ describe("sameMentionStepChrome", () => {
         onRefresh: vi.fn(() => Promise.resolve()),
         refreshing: false,
         label: "Refresh",
+        targetKey: "scope-1\x1fpull-requests",
         timeoutMs: 10_000,
       },
     });
@@ -90,6 +93,7 @@ describe("sameMentionStepChrome", () => {
         onRefresh: vi.fn(() => Promise.resolve()),
         refreshing: false,
         label: "Refresh",
+        targetKey: "scope-1\x1fpull-requests",
         timeoutMs: 10_000,
       },
     });

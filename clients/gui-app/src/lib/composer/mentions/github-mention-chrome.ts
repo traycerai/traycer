@@ -41,6 +41,15 @@ export const GITHUB_MENTION_EMPTY_SCOPE_LABEL =
 
 export interface GithubMentionChromeInput {
   readonly section: GithubMentionSection;
+  /**
+   * Identity of the scope this chrome describes (host, epic, folders).
+   *
+   * Only the refresh button's remount key reads it - see
+   * `MentionStepChromeRefresh.targetKey`. Taken from the caller rather than
+   * rebuilt here, so it is the same string the row store and the query cache
+   * are keyed by.
+   */
+  readonly scopeKey: string;
   /** Null in the landing composer; only decides where stickiness is keyed. */
   readonly epicId: string | null;
   /** The host's resolved scope, never inferred from the rows. */
@@ -83,6 +92,10 @@ export function githubMentionChromeFor(
     refresh: {
       onRefresh: input.onRefresh,
       refreshing: input.checking,
+      // Scope AND section: both catalogs are refreshed by the same button
+      // shape, and stepping between them is as much a target change as
+      // detaching a folder.
+      targetKey: `${input.scopeKey}\x1f${input.section}`,
       label:
         input.section === "pull-requests"
           ? "Refresh pull requests"

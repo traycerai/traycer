@@ -45,6 +45,18 @@ export const NO_STEP_CHROME_CAPABILITY: MentionStepChromeCapability = {
 export interface MentionStepChromeRefresh {
   readonly onRefresh: () => Promise<void>;
   readonly refreshing: boolean;
+  /**
+   * Identity of what this button refreshes - the button is REMOUNTED when it
+   * changes.
+   *
+   * `useRefreshSpinner` keeps its own `localRefreshing`, and the button stays
+   * mounted while the host, the epic, the attached folders or the section move
+   * underneath it. Without a remount, a refresh issued for the scope the user
+   * left holds the new scope's button disabled until that promise settles or
+   * the leash expires - up to 20s for a GitHub sweep, on a request the new
+   * scope never made.
+   */
+  readonly targetKey: string;
   /** Button label and tooltip; also its accessible name. */
   readonly label: string;
   /**
@@ -152,7 +164,8 @@ function sameRefresh(
     left.onRefresh === right.onRefresh &&
     left.refreshing === right.refreshing &&
     left.label === right.label &&
-    left.timeoutMs === right.timeoutMs
+    left.timeoutMs === right.timeoutMs &&
+    left.targetKey === right.targetKey
   );
 }
 

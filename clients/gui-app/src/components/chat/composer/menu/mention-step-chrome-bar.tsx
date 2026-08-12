@@ -49,7 +49,10 @@ export function MentionStepChromeBar(props: {
         />
       )}
       {chrome.refresh === null ? null : (
-        <RefreshButton refresh={chrome.refresh} />
+        <RefreshButton
+          key={chrome.refresh.targetKey}
+          refresh={chrome.refresh}
+        />
       )}
     </>
   );
