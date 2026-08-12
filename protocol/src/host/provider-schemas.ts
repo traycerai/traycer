@@ -3094,8 +3094,7 @@ export type DowngradableToV10ProviderState = (
   // snapshots: callers reach this function holding either shape, and the
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
-    | ProviderNativeCapabilities
-    | ProviderNativeCapabilitiesV70;
+    ProviderNativeCapabilities | ProviderNativeCapabilitiesV70;
   // Widened to the live OR the frozen v7.0 union once v8.0 grew the live arms
   // with `version`. `providersListDowngradeV7ToV1` feeds this function
   // v7.0-shaped rows, which no longer satisfy the live type - and the two are
@@ -3251,7 +3250,8 @@ export function downgradeProviderCliStateListToV50(
  * carries - a v6.0 host advertised no native capabilities at all.
  */
 export function upgradeProviderCliStateToV70(
-  state: ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
+  state:
+    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
 ): ProviderCliStateV70 {
   return providerCliStateSchemaV70.parse({
     ...state,
@@ -3261,9 +3261,7 @@ export function upgradeProviderCliStateToV70(
 
 export function upgradeProviderCliStateListToV70(
   states: readonly (
-    | ProviderCliStateV20
-    | ProviderCliStateV30
-    | ProviderMutationCliStateV20
+    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20
   )[],
 ): ProviderCliStateV70[] {
   return states.map(upgradeProviderCliStateToV70);

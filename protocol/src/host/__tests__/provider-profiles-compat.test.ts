@@ -338,9 +338,9 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
       7,
       2,
       providersListResponseSchemaV70.parse({
-          providers: [stateWithProfile],
-          native: null,
-        }),
+        providers: [stateWithProfile],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -398,9 +398,9 @@ describe("providers.list v3.0 line predates profiles[]", () => {
       7,
       3,
       providersListResponseSchemaV70.parse({
-          providers: [stateWithProfile],
-          native: null,
-        }),
+        providers: [stateWithProfile],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

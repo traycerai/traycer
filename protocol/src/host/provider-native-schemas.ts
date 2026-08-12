@@ -161,7 +161,12 @@ export type ProviderEnvOverrideScope = z.infer<
 export const providerMcpTransportSchema = z.enum(["stdio", "http", "sse"]);
 export type ProviderMcpTransport = z.infer<typeof providerMcpTransportSchema>;
 
-export const providerMcpAuthTypeSchema = z.enum(["none", "header", "env", "oauth"]);
+export const providerMcpAuthTypeSchema = z.enum([
+  "none",
+  "header",
+  "env",
+  "oauth",
+]);
 export type ProviderMcpAuthType = z.infer<typeof providerMcpAuthTypeSchema>;
 
 /**
@@ -505,13 +510,14 @@ export type ProviderNativeCapabilities = z.infer<
  * Empty tabs → UI shows only the pre-existing General/Env/Usage surfaces
  * that do not depend on this field.
  */
-export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES: ProviderNativeCapabilities = {
-  supportedTabs: ["general", "env", "usage"],
-  mcp: null,
-  plugins: null,
-  skills: null,
-  modelProviders: null,
-};
+export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES: ProviderNativeCapabilities =
+  {
+    supportedTabs: ["general", "env", "usage"],
+    mcp: null,
+    plugins: null,
+    skills: null,
+    modelProviders: null,
+  };
 
 // ── Transport + auth (write vs masked read) ────────────────────────────────
 
@@ -520,7 +526,9 @@ export const providerMcpSecretWriteSchema = z.object({
   name: z.string().min(1),
   value: z.string(),
 });
-export type ProviderMcpSecretWrite = z.infer<typeof providerMcpSecretWriteSchema>;
+export type ProviderMcpSecretWrite = z.infer<
+  typeof providerMcpSecretWriteSchema
+>;
 
 /** Read-side secret mask: name + presence only. */
 export const providerMcpSecretMaskSchema = z.object({
@@ -540,7 +548,10 @@ export const providerMcpAuthWriteSchema = z.discriminatedUnion("type", [
      * it; providers with repeatable `--header` support (Qwen) consume it.
      * Defaults to `[]` so older payloads/providers parse unchanged.
      */
-    additionalHeaders: z.array(providerMcpSecretWriteSchema).default([]).optional(),
+    additionalHeaders: z
+      .array(providerMcpSecretWriteSchema)
+      .default([])
+      .optional(),
   }),
   z.object({
     type: z.literal("env"),
@@ -1423,8 +1434,8 @@ const modelProviderEntryBaseSchema = z.object({
  * `refineProviderNativeScope` above: a state nothing downstream can act on
  * should be unrepresentable, not just unasserted.
  */
-export const modelProviderEntrySchema = modelProviderEntryBaseSchema.superRefine(
-  (entry, ctx) => {
+export const modelProviderEntrySchema =
+  modelProviderEntryBaseSchema.superRefine((entry, ctx) => {
     if (entry.configDeclaredCustom && entry.custom === null) {
       ctx.addIssue({
         code: "custom",
@@ -1440,8 +1451,7 @@ export const modelProviderEntrySchema = modelProviderEntryBaseSchema.superRefine
         message: "custom values require configDeclaredCustom: true",
       });
     }
-  },
-);
+  });
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
 /**
@@ -2027,7 +2037,6 @@ export const providerSkillsCapabilitiesSchemaV70 = z.object({
   }),
 });
 
-
 /**
  * Frozen capability descriptor as shipped on the `providers.list@7.0` line.
  *
@@ -2089,8 +2098,6 @@ export function projectNativeCapabilitiesToV70(
   const { modelProviders: _modelProviders, ...rest } = capabilities;
   return providerNativeCapabilitiesSchemaV70.parse({
     ...rest,
-    supportedTabs: capabilities.supportedTabs.filter((tab) =>
-      v70Tabs.has(tab),
-    ),
+    supportedTabs: capabilities.supportedTabs.filter((tab) => v70Tabs.has(tab)),
   });
 }

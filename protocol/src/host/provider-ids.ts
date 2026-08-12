@@ -60,4 +60,3 @@ export const providerIdSchemaV20 = z.enum([
   "openrouter",
 ]);
 export type ProviderIdV20 = z.infer<typeof providerIdSchemaV20>;
-

@@ -252,12 +252,11 @@ describe("modelProviders tab id and capability block", () => {
     // The live default is what the head line serves; the v7.0 default is the
     // frozen line's own snapshot, which predates the member.
     expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES.modelProviders).toBeNull();
-    expect(
-      Object.keys(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70),
-    ).not.toContain("modelProviders");
+    expect(Object.keys(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70)).not.toContain(
+      "modelProviders",
+    );
   });
 });
-
 
 describe("the tab id can only reach a decoder that knows it", () => {
   it("carries modelProviders on the live head line", () => {
@@ -388,9 +387,9 @@ describe("providers.list every older major -> the head line", () => {
     const capabilities = upgraded.providers[0].nativeCapabilities;
     expect(Object.keys(capabilities)).not.toContain("modelProviders");
     expect(capabilities).toEqual(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70);
-    expect(
-      providersListResponseSchemaV70.safeParse(upgraded).success,
-    ).toBe(true);
+    expect(providersListResponseSchemaV70.safeParse(upgraded).success).toBe(
+      true,
+    );
   });
 
   it("fills modelProviders: null as an OWN key on the v7 -> v8 hop", () => {
@@ -1282,9 +1281,7 @@ describe("providers.modelProviderAuth actions", () => {
     // Absent and explicit null are the SAME state after parsing - one spelling
     // of "untouched" downstream - and both differ from `[]`.
     expect(parseCreateCustom(base).env).toBeNull();
-    expect(
-      parseCreateCustom({ ...base, env: null }).env,
-    ).toBeNull();
+    expect(parseCreateCustom({ ...base, env: null }).env).toBeNull();
     expect(parseCreateCustom({ ...base, env: [] }).env).toEqual([]);
     expect(
       parseCreateCustom({
@@ -1310,9 +1307,7 @@ describe("providers.modelProviderAuth actions", () => {
       models: [{ id: "gpt-4o", name: "GPT-4o" }],
     };
     expect(parseCreateCustom(base).headers).toEqual([]);
-    expect(
-      parseCreateCustom({ ...base, headers: [] }).headers,
-    ).toEqual([]);
+    expect(parseCreateCustom({ ...base, headers: [] }).headers).toEqual([]);
     expect(
       modelProviderAuthActionSchema.safeParse({ ...base, headers: null })
         .success,
@@ -1650,7 +1645,9 @@ describe("attempt lifecycle is encodable end to end", () => {
 
   it("has an OUTCOMES entry for every auth error code, so a new member cannot ship untested", () => {
     const covered = OUTCOMES.map(({ code }) => code).sort();
-    expect(covered).toEqual([...modelProviderAuthErrorCodeSchema.options].sort());
+    expect(covered).toEqual(
+      [...modelProviderAuthErrorCodeSchema.options].sort(),
+    );
   });
 
   it.each(OUTCOMES)("cancel: $name, with cancelled:false", ({ code }) => {
@@ -1738,7 +1735,11 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("refuses the shared native-config codes on the auth arm too", () => {
-    for (const code of ["external_drift", "rollback_failed", "duplicate_name"]) {
+    for (const code of [
+      "external_drift",
+      "rollback_failed",
+      "duplicate_name",
+    ]) {
       expect(
         providersModelProviderAuthResponseSchema.safeParse({
           result: { kind: "error", code, detail: null },
@@ -1912,7 +1913,9 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   });
 
   it("frozen capability keys = live keys minus modelProviders, exactly", () => {
-    expect([...Object.keys(providerNativeCapabilitiesSchema.shape)].sort()).toEqual(
+    expect(
+      [...Object.keys(providerNativeCapabilitiesSchema.shape)].sort(),
+    ).toEqual(
       [
         ...Object.keys(providerNativeCapabilitiesSchemaV70.shape),
         "modelProviders",

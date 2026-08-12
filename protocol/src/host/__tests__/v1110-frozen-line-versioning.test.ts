@@ -123,9 +123,7 @@ function requestSchemaFor(major: number) {
 describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   it("callers at every major upgrade to canonical with native:null", () => {
     for (const major of ALL_REQUEST_MAJORS) {
-      const parsed = requestSchemaFor(major).parse(
-        releasedProvidersRequest,
-      );
+      const parsed = requestSchemaFor(major).parse(releasedProvidersRequest);
       const canonical = upgradeRequestToVersion(
         providersListRegistry,
         { major, minor: 0 },

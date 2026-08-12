@@ -531,9 +531,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       7,
       2,
       providersListResponseSchemaV70.parse({
-          providers: [stateWithRegistryFields],
-          native: null,
-        }),
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -550,9 +550,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       7,
       3,
       providersListResponseSchemaV70.parse({
-          providers: [stateWithRegistryFields],
-          native: null,
-        }),
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -662,9 +662,9 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
       // because the live response shape carries it - v6.0 froze before it
       // existed. Same reason the registry fields only ride v7.0 and up.
       providersListResponseSchemaV70.parse({
-          providers: [stateWithRegistryFields],
-          native: null,
-        }),
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -703,9 +703,9 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
       7,
       5,
       providersListResponseSchemaV70.parse({
-          providers: [stateWithRegistryFields],
-          native: null,
-        }),
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

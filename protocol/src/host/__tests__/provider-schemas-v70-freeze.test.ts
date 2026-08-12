@@ -93,7 +93,10 @@ const EXPECTED_PROVIDERS_LIST_REQUEST_V70_KEYS = [
   "native",
 ].sort();
 
-const EXPECTED_PROVIDERS_LIST_RESPONSE_V70_KEYS = ["providers", "native"].sort();
+const EXPECTED_PROVIDERS_LIST_RESPONSE_V70_KEYS = [
+  "providers",
+  "native",
+].sort();
 
 // Hand-written, same discipline as the key-set arrays above and for the same
 // reason: deriving this from `providerIdSchema.options` would stay green
@@ -152,7 +155,9 @@ describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
 describe("v7.0 schemas are distinct objects from the canonical live schemas", () => {
   it("providersListRequestSchemaV70 / ResponseSchemaV70 are not the canonical exports", () => {
     expect(providersListRequestSchemaV70).not.toBe(providersListRequestSchema);
-    expect(providersListResponseSchemaV70).not.toBe(providersListResponseSchema);
+    expect(providersListResponseSchemaV70).not.toBe(
+      providersListResponseSchema,
+    );
   });
 
   it("the registered v7.0 RPC contract names the frozen schemas, not the canonical ones", () => {
@@ -243,7 +248,11 @@ describe("v7.0 does not track the live shape forward", () => {
     const downloadingRow = {
       ...providerState("codex"),
       profiles: [],
-      managedInstallState: { status: "downloading", percent: 50, version: "1.2.3" },
+      managedInstallState: {
+        status: "downloading",
+        percent: 50,
+        version: "1.2.3",
+      },
     };
     const parsedDownloading = providerCliStateSchemaV70.parse(downloadingRow);
     expect(parsedDownloading.managedInstallState).toEqual({
@@ -514,7 +523,9 @@ describe("providerManagedInstallStateSchemaV70 pins the v7.0 arm and reason sets
   // `managedInstallState`, so a stuck install renders as a row with no
   // message at all.
   it("pins the eight frozen reasons literally", () => {
-    expect([...providerManagedInstallErrorReasonSchemaV70.options].sort()).toEqual(
+    expect(
+      [...providerManagedInstallErrorReasonSchemaV70.options].sort(),
+    ).toEqual(
       [
         "disk-full",
         "live-owner-stalled",
