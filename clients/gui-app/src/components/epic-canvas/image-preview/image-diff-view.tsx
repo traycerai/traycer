@@ -89,6 +89,13 @@ const DEFAULT_SIDE_MODE: SideMode = { isFitted: true, isActualSize: false };
  * side, or one that's failed to `BinaryPlaceholder`) - its stale/default
  * mode would otherwise permanently block the SURVIVING side's own pressed
  * state from ever showing.
+ *
+ * When NEITHER side is active (round-4 review P2), the "every active side
+ * agrees" quantifier is vacuously true for BOTH `isFitted` and
+ * `isActualSize` at once - Fit and Actual-size would show pressed
+ * simultaneously with no image on screen to justify either. Falls back to
+ * `DEFAULT_SIDE_MODE` explicitly instead, the same "nothing is happening"
+ * baseline already used everywhere else in this file.
  */
 function combinedMode(
   oldActive: boolean,
@@ -96,6 +103,7 @@ function combinedMode(
   newActive: boolean,
   newMode: SideMode,
 ): SideMode {
+  if (!oldActive && !newActive) return DEFAULT_SIDE_MODE;
   return {
     isFitted:
       (!oldActive || oldMode.isFitted) && (!newActive || newMode.isFitted),
@@ -188,6 +196,15 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // impossible, so a plain count is correct as-is. See the sync-delivery
   // contract test against the real library, the tripwire that must fail
   // loudly before a version bump could silently reintroduce this.
+  //
+  // Same NARROWER LIMIT as `ImagePreview`'s own `pendingProgrammaticCountRef`
+  // (round-4 review, discovered not ruled-on): a `0`ms transform's
+  // `onTransform` fires exactly once per issued call, so a single pending
+  // slot is enough - a NONZERO `animationMs` would invoke the callback once
+  // per animation frame from ONE issued call, and only the first frame
+  // would consume the slot. Never reachable here: both `ImageDiffSide`
+  // instances are ALWAYS mounted with `animationMs={0}`, pinned by its own
+  // test - this file has no code path that ever passes anything else.
   const oldPendingSyncRef = useRef(0);
   const newPendingSyncRef = useRef(0);
   // Per-side, never a single shared value, and never manually toggled

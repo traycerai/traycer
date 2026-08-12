@@ -180,6 +180,24 @@ export function ImagePreview(props: ImagePreviewProps) {
   // the sync-delivery contract test against the real library; a version
   // bump that ever breaks that assumption must fail that test loudly
   // before this mechanism can silently reopen a ping-pong echo.
+  //
+  // KNOWN NARROWER LIMIT (round-4 review, discovered not ruled-on): the
+  // "increment once, decrement on next callback" shape only correctly
+  // tags ONE `onTransform` firing as programmatic. It assumes `0`ms,
+  // single-callback delivery per issued call - true for every consumer
+  // TODAY (the diff view always passes `animationMs={0}` to both linked
+  // sides, pinned by its own test). It is NOT true for a nonzero
+  // `animationMs`: the library's own animation loop invokes `onTransform`
+  // once per animation frame for a SINGLE issued call (`animate()` calls
+  // its step callback on every `requestAnimationFrame` tick until the
+  // duration elapses), so only the FIRST of those N frames consumes the
+  // pending slot - frames 2..N misreport `"gesture"`. Inert today because
+  // the standalone workspace tile (the only caller that uses a nonzero
+  // `animationMs`) never passes `onTransformChange` at all, so no one
+  // reads the misreported origin. Deliberately NOT building consume-
+  // until-complete machinery for a configuration that doesn't exist
+  // (YAGNI) - if a future caller ever links instances at a nonzero
+  // `animationMs`, this comment is the tripwire to revisit.
   const pendingProgrammaticCountRef = useRef(0);
   const [isPanning, setIsPanning] = useState(false);
   // The single source of truth for "where is this image right now" -
