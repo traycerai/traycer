@@ -14,7 +14,7 @@ import {
   TransformWrapper,
   type ReactZoomPanPinchRef,
 } from "react-zoom-pan-pinch";
-import { Copy, Maximize2, Minus, Plus } from "lucide-react";
+import { Check, Copy, Maximize2, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -434,101 +434,106 @@ export function ImagePreview(props: ImagePreviewProps) {
         <div
           role="toolbar"
           aria-label="Image preview controls"
-          className="relative z-10 flex h-8 shrink-0 items-center justify-end gap-1 border-b border-canvas-border/70 px-2"
+          className="relative z-10 flex h-8 shrink-0 items-center justify-between gap-2 border-b border-canvas-border/70 px-2"
         >
-          <TooltipWrapper
-            label="Zoom out (-)"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={zoomOutDisabled}
-              onClick={handleZoomOut}
-              onKeyDown={handleKeyDown}
-              aria-label="Zoom out"
+          <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+            {caption}
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <TooltipWrapper
+              label="Zoom out (-)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Minus className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <TooltipWrapper
-            label="Zoom in (+)"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={zoomInDisabled}
-              onClick={handleZoomIn}
-              onKeyDown={handleKeyDown}
-              aria-label="Zoom in"
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={zoomOutDisabled}
+                onClick={handleZoomOut}
+                onKeyDown={handleKeyDown}
+                aria-label="Zoom out"
+              >
+                <Minus className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <TooltipWrapper
+              label="Zoom in (+)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Plus className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-          <TooltipWrapper
-            label="Fit to screen (F)"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-pressed={isFitted}
-              disabled={zoomDisabled}
-              onClick={handleFit}
-              onKeyDown={handleKeyDown}
-              aria-label="Fit to screen"
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={zoomInDisabled}
+                onClick={handleZoomIn}
+                onKeyDown={handleKeyDown}
+                aria-label="Zoom in"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+            <TooltipWrapper
+              label="Fit to screen (F)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Maximize2 className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <TooltipWrapper
-            label="Actual size (100%)"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-pressed={isActualSize}
-              disabled={zoomDisabled}
-              onClick={handleActualSize}
-              onKeyDown={handleKeyDown}
-              aria-label="Actual size"
-              className="min-w-12 tabular-nums"
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={isFitted}
+                disabled={zoomDisabled}
+                onClick={handleFit}
+                onKeyDown={handleKeyDown}
+                aria-label="Fit to screen"
+              >
+                <Maximize2 className="size-4" />
+              </Button>
+            </TooltipWrapper>
+            <TooltipWrapper
+              label="Actual size (100%)"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              100%
-            </Button>
-          </TooltipWrapper>
-          <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-          <TooltipWrapper
-            label={copyButtonLabel(copyFeedback)}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={zoomDisabled}
-              onClick={handleCopy}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={isActualSize}
+                disabled={zoomDisabled}
+                onClick={handleActualSize}
+                onKeyDown={handleKeyDown}
+                aria-label="Actual size"
+                className="min-w-12 tabular-nums"
+              >
+                100%
+              </Button>
+            </TooltipWrapper>
+            <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+            <TooltipWrapper
+              label={copyButtonLabel(copyFeedback)}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Copy className="size-4" />
-            </Button>
-          </TooltipWrapper>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={zoomDisabled}
+                onClick={handleCopy}
+              >
+                {copyButtonIcon(copyFeedback)}
+              </Button>
+            </TooltipWrapper>
+          </div>
         </div>
       )}
       <div
@@ -555,7 +560,7 @@ export function ImagePreview(props: ImagePreviewProps) {
           onNaturalSize: handleNaturalSize,
         })}
       </div>
-      {caption !== null ? (
+      {props.compact && caption !== null ? (
         <div className="flex h-6 shrink-0 items-center justify-center border-t border-canvas-border/70 text-ui-xs text-muted-foreground">
           {caption}
         </div>
@@ -574,6 +579,12 @@ function copyButtonLabel(state: "idle" | "copied" | "error"): string {
   if (state === "copied") return "Copied";
   if (state === "error") return "Couldn't copy image";
   return "Copy image";
+}
+
+/** Transient check-icon confirmation on copy success (item 14a) - the repo's existing `copy-text-button.tsx` convention (icon swap, not a label swap). Failure keeps its existing icon + error tooltip. */
+function copyButtonIcon(state: "idle" | "copied" | "error"): ReactNode {
+  if (state === "copied") return <Check className="size-4" />;
+  return <Copy className="size-4" />;
 }
 
 function renderImagePreviewStage(args: {
