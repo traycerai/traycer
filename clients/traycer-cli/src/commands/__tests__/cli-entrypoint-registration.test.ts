@@ -579,9 +579,29 @@ describe("traycer CLI entrypoint registration", () => {
         code: "commander.excessArguments",
         message: expect.stringContaining("--version"),
       });
-      expect(
-        expectCommand(updatePassthrough, ["host", "update"]).helpInformation(),
-      ).not.toContain("--host-update-version");
+      const updateCommand = expectCommand(updatePassthrough, [
+        "host",
+        "update",
+      ]);
+      expect(updateCommand.helpInformation()).not.toContain(
+        "--host-update-version",
+      );
+      // ...but the spelling users actually type has to be discoverable, or the
+      // command advertises "a registry version" and gives no way to name one.
+      // It cannot be a registered option (root `--version` owns that token -
+      // that collision is why the rewrite exists), so help TEXT carries it.
+      //
+      // Asserted against what `--help` actually prints, not
+      // `helpInformation()`: the latter renders only the built-in sections, so
+      // `addHelpText` content is invisible to it and this pin would pass while
+      // the user still saw nothing.
+      write.mockClear();
+      updateCommand.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("--version <version>");
+      expect(printedHelp).toContain("Update to this exact registry version");
     } finally {
       write.mockRestore();
     }

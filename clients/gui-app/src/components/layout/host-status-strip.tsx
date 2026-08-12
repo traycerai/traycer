@@ -67,6 +67,7 @@ export function HostStatusStrip(): ReactNode {
     );
   }
   const label = switchTarget?.label ?? activeLabel;
+  const waitingRetry = waitingRetryAction(readiness.kind, presentation);
   return (
     <HostStatusStripFrame state={state}>
       <PlugZap className="size-3.5 shrink-0" aria-hidden />
@@ -86,12 +87,45 @@ export function HostStatusStrip(): ReactNode {
         variant="ghost"
         className="text-current"
         data-testid="host-status-strip-retry"
-        onClick={presentation.compatibility.retry}
+        disabled={waitingRetry.pending}
+        onClick={waitingRetry.onClick}
       >
         Retry now
       </Button>
     </HostStatusStripFrame>
   );
+}
+
+/**
+ * Which recovery "Retry now" issues while the strip is waiting.
+ *
+ * The amber states are not one situation. A local host that is still starting,
+ * stalled, or dead needs its PROCESS brought back - `requestRespawn`, exactly
+ * what the full-screen cards this strip replaced put behind their Retry
+ * (`loadingFallback` and `unavailableFallback` both wire it). Re-running the
+ * compatibility probe against a process that is not there answers the same
+ * nothing, however many times it is clicked.
+ *
+ * Everything else amber - an explicit switch, `restoring-request-context`, and
+ * the still-dialing compat probe - is a CONNECTION question, and for a remote
+ * target readiness is already `ready`, so respawning the local host would be
+ * both useless and wrong. Those keep the probe retry.
+ */
+function waitingRetryAction(
+  kind: SurfaceReadiness["kind"],
+  presentation: DefaultHostReadinessPresentation,
+): { readonly onClick: () => void; readonly pending: boolean } {
+  if (
+    kind === "loading-host" ||
+    kind === "provisioning-host" ||
+    kind === "unavailable-host"
+  ) {
+    return {
+      onClick: presentation.requestRespawn,
+      pending: presentation.respawnPending,
+    };
+  }
+  return { onClick: presentation.compatibility.retry, pending: false };
 }
 
 /**

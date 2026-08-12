@@ -1774,6 +1774,110 @@ describe("runHostStart - crash relaunch loop", () => {
     );
   });
 
+  it("lets a sustained run forgive the crash budget even when it ends in a requested restart", async () => {
+    // The restart branch returns to the top of the loop directly, so it never
+    // reaches the sustained-uptime reset the abnormal path applies. Without
+    // its own copy, a host that burned budget, then ran well past
+    // `SUSTAINED_UPTIME_RESET_MS`, then was restarted ON PURPOSE would hand
+    // its replacement the stale crash history that the sustained run had
+    // already earned off - so an operator-requested restart quietly shortens
+    // the next real crash allowance.
+    //
+    // `shouldAdvanceTime` because the restart path really does wait on timers
+    // (the bounded stderr-end wait and tee flush). Frozen fake time never
+    // fires them and the attempt never finalizes.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      const outcomes = [
+        { code: 9, signal: null },
+        { code: RESTART_EXIT_CODE, signal: null },
+        { code: 9, signal: null },
+        { code: 0, signal: null },
+      ] as const;
+      let spawned = 0;
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            {
+              environment: "production",
+              cwd: null,
+              serviceLabel: "ai.traycer.host.budget-test",
+            },
+            {
+              ...deps,
+              // One relaunch of budget: enough that the SECOND crash can only
+              // be survived if the sustained run reset the counter.
+              maxRelaunches: 1,
+              sleep: async () => undefined,
+              spawn: (command, args, options) => {
+                const index = spawned;
+                spawned += 1;
+                const child = makeStubChildWithStderr();
+                const status = new PassThrough();
+                Object.assign(child, { stdio: [null, null, null, status] });
+                originalSpawn(command, args, options);
+                // `childSpawnedAtMs` is stamped before this call, so advancing
+                // here is the child running. Only the restart attempt runs long.
+                if (index === 1) {
+                  vi.setSystemTime(
+                    Date.now() + SUSTAINED_UPTIME_RESET_MS + 1_000,
+                  );
+                }
+                const outcome =
+                  outcomes[index] ?? outcomes[outcomes.length - 1];
+                setImmediate(() => {
+                  status.end();
+                  child.stderr?.end();
+                  child.emit("exit", outcome.code, outcome.signal);
+                });
+                return asChildProcess(child);
+              },
+              readLiveProbeContextForServiceLabel: async () => ({
+                kind: "authorised" as const,
+                context: {
+                  transitionId: "budget-transition",
+                  probeNonce: "budget-nonce",
+                  serviceLabel: "ai.traycer.host.budget-test",
+                },
+              }),
+              readLayer0Frame: async (): Promise<Layer0FrameRead> => {
+                const attemptId = recorded.markers
+                  .filter((marker) => marker.phase === "starting")
+                  .at(-1)?.fields.attemptId;
+                if (typeof attemptId !== "string") {
+                  return { kind: "indeterminate", reason: "missing-attempt" };
+                }
+                return {
+                  kind: "frame",
+                  frame: { attemptId, layer0: "acquired" },
+                };
+              },
+              attestProbeSupervisor: async (serviceLabel, supervisorPid) => ({
+                serviceLabel,
+                supervisorPid,
+                capturedAt: "2026-08-12T00:00:00.000Z",
+              }),
+              writeProbeMarker: async () => undefined,
+            },
+          ),
+        recorded,
+      );
+
+      // crash → sustained run ending in restart → crash → clean stand-down.
+      // Carrying the stale count stops one attempt earlier, on exit 9.
+      expect(recorded.spawnCalls).toHaveLength(4);
+      expect(recorded.exited).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not relaunch a host that exits cleanly", async () => {
     // exit 0 is the host standing down on purpose - and is also the
     // incumbent-declined path. `KeepAlive{SuccessfulExit:false}` restated.

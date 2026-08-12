@@ -522,6 +522,94 @@ describe("<HostStatusStrip />", () => {
     expect(strip?.dataset.state).toBe("switching");
   });
 
+  // The amber strip covers two unrelated situations, and Retry has to mean the
+  // right one in each. A stalled/dead LOCAL host needs its process back; the
+  // full-screen cards this strip replaced put `requestRespawn` behind Retry for
+  // exactly these three readiness kinds. Re-running the compat probe against a
+  // process that is not there answers the same nothing every click.
+  for (const kind of [
+    "loading-host",
+    "provisioning-host",
+    "unavailable-host",
+  ] as const) {
+    it(`respawns the local host instead of re-probing on '${kind}'`, () => {
+      const retry = vi.fn();
+      const requestRespawn = vi.fn();
+      renderStrip({
+        compatibility: {
+          status: "checking",
+          retry,
+        },
+        readiness: { kind },
+        presentation: {
+          ...BASE_PRESENTATION,
+          requestRespawn,
+          compatibility: {
+            ...BASE_PRESENTATION.compatibility,
+            status: "checking",
+            retry,
+          },
+        },
+        hostClient: null,
+      });
+
+      expect(queryStrip()?.dataset.state).toBe("switching");
+      fireEvent.click(screen.getByTestId("host-status-strip-retry"));
+      expect(requestRespawn).toHaveBeenCalledTimes(1);
+      expect(retry).not.toHaveBeenCalled();
+    });
+  }
+
+  it("disables Retry while a respawn it issued is still pending", () => {
+    const requestRespawn = vi.fn();
+    renderStrip({
+      compatibility: { status: "checking", retry: () => undefined },
+      readiness: { kind: "unavailable-host" },
+      presentation: {
+        ...BASE_PRESENTATION,
+        requestRespawn,
+        respawnPending: true,
+        compatibility: {
+          ...BASE_PRESENTATION.compatibility,
+          status: "checking",
+        },
+      },
+      hostClient: null,
+    });
+
+    const button = screen.getByTestId("host-status-strip-retry");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(requestRespawn).not.toHaveBeenCalled();
+  });
+
+  // The counter-pin: a CONNECTION wait must keep the probe retry. For a remote
+  // target readiness is already `ready`, so respawning the local host would be
+  // both useless and wrong.
+  it("keeps the compatibility retry while the probe is still dialing", () => {
+    const retry = vi.fn();
+    const requestRespawn = vi.fn();
+    renderStrip({
+      compatibility: { status: "checking", retry },
+      readiness: { kind: "compatibility-checking" },
+      presentation: {
+        ...BASE_PRESENTATION,
+        requestRespawn,
+        compatibility: {
+          ...BASE_PRESENTATION.compatibility,
+          status: "checking",
+          retry,
+        },
+      },
+      hostClient: null,
+    });
+
+    expect(queryStrip()?.dataset.state).toBe("switching");
+    fireEvent.click(screen.getByTestId("host-status-strip-retry"));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(requestRespawn).not.toHaveBeenCalled();
+  });
+
   it("files the same report-issue context as the full-screen card on the error variant", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     const retry = vi.fn();

@@ -812,6 +812,16 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Update the host even if it has work in progress (skips the busy check).",
+      )
+      // The option users actually type is `--version <version>`, rewritten to
+      // the hidden spelling above before Commander parses (root `--version`
+      // owns that token otherwise). Registering it for real would hand the
+      // token back to the collision, so the public syntax is documented here
+      // instead - without this the command advertises "a registry version"
+      // and gives no way to name one.
+      .addHelpText(
+        "after",
+        "\nVersion selection:\n  --version <version>  Update to this exact registry version\n",
       ),
     (opts) =>
       buildHostUpdateCommand({

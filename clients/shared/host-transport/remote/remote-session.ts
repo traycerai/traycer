@@ -1725,8 +1725,24 @@ export class RemoteSession<
    * loop back to the normal backoff.
    */
   private beginConnectGuarded(): void {
-    void this.beginConnect().catch((cause: unknown) => {
-      if (this.phase === "closed") {
+    // `beginConnect` allocates its generation SYNCHRONOUSLY, before its first
+    // await, so reading the counter immediately after the call names the
+    // generation this attempt owns - not the one it superseded.
+    const attempt = this.beginConnect();
+    const generation = this.connectGeneration;
+    void attempt.catch((cause: unknown) => {
+      // The same generation guard every other callback here takes, and it is
+      // deliberately NOT load-bearing today: a rejection can only arrive while
+      // this attempt is still pre-connection, `dropConnection` nulls
+      // `this.connection`, and `isCurrent` requires a non-null one - so
+      // `requestSessionReconnect` and every `handleConnectionLost` caller are
+      // no-ops for exactly as long as an attempt is parked, and no newer
+      // generation can exist to be dropped. That safety is incidental to
+      // another method's null check, one refactor deep (a force-redial that
+      // does not tear down first, or an `isCurrent` that stops requiring a
+      // connection, reintroduces it). Stated here so a superseded attempt
+      // owning nothing is a property of THIS code rather than a coincidence.
+      if (this.phase === "closed" || generation !== this.connectGeneration) {
         return;
       }
       this.dropConnection("connect-path-threw");

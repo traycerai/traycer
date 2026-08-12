@@ -1519,6 +1519,17 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
+      // Same forgiveness rule the abnormal path applies below, and it has to be
+      // applied HERE too because this branch never reaches it. A host that
+      // consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`,
+      // then was restarted on purpose would otherwise hand its replacement the
+      // stale crash history that the sustained run had already earned off - so
+      // an operator-requested restart would silently shorten the next real
+      // crash allowance. Only real uptime forgives; the restart itself is not a
+      // crash and neither consumes nor forgives anything on its own.
+      if (childEndedAtMs - childSpawnedAtMs >= SUSTAINED_UPTIME_RESET_MS) {
+        consecutiveRelaunches = 0;
+      }
       logger.info("Host child requested an intentional restart", {
         environment: opts.environment,
         exitCode: RESTART_EXIT_CODE,
