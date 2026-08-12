@@ -15,6 +15,9 @@
  *    main-process SDK; without it renderer errors silently fail to report.
  *  - `img-src https:` lets remote user avatars (e.g. GitHub
  *    `avatars.githubusercontent.com`) load.
+ *  - `connect-src blob: data:` lets the image lightbox `fetch()` its own
+ *    blob-cache / data-URL sources to copy or save them; both schemes are
+ *    local byte access, not network reach.
  *  - The localhost entries cover the default Vite dev server. Multi-run
  *    `make dev-desktop` can use another loopback port; the renderer page is
  *    served from that origin, so `'self'` covers its own assets and `ws:`
@@ -29,7 +32,7 @@ export const CSP_DIRECTIVES = [
   "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173",
+  "connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173",
   "frame-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",

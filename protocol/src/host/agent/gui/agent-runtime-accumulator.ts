@@ -602,6 +602,12 @@ export function accumulateEvent(
     case "usage.updated":
       return blocks;
 
+    // Updates the message-level `imageResolutions` record, not a content
+    // block - out of scope for this block-only reducer (ticket 04 owns the
+    // message-level accumulator that applies it).
+    case "image_resolution.updated":
+      return blocks;
+
     case "steer.submitted":
       return [
         ...blocks,
@@ -791,6 +797,7 @@ export function accumulateEvent(
           endedAt: null,
           backgroundTask: event.backgroundTask ?? null,
           stopped: false,
+          imageResults: [],
         },
       ];
     }
@@ -811,6 +818,13 @@ export function accumulateEvent(
             existing.backgroundTask,
             event.backgroundTask,
           ),
+          // Stamped explicitly in both completion branches (see the
+          // no-existing-block branch below) so a persisted block always
+          // carries the same shape the live broadcast did.
+          imageResults:
+            event.imageResults.length > 0
+              ? event.imageResults
+              : existing.imageResults,
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -834,6 +848,7 @@ export function accumulateEvent(
           endedAt: event.timestamp,
           backgroundTask: event.backgroundTask ?? null,
           stopped: false,
+          imageResults: event.imageResults,
         },
       ];
     }
@@ -879,6 +894,7 @@ export function accumulateEvent(
           endedAt: event.timestamp,
           backgroundTask: event.backgroundTask ?? null,
           stopped: event.terminationReason === "stopped",
+          imageResults: [],
         },
       ];
     }

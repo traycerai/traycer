@@ -2868,6 +2868,7 @@ const createdSessionHandles: ChatSessionStoreHandle[] = [];
  */
 function createSessionHandle(chatId: string): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId,
     userId: null,

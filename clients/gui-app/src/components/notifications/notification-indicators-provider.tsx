@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 
 interface NotificationIndicatorsProviderProps {
-  readonly indicators: HostNotificationsIndicatorStateResponse;
+  readonly indicators: SurfaceNotificationIndicators;
   readonly children: ReactNode;
 }
 

@@ -20,6 +20,7 @@ import {
   chatEventSchemaPreInReplyTo,
   chatRunSettingsSchema,
   chatSchema,
+  chatSchemaPreImage,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -52,10 +53,12 @@ import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
+  runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
   runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
   runtimePlanActionSchema,
+  type ImageResolutionUpdatedEvent,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 export {
@@ -67,6 +70,7 @@ import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
   worktreeBindingSchema,
   worktreeIntentSchema,
+  worktreeIntentSchemaV10,
 } from "@traycer/protocol/host/worktree-schemas";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 
@@ -927,6 +931,20 @@ export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
 >;
 
+export function createImageResolutionUpdatedFrame(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly event: ImageResolutionUpdatedEvent;
+}): Extract<ChatSubscribeServerFrame, { readonly kind: "blockDelta" }> {
+  return {
+    kind: "blockDelta",
+    hasBinaryPayload: false,
+    epicId: input.epicId,
+    chatId: input.chatId,
+    event: input.event,
+  };
+}
+
 const pauseQueueClientFrameSchema = z.object({
   kind: z.literal("pauseQueue"),
   ...ownerActionFrameFields,
@@ -967,7 +985,7 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     // rides with the send so the host creates it at turn-start before
     // gating on setup - mirroring how the landing page bundles the intent
     // with `epic.create`. `null` for an ordinary send.
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
   }),
   z.object({
     kind: z.literal("deleteMessageSuffix"),
@@ -988,7 +1006,7 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     // Editing and resending a stopped message is another turn-start path. A
     // worktree staged in the composer must ride on this frame just as it does
     // on a normal send, otherwise it is not created until the next message.
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
     // When true, revert all file changes made by the edited message's turn
     // and every turn after it (cumulative, to the state before this message)
     // before trimming history and starting the new turn. Set by the
@@ -1152,8 +1170,22 @@ export const chatSubscribeClientFrameSchemaBeforeV14 = z.discriminatedUnion(
   chatSubscribeClientFrameSchemaBeforeV14Options,
 );
 
+const [
+  ,
+  deleteMessageSuffixClientFrameSchema,
+  ,
+  ...chatSubscribeClientFrameSchemaRestOptions
+] = chatSubscribeClientFrameSchemaBeforeV14Options;
+
 const chatSubscribeClientFrameSchemaOptions = [
-  ...chatSubscribeClientFrameSchemaBeforeV14Options,
+  chatSubscribeClientFrameSchemaBeforeV13Options[0].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  deleteMessageSuffixClientFrameSchema,
+  chatSubscribeClientFrameSchemaBeforeV13Options[2].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  ...chatSubscribeClientFrameSchemaRestOptions,
   activeProfileUpdateClientFrameSchema,
 ] as const;
 
@@ -1164,6 +1196,13 @@ export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
 export type ChatSubscribeClientFrame = z.infer<
   typeof chatSubscribeClientFrameSchema
 >;
+
+// `1.4` through `1.6` are released lines. Keep their client frames on the
+// pre-collision intent shape while the live `1.7` line uses the current one.
+const chatSubscribeClientFrameSchemaV14ToV16 = z.discriminatedUnion(
+  "kind",
+  [...chatSubscribeClientFrameSchemaBeforeV14Options, activeProfileUpdateClientFrameSchema],
+);
 
 // ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
 //
@@ -1367,7 +1406,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     settings: chatRunSettingsSchema,
     accountContext: accountContextSchema,
     deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
   }),
   z.object({
     kind: z.literal("deleteMessageSuffix"),
@@ -1723,7 +1762,7 @@ const chatSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV14,
   chatSubscribeTurnStateChangedServerFrameSchemaV14,
   ...chatSubscribeCommonServerFrameSchemasPreManagedCommand,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
 
 export const chatSubscribeV14 = defineStreamRpcContract({
@@ -1731,7 +1770,7 @@ export const chatSubscribeV14 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV14,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
 // ─── Frozen `chat.subscribe@1.5` shape (`archivedAt` + steering capability) ─
@@ -1777,7 +1816,7 @@ const chatSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV15,
   chatSubscribeTurnStateChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasPreManagedCommand,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
 
 export const chatSubscribeV15 = defineStreamRpcContract({
@@ -1785,32 +1824,88 @@ export const chatSubscribeV15 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 5 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV15,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
-// ─── Live `chat.subscribe@1.6` contract (the managed-command surface) ───────
+// ─── Frozen `chat.subscribe@1.6` shape (the managed-command surface, pre-image) ─
 //
-// `1.6` is where the whole Shells surface joins the chat stream: the chat's own
-// commands (`snapshot.managedCommands` + `managedCommandsChanged`) and the queue
-// items their deliveries ride as. There is no epic-wide list stream to pair with
-// it - see the re-entry note in `host/managed-command/subscribe.ts`.
+// `1.6` is where the whole Shells surface joined the chat stream: the chat's
+// own commands (`snapshot.managedCommands` + `managedCommandsChanged`) and the
+// queue items their deliveries ride as. There is no epic-wide list stream to
+// pair with it - see the re-entry note in `host/managed-command/subscribe.ts`.
 //
-// The live serverFrame's queue is the `prompt | managed-command` union: a
-// pending managed-command delivery (a monitoring shell's log digest, a shell's
+// The serverFrame's queue is the `prompt | managed-command` union: a pending
+// managed-command delivery (a monitoring shell's log digest, a shell's
 // completion) is a first-class, content-free queue item the user can see,
 // reorder, and cancel - and, on a harness that confirms it consumed a mid-turn
-// steer, one that can be injected into the running turn rather than waiting for
-// it (`delivery`/`targetTurnId` on the variant). A released ≤1.5 peer
-// negotiates a frozen line above,
-// which cannot represent the variant at all; the host's frame projection omits
-// those items for such peers rather than fabricating a prompt shape for them.
-// The client frame is unchanged from `1.4` - cancel/reorder of a
-// managed-command item ride the existing `queueCancel`/`queueReorder`
-// actions, which are keyed by `queueItemId` alone.
+// steer, one that can be injected into the running turn rather than waiting
+// for it (`delivery`/`targetTurnId` on the variant). A released ≤1.5 peer
+// negotiates a frozen line above, which cannot represent the variant at all;
+// the host's frame projection omits those items for such peers rather than
+// fabricating a prompt shape for them. The client frame is unchanged from
+// `1.4` - cancel/reorder of a managed-command item ride the existing
+// `queueCancel`/`queueReorder` actions, which are keyed by `queueItemId` alone.
+//
+// `1.6` originally bound the fully live serverFrame/`chatSnapshotSchema`
+// directly (a bug: it let every later change to `chatSchema`/`messageSchema`/
+// `contentBlockSchema` mutate this released line) - pinned here to its
+// pre-image shape so this line can never observe `imageResults`/the image
+// resolution record added on `1.7`. Only `chat` (→ `chatSchemaPreImage`) and
+// `blockDelta`'s event (→ `runtimeEventSchemaPreImage`) actually differ from
+// the live shapes; queue/message/managedCommands/turnStateChanged are
+// untouched by images, so this bundle reuses those live sub-schemas exactly
+// like `chatSubscribeServerFrameSchemaV14`/`V15` do.
+const chatSnapshotSchemaV16 = z.object({
+  chat: chatSchemaPreImage,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16,
+});
+
+const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV16,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemas,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
+]);
 
 export const chatSubscribeV16 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV16,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
+});
+
+// ─── Live `chat.subscribe@1.7` contract (image generation + rendering) ─────
+//
+// `1.7` is where the live schemas gain image support: `imageResults` on the
+// `tool_call` content block and `tool_call.completed` runtime event, the
+// durable image resolution record on assistant messages
+// (`assistantMessageSchema.imageResolutions`), the typed
+// `image_resolution.updated` runtime event for initial resolution and
+// mid-turn watcher changes. The client frame is unchanged.
+export const chatSubscribeV17 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

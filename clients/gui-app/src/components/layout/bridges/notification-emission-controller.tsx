@@ -73,6 +73,7 @@ export function NotificationEmissionController(): null {
       if (row.payload === null) return;
       activate({
         payload: row.payload,
+        originHostId: row.originHostId,
         receivedAt: row.createdAt,
         feedId: row.feedId,
         onResult: activationResultHandler({

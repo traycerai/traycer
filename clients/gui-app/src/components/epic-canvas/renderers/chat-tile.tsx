@@ -127,7 +127,6 @@ import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-f
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
-import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
 import { contentBlocksText } from "@/lib/chat/content-block-text";
 import {
@@ -2326,15 +2325,6 @@ function ContextUsageChipForChat(props: {
 function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
-  useEffect(() => {
-    if (props.fatalClose === null) return;
-    emitChatStreamErrorNotification({
-      epicId: props.epicId,
-      chatId: props.node.id,
-      details: props.fatalClose,
-    });
-  }, [props.fatalClose, props.epicId, props.node.id]);
-
   // A fatal close before any snapshot (CHAT_INVALID, CHAT_NOT_VISIBLE, …) means
   // the host will never send one. Surface the reason + a retry instead of an
   // indefinite spinner.

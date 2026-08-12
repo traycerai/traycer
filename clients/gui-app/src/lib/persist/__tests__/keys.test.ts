@@ -4,6 +4,9 @@ import {
   appLocalNotificationDisplayReceiptKey,
   appLocalNotificationDisplayReceiptNotificationPrefix,
   appLocalNotificationDisplayReceiptPrefix,
+  appLocalNotificationCompletionReceiptHostPrefix,
+  appLocalNotificationCompletionReceiptKey,
+  appLocalNotificationCompletionReceiptPrefix,
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
@@ -200,6 +203,29 @@ describe("persist key builders — output-preserving against current source", ()
       }),
     ).toBe(
       "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport:42",
+    );
+  });
+
+  it("scopes completion receipts by user, host, and occurrence", () => {
+    expect(appLocalNotificationCompletionReceiptPrefix("user/1")).toBe(
+      "traycer-gui-app:app-local-notification-completion-receipt:user%2F1",
+    );
+    expect(
+      appLocalNotificationCompletionReceiptHostPrefix({
+        userId: "user/1",
+        originHostId: "host:1",
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-completion-receipt:user%2F1:host%3A1",
+    );
+    expect(
+      appLocalNotificationCompletionReceiptKey({
+        userId: "user/1",
+        originHostId: "host:1",
+        occurrenceKey: "agent.stopped:chat-1@42",
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-completion-receipt:user%2F1:host%3A1:agent.stopped%3Achat-1%4042",
     );
   });
 

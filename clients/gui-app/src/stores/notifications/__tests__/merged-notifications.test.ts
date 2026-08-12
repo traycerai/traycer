@@ -68,6 +68,7 @@ function appLocalEntry(
 ): AppLocalNotificationEntry {
   return {
     id,
+    originHostId: "host-a",
     updatedAt,
     readAt,
     kind: "stream.transport.error",
@@ -535,7 +536,7 @@ describe("merged notifications feed", () => {
       outcome: null,
       resolvedAt: null,
       sourceRef: null,
-      originHostId: null,
+      originHostId: "host-a",
       category: "system",
     });
   });

@@ -32,6 +32,7 @@ function createHarness(chatId: string): Harness {
   let failNext = false;
   let lastCallbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId,
     userId: "user-wake",
