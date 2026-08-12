@@ -528,6 +528,124 @@ export function ImagePreview(props: ImagePreviewProps) {
   const zoomInDisabled =
     zoomDisabled || transform.scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
 
+  function renderStage(): ReactNode {
+    if (props.status === "ready" && props.url !== null) {
+      if (stage.kind === "measuring") {
+        // Stage not yet laid out - keep the skeleton up rather than flash an
+        // unconstrained image (video symptom #1).
+        return renderSkeleton(aspectRatio);
+      }
+      if (stage.kind === "no-dimensions") {
+        // `meta` never declared width/height (a dimension-less SVG, review
+        // finding #6) - render constrained via CSS with no transform until
+        // `onNaturalSize` reports a decoded size (this same `<img>` element),
+        // at which point the stage recomputes as `ready` and this branch is
+        // replaced by the transform-enabled one below. A genuinely
+        // dimensionless decode (0x0) never calls back, so this stays the
+        // permanent, correct fallback for that file.
+        return (
+          <div className="flex size-full items-center justify-center p-2">
+            <ImageStageImg
+              url={props.url}
+              fileName={props.fileName}
+              servedFromCache={props.servedFromCache}
+              setImgRef={setImgRef}
+              onDecodeError={handleDecodeError}
+              onNaturalSize={handleNaturalSize}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+        );
+      }
+      return (
+        <TransformWrapper
+          ref={transformRef}
+          initialScale={stage.transform.scale}
+          initialPositionX={stage.transform.positionX}
+          initialPositionY={stage.transform.positionY}
+          minScale={effectiveMin}
+          maxScale={MAX_SCALE}
+          limitToBounds
+          centerOnInit={false}
+          smooth
+          disabled={!props.gesturesEnabled}
+          wheel={{
+            step: ZOOM_STEP,
+            wheelDisabled: true,
+            touchPadDisabled: false,
+          }}
+          panning={{
+            velocityDisabled: true,
+          }}
+          trackPadPanning={{
+            // Library default is `disabled: true` (review finding #1) - a
+            // partial config object merges OVER that default, so an ordinary
+            // two-finger trackpad pan stayed rejected until this was explicit.
+            disabled: false,
+            velocityDisabled: true,
+          }}
+          pinch={{
+            step: 5,
+          }}
+          doubleClick={{
+            disabled: true,
+          }}
+          // Review finding #4: the "0ms everywhere" echo-safety premise (used
+          // by `ImageDiffView`'s reentrancy guard) is only exhaustive if EVERY
+          // library-owned animation is pinned to the same duration - these two
+          // default to 200ms regardless of our own explicit `animationTime`
+          // args, and can fire after a pinch/pan settles out of bounds.
+          zoomAnimation={{ animationTime: animationMs }}
+          autoAlignment={{ animationTime: animationMs }}
+          onTransform={handleTransformed}
+          onInit={handleInit}
+          onPanningStart={handlePanningStart}
+          onPanningStop={handlePanningStop}
+        >
+          <TransformComponent
+            wrapperStyle={{ width: "100%", height: "100%" }}
+            contentStyle={{
+              cursor: panCursor(props.gesturesEnabled, isPanning),
+            }}
+          >
+            <div
+              onDoubleClick={
+                props.gesturesEnabled
+                  ? (event: MouseEvent<HTMLDivElement>) => {
+                      event.preventDefault();
+                      handleDoubleClick();
+                    }
+                  : undefined
+              }
+            >
+              <ImageStageImg
+                url={props.url}
+                fileName={props.fileName}
+                servedFromCache={props.servedFromCache}
+                setImgRef={setImgRef}
+                onDecodeError={handleDecodeError}
+                onNaturalSize={handleNaturalSize}
+                className="max-w-none"
+              />
+            </div>
+          </TransformComponent>
+        </TransformWrapper>
+      );
+    }
+    if (props.status === "loading") {
+      return (
+        <div className="flex size-full items-center justify-center">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        </div>
+      );
+    }
+    return renderSkeleton(aspectRatio);
+  }
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       {props.compact ? null : (
@@ -640,27 +758,7 @@ export function ImagePreview(props: ImagePreviewProps) {
         ref={setStageEl}
         className="image-preview-checkerboard relative isolate min-h-0 flex-1 overflow-hidden"
       >
-        {renderImagePreviewStage({
-          status: props.status,
-          url: props.url,
-          servedFromCache: props.servedFromCache,
-          fileName: props.fileName,
-          aspectRatio,
-          setImgRef,
-          stage,
-          effectiveMin,
-          animationMs,
-          gesturesEnabled: props.gesturesEnabled,
-          isPanning,
-          transformRef,
-          onDoubleClick: handleDoubleClick,
-          onPanningStart: handlePanningStart,
-          onPanningStop: handlePanningStop,
-          onTransform: handleTransformed,
-          onInit: handleInit,
-          onDecodeError: handleDecodeError,
-          onNaturalSize: handleNaturalSize,
-        })}
+        {renderStage()}
       </div>
       {props.compact && caption !== null ? (
         <div className="flex h-6 shrink-0 items-center justify-center border-t border-canvas-border/70 text-ui-xs text-muted-foreground">
@@ -687,150 +785,6 @@ function copyButtonLabel(state: "idle" | "copied" | "error"): string {
 function copyButtonIcon(state: "idle" | "copied" | "error"): ReactNode {
   if (state === "copied") return <Check className="size-4" />;
   return <Copy className="size-4" />;
-}
-
-function renderImagePreviewStage(args: {
-  readonly status: ImagePreviewStatus;
-  readonly url: string | null;
-  /** Ticket 07 closing E2E item: seeds `ImageStageImg`'s entrance-fade state so a cache hit's first commit is already `opacity-100`, in both branches below. */
-  readonly servedFromCache: boolean;
-  readonly fileName: string;
-  readonly aspectRatio: number | null;
-  readonly setImgRef: (el: HTMLImageElement | null) => void;
-  readonly stage: StageReadiness;
-  /** Review finding #7: never greater than the current fit, so a huge image's fit is always within interactive zoom-out range. */
-  readonly effectiveMin: number;
-  readonly animationMs: number;
-  readonly gesturesEnabled: boolean;
-  readonly isPanning: boolean;
-  readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
-  readonly onDoubleClick: () => void;
-  readonly onPanningStart: () => void;
-  readonly onPanningStop: () => void;
-  readonly onTransform: (
-    ref: ReactZoomPanPinchRef,
-    state: ImagePreviewTransformState,
-  ) => void;
-  /** Review finding #4: fires once at mount with the ref RZPP never passes to `onTransform` for the initial transform. */
-  readonly onInit: (ref: ReactZoomPanPinchRef) => void;
-  readonly onDecodeError: () => void;
-  readonly onNaturalSize: (size: ContainerSize) => void;
-}): ReactNode {
-  if (args.status === "ready" && args.url !== null) {
-    if (args.stage.kind === "measuring") {
-      // Stage not yet laid out - keep the skeleton up rather than flash an
-      // unconstrained image (video symptom #1).
-      return renderSkeleton(args.aspectRatio);
-    }
-    if (args.stage.kind === "no-dimensions") {
-      // `meta` never declared width/height (a dimension-less SVG, review
-      // finding #6) - render constrained via CSS with no transform until
-      // `onNaturalSize` reports a decoded size (this same `<img>` element),
-      // at which point the stage recomputes as `ready` and this branch is
-      // replaced by the transform-enabled one below. A genuinely
-      // dimensionless decode (0x0) never calls back, so this stays the
-      // permanent, correct fallback for that file.
-      return (
-        <div className="flex size-full items-center justify-center p-2">
-          <ImageStageImg
-            url={args.url}
-            fileName={args.fileName}
-            servedFromCache={args.servedFromCache}
-            setImgRef={args.setImgRef}
-            onDecodeError={args.onDecodeError}
-            onNaturalSize={args.onNaturalSize}
-            className="max-h-full max-w-full object-contain"
-          />
-        </div>
-      );
-    }
-    return (
-      <TransformWrapper
-        ref={args.transformRef}
-        initialScale={args.stage.transform.scale}
-        initialPositionX={args.stage.transform.positionX}
-        initialPositionY={args.stage.transform.positionY}
-        minScale={args.effectiveMin}
-        maxScale={MAX_SCALE}
-        limitToBounds
-        centerOnInit={false}
-        smooth
-        disabled={!args.gesturesEnabled}
-        wheel={{
-          step: ZOOM_STEP,
-          wheelDisabled: true,
-          touchPadDisabled: false,
-        }}
-        panning={{
-          velocityDisabled: true,
-        }}
-        trackPadPanning={{
-          // Library default is `disabled: true` (review finding #1) - a
-          // partial config object merges OVER that default, so an ordinary
-          // two-finger trackpad pan stayed rejected until this was explicit.
-          disabled: false,
-          velocityDisabled: true,
-        }}
-        pinch={{
-          step: 5,
-        }}
-        doubleClick={{
-          disabled: true,
-        }}
-        // Review finding #4: the "0ms everywhere" echo-safety premise (used
-        // by `ImageDiffView`'s reentrancy guard) is only exhaustive if EVERY
-        // library-owned animation is pinned to the same duration - these two
-        // default to 200ms regardless of our own explicit `animationTime`
-        // args, and can fire after a pinch/pan settles out of bounds.
-        zoomAnimation={{ animationTime: args.animationMs }}
-        autoAlignment={{ animationTime: args.animationMs }}
-        onTransform={args.onTransform}
-        onInit={args.onInit}
-        onPanningStart={args.onPanningStart}
-        onPanningStop={args.onPanningStop}
-      >
-        <TransformComponent
-          wrapperStyle={{ width: "100%", height: "100%" }}
-          contentStyle={{
-            cursor: panCursor(args.gesturesEnabled, args.isPanning),
-          }}
-        >
-          <div
-            onDoubleClick={
-              args.gesturesEnabled
-                ? (event: MouseEvent<HTMLDivElement>) => {
-                    event.preventDefault();
-                    args.onDoubleClick();
-                  }
-                : undefined
-            }
-          >
-            <ImageStageImg
-              url={args.url}
-              fileName={args.fileName}
-              servedFromCache={args.servedFromCache}
-              setImgRef={args.setImgRef}
-              onDecodeError={args.onDecodeError}
-              onNaturalSize={args.onNaturalSize}
-              className="max-w-none"
-            />
-          </div>
-        </TransformComponent>
-      </TransformWrapper>
-    );
-  }
-  if (args.status === "loading") {
-    return (
-      <div className="flex size-full items-center justify-center">
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      </div>
-    );
-  }
-  return renderSkeleton(args.aspectRatio);
 }
 
 function renderSkeleton(aspectRatio: number | null): ReactNode {
