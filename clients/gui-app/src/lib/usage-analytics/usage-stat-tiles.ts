@@ -26,15 +26,14 @@ export interface UsageOutputTile {
   readonly reasoningTokens: number | null;
 }
 
+/**
+ * Savings stands ALONE as a catalog-rate estimate (ticket 18). The earlier
+ * "Nx raw cost" ratio added catalog-derived savings to costs that can be
+ * provider-REPORTED - two different bases (call populations, tiers), so the
+ * ratio was not a coherent counterfactual (billing-bug pressure test).
+ */
 export interface UsageCacheSavingsTile {
   readonly knownCacheSavingsUsd: number;
-  /**
-   * How many times more the window's KNOWN priced cost would have been
-   * without caching (`(knownCostUsd + knownCacheSavingsUsd) / knownCostUsd`).
-   * `null` when there is no known cost to divide by, or no savings to show -
-   * never a fabricated ratio.
-   */
-  readonly multipleOfRawCost: number | null;
 }
 
 export interface UsageStatTiles {
@@ -74,7 +73,6 @@ export function buildUsageStatTiles(
   const activeDays = countActiveDays(buckets);
   const observedInput =
     tokens.uncachedInputTokens + tokens.cacheReadInputTokens;
-  const rawCostUsd = totals.knownCostUsd + totals.knownCacheSavingsUsd;
 
   return {
     processedTokens: {
@@ -99,10 +97,6 @@ export function buildUsageStatTiles(
     },
     cacheSavings: {
       knownCacheSavingsUsd: totals.knownCacheSavingsUsd,
-      multipleOfRawCost:
-        totals.knownCacheSavingsUsd > 0 && totals.knownCostUsd > 0
-          ? rawCostUsd / totals.knownCostUsd
-          : null,
     },
   };
 }

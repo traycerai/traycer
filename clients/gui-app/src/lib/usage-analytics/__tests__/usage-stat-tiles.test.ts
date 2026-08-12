@@ -119,28 +119,14 @@ describe("buildUsageStatTiles", () => {
     ).toBe(42);
   });
 
-  it("computes the cache-savings multiple against the raw (pre-savings) cost", () => {
+  it("carries savings as a standalone figure - no raw-cost ratio field", () => {
+    // Ticket 18: catalog-derived savings added to provider-reported cost
+    // mixes bases, so the "Nx raw cost" counterfactual was dropped whole.
     const tiles = buildUsageStatTiles(
       totals({ knownCostUsd: 4, knownCacheSavingsUsd: 1 }),
       [],
     );
-    // raw = 4 + 1 = 5; multiple = 5 / 4
-    expect(tiles.cacheSavings.multipleOfRawCost).toBeCloseTo(1.25, 10);
-  });
-
-  it("reports no multiple when there is nothing known to divide", () => {
-    expect(
-      buildUsageStatTiles(
-        totals({ knownCostUsd: 0, knownCacheSavingsUsd: 0 }),
-        [],
-      ).cacheSavings.multipleOfRawCost,
-    ).toBeNull();
-    expect(
-      buildUsageStatTiles(
-        totals({ knownCostUsd: 0, knownCacheSavingsUsd: 3 }),
-        [],
-      ).cacheSavings.multipleOfRawCost,
-    ).toBeNull();
+    expect(tiles.cacheSavings).toEqual({ knownCacheSavingsUsd: 1 });
   });
 });
 
