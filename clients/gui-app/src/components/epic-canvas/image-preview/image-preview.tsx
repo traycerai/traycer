@@ -698,7 +698,7 @@ function copyButtonIcon(state: "idle" | "copied" | "error"): ReactNode {
 function renderImagePreviewStage(args: {
   readonly status: ImagePreviewStatus;
   readonly url: string | null;
-  /** Ticket 07 closing E2E item: skips `ImageStageImg`'s entrance fade for a cache hit, in both branches below. */
+  /** Ticket 07 closing E2E item: seeds `ImageStageImg`'s entrance-fade state so a cache hit's first commit is already `opacity-100`, in both branches below. */
   readonly servedFromCache: boolean;
   readonly fileName: string;
   readonly aspectRatio: number | null;
@@ -886,24 +886,29 @@ function ImageStageImg(props: {
   readonly className: string;
 }): ReactNode {
   // Skeleton -> image cross-fade (UI polish requirement #4): opacity-only,
-  // <=150ms, and SKIPPED for an already-cached URL. `useLayoutEffect`, not
-  // `useEffect` (review finding #8): a passive effect runs AFTER the
-  // browser paints, so a cached remount still flashed one hidden frame
-  // before the fade; layout timing reads/applies the skip before that
-  // paint.
+  // <=150ms, and SKIPPED for an already-cached URL.
   //
-  // Two independent cache-hit signals, both checked (ticket 07 closing E2E
-  // item): `img.complete` catches a genuinely fast decode on the SAME `<img>`
-  // element within this session, but a BRAND-NEW element (a fresh remount -
-  // a different pane, a switched file and back) always starts
-  // `complete === false` even when the underlying bytes are already
-  // resident, because browser decode state lives on the ELEMENT, not the
-  // URL - that per-element signal can never carry "already resident" across
-  // a remount. `props.servedFromCache` is the asset layer's OWN knowledge
-  // of exactly that (a hit against the shared blob cache), independent of
-  // any particular `<img>` element's decode history.
+  // `loaded` seeds from `servedFromCache` in the `useState` INITIALIZER, not
+  // via an effect (ticket 07 closing E2E item, round 2): a `useLayoutEffect`
+  // correction still runs after the FIRST commit has already painted - or,
+  // pre-paint, after some OTHER layout effect in this tree (RZPP's own
+  // mount-time measurement, the stage's `getBoundingClientRect` reads) has
+  // forced the browser to resolve a style pass while this element still
+  // read `opacity-0`. A CSS transition fires on any resolved-style CHANGE
+  // between two style passes, paint or not - so a same-commit correction
+  // still animated 0 -> 100 on a live trace. Seeding the initial state
+  // itself means the FIRST commit's className is already `opacity-100` for
+  // a cache hit; there is no `opacity-0` value ever exposed to a style pass
+  // to transition away from.
+  //
+  // `img.complete` (checked below, in the layout effect) stays as a second,
+  // independent signal: it catches a genuinely fast decode on the SAME
+  // `<img>` element within this session - relevant to a same-instance prop
+  // update that isn't a cache hit at mount - but can never itself seed the
+  // mount-time value, since browser decode state lives on the ELEMENT (not
+  // yet attached at `useState` initializer time), not the URL.
   const { setImgRef, onNaturalSize, servedFromCache } = props;
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(servedFromCache);
   const localImgRef = useRef<HTMLImageElement | null>(null);
   const setImgEl = useCallback(
     (el: HTMLImageElement | null): void => {
