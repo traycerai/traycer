@@ -41,16 +41,7 @@ export interface ImageAssetState {
   readonly reason: string | null;
   /** `null` until the header arrives. */
   readonly totalBytes: number | null;
-  /**
-   * Meaningful only at `status === "ready"`: whether `url` resolved from the
-   * shared `imageBlobCache` (a hit - `fetcher` below never ran) rather than
-   * a fresh stream. A brand-new `<img>` element mounted for a cache hit
-   * still reports `complete === false` at layout time even though the
-   * bytes are already local - that per-element browser signal can never
-   * carry "this was already resident" across a remount, but this
-   * asset-layer signal can, so a consumer can skip the entrance fade for a
-   * cache hit specifically without guessing from decode timing.
-   */
+  /** Meaningful only at `status === "ready"` - whether `url` resolved from the shared `imageBlobCache` (`fetcher` below never ran) rather than a fresh stream. See `ImagePreviewProps.servedFromCache` for why a consumer needs this. */
   readonly servedFromCache: boolean;
 }
 

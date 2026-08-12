@@ -13,14 +13,9 @@
  * the stream transport - chunked binary frames, not a unary base64 response
  * bound by the mux's 1 MiB frame cap.
  *
- * Neither method takes application client frames: these are server-push-only
- * streams opened for one fetch and then closed by the caller. The client
- * frame schema still declares `ping` - `WsStreamClient`'s wire-level
- * heartbeat constructs `ping`/`pong` frames unconditionally on a timer
- * without validating them against the active contract's schema, but every
- * other stream contract in this registry declares the pair for the same
- * reason (see `migration.run`, `worktree.deleteByPath`), so this follows
- * that precedent rather than being the first exception.
+ * Neither method takes application client frames (server-push-only, opened
+ * for one fetch and closed by the caller) - the client frame schema still
+ * declares `ping`, matching every other stream contract in this registry.
  */
 import { z } from "zod";
 
