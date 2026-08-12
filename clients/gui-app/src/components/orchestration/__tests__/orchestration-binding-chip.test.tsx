@@ -61,7 +61,7 @@ describe("OrchestrationBindingChip", () => {
       "orchestrator",
     );
     expect(screen.getByTestId("orchestration-binding-chip").textContent).toContain(
-      "default",
+      "Default",
     );
   });
 
