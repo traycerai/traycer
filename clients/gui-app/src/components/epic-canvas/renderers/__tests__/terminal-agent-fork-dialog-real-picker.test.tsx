@@ -717,6 +717,7 @@ function seedClaudeProviders(profiles: ReadonlyArray<ProviderProfile>): void {
         mcp: null,
         plugins: null,
         skills: null,
+        modelProviders: null,
       },
       managedInstallState: null,
       versionVisibility: null,

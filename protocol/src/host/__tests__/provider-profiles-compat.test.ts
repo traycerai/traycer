@@ -7,6 +7,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  providersListResponseSchemaV70,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providerCliStateSchemaV10,
@@ -327,15 +328,19 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
     // them. The major is spelled out because `downgradeResponseAcrossMajors`
     // resolves it at the type level, so it cannot be read off the registry at
-    // runtime - it has to be bumped by hand every time a release freezes the
-    // current line (v5.0 at `cli-v1.1.8`, v6.0 at `cli-v1.1.9`, so v7.0 now).
-    // The latest major also carries `nativeCapabilities` and `native`, which
-    // this downgrade strips alongside `profiles`.
+    // runtime - it has to be bumped by hand every time a new major opens
+    // (v5.0 and v6.0 were each frozen by a release; v7.0 is the newest line
+    // and is not released yet). The latest major also carries
+    // `nativeCapabilities` and `native`, which this downgrade strips alongside
+    // `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       7,
       2,
-      { providers: [stateWithProfile], native: null },
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithProfile],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -392,7 +397,10 @@ describe("providers.list v3.0 line predates profiles[]", () => {
       hostRpcRegistry["providers.list"],
       7,
       3,
-      { providers: [stateWithProfile], native: null },
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithProfile],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

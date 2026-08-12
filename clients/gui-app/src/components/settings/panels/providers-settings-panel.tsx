@@ -27,6 +27,7 @@ import {
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
   type HostScope,
@@ -43,6 +44,7 @@ import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProviderMcpTab } from "./provider-mcp-tab";
+import { ProviderModelProvidersTab } from "./provider-model-providers-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
 import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
@@ -52,6 +54,7 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import {
   providerCanStartProfileOauth,
   providerSignInUnavailableHint,
@@ -68,6 +71,7 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
   providerTabInputs,
+  providerTabLabel,
   supportedTabsFor as resolveSupportedTabs,
   type ProviderTabKey,
 } from "./provider-settings-tabs";
@@ -96,6 +100,7 @@ const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   mcp: "MCP",
   plugins: "Plugins",
   skills: "Skills",
+  modelProviders: "Model Providers",
 };
 
 // The provider to select on mount: the deep-link focus target (mapped from its
@@ -355,14 +360,31 @@ function ProvidersSettingsPanelInner({
       // No host readout here — the sidebar states the scoped host one row
       // above and repeating it was the same fact printed twice.
       //
-      // And no provider CONTROLS here either, which is the load-bearing half.
-      // `headerAction` renders as a SIBLING of the gate below, not a child, so
-      // anything mounted here escapes it: with a non-ready scope the runtime
-      // context is not re-provided, `useHostClient()` resolves to the ambient
-      // host, and "Refresh" re-probed and rewrote THAT host's provider list
-      // while the page named a different one. The gate only guards what it
-      // wraps, so the controls moved inside it.
-      headerAction={undefined}
+      // The global status DOES belong here: it reports a max over every
+      // provider and refreshes all of them, and inside the card it sat beside
+      // the selected provider's Enabled toggle and read as that provider's own.
+      //
+      // It renders only on a USABLE scope, which is the whole safety argument.
+      // `headerAction` is a sibling of the gate, so it is not gated - and the
+      // old bug was mounting these hooks here unconditionally: on `connecting`,
+      // `unreachable` or `vanished` there is no client, `useHostClient()` falls
+      // back to the ambient one, and Refresh re-probed and rewrote THAT host's
+      // provider list while the page named another.
+      //
+      // `isHostScopeUsable` is the repo's own name for this - "what may be
+      // MOUNTED", as its own comment puts it - and it is the same rule the
+      // body's controls already mount under, so the header cannot be safe by a
+      // different standard than the thing below it.
+      //
+      // The two usable states are correct for DIFFERENT reasons: `ready`
+      // re-provides its own client through `HostRuntimeContext`, which wraps
+      // this entire shell INCLUDING the header, while `following` needs no
+      // override precisely because the ambient client already IS the scoped
+      // host's. Gating on `ready` alone would hide the control in the ordinary
+      // no-explicit-pick case.
+      headerAction={
+        isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
+      }
     >
       <HostScopeGate
         scope={scope}
@@ -378,15 +400,51 @@ function ProvidersSettingsPanelInner({
 }
 
 /**
+ * "All providers · Checked …" plus Refresh, for the panel heading row.
+ *
+ * Named for its SCOPE because that is what was unclear: `checkedAt` is a max
+ * over every provider and Refresh re-probes all of them, which read as
+ * per-provider when it sat at the card's top-right.
+ *
+ * Mounted only on a USABLE scope - see `headerAction` above. Its hooks resolve
+ * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
+ * resolve the ambient host instead of the one the page names.
+ */
+function ProvidersGlobalStatus(): ReactNode {
+  // SUBSCRIBED, like the body's instance. `subscribed: false` was avoiding a
+  // duplicate that does not exist - two observers of one key share a fetch -
+  // while buying a real defect: an unsubscribed observer renders the cache at
+  // mount and then ignores it, so a refresh would update the rows below and
+  // leave this row's "Checked …" and its spinner frozen on the old answer.
+  // That is precisely the state this control exists to report.
+  const query = useProvidersList({ enabled: true, subscribed: true });
+  const providers = query.data?.providers ?? [];
+  const checking = query.isFetching || hasPendingProviderProbe(providers);
+  const refreshProviders = useRefreshProviders();
+  return (
+    <div
+      className="flex items-center gap-2"
+      data-testid="providers-global-status"
+    >
+      <span className="text-ui-xs font-medium text-muted-foreground">
+        All providers
+      </span>
+      <ProviderLastChecked
+        checkedAt={latestProviderCheckedAt(providers)}
+        checking={checking}
+      />
+      <RefreshIconButton
+        onRefresh={refreshProviders}
+        label="Refresh all providers"
+        refreshing={checking}
+      />
+    </div>
+  );
+}
+
+/**
  * Everything that talks to the scoped host, mounted only once the gate has
  * proven there is a client behind the name.
- *
- * The list query and the Refresh control live HERE rather than in the panel
- * header for one reason: the header is outside the gate. Mounted there, these
- * hooks resolved against the ambient host whenever the scope was not ready —
- * so "Refresh" re-probed provider auth and rewrote the cached provider list of
- * a host the page was not showing. Being a child of the gate is what makes
- * them unable to do that.
  */
 function ProvidersScopedContent({
   hostId,
@@ -396,24 +454,8 @@ function ProvidersScopedContent({
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
-  const providers = query.data?.providers ?? [];
-  const checkingProviders =
-    query.isFetching || hasPendingProviderProbe(providers);
-  const checkedAt = latestProviderCheckedAt(providers);
-  const refreshProviders = useRefreshProviders();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-end gap-2 px-5 pb-2">
-        <ProviderLastChecked
-          checkedAt={checkedAt}
-          checking={checkingProviders}
-        />
-        <RefreshIconButton
-          onRefresh={refreshProviders}
-          label="Refresh providers"
-          refreshing={checkingProviders}
-        />
-      </div>
       <div className="min-h-0 flex-1">
         <ProvidersPanelBody
           query={query}
@@ -898,7 +940,7 @@ function ProviderDetail({
           >
             {tabs.map((tab) => (
               <TabsTrigger key={tab} value={tab} className="flex-none px-3">
-                {PROVIDER_TAB_LABELS[tab]}
+                {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -920,6 +962,7 @@ function ProviderDetail({
                 tab={tab}
                 state={state}
                 providers={providers}
+                hostId={hostId}
                 profileTab={profileTab}
                 apiKeyDraft={apiKeyDraft}
                 onApiKeyDraftChange={setApiKeyDraft}
@@ -969,6 +1012,7 @@ function ProviderTabBody({
   tab,
   state,
   providers,
+  hostId,
   profileTab,
   apiKeyDraft,
   onApiKeyDraftChange,
@@ -976,6 +1020,7 @@ function ProviderTabBody({
   readonly tab: ProviderTabKey;
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
   readonly profileTab: ProviderProfileTabProps;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
@@ -984,7 +1029,11 @@ function ProviderTabBody({
     case "general":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderCliCandidatesSection state={state} providers={providers} />
+          <ProviderCliCandidatesSection
+            state={state}
+            providers={providers}
+            hostId={hostId}
+          />
           <TerminalAgentArgsSection
             key={state.terminalAgentArgs}
             state={state}
@@ -1064,6 +1113,34 @@ function ProviderTabBody({
           // that cannot report this never accuses a provider of a missing
           // binary it knows nothing about.
           cliBinaryResolved={state.cliBinaryResolved ?? true}
+        />
+      );
+    }
+    case "modelProviders": {
+      const modelProviders = state.nativeCapabilities.modelProviders;
+      if (modelProviders === null) {
+        // Unreachable through the tab bar - `supportedTabsFor` only returns a
+        // tab the host advertised, and a host that advertises this one fills
+        // the capability block. Kept because the switch is the only place that
+        // narrows the nullable block, and a `!` here would be the escape the
+        // repo's type rules exist to prevent.
+        return (
+          <ProviderTabPlaceholder
+            title="Model providers"
+            description="This provider does not support upstream model provider sign-in."
+          />
+        );
+      }
+      return (
+        <ProviderModelProvidersTab
+          providerId={state.providerId}
+          providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          capabilities={modelProviders}
+          // The catalog needs a managed server, so a pack that is still
+          // downloading reads as "the server would not start". The provider row
+          // is what tells the tab to render that as a WAIT rather than a
+          // failure - see `ModelProvidersBody`.
+          packPreparing={providerPackPreparingForProvider(state)}
         />
       );
     }

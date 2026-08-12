@@ -702,6 +702,7 @@ function buildChatMentionEntry(
     description: epicTitle,
     parentId: chat.parentId,
     updatedAt: chat.updatedAt,
+    archived: chat.archivedAt !== null,
     agentInterface: "chat",
     // Every GUI-backed Agent's runtime supports A2A (provider-native via the
     // MCP bridge) - mirrors `canParticipateInA2A`'s `surface === "gui"` arm.
@@ -728,6 +729,7 @@ function buildTerminalAgentMentionEntry(
     description: epicTitle,
     parentId: agent.parentId,
     updatedAt: agent.updatedAt,
+    archived: agent.archivedAt !== null,
     agentInterface: "terminal",
     // Delivery support is a runtime capability, not a referenceability gate:
     // Codex and OpenCode Terminal Agents stay listed with `false` here rather

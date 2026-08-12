@@ -113,6 +113,7 @@ describe("epicAgentMentionEntriesFromEpic", () => {
         description: "My Epic",
         parentId: null,
         updatedAt: 200,
+        archived: false,
         agentInterface: "chat",
         runtimeSupportsMessageDelivery: true,
       },
@@ -127,6 +128,7 @@ describe("epicAgentMentionEntriesFromEpic", () => {
         description: "My Epic",
         parentId: "c1",
         updatedAt: 100,
+        archived: false,
         agentInterface: "chat",
         runtimeSupportsMessageDelivery: true,
       },
@@ -165,9 +167,38 @@ describe("epicAgentMentionEntriesFromEpic", () => {
       description: "My Epic",
       parentId: "c1",
       updatedAt: 150,
+      archived: false,
       agentInterface: "terminal",
       runtimeSupportsMessageDelivery: true,
     });
+  });
+
+  it("marks entries archived from the record's archivedAt", () => {
+    const archivedChat = { ...chat("c1", "Old run", null, 200), archivedAt: 5 };
+    const archivedAgent = {
+      ...terminalAgent({
+        id: "t1",
+        harnessId: "claude",
+        title: "Old refactor",
+        parentId: null,
+        updatedAt: 150,
+      }),
+      archivedAt: 5,
+    };
+    const entries = epicAgentMentionEntriesFromEpic(
+      chatsSlice([archivedChat, chat("c2", "Live run", null, 100)]),
+      terminalAgentsSlice([archivedAgent]),
+      "epic-1",
+      "My Epic",
+    );
+
+    expect(
+      entries.map((entry) => ({ id: entry.id, archived: entry.archived })),
+    ).toEqual([
+      { id: "chat:epic-1:c1", archived: true },
+      { id: "chat:epic-1:c2", archived: false },
+      { id: "terminal-agent:epic-1:t1", archived: true },
+    ]);
   });
 
   it("keeps Codex and OpenCode Terminal Agents referenceable but not messageable", () => {
