@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ChatUserMessageContent } from "@/components/chat/chat-user-message-content";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import type { MentionAttachment } from "@/lib/composer/types";
 
 afterEach(() => {
@@ -71,6 +72,14 @@ describe("ChatUserMessageContent GitHub chips", () => {
     expect(chip).toBeTruthy();
     // The tooltip carries the title, not the token: a reader hovering a sent
     // chip is asking what it refers to, and the raw path answers nothing.
+    //
+    // Asserted by OPENING it. "the token does not appear" passes just as well
+    // when the tooltip is empty, or gone - the generic branch this chip exists
+    // to avoid would satisfy it too, since that renders the token as a `title`
+    // attribute rather than as text.
+    expect(tooltipTextNear(chip)).toBe(
+      "traycerai/traycer#4917 · Stop the busy-loop",
+    );
     expect(screen.queryByText("github-pr:traycerai/traycer#4917")).toBeNull();
     expect(
       document.querySelector("[data-composer-chip='mention']"),
@@ -86,9 +95,14 @@ describe("ChatUserMessageContent GitHub chips", () => {
     );
 
     // `traycer#812` is the multi-repository label the composer chose. The
-    // basename of the token happens to read the same way, so the assertion
-    // that matters is the one below it: the token itself never appears.
-    expect(screen.getByText("traycer#812")).toBeTruthy();
+    // basename of the token happens to read the same way, so the label alone
+    // cannot tell the two branches apart - the tooltip can, and it is the
+    // thing a reader actually consults.
+    const chip = screen.getByText("traycer#812");
+    expect(chip).toBeTruthy();
+    expect(tooltipTextNear(chip)).toBe(
+      "traycerai/traycer#812 · Magic link expires",
+    );
     expect(screen.queryByText("github-issue:traycerai/traycer#812")).toBeNull();
   });
 });
