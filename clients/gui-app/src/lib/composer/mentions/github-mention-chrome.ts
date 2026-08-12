@@ -53,6 +53,15 @@ export interface GithubMentionChromeInput {
   readonly catalogNotice: PrSourceNotice | null;
   readonly searchNotice: PrSourceNotice | null;
   readonly freshnessAt: number | null;
+  /**
+   * The live search's own status, or null when no search has answered.
+   *
+   * Separate from `sourceStatus` because the two reads reach GitHub by
+   * different routes: the catalog is cache-only and the search is not, so the
+   * search can discover `gh-unavailable` while the catalog is still serving a
+   * perfectly good cached list.
+   */
+  readonly searchSourceStatus: PrSourceStatus | null;
   readonly checking: boolean;
   readonly searching: boolean;
   readonly onRefresh: () => Promise<void>;
@@ -61,7 +70,15 @@ export interface GithubMentionChromeInput {
 export function githubMentionChromeFor(
   input: GithubMentionChromeInput,
 ): MentionStepChrome {
-  const ghUnavailable = input.sourceStatus === "gh-unavailable";
+  // EITHER source proves `gh` unusable, and the search is the one that can
+  // observe it FIRST: the catalog read is cache-only, so a host whose `gh`
+  // disappeared after the last sweep answers it happily from cache and only
+  // the live search actually tries to shell out. Reading the catalog alone
+  // meant the typed search silently returned nothing while the banner that
+  // explains why stayed hidden.
+  const ghUnavailable =
+    input.sourceStatus === "gh-unavailable" ||
+    input.searchSourceStatus === "gh-unavailable";
   return {
     refresh: {
       onRefresh: input.onRefresh,

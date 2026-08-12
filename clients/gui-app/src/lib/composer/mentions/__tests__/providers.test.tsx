@@ -33,6 +33,10 @@ function context(
     github: {
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
       issues: EMPTY_GITHUB_SECTION_CONTEXT,
+      // The default fixture is a host that HAS both mention methods, so the
+      // existing cases keep exercising the categories rather than the
+      // unsupported-host gate. The gate has its own cases below.
+      supported: true,
       now: 0,
     },
     ...overrides,
@@ -142,6 +146,59 @@ describe("mention provider registry", () => {
       "Task",
       "Artifacts",
     ]);
+  });
+
+  /**
+   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor)
+   * RPCs, so a host predating them negotiates them away rather than failing
+   * the handshake. Left ungated, both categories stay selectable against such
+   * a host and render permanently empty - the RPC rejects, the rejection is
+   * swallowed into the section's degraded state, and the user is shown a
+   * category that looks broken rather than one that is absent.
+   */
+  it("hides both GitHub categories when the host does not serve the mention methods", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        github: {
+          pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: false,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(labels(entries)).toEqual([
+      "Files",
+      "Folders",
+      "Worktrees",
+      "Git",
+      "Task",
+      "Artifacts",
+    ]);
+  });
+
+  // Root search is a SECOND way into the same rows, so a category hidden from
+  // the root menu but still answering flat search would be hidden in name only
+  // - and its reference-resolve row would drill into a step no host can serve.
+  it("contributes no root-search rows when the host does not serve the mention methods", () => {
+    const unsupported = context({
+      query: "#123",
+      github: {
+        pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+        issues: EMPTY_GITHUB_SECTION_CONTEXT,
+        supported: false,
+        now: 0,
+      },
+    });
+
+    expect(
+      labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported)),
+    ).not.toContain("Resolve in Pull requests...");
+    expect(
+      labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported)),
+    ).not.toContain("Resolve in Issues...");
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {

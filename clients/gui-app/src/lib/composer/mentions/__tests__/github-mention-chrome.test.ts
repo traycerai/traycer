@@ -26,6 +26,7 @@ function baseInput(
   return {
     section: "pull-requests",
     epicId: "epic-1",
+    searchSourceStatus: null,
     repositories: [
       {
         githubHost: "github.com",
@@ -67,6 +68,29 @@ describe("githubMentionChromeFor — gh-unavailable notice suppression", () => {
       kind: "gh-unavailable",
       section: "issues",
     });
+  });
+
+  /**
+   * The SEARCH is the read that can discover this first. The catalog read is
+   * cache-only, so a host whose `gh` disappeared after the last sweep still
+   * answers it happily - and building the banner from the catalog alone left
+   * the typed search returning nothing with no explanation on screen.
+   */
+  it("raises the banner when only the live search reports gh-unavailable", () => {
+    const chrome = githubMentionChromeFor(
+      baseInput({
+        section: "pull-requests",
+        sourceStatus: "cached",
+        catalogNotice: null,
+        searchSourceStatus: "gh-unavailable",
+      }),
+    );
+
+    expect(chrome.banner).toEqual({
+      kind: "gh-unavailable",
+      section: "pull-requests",
+    });
+    expect(chrome.notice).toBeNull();
   });
 
   it("passes the notice through and keeps the banner null when gh is available", () => {

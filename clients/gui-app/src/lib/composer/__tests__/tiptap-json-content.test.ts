@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
+  buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
   type SlashCommandCatalog,
@@ -562,4 +563,65 @@ describe("buildSubmittedChatJSONContent leading trigger", () => {
       { type: "text", text: "please run $frontend-design" },
     ]);
   });
+});
+
+/**
+ * The chip is the only mention attribute that is genuinely numeric, and
+ * `dataAttributeMap` parses every attribute back with `getAttribute`, which
+ * only ever returns a string. So the same chip arrives as a `number` from the
+ * picker or from persisted ProseMirror JSON, and as `"123"` after the editor's
+ * ordinary copy/paste round-trip through HTML.
+ */
+describe("GitHub mention attachments across an HTML round-trip", () => {
+  function githubDoc(issueNumber: unknown): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "mention",
+              attrs: {
+                contextType: "github_pull_request",
+                id: "github-pr:acme/widgets#123",
+                label: "#123",
+                organizationLogin: "acme",
+                repositoryName: "widgets",
+                issueNumber,
+                url: "https://github.com/acme/widgets/pull/123",
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("builds the attachment when issueNumber is a number", () => {
+    expect(buildAttachmentsFromJSONContent(githubDoc(123))).toEqual([
+      expect.objectContaining({
+        kind: "mention",
+        contextType: "github_pull_request",
+        path: "github-pr:acme/widgets#123",
+      }),
+    ]);
+  });
+
+  // The pasted chip used to be dropped entirely here: no attachment, a blank
+  // node view, and silent omission from the submitted context.
+  it("builds the same attachment when issueNumber came back from HTML as a string", () => {
+    expect(buildAttachmentsFromJSONContent(githubDoc("123"))).toEqual(
+      buildAttachmentsFromJSONContent(githubDoc(123)),
+    );
+  });
+
+  it.each([["12abc"], ["1.5"], [""], ["-4"]])(
+    "still rejects %j rather than coercing it into some other reference",
+    (issueNumber) => {
+      expect(buildAttachmentsFromJSONContent(githubDoc(issueNumber))).toEqual(
+        [],
+      );
+    },
+  );
 });

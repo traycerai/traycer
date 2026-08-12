@@ -243,6 +243,20 @@ export interface GithubMentionSectionContext {
 export interface GithubMentionProviderContext {
   readonly pullRequests: GithubMentionSectionContext;
   readonly issues: GithubMentionSectionContext;
+  /**
+   * Whether the bound host advertised BOTH mention methods at handshake.
+   *
+   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor)
+   * RPCs, so a host predating them negotiates them away rather than failing
+   * the handshake. Without this gate the two categories stay selectable
+   * against such a host and render permanently empty - the RPC rejects, the
+   * rejection is deliberately swallowed into the section's degraded state, and
+   * the user is left with a category that looks broken rather than absent.
+   *
+   * Fails closed via `useHostSupportsMethod`, so the categories stay hidden
+   * until a manifest positively proves both methods present.
+   */
+  readonly supported: boolean;
   /** Sampled once per build so every row's relative age agrees. */
   readonly now: number;
 }
@@ -882,7 +896,7 @@ class GithubMentionProvider extends ComposerMentionProvider {
   }
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
-    if (context.roots.length === 0) return null;
+    if (!this.available(context)) return null;
     return providerEntry({
       id: `provider:${this.id}`,
       label: this.label,
@@ -890,6 +904,14 @@ class GithubMentionProvider extends ComposerMentionProvider {
       icon: githubMentionCategoryIcon(this.section),
       step: this.providerStep("root", null),
     });
+  }
+
+  /**
+   * Both conditions the category needs before it may appear at all: folders to
+   * scope it to, and a host that actually serves the two mention methods.
+   */
+  private available(context: ComposerMentionProviderContext): boolean {
+    return context.github.supported && context.roots.length > 0;
   }
 
   /**
@@ -901,6 +923,11 @@ class GithubMentionProvider extends ComposerMentionProvider {
   rootSearchEntries(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
+    // Same gate as `rootEntry`. The flat root list is a SECOND way into these
+    // rows, so a category hidden from the root menu but still answering root
+    // search would be hidden in name only - and the reference-resolve row
+    // would drill into a step that no host can serve.
+    if (!this.available(context)) return [];
     return [
       ...this.rowEntries(context),
       ...this.referenceResolveEntries(context),

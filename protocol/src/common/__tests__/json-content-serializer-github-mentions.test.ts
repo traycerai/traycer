@@ -33,6 +33,32 @@ function serialize(
 }
 
 describe("GitHub mention serialization", () => {
+  // `url` is still optional on the node, so nodes written before it existed -
+  // and any caller that omits it - must serialize to the SAME complete
+  // reference they always did. Emitting `[url=]` is malformed metadata that
+  // hands the agent an empty fallback rather than no fallback.
+  it.each([
+    [ContextType.GithubPullRequest, "github-pr", 42],
+    [ContextType.GithubIssue, "github-issue", 7],
+  ] as const)(
+    "omits the url metadata entirely for a %s node that carries no url",
+    (contextType, marker, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            id: `${marker}:acme/widgets#${number}`,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "github.example.test",
+          },
+          "llm",
+        ),
+      ).toBe(`See @${marker}:acme/widgets#${number} before merging.`);
+    },
+  );
+
   it.each([
     [ContextType.GithubPullRequest, "github-pr", "pull/42"],
     [ContextType.GithubIssue, "github-issue", "issues/7"],

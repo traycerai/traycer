@@ -141,14 +141,20 @@ export interface ComposerPickerState {
    */
   readonly dismiss: (() => void) | null;
   /**
-   * Returns DOM focus (and the caret) to the composer's editor.
+   * Returns DOM focus (and the caret) to the composer's editor, inserting
+   * `resumeText` at the caret when it is non-null.
    *
    * Registered by the suggestion render beside `commit`/`dismiss`, because the
    * editor handle only exists there. The one caller is the filter popover's
    * close: Radix restores focus to its trigger by default, which would leave
    * the caret outside the composer with the mention menu still open.
+   *
+   * `resumeText` carries the printable character that dismissed the popover.
+   * That keystroke is delivered to the popover's radio group and the editor is
+   * not focused until a microtask later, so without handing it over the first
+   * letter of the resumed query is silently dropped.
    */
-  readonly focusEditor: (() => void) | null;
+  readonly focusEditor: ((resumeText: string | null) => void) | null;
   /**
    * True when the active kind's catalog query FAILED (currently only the
    * slash-command catalog reports this). The menu renders a "couldn't load"
@@ -218,7 +224,7 @@ export interface ComposerPickerActions {
     readonly query: string;
     readonly commit: ComposerPickerCommit;
     readonly dismiss: (() => void) | null;
-    readonly focusEditor: (() => void) | null;
+    readonly focusEditor: ((resumeText: string | null) => void) | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {

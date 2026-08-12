@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { keepPreviousData, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -18,6 +22,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { mentionQueryKeys } from "@/lib/query-keys";
 
 /**
@@ -101,6 +106,11 @@ export interface GithubMentionCatalogResult {
 const EMPTY_ROWS: ReadonlyArray<GithubMentionRow> = [];
 const EMPTY_REPOSITORIES: ReadonlyArray<GithubMentionRepository> = [];
 
+/** The cache slot a refresh was issued against, captured at mutate time. */
+interface CatalogRefreshContext {
+  readonly destination: QueryKey;
+}
+
 export function useGithubMentionCatalog(
   params: UseGithubMentionCatalogParams,
 ): GithubMentionCatalogResult {
@@ -139,28 +149,51 @@ export function useGithubMentionCatalog(
 
   // Both refresh lanes fold their response back into the slot the menu reads,
   // rather than re-issuing the cache-only read to observe their own effect.
+  //
+  // The destination key is captured in `onMutate` and read back in
+  // `onSuccess`. TanStack hands a pending mutation the LATEST render's
+  // callbacks, so a `cacheKey` closed over at render time is the key of
+  // whatever host is bound when the response lands - not the one the request
+  // was issued against. Capturing it at mutate time is the repo's standing
+  // rule for host-swap races, and here it is what stops one host's catalog
+  // being written into another's slot.
   const applyResponse = useCallback(
-    (response: MentionGithubCatalogResponse) => {
+    (response: MentionGithubCatalogResponse, destination: QueryKey) => {
       queryClient.setQueryData<MentionGithubCatalogResponse>(
-        cacheKey,
+        destination,
         response,
       );
     },
-    [cacheKey, queryClient],
+    [queryClient],
   );
 
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
-    "mention.githubCatalog"
+    "mention.githubCatalog",
+    CatalogRefreshContext
   >({
     client,
     method: "mention.githubCatalog",
     mapVariables: (variables) => variables,
     options: {
-      onSuccess: applyResponse,
-      // No toast. A degraded GitHub source is reported IN the menu - banner,
-      // ⓘ notice, freshness stamp - and a toast over an open picker would
-      // cover the rows it is talking about.
+      onMutate: () => ({ destination: cacheKey }),
+      onSuccess: (response, _variables, context) => {
+        applyResponse(response, context.destination);
+      },
+      // No toast on a DEGRADED response. That is reported IN the menu -
+      // banner, ⓘ notice, freshness stamp - and a toast over an open picker
+      // would cover the rows it is talking about.
+      //
+      // A REJECTION is the other case entirely: it carries no response, so
+      // none of that chrome can move and the spinner simply stops, leaving a
+      // refresh that never reached the host indistinguishable from one that
+      // found nothing new. Only the MANUAL lane reports it - the user asked
+      // for that one - while the automatic follow-up stays silent rather than
+      // nagging about a background sweep nobody requested.
+      onError: (error, variables) => {
+        if (variables.refresh !== "manual") return;
+        toastFromHostError(error, "Could not refresh from GitHub");
+      },
     },
   });
 
@@ -210,9 +243,9 @@ export function useGithubMentionCatalog(
         refresh: "manual",
       });
     } catch {
-      // Manual refresh never ends in an error state over real cached rows.
-      // The response the user is owed - "we asked; here is why nothing
-      // changed" - arrives as the notice, which the top bar already shows.
+      // Reported by the mutation's `onError`, which receives the rejection
+      // already typed as `HostRpcError`. Swallowed here so the click handler
+      // does not also reject at its call site.
     }
   }, [mutateAsync, scope.epicId, scope.workspacePaths, section]);
 

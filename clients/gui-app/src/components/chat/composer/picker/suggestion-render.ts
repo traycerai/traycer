@@ -138,9 +138,18 @@ export function createComposerSuggestionRender<
         // The editor handle only exists here, so the one place that has to
         // hand focus back to the composer (the filter popover's close) reaches
         // it through the store, exactly like `commit` and `dismiss`.
-        focusEditor: () => {
+        //
+        // `resumeText` is the character that closed the popover. It is
+        // inserted in the SAME chain as the focus so the caret is already back
+        // in the composer when it lands - the key event itself went to the
+        // radio group and can never reach the editor on its own.
+        focusEditor: (resumeText) => {
           if (latestProps === null) return;
-          latestProps.editor.commands.focus();
+          if (resumeText === null) {
+            latestProps.editor.commands.focus();
+            return;
+          }
+          latestProps.editor.chain().focus().insertContent(resumeText).run();
         },
         clientRect: props.clientRect ?? null,
       });

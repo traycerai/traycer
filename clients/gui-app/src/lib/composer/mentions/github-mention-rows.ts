@@ -172,27 +172,46 @@ export function githubMentionRowsForSection(
 /**
  * Merges remote search hits into the cached catalog rows.
  *
- * The cached row WINS on a collision, and wins by identity - the very object
- * stays in the list. That is load-bearing rather than tidy: the preview panel
- * and the insertion path both read the surviving row, so swapping in a
- * freshly-parsed remote twin would re-key the picker item mid-typing and move
- * the highlight off whatever the user had selected. Remote-only rows append in
- * the order the host returned them.
+ * On a collision the cached row keeps its POSITION and its key, and the remote
+ * row supplies the payload. Both halves of that matter, and they used to be
+ * conflated:
+ *
+ * - the key is what the picker lists by, so preserving it is what keeps the
+ *   highlight from jumping while the user is typing. It is derived from
+ *   `(githubHost, owner, repo, number)`, none of which a refresh can change,
+ *   so it survives taking the fresh payload;
+ * - the payload is the part that goes stale. Keeping the cached one discarded
+ *   the very state the search was issued to discover: searching with the
+ *   Merged filter returns a PR the sweep still records as Open, the stale Open
+ *   copy wins here, and the state filter downstream then drops it - so a
+ *   search that succeeded renders as no results at all.
+ *
+ * Remote-only rows append in the order the host returned them.
  */
 export function mergeGithubMentionRows(
   cached: ReadonlyArray<GithubMentionRow>,
   remote: ReadonlyArray<GithubMentionRow>,
 ): ReadonlyArray<GithubMentionRow> {
   if (remote.length === 0) return cached;
+  const freshByKey = new Map(
+    remote.map((row) => [githubMentionRowKey(row), row]),
+  );
   const seen = new Set(cached.map((row) => githubMentionRowKey(row)));
+  const refreshed = cached.map(
+    (row) => freshByKey.get(githubMentionRowKey(row)) ?? row,
+  );
+  const replaced = refreshed.some((row, index) => row !== cached[index]);
   const additions = remote.filter((row) => {
     const key = githubMentionRowKey(row);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  if (additions.length === 0) return cached;
-  return [...cached, ...additions];
+  // Nothing appended and nothing actually swapped: hand back the very array
+  // that came in. Allocating a twin here would re-key the picker on every
+  // search response that told us only what we already knew.
+  if (additions.length === 0) return replaced ? refreshed : cached;
+  return [...refreshed, ...additions];
 }
 
 const PULL_REQUEST_BUCKET_ORDER: ReadonlyArray<GithubMentionBucket> = [
@@ -467,9 +486,30 @@ function referenceMatchesRow(
  * reachable from these folders; the client cannot see that mapping, so it keys
  * by the folder set itself - order-independent, because the same attached
  * folders in a different order are the same scope.
+ *
+ * The host and the epic are part of that identity, not decoration. The row
+ * store is a single app-wide zustand store, while the rows it holds are
+ * answers to a per-host, per-epic question: the `epic` bucket ranks THIS
+ * epic's PRs first, and two hosts can serve entirely different repositories
+ * from identical absolute paths. Keying on paths alone lets a second tab read
+ * the first one's rows and - because root rows are immediately insertable -
+ * commit a reference belonging to another host or task before its own catalog
+ * answer replaces them.
  */
 export function githubMentionScopeKey(
-  workspacePaths: ReadonlyArray<string>,
+  input: GithubMentionScopeIdentity,
 ): string {
-  return [...workspacePaths].toSorted().join("\x1f");
+  return [
+    input.hostId ?? "",
+    input.epicId ?? "",
+    ...[...input.workspacePaths].toSorted(),
+  ].join("\x1f");
+}
+
+export interface GithubMentionScopeIdentity {
+  /** Null before a host is bound; its rows are keyed apart from any host's. */
+  readonly hostId: string | null;
+  /** Null in the landing composer, which is its own bucket. */
+  readonly epicId: string | null;
+  readonly workspacePaths: ReadonlyArray<string>;
 }

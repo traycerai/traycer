@@ -26,7 +26,7 @@ import { GithubMentionFilterPopover } from "./github-mention-filter-popover";
  */
 export function MentionStepChromeBar(props: {
   readonly chrome: MentionStepChrome;
-  readonly onReturnFocus: () => void;
+  readonly onReturnFocus: (resumeText: string | null) => void;
 }): ReactNode {
   const { chrome, onReturnFocus } = props;
   return (

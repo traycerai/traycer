@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { FilterIcon } from "lucide-react";
 
 import type { GithubMentionRepository } from "@traycer/protocol/host/mention-schemas";
@@ -52,8 +52,17 @@ import { cn } from "@/lib/utils";
 
 export interface GithubMentionFilterPopoverProps {
   readonly filter: MentionStepChromeFilter;
-  /** Returns focus (and the caret) to the composer when the popover closes. */
-  readonly onReturnFocus: () => void;
+  /**
+   * Returns focus (and the caret) to the composer when the popover closes,
+   * inserting `resumeText` at the caret when the close was caused by the user
+   * typing.
+   *
+   * The keystroke that means "I am done filtering, back to typing" is consumed
+   * by the radio group before the popover can close, so it has to be handed
+   * over explicitly rather than replayed. One call rather than two so the
+   * character lands in the same focus operation that restores the caret.
+   */
+  readonly onReturnFocus: (resumeText: string | null) => void;
 }
 
 export function GithubMentionFilterPopover(
@@ -61,6 +70,9 @@ export function GithubMentionFilterPopover(
 ): ReactNode {
   const { filter: chrome, onReturnFocus } = props;
   const [open, setOpen] = useState(false);
+  // Not state: this is a handoff between one event and the close that follows
+  // it in the same interaction, and re-rendering on it would be noise.
+  const resumeTypingRef = useRef<string | null>(null);
   const setFilter = useGithubMentionFilterStore((state) => state.setFilter);
   // The RECONCILED selection the list is applying, not the raw store. Reading
   // the store here would let the dot claim a filter is active while the list
@@ -115,7 +127,11 @@ export function GithubMentionFilterPopover(
         onOpenAutoFocus={undefined}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          queueMicrotask(onReturnFocus);
+          const typed = resumeTypingRef.current;
+          resumeTypingRef.current = null;
+          queueMicrotask(() => {
+            onReturnFocus(typed);
+          });
         }}
         onKeyDown={(event) => {
           // A printable character means the user has gone back to querying:
@@ -128,6 +144,13 @@ export function GithubMentionFilterPopover(
           // both failed to select the option and dismissed the popover.
           if (event.key === " ") return;
           if (event.key.length !== 1 || event.metaKey || event.ctrlKey) return;
+          // The character is CARRIED rather than replayed. By the time this
+          // runs the key event has already been delivered to the radio group,
+          // and focus does not return to the editor until a microtask after
+          // the content unmounts - so the editor never sees this keystroke and
+          // the first letter of the resumed query was silently lost. Closing
+          // is not enough; the character has to be handed over with it.
+          resumeTypingRef.current = event.key;
           setOpen(false);
         }}
       >
@@ -148,7 +171,7 @@ export function GithubMentionFilterPopover(
               { value: ALL_REPOSITORIES_VALUE, label: "All repositories" },
               ...chrome.repositories.map((repository) => ({
                 value: repositoryKey(repository),
-                label: repository.repo,
+                label: repositoryLabel(repository, chrome.repositories),
               })),
             ]}
             onSelect={(value) => {
@@ -177,6 +200,33 @@ const ALL_REPOSITORIES_VALUE = "*";
 
 function repositoryKey(repository: GithubMentionRepository): string {
   return `${repository.githubHost}/${repository.owner}/${repository.repo}`;
+}
+
+/**
+ * The shortest label that is still unambiguous within THIS scope.
+ *
+ * Bare `repo` reads best and is right almost always, but the key above exists
+ * precisely because a scope can hold `acme/api` and `contoso/api`, or the same
+ * `owner/repo` on two GitHub hosts. Labelling every option `api` in that scope
+ * leaves the user picking between two identical radios - the one case the key
+ * was written to handle, made invisible in the UI. Widening happens per
+ * collision rather than globally, so an ordinary single-owner scope keeps the
+ * short labels.
+ */
+function repositoryLabel(
+  repository: GithubMentionRepository,
+  all: ReadonlyArray<GithubMentionRepository>,
+): string {
+  const sameName = all.filter(
+    (candidate) => candidate.repo === repository.repo,
+  );
+  if (sameName.length === 1) return repository.repo;
+  const qualified = `${repository.owner}/${repository.repo}`;
+  const sameOwner = sameName.filter(
+    (candidate) => candidate.owner === repository.owner,
+  );
+  if (sameOwner.length === 1) return qualified;
+  return `${qualified} (${repository.githubHost})`;
 }
 
 const PULL_REQUEST_STATE_OPTIONS = [

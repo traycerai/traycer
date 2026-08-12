@@ -220,9 +220,12 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   // lives in the composer and Radix's default restore would strand it in the
   // menu chrome. `dismiss`/`commit` are already how this layer reaches the
   // editor, so the picker's own commit path owns the handle.
-  const returnFocusToEditor = useCallback(() => {
-    pickerStore.getState().focusEditor?.();
-  }, [pickerStore]);
+  const returnFocusToEditor = useCallback(
+    (resumeText: string | null) => {
+      pickerStore.getState().focusEditor?.(resumeText);
+    },
+    [pickerStore],
+  );
 
   // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that
   // have a preview (see its layout effect), but it early-returns before
@@ -343,12 +346,16 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           // The first menu (mention categories, slash commands) stays compact:
           // tall enough for the full category roster without a scrollbar,
           // while typed-query results scroll behind the cap. A provider
-          // submenu mirrors a bounded roster (terminals, git refs), so it
-          // grows to the viewport cap instead of scrolling.
+          // submenu gets more room than root - a roster reads better with
+          // more of it on screen - but behind a rem ceiling, not a bare
+          // viewport fraction: several providers (files, the GitHub sections)
+          // fill their 25-row result limit routinely, and 70vh of dense rows
+          // on a large display is a menu that takes over the window rather
+          // than a menu that grew. The vh term still governs short windows.
           className={cn(
             "overflow-y-auto py-1",
             kind === "mention" && step.kind === "provider"
-              ? "max-h-[70vh]"
+              ? "max-h-[min(70vh,24rem)]"
               : "max-h-[min(50vh,16rem)]",
           )}
         >
@@ -514,9 +521,11 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       <MentionStepChromeStatusRow label={appendedStatus} />
     );
   if (renderedItems.length === 0) {
+    // Same rule as the Back-row-only branch below: a settled "nothing matched"
+    // must not be shown beside a search that has not answered yet.
     return (
       <>
-        {emptyRow(emptyLabel, false)}
+        {appendedStatus === null ? emptyRow(emptyLabel, false) : null}
         {statusRow}
       </>
     );
@@ -570,10 +579,14 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     );
   }
   if (showEmptyLabelWithItems) {
+    // `appendedStatus` is non-null only while a remote search is in flight, and
+    // "No matching pull requests" is a SETTLED claim. Rendering both at once
+    // told the user nothing matched and that the search was still running, in
+    // that order - so the honest-but-premature verdict is the one that waits.
     return (
       <>
         {rows}
-        {emptyRow(emptyLabel, true)}
+        {appendedStatus === null ? emptyRow(emptyLabel, true) : null}
         {statusRow}
       </>
     );

@@ -675,6 +675,20 @@ describe("mentionNoMatchDismissVerdict", () => {
     expect(mentionNoMatchDismissVerdict(settledNoMatch)).toBe(true);
   });
 
+  // Without this the whole `referenceQuery` input can be deleted from the
+  // verdict call and every other case in this suite stays green - the fixture
+  // only ever sets it false, so nothing measures the exemption it exists for.
+  it("holds the menu open for a reference-shaped query that matched nothing", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        query: "#123",
+        debouncedQuery: "#123",
+        referenceQuery: true,
+      }),
+    ).toBe(false);
+  });
+
   it("holds the menu open while the terminal list is still loading", () => {
     expect(
       mentionNoMatchDismissVerdict({

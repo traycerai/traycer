@@ -60,8 +60,16 @@ const catalogMocks = vi.hoisted(() => {
 });
 
 vi.mock("@/hooks/composer/use-github-mention-catalog", () => ({
-  useGithubMentionCatalog: (args: { readonly section: string }) =>
-    args.section === "issues" ? catalogMocks.issues : catalogMocks.pullRequests,
+  // A SHALLOW COPY per call, deliberately. The real hook builds its result
+  // fresh on every render, so a mock that hands back one long-lived object
+  // mutated in place would give the effects under test a stable identity
+  // production never has - and an effect that depends on the whole catalog
+  // object would look correct here while re-running every render in the app.
+  useGithubMentionCatalog: (args: { readonly section: string }) => ({
+    ...(args.section === "issues"
+      ? catalogMocks.issues
+      : catalogMocks.pullRequests),
+  }),
 }));
 
 vi.mock("@/hooks/composer/use-github-mention-search", () => ({
@@ -75,6 +83,17 @@ vi.mock("@/hooks/composer/use-github-mention-search", () => ({
 
 vi.mock("@/lib/relative-time", () => ({
   useSampledNow: () => 0,
+}));
+
+// The scope key is now per (host, epic, folders), and the categories are gated
+// on the host advertising both mention methods - so this suite has to name a
+// host and say it supports them, or the effects under test never run at all.
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({ hostId: "host-1" }),
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
 }));
 
 import { useGithubMentionSections } from "../use-github-mention-sections";
@@ -124,7 +143,11 @@ function issue(
 }
 
 const ROOTS = ["/repo"] as const;
-const SCOPE_KEY = githubMentionScopeKey(ROOTS);
+const SCOPE_KEY = githubMentionScopeKey({
+  hostId: "host-1",
+  epicId: "epic-1",
+  workspacePaths: ROOTS,
+});
 const ONE_REPO = {
   githubHost: "github.com",
   owner: "traycerai",
@@ -238,6 +261,81 @@ describe("useGithubMentionSections catalog write path", () => {
       "pull-request",
     ]);
     expect(stored.map((row) => row.number)).toEqual([1, 3]);
+  });
+
+  /**
+   * An empty list from a host that HAS answered is as authoritative as any
+   * other answer, and the store is session-lived. Skipping the write left the
+   * previous non-empty result in place forever: the section itself looked
+   * correctly empty (it reads the query), while root search kept offering PRs
+   * that had been closed hours earlier.
+   */
+  it("clears stored rows when a resolved catalog answers with none", async () => {
+    catalogMocks.pullRequests.rows = [pullRequest({ number: 1, title: "PR" })];
+    catalogMocks.pullRequests.isPlaceholder = false;
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.repositories = [ONE_REPO];
+
+    const first = renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      selectGithubMentionCatalogRows(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+        "pull-requests",
+      ),
+    ).toHaveLength(1);
+    first.unmount();
+
+    // The last open PR was closed; the next sweep resolves with nothing.
+    catalogMocks.pullRequests.rows = [];
+    renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionCatalogRows(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+        "pull-requests",
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * The other half of the same rule: `[]` because nothing has answered YET is
+   * not an answer, and writing it would blank the warm store that is currently
+   * the only thing serving root search.
+   */
+  it("leaves stored rows alone while the catalog has not answered", async () => {
+    catalogMocks.pullRequests.rows = [pullRequest({ number: 1, title: "PR" })];
+    catalogMocks.pullRequests.isPlaceholder = false;
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.repositories = [ONE_REPO];
+
+    const first = renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    first.unmount();
+
+    catalogMocks.pullRequests.rows = [];
+    catalogMocks.pullRequests.scopeResolved = false;
+    renderSections("");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      selectGithubMentionCatalogRows(
+        useGithubMentionCatalogStore.getState(),
+        SCOPE_KEY,
+        "pull-requests",
+      ),
+    ).toHaveLength(1);
   });
 
   it("falls back to persisted repositories when the query has not answered (warm store, cold query)", async () => {

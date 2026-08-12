@@ -245,10 +245,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
 
   // Request-shaping contexts carry no rows; the GitHub arm is only read by
   // `stepEntries`/`rootSearchEntries`, which run off `resolvedContext` below.
+  // The request contexts drive host lookups, never the rendered rows, so this
+  // stub reports `supported: false` - it is not an answer about the host, and
+  // nothing should read a category's availability off it.
   const emptyGithubContext = useMemo(
     () => ({
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
       issues: EMPTY_GITHUB_SECTION_CONTEXT,
+      supported: false,
       now: 0,
     }),
     [],
@@ -518,7 +522,17 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     terminalLoading: terminalListQuery.isLoading,
     terminalFetching: terminalListQuery.isFetching,
     terminalError: terminalListQuery.error,
-    referenceQuery: parseGithubReferenceQuery(query) !== null,
+    // Only a reference the GitHub sections could actually resolve earns the
+    // exemption. The exemption exists because those sections offer a
+    // `Resolve in ...` row for a reference the cache does not hold - but when
+    // the composer has no roots, or the host does not serve the mention
+    // methods, neither section contributes any row at all. Exempting `@#123`
+    // there suppresses the ordinary zero-match close over a picker that is
+    // genuinely empty and can never fill, and it stays open indefinitely.
+    referenceQuery:
+      github.context.supported &&
+      mentionRoots.length > 0 &&
+      parseGithubReferenceQuery(query) !== null,
   });
 
   useEffect(() => {

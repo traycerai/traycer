@@ -415,7 +415,13 @@ function formatMentionForLLMQuery(
         attrs.contextType === ContextType.GithubPullRequest
           ? "github-pr"
           : "github-issue";
-      return `@${prefix}:${org}/${repo}#${issue} [url=${attrs.url || ""}]`;
+      const reference = `@${prefix}:${org}/${repo}#${issue}`;
+      // `url` is still optional on the node, so the suffix is only appended
+      // when there is one. Emitting `[url=]` for a node that predates the
+      // attribute - or for any caller that omits it - turns a reference that
+      // used to serialize cleanly into malformed metadata, and hands the agent
+      // an empty fallback instead of no fallback.
+      return attrs.url ? `${reference} [url=${attrs.url}]` : reference;
     }
     case ContextType.Git: {
       if (attrs.branchName)

@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { GithubMentionRow } from "@traycer/protocol/host/mention-schemas";
 
 import {
+  asIssueMentionFilter,
+  asPullRequestMentionFilter,
   DEFAULT_ISSUE_MENTION_FILTER,
   DEFAULT_PULL_REQUEST_MENTION_FILTER,
   filterGithubMentionRows,
   githubMentionBucketRank,
   githubMentionMatchScore,
+  githubMentionRowKey,
+  githubMentionScopeKey,
   githubMentionRowsForSection,
   mergeGithubMentionRows,
   parseGithubReferenceQuery,
@@ -175,7 +179,7 @@ describe("githubMentionRowsForSection", () => {
 });
 
 describe("mergeGithubMentionRows", () => {
-  it("keeps the cached object by reference when a remote hit duplicates its identity", () => {
+  it("keeps the cached row's position but takes the remote hit's payload", () => {
     const cached = pullRequest({
       number: 4917,
       title: "Stop the busy-loop",
@@ -197,9 +201,40 @@ describe("mergeGithubMentionRows", () => {
     const merged = mergeGithubMentionRows([cached], [remoteTwin, remoteOnly]);
 
     expect(merged).toHaveLength(2);
-    expect(merged[0]).toBe(cached);
-    expect(merged[0].title).toBe("Stop the busy-loop");
+    // Position and key are the cached row's - that is what keeps the
+    // highlight still while the user types.
+    expect(githubMentionRowKey(merged[0])).toBe(githubMentionRowKey(cached));
+    // The payload is the fresh one. Keeping the cached copy discarded the very
+    // state the search was issued to discover.
+    expect(merged[0]).toBe(remoteTwin);
+    expect(merged[0].title).toBe("Stop the busy-loop (remote title)");
     expect(merged[1]).toBe(remoteOnly);
+  });
+
+  // The failure this guards is silent and looks like "search found nothing":
+  // a state-filtered search returns a row the sweep still records as `open`,
+  // the stale copy wins the merge, and the filter downstream then drops it.
+  it("lets a state-filtered search survive its own merge against a stale cache", () => {
+    const staleOpen = pullRequest({
+      number: 77,
+      title: "Landed while the cache was warm",
+      state: "open",
+      buckets: ["authored"],
+    });
+    const freshMerged = pullRequest({
+      number: 77,
+      title: "Landed while the cache was warm",
+      state: "merged",
+      buckets: ["search"],
+    });
+
+    const merged = mergeGithubMentionRows([staleOpen], [freshMerged]);
+    const visible = filterGithubMentionRows(merged, "pull-requests", {
+      ...DEFAULT_PULL_REQUEST_MENTION_FILTER,
+      state: "merged",
+    });
+
+    expect(visible).toEqual([freshMerged]);
   });
 
   it("does not treat the same owner/repo/number on a different host as a duplicate", () => {
@@ -248,12 +283,24 @@ describe("mergeGithubMentionRows", () => {
     expect(merged[1]).toBe(uniqueRemote);
   });
 
-  it("returns the cached array reference when remote adds nothing new", () => {
+  it("returns the cached array reference when remote adds nothing and changes nothing", () => {
+    const only = pullRequest({ number: 1, title: "Only" });
+    const cached = [only];
+
+    // The host re-answered with a row the cache already holds. Nothing to
+    // append and nothing to refresh, so the list must not churn identity -
+    // that churn is what re-keys the picker mid-typing.
+    const merged = mergeGithubMentionRows(cached, [only]);
+    expect(merged).toBe(cached);
+  });
+
+  it("allocates a new list when a remote twin actually changes the payload", () => {
     const cached = [pullRequest({ number: 1, title: "Only" })];
     const remoteTwin = pullRequest({ number: 1, title: "Twin" });
 
     const merged = mergeGithubMentionRows(cached, [remoteTwin]);
-    expect(merged).toBe(cached);
+    expect(merged).not.toBe(cached);
+    expect(merged).toEqual([remoteTwin]);
   });
 
   it("returns cached when remote is empty", () => {
@@ -571,6 +618,146 @@ describe("githubMentionBucketRank", () => {
         "pull-requests",
         pullRequest({ number: 3, title: "y", buckets: ["recent"] }),
       ),
+    );
+  });
+});
+
+/**
+ * The coercions repair a filter persisted by an older build, or written by the
+ * OTHER section - the two arms are not interchangeable (only PRs have
+ * `review-requested`, only issues have `mentions`). Untested, a regression
+ * that dropped the `find` fallback stayed green here and surfaced only as a
+ * malformed wire request at runtime.
+ */
+describe("filter coercion", () => {
+  const REPOSITORY = {
+    githubHost: "github.com",
+    owner: "traycerai",
+    repo: "traycer",
+  };
+
+  it("falls back to the default when the stored involvement belongs to the other section", () => {
+    expect(
+      asPullRequestMentionFilter({
+        state: "open",
+        involvement: "mentions",
+        repository: null,
+      }),
+    ).toEqual(DEFAULT_PULL_REQUEST_MENTION_FILTER);
+    expect(
+      asIssueMentionFilter({
+        state: "open",
+        involvement: "review-requested",
+        repository: null,
+      }),
+    ).toEqual(DEFAULT_ISSUE_MENTION_FILTER);
+  });
+
+  it("falls back to the default when the stored state belongs to the other section", () => {
+    expect(
+      asIssueMentionFilter({
+        state: "merged",
+        involvement: "assigned",
+        repository: null,
+      }).state,
+    ).toBe(DEFAULT_ISSUE_MENTION_FILTER.state);
+  });
+
+  it("keeps a valid selection, and carries the repository through either arm", () => {
+    expect(
+      asPullRequestMentionFilter({
+        state: "merged",
+        involvement: "review-requested",
+        repository: REPOSITORY,
+      }),
+    ).toEqual({
+      state: "merged",
+      involvement: "review-requested",
+      repository: REPOSITORY,
+    });
+    // By reference: the repository is resolved back to the scope's own object
+    // elsewhere, and a coercion that rebuilt it would break that identity.
+    expect(
+      asIssueMentionFilter({
+        state: "closed",
+        involvement: "assigned",
+        repository: REPOSITORY,
+      }).repository,
+    ).toBe(REPOSITORY);
+  });
+});
+
+/**
+ * The row store is one app-wide zustand store holding answers to a per-host,
+ * per-epic question, so the key has to carry both. Keyed on folders alone, a
+ * second tab reads the first one's rows - and because root rows are
+ * immediately insertable, the user can commit a reference belonging to
+ * another host or task before their own catalog answer replaces it.
+ */
+describe("githubMentionScopeKey", () => {
+  const PATHS = ["/a", "/b"];
+
+  it("is order-independent across the same folders", () => {
+    expect(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-1",
+        workspacePaths: ["/b", "/a"],
+      }),
+    ).toBe(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-1",
+        workspacePaths: PATHS,
+      }),
+    );
+  });
+
+  it("separates two hosts serving identical absolute paths", () => {
+    expect(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-1",
+        workspacePaths: PATHS,
+      }),
+    ).not.toBe(
+      githubMentionScopeKey({
+        hostId: "host-2",
+        epicId: "epic-1",
+        workspacePaths: PATHS,
+      }),
+    );
+  });
+
+  it("separates two epics sharing the same folders", () => {
+    expect(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-1",
+        workspacePaths: PATHS,
+      }),
+    ).not.toBe(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-2",
+        workspacePaths: PATHS,
+      }),
+    );
+  });
+
+  it("separates the landing composer from any epic on the same folders", () => {
+    expect(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: null,
+        workspacePaths: PATHS,
+      }),
+    ).not.toBe(
+      githubMentionScopeKey({
+        hostId: "host-1",
+        epicId: "epic-1",
+        workspacePaths: PATHS,
+      }),
     );
   });
 });

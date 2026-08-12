@@ -759,7 +759,7 @@ function githubMentionAttachmentFromAttrs(
 ): MentionAttachment | null {
   const organizationLogin = stringValue(attrs.organizationLogin);
   const repositoryName = stringValue(attrs.repositoryName);
-  const issueNumber = numberValue(attrs.issueNumber);
+  const issueNumber = issueNumberValue(attrs.issueNumber);
   if (
     organizationLogin === null ||
     repositoryName === null ||
@@ -848,6 +848,30 @@ export function stringValue(value: unknown): string | null {
 
 export function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * `issueNumber` after a round-trip through HTML, where it is a STRING.
+ *
+ * The chip is the only mention attribute that is genuinely numeric, and
+ * `dataAttributeMap` parses every attribute back with `getAttribute`, which
+ * only ever returns a string. So the same chip is a `number` when it comes
+ * from the picker or from persisted ProseMirror JSON, and `"123"` when the
+ * user copies it and pastes it back - the editor's ordinary Cmd+C path.
+ * Rejecting the string form left the pasted chip with no attachment at all:
+ * a blank node view, no plain-text projection, and silent omission from the
+ * submitted context.
+ *
+ * Deliberately strict about what it accepts: a bare run of digits, so
+ * `"12abc"`, `"1.5"` and `""` are still rejected rather than being coerced
+ * into a reference that points somewhere else.
+ */
+function issueNumberValue(value: unknown): number | null {
+  const direct = numberValue(value);
+  if (direct !== null) return direct;
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function pathKindValue(value: unknown): PathKind | null {

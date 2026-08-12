@@ -8,8 +8,13 @@ import type {
 } from "@traycer/protocol/host/mention-schemas";
 
 import { useGithubMentionCatalog } from "@/hooks/composer/use-github-mention-catalog";
-import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-catalog";
+import type {
+  GithubMentionCatalogResult,
+  GithubMentionScope,
+} from "@/hooks/composer/use-github-mention-catalog";
 import { useGithubMentionSearch } from "@/hooks/composer/use-github-mention-search";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -85,13 +90,30 @@ export function useGithubMentionSections(
 
   const openSection = githubMentionSectionForStep(step);
   const atRoot = step.kind === "root";
+  const readiness = useReactiveHostReadiness(client);
+  const hostId = readiness.hostId;
+  // Both methods are optional (non-floor) RPCs, so an older host negotiates
+  // them away instead of failing the handshake. `useHostSupportsMethod` fails
+  // closed, which is what keeps the categories hidden - rather than present
+  // and permanently empty - until a manifest proves both are there.
+  const catalogSupported = useHostSupportsMethod(
+    hostId,
+    "mention.githubCatalog",
+  );
+  const searchSupported = useHostSupportsMethod(hostId, "mention.githubSearch");
+  const supported = catalogSupported && searchSupported;
   const scope = useMemo<GithubMentionScope>(
     () => ({ epicId: currentEpicId, workspacePaths: mentionRoots }),
     [currentEpicId, mentionRoots],
   );
   const scopeKey = useMemo(
-    () => githubMentionScopeKey(mentionRoots),
-    [mentionRoots],
+    () =>
+      githubMentionScopeKey({
+        hostId,
+        epicId: currentEpicId,
+        workspacePaths: mentionRoots,
+      }),
+    [currentEpicId, hostId, mentionRoots],
   );
 
   // The shared 60s clock, not `Date.now()`: every row's relative age in one
@@ -103,14 +125,14 @@ export function useGithubMentionSections(
     client,
     scope,
     section: "pull-requests",
-    enabled: active && (atRoot || openSection === "pull-requests"),
+    enabled: supported && active && (atRoot || openSection === "pull-requests"),
     allowStaleFollowUp: openSection === "pull-requests",
   });
   const issueCatalog = useGithubMentionCatalog({
     client,
     scope,
     section: "issues",
-    enabled: active && (atRoot || openSection === "issues"),
+    enabled: supported && active && (atRoot || openSection === "issues"),
     allowStaleFollowUp: openSection === "issues",
   });
 
@@ -143,32 +165,31 @@ export function useGithubMentionSections(
   //   WITHOUT passing through `openRows`, so a boundary enforced only there is
   //   a boundary this path walks around. It costs one `every` over an
   //   already-correct array.
-  useEffect(() => {
-    if (pullRequestCatalog.isPlaceholder) return;
-    if (pullRequestCatalog.rows.length === 0) return;
-    setRows({
-      scopeKey,
-      section: "pull-requests",
-      rows: githubMentionRowsForSection(
-        pullRequestCatalog.rows,
-        "pull-requests",
-      ),
-    });
-  }, [
-    pullRequestCatalog.isPlaceholder,
-    pullRequestCatalog.rows,
+  // The third guard is `scopeResolved`, and it is why the empty case is a
+  // WRITE rather than a skip. An empty list has two completely different
+  // meanings here:
+  //
+  // - the host has not answered yet - `rows` is `[]` only because there is no
+  //   response, and writing it would blank a warm store that is currently the
+  //   only thing serving root search;
+  // - the host answered and this scope genuinely has no open items - which is
+  //   as authoritative as any other answer. Skipping it strands the previous
+  //   non-empty result in a session-lived store, so root search keeps offering
+  //   PRs that were closed hours ago, indefinitely and invisibly.
+  //
+  // `scopeResolved` is exactly "the host answered", so it separates the two.
+  useCatalogRowPublication({
+    catalog: pullRequestCatalog,
+    section: "pull-requests",
     scopeKey,
     setRows,
-  ]);
-  useEffect(() => {
-    if (issueCatalog.isPlaceholder) return;
-    if (issueCatalog.rows.length === 0) return;
-    setRows({
-      scopeKey,
-      section: "issues",
-      rows: githubMentionRowsForSection(issueCatalog.rows, "issues"),
-    });
-  }, [issueCatalog.isPlaceholder, issueCatalog.rows, scopeKey, setRows]);
+  });
+  useCatalogRowPublication({
+    catalog: issueCatalog,
+    section: "issues",
+    scopeKey,
+    setRows,
+  });
 
   // The scope's repositories persist beside the rows because the two are read
   // together by a root-search row and must share ONE lifetime. The query
@@ -176,13 +197,28 @@ export function useGithubMentionSections(
   // session-lived. Without this, reopening the menu past that window serves
   // rows from the warm store while the query answers `undefined`, and a
   // single-repo scope starts labelling its chips `repo#123`.
+  const scopeAnswer = preferredScopeAnswer(
+    openSection,
+    pullRequestCatalog,
+    issueCatalog,
+  );
+  // Read the three FIELDS out before the effect. `useGithubMentionCatalog`
+  // builds its result fresh on every render, so depending on the whole object
+  // re-runs this effect every pass; the fields are the stable values the two
+  // row effects above already depend on.
+  const scopeResolved = scopeAnswer.scopeResolved;
+  const scopeAnswerIsPlaceholder = scopeAnswer.isPlaceholder;
+  const queryRepositories = scopeAnswer.repositories;
   useEffect(() => {
-    const answered = pullRequestCatalog.scopeResolved
-      ? pullRequestCatalog
-      : issueCatalog;
-    if (!answered.scopeResolved || answered.isPlaceholder) return;
-    setRepositories({ scopeKey, repositories: answered.repositories });
-  }, [issueCatalog, pullRequestCatalog, scopeKey, setRepositories]);
+    if (!scopeResolved || scopeAnswerIsPlaceholder) return;
+    setRepositories({ scopeKey, repositories: queryRepositories });
+  }, [
+    queryRepositories,
+    scopeAnswerIsPlaceholder,
+    scopeKey,
+    scopeResolved,
+    setRepositories,
+  ]);
 
   const openCatalog =
     openSection === "issues" ? issueCatalog : pullRequestCatalog;
@@ -199,14 +235,10 @@ export function useGithubMentionSections(
   // then the same PR would insert `repo#4917` when picked from root search and
   // `#4917` when picked inside the section, which is the entry point changing
   // the chip.
-  // Live query answer first; the persisted one when neither query has answered
-  // for this scope yet (a warm store outliving a garbage-collected query entry
-  // is exactly the case that mislabels a chip at root).
-  const queryRepositories = pullRequestCatalog.scopeResolved
-    ? pullRequestCatalog.repositories
-    : issueCatalog.repositories;
-  const scopeResolved =
-    pullRequestCatalog.scopeResolved || issueCatalog.scopeResolved;
+  // Live query answer first (`queryRepositories`, resolved above); the
+  // persisted one when neither query has answered for this scope yet (a warm
+  // store outliving a garbage-collected query entry is exactly the case that
+  // mislabels a chip at root).
   const scopeRepositories = scopeResolved
     ? queryRepositories
     : catalogStore.repositories;
@@ -302,6 +334,7 @@ export function useGithubMentionSections(
         openSection === "issues" ? openRows : rootIssueRows,
         singleRepositoryScope,
       ),
+      supported,
       now,
     }),
     [
@@ -311,6 +344,7 @@ export function useGithubMentionSections(
       rootIssueRows,
       rootPullRequestRows,
       singleRepositoryScope,
+      supported,
     ],
   );
 
@@ -328,6 +362,7 @@ export function useGithubMentionSections(
       sourceStatus: openCatalog.sourceStatus,
       catalogNotice: openCatalog.notice,
       searchNotice: search.notice,
+      searchSourceStatus: search.sourceStatus,
       freshnessAt: openCatalog.freshnessAt,
       checking: openCatalog.isChecking,
       searching: search.isSearching,
@@ -346,18 +381,55 @@ export function useGithubMentionSections(
     scopeRepositories,
     search.isSearching,
     search.notice,
+    search.sourceStatus,
   ]);
 
   return {
     context,
     chrome,
-    loading:
-      openSection !== null && openCatalog.isLoading && openRows.length === 0,
-    // Core flows asks for the header spinner AND the `Checking…` stamp during a
-    // background refetch, explicitly "same as Artifacts". Reporting one and not
-    // the other would make this section quietly different from the one beside
-    // it in the same menu.
-    checking: openSection !== null && openCatalog.isChecking,
+    ...sectionActivity({
+      atRoot,
+      openSection,
+      openCatalog,
+      pullRequests: pullRequestCatalog,
+      issues: issueCatalog,
+      openRowCount: openRows.length,
+    }),
+  };
+}
+
+/**
+ * What the picker should report as in-flight, which differs by step.
+ *
+ * At ROOT both catalogs are read cache-only to warm the row store, and those
+ * reads gate the zero-match dismissal too: root search reads the STORE, which
+ * stays empty until they land. Reporting nothing there let a title query whose
+ * 250 ms debounce settled first see zero matches with nothing loading, and the
+ * zero-match rule closed the picker moments before the cached PRs and issues
+ * it was about to match were published.
+ *
+ * Inside a section only that section's catalog matters - and `checking` covers
+ * a background refetch behind rows already on screen, which core flows asks to
+ * render exactly like Artifacts (header spinner AND `Checking…` stamp).
+ */
+function sectionActivity(input: {
+  readonly atRoot: boolean;
+  readonly openSection: GithubMentionSection | null;
+  readonly openCatalog: GithubMentionCatalogResult;
+  readonly pullRequests: GithubMentionCatalogResult;
+  readonly issues: GithubMentionCatalogResult;
+  readonly openRowCount: number;
+}): { readonly loading: boolean; readonly checking: boolean } {
+  if (input.atRoot) {
+    return {
+      loading: input.pullRequests.isLoading || input.issues.isLoading,
+      checking: input.pullRequests.isChecking || input.issues.isChecking,
+    };
+  }
+  if (input.openSection === null) return { loading: false, checking: false };
+  return {
+    loading: input.openCatalog.isLoading && input.openRowCount === 0,
+    checking: input.openCatalog.isChecking,
   };
 }
 
@@ -366,6 +438,58 @@ function sectionContext(
   singleRepositoryScope: boolean,
 ): GithubMentionSectionContext {
   return { rows, singleRepositoryScope };
+}
+
+/**
+ * Whichever catalog's `repositories` answer should be believed right now.
+ *
+ * Both sections are asked about the same folders, so either one's answer is
+ * valid - but only the OPEN one is being refreshed, so it is the one that can
+ * have observed an added, removed or renamed repository. Reading pull-requests
+ * first unconditionally left the Repository group, the empty-scope copy and
+ * the `repo#123` chip label on scope data an Issues refresh had already
+ * invalidated. The other section is the fallback for the window before the
+ * open one has answered at all - including at root, where neither is open.
+ */
+function preferredScopeAnswer(
+  openSection: GithubMentionSection | null,
+  pullRequests: GithubMentionCatalogResult,
+  issues: GithubMentionCatalogResult,
+): GithubMentionCatalogResult {
+  const preferred = openSection === "issues" ? issues : pullRequests;
+  if (preferred.scopeResolved) return preferred;
+  return openSection === "issues" ? pullRequests : issues;
+}
+
+/**
+ * Publishes one section's resolved rows into the session store that root
+ * search reads.
+ *
+ * A hook rather than two inline effects so the two sections cannot drift, and
+ * so the guards are stated once. See the note at the call site for why an
+ * authoritative empty is a WRITE and an unanswered one is not.
+ */
+function useCatalogRowPublication(input: {
+  readonly catalog: GithubMentionCatalogResult;
+  readonly section: GithubMentionSection;
+  readonly scopeKey: string;
+  readonly setRows: (write: {
+    readonly scopeKey: string;
+    readonly section: GithubMentionSection;
+    readonly rows: ReadonlyArray<GithubMentionRow>;
+  }) => void;
+}): void {
+  const { catalog, section, scopeKey, setRows } = input;
+  const { isPlaceholder, scopeResolved, rows } = catalog;
+  useEffect(() => {
+    if (isPlaceholder) return;
+    if (!scopeResolved) return;
+    setRows({
+      scopeKey,
+      section,
+      rows: githubMentionRowsForSection(rows, section),
+    });
+  }, [isPlaceholder, rows, scopeKey, scopeResolved, section, setRows]);
 }
 
 interface RootRowsInput {
