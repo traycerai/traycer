@@ -193,6 +193,36 @@ export function githubMentionRowsForSection(
 }
 
 /**
+ * Keeps only the rows whose repository is in the RESOLVED scope.
+ *
+ * Repository membership is a property of the scope's freshest resolved answer,
+ * not of whichever response a row happens to ride in on. Two carriers can
+ * outlive a repository leaving the scope: the sibling section's catalog entry
+ * inside its `staleTime`, and the session store's published rows. Both are
+ * still served as rows, so without this boundary a repository detached moments
+ * ago keeps offering references the current scope can no longer resolve - and
+ * the user can commit one as a mention.
+ *
+ * Identity-preserving on the common path: when nothing is out of scope the
+ * input array is returned as-is, so appliers inside memos do not re-key the
+ * picker on every render.
+ */
+export function githubMentionRowsWithinScope(
+  rows: ReadonlyArray<GithubMentionRow>,
+  repositories: ReadonlyArray<GithubMentionRepository>,
+): ReadonlyArray<GithubMentionRow> {
+  const inScope = new Set(
+    repositories.map((entry) =>
+      [entry.githubHost, entry.owner, entry.repo].join("\x1f"),
+    ),
+  );
+  const kept = rows.filter((row) =>
+    inScope.has([row.githubHost, row.owner, row.repo].join("\x1f")),
+  );
+  return kept.length === rows.length ? rows : kept;
+}
+
+/**
  * Merges remote search hits into the cached catalog rows.
  *
  * On a collision the cached row keeps its POSITION and its key, and the remote

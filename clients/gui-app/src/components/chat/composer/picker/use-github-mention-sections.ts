@@ -24,6 +24,7 @@ import {
   githubMentionScopeKey,
   githubMentionSectionForStep,
   githubMentionRowsForSection,
+  githubMentionRowsWithinScope,
   mergeGithubMentionRows,
   rankGithubMentionRows,
   type GithubMentionFilter,
@@ -250,6 +251,24 @@ export function useGithubMentionSections(
     ? queryRepositories
     : catalogStore.repositories;
 
+  // The row boundary the resolved scope implies, or `null` while no answer
+  // exists to imply one. `scopeResolved` already names the freshest RESOLVED
+  // answer across BOTH sections, and that answer's repository set is
+  // authoritative for every row surface - including rows that arrived under an
+  // OLDER resolution. Two carriers hold such rows: the sibling section's
+  // catalog entry inside its `staleTime`, and the session store. A repository
+  // removed (or a remote changed) is discovered by whichever section refreshes
+  // first; without this, the other section keeps showing - and inserting -
+  // references from the departed repository until its own cache expires.
+  //
+  // `null` (not `[]`) while unresolved, because the store fallback above
+  // cannot distinguish "no repositories" from "never answered", and filtering
+  // a cold open's warm store against an unknown would blank it. An empty
+  // RESOLVED set stays a filter: "these folders hold no GitHub repo" is
+  // authoritative, and rows surviving it would be exactly the leak this
+  // boundary exists to stop.
+  const resolvedScopeRepositories = scopeResolved ? queryRepositories : null;
+
   const storedFilter = useGithubMentionFilterStore((state) =>
     selectGithubMentionFilter(
       state,
@@ -323,13 +342,29 @@ export function useGithubMentionSections(
       githubMentionRowsForSection(openCatalog.rows, openSection),
       githubMentionRowsForSection(search.rows, openSection),
     );
+    // The repository boundary is applied to the MERGE, not to one input: this
+    // section's catalog can be the stale sibling (see
+    // `resolvedScopeRepositories`), and a held search response predating a
+    // scope change is the same row under the other arm.
+    const scoped =
+      resolvedScopeRepositories === null
+        ? merged
+        : githubMentionRowsWithinScope(merged, resolvedScopeRepositories);
     return rankGithubMentionRows({
-      rows: filterGithubMentionRows(merged, openSection, filter),
+      rows: filterGithubMentionRows(scoped, openSection, filter),
       section: openSection,
       query,
       limit,
     });
-  }, [filter, limit, openCatalog.rows, openSection, query, search.rows]);
+  }, [
+    filter,
+    limit,
+    openCatalog.rows,
+    openSection,
+    query,
+    resolvedScopeRepositories,
+    search.rows,
+  ]);
 
   // Changing a funnel must not flash the list away and back.
   //
@@ -366,6 +401,7 @@ export function useGithubMentionSections(
     atRoot,
     query,
     limit,
+    resolvedScopeRepositories,
   });
   const rootIssueRows = useRootRows({
     catalog: issueCatalog,
@@ -374,6 +410,7 @@ export function useGithubMentionSections(
     atRoot,
     query,
     limit,
+    resolvedScopeRepositories,
   });
 
   const context = useMemo<GithubMentionProviderContext>(
@@ -643,6 +680,14 @@ interface RootRowsInput {
   readonly atRoot: boolean;
   readonly query: string;
   readonly limit: number;
+  /**
+   * The freshest resolved answer's repositories across BOTH sections, or
+   * `null` while neither has resolved. Root reaches insertable rows without
+   * passing through the open section's merge, so the repository boundary is
+   * enforced here too - on the catalog arm AND the stored arm, because the
+   * store outlives the resolution that wrote it.
+   */
+  readonly resolvedScopeRepositories: ReadonlyArray<GithubMentionRepository> | null;
 }
 
 /**
@@ -666,7 +711,15 @@ interface RootRowsInput {
  * observers unmounted) rather than a second source of truth.
  */
 function useRootRows(input: RootRowsInput): ReadonlyArray<GithubMentionRow> {
-  const { catalog, stored, section, atRoot, query, limit } = input;
+  const {
+    catalog,
+    stored,
+    section,
+    atRoot,
+    query,
+    limit,
+    resolvedScopeRepositories,
+  } = input;
   const { rows: catalogRows, isPlaceholder, scopeResolved } = catalog;
   return useMemo(() => {
     if (!atRoot || query.trim().length === 0) return EMPTY_ROWS;
@@ -674,13 +727,21 @@ function useRootRows(input: RootRowsInput): ReadonlyArray<GithubMentionRow> {
       isPlaceholder || !scopeResolved
         ? stored
         : githubMentionRowsForSection(catalogRows, section);
-    return rankGithubMentionRows({ rows, section, query, limit });
+    // Applied to BOTH arms above. The stored arm can predate the current
+    // resolution, and the catalog arm can be the section whose entry is still
+    // inside `staleTime` while its sibling already learned a repository left.
+    const scoped =
+      resolvedScopeRepositories === null
+        ? rows
+        : githubMentionRowsWithinScope(rows, resolvedScopeRepositories);
+    return rankGithubMentionRows({ rows: scoped, section, query, limit });
   }, [
     atRoot,
     catalogRows,
     isPlaceholder,
     limit,
     query,
+    resolvedScopeRepositories,
     scopeResolved,
     section,
     stored,

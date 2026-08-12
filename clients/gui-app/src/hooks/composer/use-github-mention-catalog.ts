@@ -277,6 +277,9 @@ export function useGithubMentionCatalog(
   // One automatic follow-up per (host, scope, section) per menu session. The
   // ref is what keeps a re-render, or the response arriving still `stale`,
   // from turning "fetch once because the cache is old" into a fetch loop.
+  // EITHER lane's sweep pays that debt: the effect marks the key before it
+  // issues, and `refreshManually` marks it too, because a manual sweep is the
+  // very request the follow-up would otherwise spend (see the note there).
   //
   // It is CLEARED on exactly one edge - the picker closing - and the host,
   // scope and section live in the stored value instead, so a change to any of
@@ -330,6 +333,16 @@ export function useGithubMentionCatalog(
   ]);
 
   const refreshManually = useCallback(async (): Promise<void> => {
+    // A manual sweep pays the session's one follow-up for this key. The ref
+    // above only knows about sweeps the AUTO lane issued, so a manual response
+    // arriving still `stale` - GitHub rate-limited, a partial sweep - landed in
+    // the slot the follow-up effect watches with the ref unset, and the effect
+    // immediately spent a second, automatic request re-asking the question the
+    // user just watched be answered. Marked at ISSUE time, not on success: a
+    // manual attempt that fails was already reported by `onError`, and a
+    // silent automatic retry right behind a refresh that just failed is budget
+    // spent on the same outcome.
+    autoFollowedRef.current = followKey;
     try {
       await mutateAsync({
         epicId: scope.epicId,
@@ -342,7 +355,7 @@ export function useGithubMentionCatalog(
       // already typed as `HostRpcError`. Swallowed here so the click handler
       // does not also reject at its call site.
     }
-  }, [mutateAsync, scope.epicId, scope.workspacePaths, section]);
+  }, [followKey, mutateAsync, scope.epicId, scope.workspacePaths, section]);
 
   // What THIS scope has actually said, which is not `catalogQuery.data`: a
   // placeholder response belongs to the PREVIOUS scope, and its rows are

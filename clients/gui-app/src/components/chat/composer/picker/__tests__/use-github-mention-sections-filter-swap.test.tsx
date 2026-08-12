@@ -42,7 +42,13 @@ type CatalogResult = {
 const mocks = vi.hoisted(() => {
   const catalog = (): CatalogResult => ({
     rows: [],
-    repositories: [],
+    // A RESOLVED answer must name the repository its rows belong to - the
+    // host derives both from the same sweep, and the sections hook now drops
+    // rows the resolved set does not cover. `[]` here would be the
+    // authoritative "these folders hold no GitHub repo".
+    repositories: [
+      { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+    ],
     scopeResolved: true,
     freshnessAt: null,
     sourceStatus: "ok",
