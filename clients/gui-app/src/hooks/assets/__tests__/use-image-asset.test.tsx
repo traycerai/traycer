@@ -446,24 +446,15 @@ describe("useImageAsset", () => {
     const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
       emitHeader(firstSession, "shared-identity", 3);
     });
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(2);
-    const secondSession = mockWsStreamClient.sessions[1];
-    act(() => {
-      emitHeader(secondSession, "shared-identity", 3);
-    });
-
-    // `second` loses the cache race the instant its header names an entry
-    // `first` already owns - its own stream is redundant right away, not
-    // only once `first`'s transfer completes. Asserted BEFORE `first`
-    // finishes (fix 5, ticket 09): a version that deferred the close to the
-    // shared lease's `.then()` would still have `secondSession` open here,
-    // reading/enqueueing the same bytes `first` is already fetching.
-    expect(secondSession.closed).toBe(true);
+    // Both mounts joined the same pre-header subscription, so the one
+    // underlying session remains open until the shared transfer settles.
     expect(firstSession.closed).toBe(false);
 
     act(() => {
@@ -484,11 +475,8 @@ describe("useImageAsset", () => {
     expect(first.result.current.servedFromCache).toBe(false);
     expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
-    // Owning session self-closes once ITS OWN assetComplete lands
-    // (de02da59: every terminal path closes); the losing session was
-    // already closed above, well before this point.
+    // The shared session self-closes once the assetComplete frame lands.
     expect(firstSession.closed).toBe(true);
-    expect(secondSession.closed).toBe(true);
 
     first.unmount();
     expect(revokeObjectUrlMock).not.toHaveBeenCalled();
@@ -499,6 +487,28 @@ describe("useImageAsset", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
     expect(revokeObjectUrlMock).toHaveBeenCalledTimes(1);
     expect(imageBlobCache.size()).toBe(0);
+  });
+
+  it("opens exactly one subscription for concurrent first mounts", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+
+    // This boundary assertion is the regression guard: same-URL sharing alone
+    // would also pass against the pre-coalescing implementation.
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "concurrent-identity", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(first.result.current.status).toBe("ready");
+    expect(second.result.current.status).toBe("ready");
+    expect(second.result.current.servedFromCache).toBe(true);
+    first.unmount();
+    second.unmount();
   });
 
   it("reports a browser decode failure by discarding the ready asset", async () => {
@@ -623,15 +633,11 @@ describe("useImageAsset", () => {
     const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
-    act(() => {
-      emitHeader(firstSession, "shared-in-flight", 3);
-    });
 
     const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(2);
-    const secondSession = mockWsStreamClient.sessions[1];
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
-      emitHeader(secondSession, "shared-in-flight", 3);
+      emitHeader(firstSession, "shared-in-flight", 3);
     });
 
     first.unmount();
@@ -645,7 +651,6 @@ describe("useImageAsset", () => {
     expect(second.result.current.status).toBe("ready");
     expect(second.result.current.url).toBe("blob:image/1");
     expect(firstSession.closed).toBe(true);
-    expect(secondSession.closed).toBe(true);
     second.unmount();
   });
 
@@ -653,15 +658,11 @@ describe("useImageAsset", () => {
     const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
-    act(() => {
-      emitHeader(firstSession, "retryable-identity", 3);
-    });
 
     const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(2);
-    const secondSession = mockWsStreamClient.sessions[1];
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
-      emitHeader(secondSession, "retryable-identity", 3);
+      emitHeader(firstSession, "retryable-identity", 3);
       firstSession.emitFrame(
         { kind: "assetChunk", hasBinaryPayload: true, index: 0, byteLength: 1 },
         new Uint8Array([1]),
@@ -678,8 +679,8 @@ describe("useImageAsset", () => {
     expect(imageBlobCache.size()).toBe(0);
 
     const third = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(3);
-    const thirdSession = mockWsStreamClient.sessions[2];
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const thirdSession = mockWsStreamClient.sessions[1];
     act(() => {
       emitHeader(thirdSession, "retryable-identity", 3);
     });
