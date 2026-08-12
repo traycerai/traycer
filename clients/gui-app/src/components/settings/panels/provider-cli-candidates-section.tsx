@@ -1,10 +1,18 @@
-import { use, useCallback, useId, useState, type ReactNode } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import {
+  use,
+  useCallback,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { ChevronDown, Info, Plus, TriangleAlert, Trash2 } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliCandidate,
   type ProviderCliState,
   type ProviderManagedInstallState,
+  type ProviderNextRunBinary,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -12,6 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
@@ -19,9 +33,7 @@ import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detec
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
   providerPackBlocksExecution,
-  providerPackErrorDetail,
   providerPackPreparingForProvider,
-  providerPackPreparingShortLabel,
   providerPackRetryable,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
@@ -29,14 +41,44 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
+import { ProviderPackVersionManagerPanel } from "./provider-pack-version-manager-panel";
+import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
+import {
+  managedInstallFailureMessage,
+  managedVersionsUnavailableMessage,
+} from "./provider-pack-version-manager-model";
 
 type ProviderId = ProviderCliState["providerId"];
 
-// Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
-// the Path column guarantees it shrinks/truncates instead of pushing the
-// table past the panel width.
+// ONE grid for the whole table, with the header and every row joining it via
+// `grid-cols-subgrid`. This used to be the same template applied SEPARATELY to
+// the header and to each row, which are sibling grids - so the Version track
+// resolved against each row's own content and no two rows agreed where the
+// column started.
+//
+// The Version track is deliberately NOT content-sized. It was
+// `minmax(5.5rem,auto)`, and once the header and rows shared one grid, `auto`
+// meant ANY row's content could resize the column for EVERY row: clicking
+// Retry swapped that cell to a progress bar and the whole table reflowed. The
+// `0.2fr` max keeps it fluid (it grows with the dialog, per the repo's
+// no-fixed-layout-widths rule) while making it impossible for cell content to
+// size it - the property that makes the table hold still.
+//
+// The floor is `0`, not the `5.5rem` a `v0.147.0` wants before it truncates.
+// A rem floor is a fixed layout width: combined with the other tracks and the
+// cell padding it stops the grid shrinking with its viewport-sized container,
+// so a narrow settings dialog overflows horizontally instead of truncating.
+// The cell already truncates, which is the graceful answer at that width.
+//
+// The row wrapper still has to be a real box (borders, hover, dimming), which
+// is why this is subgrid and not `display: contents`.
 const TABLE_GRID =
-  "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(5.5rem,auto)_2.25rem] items-center";
+  "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(0,0.2fr)_2.25rem]";
+const TABLE_ROW = "col-span-4 grid grid-cols-subgrid items-center";
+// Every cell in every row and in the header uses the SAME horizontal padding,
+// so the Version header's right edge lands exactly on each row's version. The
+// header used `p-2` against the rows' `p-2.5` and was 2px out.
+const TABLE_CELL_X = "px-2.5";
 
 /**
  * Which OTHER provider's CLI candidates this one falls back to when its own
@@ -123,6 +165,22 @@ interface ProviderCandidateConfig {
   readonly candidates: readonly ProviderCliCandidate[];
 }
 
+type VersionManagerPanelData =
+  | {
+      readonly kind: "panel";
+      readonly packId: string;
+      readonly packDisplayName: string;
+      readonly managedVersions: NonNullable<
+        ProviderCliState["managedVersions"]
+      >;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly packId: string;
+      readonly packDisplayName: string;
+      readonly message: string;
+    };
+
 function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
@@ -140,103 +198,60 @@ function candidateConfigForProvider(
 }
 
 /**
- * D6's PATH-unblock composite: the user's selection is the managed candidate,
- * an install is ACTIVELY in progress (not merely absent - an absent pack with
- * no download running yet is not "installing", so the copy must stay quiet
- * until a download actually starts), and a PATH binary is standing in for it
- * right now. Derived client-side from existing signals (selection +
- * candidates) plus `managedInstallState` rather than carried as its own field
- * - there is nothing here a host-computed boolean would tell us that these
- * don't already. `null` (old host, or this provider hasn't been cut over to
- * the registry yet) never activates it.
+ * Three outcomes, not two.
+ *
+ * `null` still means HIDE, but it now means only one thing: this provider has
+ * no managed pack, so there is nothing to manage and nothing to explain.
+ * Every other way the panel can fail to appear returns `unavailable` and gets
+ * rendered as a sentence. Silently hiding those was the reported bug - a
+ * settings tab with no control and no reason reads as "this feature does not
+ * exist on my machine".
  */
-function pathUnblockActive(
-  selected: ProviderSelection,
-  managedInstallState: ProviderManagedInstallState | null,
-  candidates: readonly ProviderCliCandidate[],
-): boolean {
-  if (selected.kind !== "bundled") return false;
-  if (managedInstallState?.status !== "downloading") return false;
-  return candidates.some(
-    (candidate) => candidate.kind === "path" && candidate.available,
-  );
-}
-
-// The two quiet, self-correcting row indicators above the candidates table -
-// never a toast (see the plan's D6/D12 renderer rules). Both are absent by
-// default (old host, or nothing to report).
-function CandidateNotices({
-  showPathUnblockNotice,
-  versionVisibility,
-  advisory,
-  packPreparing,
-}: {
-  readonly showPathUnblockNotice: boolean;
-  readonly versionVisibility: ProviderCliState["versionVisibility"];
-  readonly advisory: ProviderCliState["advisory"];
-  readonly packPreparing: ProviderPackPreparing | null;
-}): ReactNode {
-  // An old host leaves the key genuinely absent, which reads the same here as
-  // "no other session is on a different version".
-  const differingSessionCount = versionVisibility?.differingSessionCount ?? 0;
-  return (
-    <>
-      {/*
-        P2. The reason a failed pack failed, on the screen every other surface
-        sends the user to. The status cell beside the bundled row has one
-        truncating grid column, so it can only ever carry the short label -
-        which for a blocking failure is the two words "Setup failed". A user who
-        followed the picker tooltip or the host's own RPC error here arrived
-        precisely to learn WHY, and found the least informative phrasing in the
-        module. This line is where the sentence fits, and it sits with the other
-        row-level notices rather than inside the table for the same reason those
-        do: the table's job is the binary choice, not the narration.
-
-        Shown for a non-blocking failure too. "Ready · managed install failed"
-        is a state a user is entitled to understand - the provider works, and
-        something they may want to fix quietly did not.
-      */}
-      {packPreparing?.kind === "error" ? (
-        <p
-          className={cn(
-            "mb-2 text-ui-xs",
-            providerPackBlocksExecution(packPreparing)
-              ? "text-destructive"
-              : "text-muted-foreground",
-          )}
-        >
-          {providerPackErrorDetail(packPreparing.reason)}
-        </p>
-      ) : null}
-      {/*
-        W10. The one advisory kind a Phase-1 host populates: this provider is
-        paired with the exact build Traycer ships, so a version found on PATH is
-        skipped automatically on execute. Without this the provider reported
-        available, rendered ungated and selectable, and the turn then threw
-        `preparing` - offered-then-failed, from a direction no gate was watching.
-        Rendered next to the candidates table on purpose: the fix it names ("use
-        that path anyway") is a row the user is already looking at.
-        Unknown future kinds render nothing rather than a bare code.
-      */}
-      {advisory?.kind === "row-incompatibility" && advisory.detail !== null ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          {advisory.detail}
-        </p>
-      ) : null}
-      {showPathUnblockNotice ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          Running from PATH · installing managed copy
-        </p>
-      ) : null}
-      {differingSessionCount > 0 ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          {differingSessionCount === 1
-            ? "1 other session is using a different version."
-            : `${differingSessionCount} other sessions are using a different version.`}
-        </p>
-      ) : null}
-    </>
-  );
+function versionManagerPanelDataFor(args: {
+  readonly hostId: string | null;
+  readonly supportsVersionManager: boolean | null;
+  readonly packId: ProviderCliState["packId"];
+  readonly managedVersions: ProviderCliState["managedVersions"];
+  readonly managedVersionsUnavailable: ProviderCliState["managedVersionsUnavailable"];
+}): VersionManagerPanelData | null {
+  // No host is the second case that still HIDES rather than explains. Every
+  // reason below is a statement about a host; with none bound there is nothing
+  // true to say, and the capability read is null for a null hostId - so
+  // explaining here would confidently report "your host is too old" about a
+  // host that does not exist.
+  if (args.hostId === null) return null;
+  if (args.packId === null || args.packId === undefined) return null;
+  // A pack can back several providers. Its manager must retain the
+  // shared-store name rather than inheriting whichever provider row
+  // happened to open it (for example, `opencode CLI`, not `OpenRouter CLI`).
+  const packDisplayName = `${args.packId} CLI`;
+  // Null is "not answered yet", not "unsupported" - treat only an explicit
+  // false as a capability refusal, so a first paint does not flash a
+  // "your host is too old" line at a host that supports it perfectly.
+  if (args.supportsVersionManager === false) {
+    return {
+      kind: "unavailable",
+      packId: args.packId,
+      packDisplayName,
+      message: managedVersionsUnavailableMessage("host-unsupported"),
+    };
+  }
+  if (args.managedVersions === null || args.managedVersions === undefined) {
+    const unavailable = args.managedVersionsUnavailable;
+    if (unavailable === null || unavailable === undefined) return null;
+    return {
+      kind: "unavailable",
+      packId: args.packId,
+      packDisplayName,
+      message: managedVersionsUnavailableMessage(unavailable.reason),
+    };
+  }
+  return {
+    kind: "panel",
+    packId: args.packId,
+    packDisplayName,
+    managedVersions: args.managedVersions,
+  };
 }
 
 /**
@@ -376,15 +391,24 @@ function CliBinaryMissingNotice({
 export function ProviderCliCandidatesSection({
   state,
   providers,
+  hostId,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
 }): ReactNode {
   const providerId = state.providerId;
   const cliConfig = candidateConfigForProvider(state, providers);
   const radioName = useId();
   const [adding, setAdding] = useState(false);
   const [draftPath, setDraftPath] = useState("");
+  // The version manager's RPCs are all non-floor, so support is a real
+  // per-host question. Read THREE-VALUED: `useHostSupportsMethod` collapses
+  // "not answered yet" into `false`, which this surface can no longer use -
+  // it now renders a reason rather than hiding, and would confidently tell a
+  // perfectly capable host it is too old for the moments before its handshake
+  // lands.
+  const supportsVersionManager = useProviderPackVersionManagerSupport(hostId);
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
   }, []);
@@ -435,11 +459,13 @@ export function ProviderCliCandidatesSection({
   // a red row and a blocking "Setup failed" for every pin-carrying provider on
   // the machine, at the moment the user is least able to tell it is wrong.
   const packPreparing = providerPackPreparingForProvider(state);
-  const showPathUnblockNotice = pathUnblockActive(
-    cliConfig.selected,
-    managedInstallState,
-    cliConfig.candidates,
-  );
+  const versionManagerData = versionManagerPanelDataFor({
+    hostId,
+    supportsVersionManager,
+    packId: state.packId,
+    managedVersions: state.managedVersions,
+    managedVersionsUnavailable: state.managedVersionsUnavailable,
+  });
   // `availabilityPending` means the host's shell/PATH probe is still running,
   // and the protocol is explicit that `candidates` must not be trusted until
   // it settles ("A pending row always carries `available: false` semantically"
@@ -455,103 +481,251 @@ export function ProviderCliCandidatesSection({
 
   return (
     <>
-      <CandidateNotices
-        showPathUnblockNotice={showPathUnblockNotice}
-        versionVisibility={state.versionVisibility}
-        advisory={state.advisory ?? null}
-        packPreparing={packPreparing}
+      <CandidateAreaContent
+        area={candidateArea}
+        providerId={providerId}
+        table={{
+          candidates: cliConfig.candidates,
+          managedInstallState,
+          packPreparing,
+          nextRunBinary: state.nextRunBinary ?? null,
+          advisory: state.advisory ?? null,
+          differingSessionCount:
+            state.versionVisibility?.differingSessionCount ?? 0,
+          radioName,
+          selection: cliConfig.selected,
+          busy: setSelection.isPending || removeCustom.isPending,
+          onSelect,
+          onRetryPack: () => ensurePack.mutate({ providerId }),
+          retryingPack: ensurePack.isPending,
+          onRemove: (path) => removeCustom.mutate({ providerId, path }),
+          // The Version cell IS the control. It carries the reason too, so an
+          // unavailable pack still has somewhere to say why.
+          versionMenu: versionManagerData,
+          versionMenuHostId: hostId,
+          adding,
+          draftPath,
+          onDraftPathChange: setDraftPath,
+          focusDraftInput,
+          onSaveCustom,
+          savingCustom: addCustom.isPending,
+          onCancelCustom: () => {
+            setAdding(false);
+            setDraftPath("");
+          },
+          probing: probe.isFetching,
+          probeExecutable: probe.data?.executable ?? null,
+          probeVersion: probe.data?.version ?? null,
+        }}
       />
-      {candidateArea === "table" ? (
-        <div className="overflow-hidden rounded-lg border border-border/60">
-          <div
-            className={cn(
-              TABLE_GRID,
-              "border-b border-border/40 bg-muted/30 text-ui-xs font-medium text-muted-foreground",
-            )}
-          >
-            <span className="py-2" />
-            <span className="min-w-0 p-2">Path</span>
-            <span className="p-2">Version</span>
-            <span className="py-2" />
-          </div>
-          {cliConfig.candidates.map((candidate) => (
-            <CandidateRow
-              key={candidateKey(candidate)}
-              candidate={candidate}
-              managedInstallState={managedInstallState}
-              packPreparing={packPreparing}
-              radioName={radioName}
-              selected={isSelected(cliConfig.selected, candidate)}
-              busy={setSelection.isPending || removeCustom.isPending}
-              onSelect={onSelect}
-              onRetryPack={() => ensurePack.mutate({ providerId })}
-              retryingPack={ensurePack.isPending}
-              onRemove={(path) => removeCustom.mutate({ providerId, path })}
-            />
-          ))}
-          {adding ? (
-            <div className="flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
-              <div className="flex items-center gap-2">
-                <Input
-                  ref={focusDraftInput}
-                  className="w-full font-mono text-ui-sm"
-                  placeholder="/absolute/path/to/binary"
-                  value={draftPath}
-                  onChange={(e) => setDraftPath(e.target.value)}
-                  disabled={addCustom.isPending}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onSaveCustom();
-                    if (e.key === "Escape") {
-                      setAdding(false);
-                      setDraftPath("");
-                    }
-                  }}
-                />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={onSaveCustom}
-                  disabled={
-                    addCustom.isPending || draftPath.trim().length === 0
-                  }
-                >
-                  {addCustom.isPending ? <MutedAgentSpinner /> : null}
-                  Save
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setAdding(false);
-                    setDraftPath("");
-                  }}
-                  disabled={addCustom.isPending}
-                >
-                  Cancel
-                </Button>
-              </div>
-              <ProbeLine
-                probing={probe.isFetching}
-                executable={probe.data?.executable ?? null}
-                version={probe.data?.version ?? null}
-              />
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <CandidateEmptyArea area={candidateArea} providerId={providerId} />
-      )}
-
-      {adding ? null : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <Plus className="size-4" /> Add custom path
-        </button>
-      )}
+      <AddCustomPathButton hidden={adding} onClick={() => setAdding(true)} />
     </>
+  );
+}
+
+type CandidateTableProps = {
+  readonly candidates: readonly ProviderCliCandidate[];
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly differingSessionCount: number;
+  readonly radioName: string;
+  readonly selection: ProviderSelection;
+  readonly busy: boolean;
+  readonly onSelect: (selection: ProviderSelection) => void;
+  readonly onRetryPack: () => void;
+  readonly retryingPack: boolean;
+  readonly onRemove: (path: string) => void;
+  readonly versionMenu: VersionManagerPanelData | null;
+  readonly versionMenuHostId: string | null;
+  readonly adding: boolean;
+  readonly draftPath: string;
+  readonly onDraftPathChange: (path: string) => void;
+  readonly focusDraftInput: (node: HTMLInputElement | null) => void;
+  readonly onSaveCustom: () => void;
+  readonly savingCustom: boolean;
+  readonly onCancelCustom: () => void;
+  readonly probing: boolean;
+  readonly probeExecutable: boolean | null;
+  readonly probeVersion: string | null;
+};
+
+function CandidateAreaContent({
+  area,
+  providerId,
+  table,
+}: {
+  readonly area: CandidateArea;
+  readonly providerId: ProviderId;
+  readonly table: CandidateTableProps;
+}): ReactNode {
+  if (area !== "table") {
+    return <CandidateEmptyArea area={area} providerId={providerId} />;
+  }
+  return <CandidateTable {...table} />;
+}
+
+function CandidateTable({
+  candidates,
+  managedInstallState,
+  packPreparing,
+  nextRunBinary,
+  advisory,
+  differingSessionCount,
+  radioName,
+  selection,
+  busy,
+  onSelect,
+  onRetryPack,
+  retryingPack,
+  onRemove,
+  versionMenu,
+  versionMenuHostId,
+  adding,
+  draftPath,
+  onDraftPathChange,
+  focusDraftInput,
+  onSaveCustom,
+  savingCustom,
+  onCancelCustom,
+  probing,
+  probeExecutable,
+  probeVersion,
+}: CandidateTableProps): ReactNode {
+  return (
+    <div
+      className={cn(
+        TABLE_GRID,
+        "overflow-hidden rounded-lg border border-border/60",
+      )}
+    >
+      <div
+        className={cn(
+          TABLE_ROW,
+          "border-b border-border/40 bg-muted/30 py-2 text-ui-xs font-medium text-muted-foreground",
+        )}
+      >
+        <span />
+        <span className={cn("min-w-0", TABLE_CELL_X)}>Path</span>
+        {/* Right-aligned to match the cell below it, which now holds nothing
+            but the version, so every row's version lands on this edge. */}
+        <span className={cn("text-right", TABLE_CELL_X)}>Version</span>
+        <span />
+      </div>
+      {candidates.map((candidate) => (
+        <CandidateRow
+          key={candidateKey(candidate)}
+          candidate={candidate}
+          managedInstallState={managedInstallState}
+          packPreparing={packPreparing}
+          nextRunBinary={nextRunBinary}
+          advisory={advisory}
+          differingSessionCount={differingSessionCount}
+          radioName={radioName}
+          selection={selection}
+          selected={isSelected(selection, candidate)}
+          busy={busy}
+          onSelect={onSelect}
+          onRetryPack={onRetryPack}
+          retryingPack={retryingPack}
+          onRemove={onRemove}
+          versionMenu={candidate.kind === "bundled" ? versionMenu : null}
+          versionMenuHostId={versionMenuHostId}
+        />
+      ))}
+      <CustomPathForm
+        open={adding}
+        draftPath={draftPath}
+        onDraftPathChange={onDraftPathChange}
+        focusDraftInput={focusDraftInput}
+        onSave={onSaveCustom}
+        saving={savingCustom}
+        onCancel={onCancelCustom}
+        probing={probing}
+        executable={probeExecutable}
+        version={probeVersion}
+      />
+    </div>
+  );
+}
+
+function CustomPathForm({
+  open,
+  draftPath,
+  onDraftPathChange,
+  focusDraftInput,
+  onSave,
+  saving,
+  onCancel,
+  probing,
+  executable,
+  version,
+}: {
+  readonly open: boolean;
+  readonly draftPath: string;
+  readonly onDraftPathChange: (path: string) => void;
+  readonly focusDraftInput: (node: HTMLInputElement | null) => void;
+  readonly onSave: () => void;
+  readonly saving: boolean;
+  readonly onCancel: () => void;
+  readonly probing: boolean;
+  readonly executable: boolean | null;
+  readonly version: string | null;
+}): ReactNode {
+  if (!open) return null;
+  return (
+    // `col-span-4`: the table container is the shared grid the header and rows
+    // subgrid onto, so this form is a grid item too - without it, it lands in
+    // the 2.25rem radio column and collapses to a sliver.
+    <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
+      <div className="flex items-center gap-2">
+        <Input
+          ref={focusDraftInput}
+          className="w-full font-mono text-ui-sm"
+          placeholder="/absolute/path/to/binary"
+          value={draftPath}
+          onChange={(event) => onDraftPathChange(event.target.value)}
+          disabled={saving}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSave();
+            if (event.key === "Escape") onCancel();
+          }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onSave}
+          disabled={saving || draftPath.trim().length === 0}
+        >
+          {saving ? <MutedAgentSpinner /> : null}
+          Save
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+      <ProbeLine probing={probing} executable={executable} version={version} />
+    </div>
+  );
+}
+
+function AddCustomPathButton({
+  hidden,
+  onClick,
+}: {
+  readonly hidden: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  if (hidden) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+    >
+      <Plus className="size-4" /> Add custom path
+    </button>
   );
 }
 
@@ -559,13 +733,19 @@ function CandidateRow({
   candidate,
   managedInstallState,
   packPreparing,
+  nextRunBinary,
+  advisory,
+  differingSessionCount,
   radioName,
+  selection,
   selected,
   busy,
   onSelect,
   onRetryPack,
   retryingPack,
   onRemove,
+  versionMenu,
+  versionMenuHostId,
 }: {
   readonly candidate: ProviderCliCandidate;
   // Provider-level (not per-candidate - see that schema's comment), so only
@@ -576,109 +756,565 @@ function CandidateRow({
   readonly managedInstallState: ProviderManagedInstallState | null;
   /** The same state, derived against the row's fallbacks. See the call site. */
   readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly differingSessionCount: number;
   readonly radioName: string;
+  readonly selection: ProviderSelection;
   readonly selected: boolean;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
   readonly onRetryPack: () => void;
   readonly retryingPack: boolean;
   readonly onRemove: (path: string) => void;
+  readonly versionMenu: VersionManagerPanelData | null;
+  readonly versionMenuHostId: string | null;
 }): ReactNode {
-  const isBundled = candidate.kind === "bundled";
-  const isCustom = candidate.kind === "custom";
-  const pathLabel = isBundled
-    ? bundledPathLabel(managedInstallState)
-    : candidate.path;
-  // A resolved-but-missing binary (custom path the user typed that no longer
-  // exists, or a bundled binary not installed). We keep the row and dim it so
-  // the user sees the entry is retained but unavailable. An in-progress
-  // managed install is not "unavailable" - it's actively working, so it stays
-  // undimmed even though `available` is still false.
-  //
-  // A FAILED pack behind a working fallback gets the same exemption, and
-  // without it P4 survives the fix above: this flag also paints the status cell
-  // `text-destructive`, so the row would render "Ready · managed install
-  // failed" in red - the cell contradicting its own sentence. Dimming is a
-  // claim about the provider ("you cannot use this"), and the derived state is
-  // the only thing that knows whether that claim is true.
-  const packExcusesMissingBinary =
-    isBundled &&
-    packPreparing !== null &&
-    (packPreparing.kind === "downloading" ||
-      !providerPackBlocksExecution(packPreparing));
-  const unavailable =
-    !candidate.available &&
-    !candidate.versionPending &&
-    !packExcusesMissingBinary;
+  const presentation = candidateRowPresentation({
+    candidate,
+    managedInstallState,
+    packPreparing,
+    nextRunBinary,
+    advisory,
+    selection,
+    selected,
+    differingSessionCount,
+  });
   return (
     <div
       className={cn(
-        TABLE_GRID,
-        "border-b border-border/40 last:border-b-0 hover:bg-muted/20",
-        unavailable ? "opacity-60" : "",
+        TABLE_ROW,
+        "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-muted/20",
+        presentation.unavailable ? "opacity-60" : "",
       )}
     >
-      <span className="flex items-center justify-center py-2.5">
-        <input
-          type="radio"
-          aria-label={
-            isBundled ? "Select bundled binary" : `Select ${candidate.path}`
-          }
-          name={radioName}
-          checked={selected}
-          disabled={busy}
-          onChange={() => onSelect(selectionFor(candidate))}
-          className="size-3.5 cursor-pointer accent-primary"
-        />
-      </span>
-      {isBundled ? (
-        <span className="min-w-0 truncate p-2.5 text-ui-sm text-foreground">
-          {pathLabel}
-        </span>
-      ) : (
-        <FilePathTooltip content={candidate.path} side="bottom">
-          <StartTruncatedText className="min-w-0 p-2.5 font-mono text-ui-sm text-foreground">
-            {candidate.path}
-          </StartTruncatedText>
-        </FilePathTooltip>
-      )}
-      <span
-        className={cn(
-          "flex items-center gap-1.5 truncate p-2.5 text-ui-sm",
-          unavailable ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        <CandidateStatus
-          candidate={candidate}
-          preparing={isBundled ? packPreparing : null}
-          onRetry={onRetryPack}
-          retrying={retryingPack}
-        />
-      </span>
-      <span className="flex items-center justify-center py-2.5">
-        {isCustom ? (
-          <button
-            type="button"
-            aria-label="Remove custom path"
-            disabled={busy}
-            onClick={() => onRemove(candidate.path)}
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-          >
-            <Trash2 className="size-3.5" />
-          </button>
-        ) : null}
-      </span>
+      <CandidateSelectionControl
+        candidate={candidate}
+        radioName={radioName}
+        selected={selected}
+        busy={busy}
+        onSelect={onSelect}
+      />
+      <CandidatePathCell
+        candidate={candidate}
+        pathLabel={presentation.pathLabel}
+        pathAdvisory={presentation.pathAdvisory}
+      />
+      <CandidateVersionCell
+        candidate={candidate}
+        unavailable={presentation.unavailable}
+      />
+      <CandidateRowActions
+        candidate={candidate}
+        busy={busy}
+        onRemove={onRemove}
+        versionMenu={versionMenu}
+        versionMenuHostId={versionMenuHostId}
+      />
+      <RowStatusLine
+        status={presentation.status}
+        onRetry={onRetryPack}
+        retrying={retryingPack}
+      />
     </div>
   );
 }
 
+type CandidateRowPresentation = {
+  readonly pathLabel: string;
+  readonly pathAdvisory: string | null;
+  readonly unavailable: boolean;
+  readonly status: RowStatus | null;
+};
+
+function candidateRowPresentation(args: {
+  readonly candidate: ProviderCliCandidate;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly selection: ProviderSelection;
+  readonly selected: boolean;
+  readonly differingSessionCount: number;
+}): CandidateRowPresentation {
+  const isBundled = args.candidate.kind === "bundled";
+  const packExcusesMissingBinary =
+    isBundled &&
+    args.packPreparing !== null &&
+    (args.packPreparing.kind === "downloading" ||
+      !providerPackBlocksExecution(args.packPreparing));
+  return {
+    pathLabel: isBundled
+      ? bundledPathLabel(args.managedInstallState)
+      : args.candidate.path,
+    pathAdvisory:
+      args.candidate.kind === "path" &&
+      args.advisory?.kind === "row-incompatibility"
+        ? args.advisory.detail
+        : null,
+    unavailable:
+      !args.candidate.available &&
+      !args.candidate.versionPending &&
+      !packExcusesMissingBinary,
+    status: rowStatusFor({
+      // The managed install, the pack-preparing derivation and the session
+      // count are all PROVIDER-level facts that belong to the bundled row, so
+      // they are scoped here rather than at the call site - every other row
+      // gets null and cannot accidentally narrate the pack's business.
+      managedInstallState: isBundled ? args.managedInstallState : null,
+      preparing: isBundled ? args.packPreparing : null,
+      differingSessionCount: isBundled ? args.differingSessionCount : 0,
+      // NOT scoped: `nextRunMatchesSelection` has to know whether this provider
+      // has a managed pack at all to tell an inline bundled fallback apart from
+      // the managed install that shares its row.
+      providerManagedInstallState: args.managedInstallState,
+      nextRunBinary: args.nextRunBinary,
+      selection: args.selection,
+      selected: args.selected,
+    }),
+  };
+}
+
+function CandidateSelectionControl({
+  candidate,
+  radioName,
+  selected,
+  busy,
+  onSelect,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly radioName: string;
+  readonly selected: boolean;
+  readonly busy: boolean;
+  readonly onSelect: (selection: ProviderSelection) => void;
+}): ReactNode {
+  const label =
+    candidate.kind === "bundled"
+      ? "Select bundled binary"
+      : `Select ${candidate.path}`;
+  return (
+    // `min-h-6` sets the row's content floor. Vertical padding lives on the row
+    // wrapper now (so the status line sits INSIDE the row's box), which means
+    // nothing else guarantees a rowtrack tall enough for the 24px action
+    // buttons - and a Managed row 4px taller than the PATH row under it is the
+    // same misalignment this revision exists to remove.
+    <span className="flex min-h-6 items-center justify-center">
+      <input
+        type="radio"
+        aria-label={label}
+        name={radioName}
+        checked={selected}
+        disabled={busy}
+        onChange={() => onSelect(selectionFor(candidate))}
+        className="size-3.5 cursor-pointer accent-primary"
+      />
+    </span>
+  );
+}
+
+function CandidatePathCell({
+  candidate,
+  pathLabel,
+  pathAdvisory,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly pathLabel: string;
+  readonly pathAdvisory: string | null;
+}): ReactNode {
+  if (candidate.kind === "bundled") {
+    // The differing-session caption used to hang off this cell. It is a status,
+    // not an identity, so it moved to the row's one status line where it takes
+    // its turn behind an install failure or an install in flight.
+    return (
+      <span
+        className={cn(
+          "min-w-0 truncate text-ui-sm text-foreground",
+          TABLE_CELL_X,
+        )}
+      >
+        {pathLabel}
+      </span>
+    );
+  }
+  return (
+    <ExternalCandidatePathCell candidate={candidate} advisory={pathAdvisory} />
+  );
+}
+
+function ExternalCandidatePathCell({
+  candidate,
+  advisory,
+}: {
+  readonly candidate: Exclude<
+    ProviderCliCandidate,
+    { readonly kind: "bundled" }
+  >;
+  readonly advisory: string | null;
+}): ReactNode {
+  const advisoryRef = useRef<HTMLButtonElement>(null);
+  const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
+    null,
+  );
+  return (
+    <div className={cn("flex min-w-0 items-center gap-1", TABLE_CELL_X)}>
+      <FilePathTooltip content={candidate.path} side="bottom">
+        <StartTruncatedText className="min-w-0 font-mono text-ui-sm text-foreground">
+          {candidate.path}
+        </StartTruncatedText>
+      </FilePathTooltip>
+      {advisory === null ? null : (
+        <TooltipWrapper
+          label={advisory}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+          collisionBoundary={dialogContainer}
+          collisionPadding={8}
+          onOpenChange={(next) => {
+            if (!next) return;
+            setDialogContainer(
+              advisoryRef.current?.closest<HTMLElement>(
+                '[data-slot="dialog-content"]',
+              ) ?? null,
+            );
+          }}
+        >
+          <button
+            ref={advisoryRef}
+            type="button"
+            aria-label="Why this PATH binary is not used automatically"
+            className="shrink-0 rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Info className="size-3.5" aria-hidden="true" />
+          </button>
+        </TooltipWrapper>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ONE subject: the version this row would run. Nothing else.
+ *
+ * It used to hold the version, a chevron, the Active chip, a warning icon, a
+ * Retry button, a progress bar and a progress label - six subjects under a
+ * header that says "Version", which is why no amount of alignment work made
+ * the column line up. The chevron moved to the action column and everything
+ * else moved to the row's status line; what is left is right-aligned text that
+ * lands on the same edge on every row by construction.
+ */
+function CandidateVersionCell({
+  candidate,
+  unavailable,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly unavailable: boolean;
+}): ReactNode {
+  return (
+    <span
+      className={cn(
+        "min-w-0 truncate text-right text-ui-sm tabular-nums",
+        TABLE_CELL_X,
+        unavailable ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      {versionLabel(candidate)}
+    </span>
+  );
+}
+
+/**
+ * The version MENU, in the per-row action column beside the custom-path trash.
+ *
+ * It used to wrap the version value itself, on the argument that clicking the
+ * version to change the version needs no label. True, but it made the version
+ * a padded button on exactly one row while every other row rendered bare text,
+ * so the two could not share a right edge - the reported "weird indentation",
+ * unfixable while the control and the value were the same element.
+ *
+ * Anchored with the same dialog-scoped collision handling the other settings
+ * pickers use, so it cannot escape the modal.
+ */
+function VersionMenuTrigger({
+  data,
+  hostId,
+}: {
+  readonly data: VersionManagerPanelData;
+  readonly hostId: string | null;
+}): ReactNode {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
+    null,
+  );
+  return (
+    <Popover
+      onOpenChange={(next) => {
+        if (!next) return;
+        setDialogContainer(
+          triggerRef.current?.closest<HTMLElement>(
+            '[data-slot="dialog-content"]',
+          ) ?? null,
+        );
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-label={`${data.packDisplayName} version`}
+          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <ChevronDown className="size-3.5" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        container={dialogContainer ?? undefined}
+        collisionBoundary={dialogContainer ?? undefined}
+        collisionPadding={8}
+        // Bounded in BOTH axes. Width was already viewport-derived; height was
+        // not, and the list is `managedVersions.available` in full - every
+        // published version plus every retained install. Past the dialog's
+        // collision boundary the older rows and their Use / Delete controls
+        // were simply unreachable, because `overflow-hidden` clips rather than
+        // scrolls. The panel scrolls its own list, so the header and the
+        // auto-download toggle stay put.
+        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
+      >
+        {data.kind === "unavailable" ? (
+          <div className="px-4 py-3" data-testid="version-manager-unavailable">
+            <p className="text-ui-sm font-medium text-foreground">
+              {data.packDisplayName} versions are unavailable
+            </p>
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              {data.message}
+            </p>
+          </div>
+        ) : (
+          <ProviderPackVersionManagerPanel
+            packId={data.packId}
+            packDisplayName={data.packDisplayName}
+            managedVersions={data.managedVersions}
+            hostId={hostId}
+          />
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * The one per-row action, whatever that row's action happens to be: the
+ * version menu on the managed row, Remove on a custom row, nothing elsewhere.
+ * The two can never collide - `versionMenu` is only ever passed for the
+ * bundled candidate, and a custom row is never bundled.
+ */
+function CandidateRowActions({
+  candidate,
+  busy,
+  onRemove,
+  versionMenu,
+  versionMenuHostId,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly busy: boolean;
+  readonly onRemove: (path: string) => void;
+  readonly versionMenu: VersionManagerPanelData | null;
+  readonly versionMenuHostId: string | null;
+}): ReactNode {
+  if (candidate.kind === "custom") {
+    return (
+      <span className="flex items-center justify-center">
+        <button
+          type="button"
+          aria-label="Remove custom path"
+          disabled={busy}
+          onClick={() => onRemove(candidate.path)}
+          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </span>
+    );
+  }
+  if (versionMenu === null) {
+    return <span className="flex items-center justify-center" />;
+  }
+  return (
+    <span className="flex items-center justify-center">
+      <VersionMenuTrigger data={versionMenu} hostId={versionMenuHostId} />
+    </span>
+  );
+}
+
 function versionLabel(candidate: ProviderCliCandidate): string {
+  // Pending resolves INSIDE the column rather than replacing it with a spinner
+  // and a label, so a probing row keeps the same shape as every other row.
+  if (candidate.versionPending) return "Checking…";
   if (candidate.version !== null) return `v${candidate.version}`;
   if (candidate.kind === "bundled" && !candidate.available) {
     return "Not installed";
   }
   if (!candidate.available) return "Not found";
   return "-";
+}
+
+function differentVersionSessionsLabel(differingSessionCount: number): string {
+  return differingSessionCount === 1
+    ? "1 running session uses a different version."
+    : `${differingSessionCount} running sessions use a different version.`;
+}
+
+/**
+ * AT MOST ONE status line per row, ever.
+ *
+ * The bounded row shape is the property this whole layout rests on: the four
+ * columns each hold exactly one subject, and everything else a row might need
+ * to say queues up here. A second line would reintroduce the crowding that
+ * made the version column unreadable, so the states are ranked instead.
+ *
+ * Ranking, most urgent first:
+ *
+ * 1. `install-failed` - the managed install failed.
+ * 2. `installing` - bytes are moving.
+ * 3. `substituted` - this is the row the radio picks, and the host will start
+ *    something else.
+ * 4. `sessions` - other live sessions hold a different version.
+ *
+ * 3 IS NOT STARVED BY 1 OR 2 - it is FOLDED INTO THEM. "What will actually
+ * start" is the one fact the deleted Active chip carried, and the ranking is a
+ * presentation rule, not a licence to drop it: a failed install whose sentence
+ * does not say what is running instead is the exact reading that made a
+ * healthy fallback look broken, and an install in flight that hides it loses
+ * the fact entirely, because the row that WOULD have worn the chip is not this
+ * one. So `runningInstead` is computed once and every arm that can coexist
+ * with it says it.
+ *
+ * 4 genuinely is starved, and that is the accepted trade: it is a quiet,
+ * self-correcting count, and it is never why someone opened this screen while
+ * 1-3 are true.
+ */
+type RowStatus =
+  | {
+      readonly kind: "install-failed";
+      readonly text: string;
+      readonly retryable: boolean;
+    }
+  | {
+      readonly kind: "installing";
+      readonly label: string;
+      readonly percent: number | null;
+      readonly note: string | null;
+    }
+  | { readonly kind: "substituted"; readonly text: string }
+  | { readonly kind: "sessions"; readonly text: string };
+
+function rowStatusFor(args: {
+  /** Bundled-row-scoped: null on every other row. */
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  /** Bundled-row-scoped. */
+  readonly preparing: ProviderPackPreparing | null;
+  /** Bundled-row-scoped. */
+  readonly differingSessionCount: number;
+  /** Provider-level - see `nextRunMatchesSelection`. */
+  readonly providerManagedInstallState: ProviderManagedInstallState | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly selection: ProviderSelection;
+  readonly selected: boolean;
+}): RowStatus | null {
+  // Non-null only on the row the radio picks, and only when the host says it
+  // will start something else. Every arm below reads it; nothing else decides
+  // "what runs", which is what keeps the four states from contradicting.
+  const runningInstead =
+    args.selected &&
+    args.nextRunBinary !== null &&
+    !nextRunMatchesSelection(
+      args.nextRunBinary,
+      args.selection,
+      args.providerManagedInstallState,
+    )
+      ? nextRunSourceLabel(args.nextRunBinary)
+      : null;
+
+  const managed = args.managedInstallState;
+  if (managed?.status === "error") {
+    const detail = managedInstallFailureMessage(
+      managed.reason,
+      managed.version ?? null,
+    );
+    return {
+      kind: "install-failed",
+      // What runs comes FIRST. Leading with the failure is what made a
+      // provider that had cleanly fallen back read as broken.
+      text:
+        runningInstead === null
+          ? detail
+          : `Running ${runningInstead}. ${detail}`,
+      retryable:
+        args.preparing !== null && providerPackRetryable(args.preparing),
+    };
+  }
+  if (managed?.status === "downloading") {
+    return {
+      kind: "installing",
+      label: installProgressLabel(managed.version ?? null, managed.percent),
+      percent: managed.percent,
+      note:
+        runningInstead === null
+          ? null
+          : `Running ${runningInstead} until it's ready.`,
+    };
+  }
+  if (runningInstead !== null) {
+    return {
+      kind: "substituted",
+      text: `Not used right now — Traycer will start ${runningInstead} instead. Sessions already running keep the binary they started with.`,
+    };
+  }
+  if (args.differingSessionCount > 0) {
+    return {
+      kind: "sessions",
+      text: differentVersionSessionsLabel(args.differingSessionCount),
+    };
+  }
+  return null;
+}
+
+function nextRunSourceLabel(nextRunBinary: ProviderNextRunBinary): string {
+  switch (nextRunBinary.kind) {
+    case "managed":
+      return "the managed copy";
+    case "bundled":
+      return "the bundled build";
+    case "path":
+      return "the copy on your PATH";
+    case "custom":
+      return "your custom binary";
+  }
+}
+
+function nextRunMatchesSelection(
+  nextRunBinary: ProviderNextRunBinary,
+  selection: ProviderSelection,
+  managedInstallState: ProviderManagedInstallState | null,
+): boolean {
+  if (nextRunBinary.kind === "managed") {
+    return selection.kind === "bundled";
+  }
+  // The inline `bundled` fallback and a managed install share the Managed UI
+  // row but are different binaries, so that IS a substitution worth naming. A
+  // legacy Bundled row (`managedInstallState === null`) is the inline binary
+  // itself, where a bundled next run matches the persisted bundled selection
+  // and there is nothing to report.
+  if (nextRunBinary.kind === "bundled") {
+    return selection.kind === "bundled" && managedInstallState === null;
+  }
+  if (nextRunBinary.kind === "path") return selection.kind === "path";
+  return (
+    selection.kind === "custom" &&
+    nextRunBinary.path !== null &&
+    selection.path === nextRunBinary.path
+  );
 }
 
 // "Bundled" while this provider still ships the still-inline binary (no
@@ -691,97 +1327,109 @@ function bundledPathLabel(
   return managedInstallState === null ? "Bundled" : "Managed";
 }
 
-// The bundled row's status cell: the in-progress managed-install state takes
-// priority over the plain version/availability copy (`versionLabel`), which
-// takes priority over the version-probe spinner every candidate can show.
-// Path/custom candidates always pass `preparing: null` here, so they fall
-// straight through to the existing versionPending/versionLabel behavior,
-// unchanged.
-//
-// Takes the DERIVED `ProviderPackPreparing` rather than the raw wire state.
-// Both are one field apart, and that field is `fallbackRunnable` - the one this
-// component used to write itself. Passing the derived object is what makes the
-// fabrication impossible to reintroduce here: there is no longer a literal to
-// edit, only a value that arrived.
-function CandidateStatus({
-  candidate,
-  preparing,
+/**
+ * The row's one subordinate line. Sits at `col-start-2 col-span-3`, so it
+ * starts under the Path column and runs to the row's right edge.
+ *
+ * It costs no extra nesting: the row wrapper is already
+ * `col-span-4 grid grid-cols-subgrid`, so this is simply its fifth child and
+ * auto-places onto a second internal row. The wrapper keeps its border, hover
+ * and dimming untouched - which is what lets a status appear and disappear
+ * without any column resizing.
+ *
+ * Replaces `ManagedInstallProgress`, `ManagedInstallFailureNote` and
+ * `ActiveNextRunChip`. Those were three affordances competing for one cell.
+ */
+function RowStatusLine({
+  status,
   onRetry,
   retrying,
 }: {
-  readonly candidate: ProviderCliCandidate;
-  readonly preparing: ProviderPackPreparing | null;
+  readonly status: RowStatus | null;
   readonly onRetry: () => void;
   readonly retrying: boolean;
 }): ReactNode {
-  if (candidate.versionPending) {
+  if (status === null) return null;
+  if (status.kind === "installing") {
+    // Clamp before the value reaches a width or an accessible name. `percent`
+    // is a host wire field: above 100 it overflows the track, below 0 it emits
+    // an invalid width, and `aria-valuenow` would report a figure outside its
+    // own declared min/max. `DownloadProgress` in the version manager clamps
+    // the same field, and the two progress surfaces have to agree.
+    const percent =
+      status.percent === null
+        ? null
+        : Math.min(100, Math.max(0, Math.round(status.percent)));
     return (
-      <>
-        <MutedAgentSpinner />
-        <span className="text-ui-xs">checking…</span>
-      </>
-    );
-  }
-  if (preparing?.kind === "downloading") {
-    return (
-      <>
-        <MutedAgentSpinner />
-        {/*
-          `percent` is NULLABLE and null is a real state, not defensive typing:
-          a queued pack has seen no bytes, and a pack whose download a live
-          SIBLING host owns is genuinely in progress with no observable byte
-          count on this side. Interpolating it raw rendered the literal
-          `Installing… %`. Routed through the shared label helper rather than
-          re-guarded here, so this surface cannot drift from the picker and the
-          composer - all three now answer "unknown progress" the same way.
-        */}
-        <span className="text-ui-xs">
-          {providerPackPreparingShortLabel(preparing)}
-        </span>
-      </>
-    );
-  }
-  if (preparing?.kind === "error") {
-    // The arm that did not exist. A failed managed pack rendered a bare red
-    // "Not installed" with no reason and no way forward - while the recovery
-    // copy everywhere else (the picker tooltip, the host's own RPC error)
-    // points the user AT this screen. Whatever sent them here had to be
-    // readable once they arrived.
-    return (
-      <>
+      <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 items-center gap-2 px-2.5">
         <span
-          className={cn(
-            "truncate text-ui-xs",
-            // Red is a claim, and it is only true when the provider genuinely
-            // cannot run. A pack that failed behind a working PATH or bundled
-            // binary reads "Ready · managed install failed", and painting that
-            // destructive would contradict the sentence next to it.
-            providerPackBlocksExecution(preparing) ? "text-destructive" : "",
-          )}
+          role="progressbar"
+          aria-label={status.label}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent === null ? undefined : percent}
+          // Viewport-bounded, not a fixed 12rem. `max-w-48` is a fixed layout
+          // width, which this repo's UI rule excludes for layout surfaces - the
+          // track has to shrink with a narrow settings dialog rather than hold
+          // a rem figure chosen against one window size.
+          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-muted"
         >
-          {providerPackPreparingShortLabel(preparing)}
+          <span
+            className={cn(
+              "block h-full rounded-full bg-primary",
+              percent === null ? "w-1/3 animate-pulse" : "",
+            )}
+            style={
+              percent === null ? undefined : { width: `${String(percent)}%` }
+            }
+          />
         </span>
-        {/*
-          The retry respects the SAME allow-list the picker rail does. A
-          `unrepairable` cell is terminal host-side and a `trust-unavailable`
-          host has no install machinery at all, so a button here would reach
-          `providers.ensurePack` and be a guaranteed no-op - offered-then-failed
-          on the one screen a stuck user was told to open.
-        */}
-        {providerPackRetryable(preparing) ? (
-          <button
-            type="button"
-            disabled={retrying}
-            onClick={onRetry}
-            className="shrink-0 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
-          >
-            Retry
-          </button>
-        ) : null}
-      </>
+        <span className="min-w-0 text-ui-xs text-muted-foreground">
+          {/* Own element so the visible progress label stays byte-identical to
+              the progressbar's accessible name, whether or not a fallback
+              clause follows it. */}
+          <span>{status.label}</span>
+          {status.note === null ? null : <span> · {status.note}</span>}
+        </span>
+      </span>
     );
   }
-  return versionLabel(candidate);
+  return (
+    <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 items-start gap-1.5 px-2.5 text-ui-xs text-muted-foreground">
+      {status.kind === "sessions" ? null : (
+        <TriangleAlert
+          className="mt-0.5 size-3.5 shrink-0 text-warning"
+          aria-hidden="true"
+        />
+      )}
+      {/* The reason is TEXT, not a tooltip. It used to be the accessible name
+          of a warning icon, which is the wrong home for the one sentence that
+          decides whether a retry is worth attempting - four of the eight
+          reasons are terminal and say so. There is room for it here. */}
+      <span className="min-w-0">{status.text}</span>
+      {status.kind === "install-failed" && status.retryable ? (
+        <button
+          type="button"
+          disabled={retrying}
+          onClick={onRetry}
+          className="shrink-0 rounded-md px-1.5 text-ui-xs font-medium text-primary underline-offset-2 transition-colors hover:underline disabled:opacity-50"
+        >
+          Retry
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+function installProgressLabel(
+  version: string | null,
+  percent: number | null,
+): string {
+  const versionLabel =
+    version === null ? "Installing" : `Installing v${version}`;
+  return percent === null
+    ? `${versionLabel}…`
+    : `${versionLabel} · ${percent}%`;
 }
 
 function candidateKey(candidate: ProviderCliCandidate): string {

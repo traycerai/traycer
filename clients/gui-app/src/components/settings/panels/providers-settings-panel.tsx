@@ -920,6 +920,7 @@ function ProviderDetail({
                 tab={tab}
                 state={state}
                 providers={providers}
+                hostId={hostId}
                 profileTab={profileTab}
                 apiKeyDraft={apiKeyDraft}
                 onApiKeyDraftChange={setApiKeyDraft}
@@ -969,6 +970,7 @@ function ProviderTabBody({
   tab,
   state,
   providers,
+  hostId,
   profileTab,
   apiKeyDraft,
   onApiKeyDraftChange,
@@ -976,6 +978,7 @@ function ProviderTabBody({
   readonly tab: ProviderTabKey;
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
   readonly profileTab: ProviderProfileTabProps;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
@@ -984,7 +987,11 @@ function ProviderTabBody({
     case "general":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderCliCandidatesSection state={state} providers={providers} />
+          <ProviderCliCandidatesSection
+            state={state}
+            providers={providers}
+            hostId={hostId}
+          />
           <TerminalAgentArgsSection
             key={state.terminalAgentArgs}
             state={state}

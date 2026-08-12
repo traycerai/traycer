@@ -23,10 +23,10 @@ import {
   createTuiAgentRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
-  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListResponseSchema,
+  providersListRequestSchemaV70,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 const createTuiRegistry = hostRpcRegistry["epic.createTuiAgent"];
@@ -114,12 +114,18 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
         forceAuthRefresh: true,
         native: null,
       });
-      expect(() => providersListRequestSchema.parse(canonical)).not.toThrow();
+      // Asserted against the frozen v7.0 schema specifically, not merely the
+      // canonical one - the registered `providers.list` v7.0 contract is
+      // pinned to `providersListRequestSchemaV70`, so this is the schema a
+      // real peer negotiating v7.0 actually decodes against.
+      expect(() =>
+        providersListRequestSchemaV70.parse(canonical),
+      ).not.toThrow();
     }
   });
 
   it("a new 7.0 client downgrades its request to every released major without leaking native", () => {
-    const canonical = providersListRequestSchema.parse({
+    const canonical = providersListRequestSchemaV70.parse({
       forceAuthRefresh: true,
       native: {
         kind: "mcp",
@@ -146,7 +152,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   });
 
   it("response round-trip 7.0 -> 6.0 -> 7.0 still parses at both ends", () => {
-    const canonicalResponse = providersListResponseSchema.parse({
+    const canonicalResponse = providersListResponseSchemaV70.parse({
       providers: [],
       native: null,
     });
@@ -169,6 +175,6 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       providersListResponseSchemaV60.parse(down.value),
     );
     expect(back.native).toBeNull();
-    expect(providersListResponseSchema.safeParse(back).success).toBe(true);
+    expect(providersListResponseSchemaV70.safeParse(back).success).toBe(true);
   });
 });

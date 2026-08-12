@@ -135,7 +135,6 @@ export async function runDeviceAuthFlow(
   const credentials: StoredCredentials = {
     token: tokens.token,
     refreshToken: tokens.refreshToken,
-    authnBaseUrl,
     savedAt: new Date().toISOString(),
     user,
   };

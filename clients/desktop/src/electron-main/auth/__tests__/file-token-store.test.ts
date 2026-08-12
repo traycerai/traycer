@@ -8,9 +8,11 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -129,6 +131,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const store = new FileTokenStore({
       environment: ENVIRONMENT,
       authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
     });
     stores.push(store);
     return store;
@@ -174,7 +177,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(store).toBeDefined();
   });
 
-  it("signIn stamps authnBaseUrl + savedAt, get round-trips the full identity", async () => {
+  it("signIn stamps savedAt, get round-trips the full identity", async () => {
     const store = makeStore();
     await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
 
@@ -182,7 +185,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(got).toEqual({
       token: "tok-1",
       refreshToken: "rt-1",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: expect.any(String),
       user: { ...IDENTITY },
     });
@@ -190,7 +192,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const onDisk = JSON.parse(
       readFileSync(credentialsPath(), "utf8"),
     ) as StoredCredentials;
-    expect(onDisk.authnBaseUrl).toBe(AUTHN_BASE_URL);
     expect(onDisk.user).toEqual(IDENTITY);
   });
 
@@ -314,7 +315,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(await store.get()).toEqual({
       token: "tok-1",
       refreshToken: "rt-1",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: expect.any(String),
       user: { ...IDENTITY },
     });
@@ -518,7 +518,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const EXTERNAL: StoredCredentials = {
       token: "ext-token",
       refreshToken: "ext-refresh",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: "2026-01-01T00:00:00.000Z",
       user: { ...IDENTITY },
     };
@@ -550,6 +549,38 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         dispose();
       },
       WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+    );
+
+    it(
+      "recovers the watch after a failed install and emits a catch-up change",
+      async () => {
+        // Plant a FILE where the credentials DIRECTORY must go: the
+        // constructor's watcher install fails (mkdir ENOTDIR) and schedules
+        // the backoff reinstall instead of leaving the store blind forever.
+        const credsDir = dirname(credentialsPath());
+        mkdirSync(dirname(credsDir), { recursive: true, mode: 0o700 });
+        writeFileSync(credsDir, "not a directory", { mode: 0o600 });
+        const store = makeStore();
+        const changes: TokenStoreChange[] = [];
+        const dispose = store.subscribe((change) => {
+          changes.push(change);
+        });
+
+        // Unblock and land a write BEFORE the reinstall fires - the catch-up
+        // emit after the reinstall must surface it even though the watch was
+        // down when it happened.
+        rmSync(credsDir);
+        await writeCredentialsFile(credentialsPath(), EXTERNAL, 0);
+
+        await vi.waitFor(
+          () => {
+            expect(changes.some((change) => change.present)).toBe(true);
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS + 2_000 },
+        );
+        dispose();
+      },
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS + 3_000,
     );
 
     it(
