@@ -165,6 +165,50 @@ function closedCount(socket: StubStreamWebSocket): number {
   return socket.closeCount;
 }
 
+interface WorkspaceAssetScenario {
+  readonly asset: AssetStreamClient<"workspace.streamAsset">;
+  readonly recorded: RecordedCallbacks;
+  readonly socket: StubStreamWebSocket;
+}
+
+function startWorkspaceAsset(): WorkspaceAssetScenario {
+  const { factory, sockets } = makeFactory();
+  const client = makeClient(factory);
+  const { callbacks, recorded } = recordingCallbacks();
+  const asset = new AssetStreamClient({
+    wsStreamClient: client,
+    method: "workspace.streamAsset",
+    params: WORKSPACE_PARAMS,
+    callbacks,
+  });
+  const socket = sockets[0];
+  if (socket === undefined)
+    throw new Error("asset stream socket was not created");
+  completeHandshake(socket, undefined);
+  return { asset, recorded, socket };
+}
+
+function fireAssetHeader(socket: StubStreamWebSocket, sizeBytes: number): void {
+  socket.fireText({
+    kind: "assetHeader",
+    hasBinaryPayload: false,
+    mediaType: "image/png",
+    sizeBytes,
+    width: 10,
+    height: 20,
+    contentIdentity: "blob-test",
+  });
+}
+
+function expectFatal(
+  recorded: RecordedCallbacks,
+  socket: StubStreamWebSocket,
+  message: string,
+): void {
+  expect(recorded.failures).toEqual([{ reason: "fatal", message }]);
+  expect(closedCount(socket)).toBe(1);
+}
+
 const WORKSPACE_PARAMS = {
   workspacePath: "/workspace/project",
   filePath: "logo.png",
@@ -179,6 +223,107 @@ const GIT_PARAMS = {
 };
 
 describe("AssetStreamClient", () => {
+  it("fails fatally on an unparseable server frame", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    socket.fireText({ kind: "not-an-asset-frame", hasBinaryPayload: false });
+
+    expectFatal(recorded, socket, "received an invalid frame");
+    asset.close();
+  });
+
+  it("fails fatally when a second assetHeader arrives", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    fireAssetHeader(socket, 1);
+    fireAssetHeader(socket, 1);
+
+    expectFatal(recorded, socket, "assetHeader arrived more than once");
+    asset.close();
+  });
+
+  it("fails fatally when an assetChunk arrives before its header", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    socket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 1,
+    });
+    socket.fireBinary(new Uint8Array([1]));
+
+    expectFatal(recorded, socket, "assetChunk arrived before assetHeader");
+    asset.close();
+  });
+
+  it("fails fatally when an assetChunk index is out of sequence", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    fireAssetHeader(socket, 1);
+    socket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 1,
+      byteLength: 1,
+    });
+    socket.fireBinary(new Uint8Array([1]));
+
+    expectFatal(
+      recorded,
+      socket,
+      "assetChunk index 1 out of sequence, expected 0",
+    );
+    asset.close();
+  });
+
+  it("fails fatally when an assetChunk payload length differs from its declaration", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    fireAssetHeader(socket, 2);
+    socket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 2,
+    });
+    socket.fireBinary(new Uint8Array([1]));
+
+    expectFatal(
+      recorded,
+      socket,
+      "assetChunk declared byteLength 2 but carried 1",
+    );
+    asset.close();
+  });
+
+  it("fails fatally when cumulative chunk bytes exceed the header budget", () => {
+    const { asset, recorded, socket } = startWorkspaceAsset();
+
+    fireAssetHeader(socket, 3);
+    socket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 2,
+    });
+    socket.fireBinary(new Uint8Array([1, 2]));
+    socket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 1,
+      byteLength: 2,
+    });
+    socket.fireBinary(new Uint8Array([3, 4]));
+
+    expectFatal(
+      recorded,
+      socket,
+      "assetChunk pushed cumulative bytes past the 3-byte budget",
+    );
+    asset.close();
+  });
+
   it("fires onHeader immediately, then assembles chunks in arrival order for onReady", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);

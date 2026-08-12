@@ -277,6 +277,26 @@ vi.mock("react-zoom-pan-pinch", () => {
         >
           Wheel zoom out
         </button>
+        <button
+          type="button"
+          data-testid={`rzpp-mismatched-gesture-${instance.id}`}
+          onClick={() => {
+            const transform = transformRef.current;
+            if (transform === null) return;
+            // Synthetic wheel gesture for the mismatched-dimensions test:
+            // deliberately put the source position outside the peer's
+            // visible bounds so the peer must clamp at its own scale.
+            transformRef.current = {
+              ...transform,
+              positionX: 1_000,
+              positionY: -1_000,
+              scale: 0.19,
+            };
+            emitTransform(transformRef.current);
+          }}
+        >
+          Mismatched gesture
+        </button>
         {props.children}
       </div>
     );
@@ -583,6 +603,109 @@ describe("image preview interactions", () => {
     expect(state.instances[0].currentTransform.scale).toBeGreaterThan(1);
     expect(state.instances[0].centerViewCalls).toHaveLength(0);
   });
+
+  it("refreshes fit state and bounds after a ready-header-ready asset change", () => {
+    const firstMeta = META;
+    const secondMeta: ImageAssetMeta = {
+      ...META,
+      width: 4_000,
+      height: 2_000,
+    };
+    const reports: Array<{
+      readonly state: ImagePreviewTransformState;
+      readonly isFitted: boolean;
+      readonly minScale: number;
+    }> = [];
+
+    const { rerender } = render(
+      <ImagePreview
+        status="ready"
+        url="blob:first-image"
+        meta={firstMeta}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={(report) => {
+          reports.push({
+            state: report.state,
+            isFitted: report.isFitted,
+            minScale: report.minScale,
+          });
+        }}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Fit to screen" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    rerender(
+      <ImagePreview
+        status="header"
+        url={null}
+        meta={secondMeta}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={(report) => {
+          reports.push({
+            state: report.state,
+            isFitted: report.isFitted,
+            minScale: report.minScale,
+          });
+        }}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+    rerender(
+      <ImagePreview
+        status="ready"
+        url="blob:second-image"
+        meta={secondMeta}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={(report) => {
+          reports.push({
+            state: report.state,
+            isFitted: report.isFitted,
+            minScale: report.minScale,
+          });
+        }}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    const refreshedReport = reports.at(-1);
+    if (refreshedReport === undefined) {
+      throw new Error("refreshed transform was not reported");
+    }
+    expect(
+      screen
+        .getByRole("button", { name: "Fit to screen" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(refreshedReport.isFitted).toBe(true);
+    expect(refreshedReport.state.scale).toBeCloseTo(0.184, 3);
+    expect(refreshedReport.state.positionX).toBeCloseTo(32);
+    expect(refreshedReport.state.positionY).toBeCloseTo(116);
+    expect(refreshedReport.minScale).toBeCloseTo(0.184, 3);
+  });
 });
 
 describe("linked image diff transforms", () => {
@@ -638,5 +761,23 @@ describe("linked image diff transforms", () => {
     expect(
       screen.getByRole("button", { name: "Zoom out" }).hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("clamps a mirrored mismatched gesture to the peer scale before its position bounds", () => {
+    const largeMeta: ImageAssetMeta = {
+      ...META,
+      width: 4_000,
+      height: 3_000,
+    };
+    state.oldAsset = { ...readyAsset("blob:old"), meta: META };
+    state.newAsset = { ...readyAsset("blob:new"), meta: largeMeta };
+
+    renderDiff({});
+
+    const oldInstance = state.instances[0];
+
+    fireEvent.click(screen.getByTestId("rzpp-mismatched-gesture-1"));
+
+    expect(oldInstance.setTransformCalls).toEqual([[799, -119, 0.25, 0]]);
   });
 });
