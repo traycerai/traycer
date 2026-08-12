@@ -17,10 +17,12 @@ import {
   type ImageBlobRetention,
   type ImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
-import {
-  buildImageAssetCacheKey,
-  type ImageAssetSource,
-} from "@/lib/assets/image-asset-cache-key";
+
+/**
+ * Which side of which surface an image asset came from - the routing part of
+ * the blob-cache key (image-preview decision log, decision #11).
+ */
+type ImageAssetSource = "workspace" | "git-old" | "git-new";
 
 export type ImageAssetStatus = "loading" | "header" | "ready" | "fallback";
 
@@ -124,10 +126,37 @@ function assetSourceFor(request: ImageAssetRequest): ImageAssetSource {
   return request.side === "old" ? "git-old" : "git-new";
 }
 
-function assetPathFor(request: ImageAssetRequest): string {
+/** A workspace path or git running-dir can legally contain `::`/`|` - the request's own fields go into `buildImageAssetCacheKey`/`requestKeyFor` as SEPARATE array elements (JSON-encoded), never delimiter-joined into one string first. */
+function locationFor(request: ImageAssetRequest): string {
   return request.method === "workspace"
-    ? `${request.workspacePath}::${request.filePath}`
-    : `${request.runningDir}::${request.filePath}`;
+    ? request.workspacePath
+    : request.runningDir;
+}
+
+/**
+ * Composite key for `imageBlobCache`: `hostId`/`source`/location/`filePath`/
+ * `contentIdentity` (image-preview decision log, decision #11), as a JSON
+ * array - not delimiter-joined, since any of those fields can legally
+ * contain the delimiter and alias two different files onto the same key.
+ * Git object sides are immutable by OID, so their key never changes for the
+ * life of the session; worktree files carry a `size:mtimeMs` fingerprint as
+ * `contentIdentity`, so a re-stat that finds the same fingerprint reuses the
+ * cached blob instead of re-transferring bytes.
+ */
+function buildImageAssetCacheKey(parts: {
+  readonly hostId: string;
+  readonly source: ImageAssetSource;
+  readonly location: string;
+  readonly filePath: string;
+  readonly contentIdentity: string;
+}): string {
+  return JSON.stringify([
+    parts.hostId,
+    parts.source,
+    parts.location,
+    parts.filePath,
+    parts.contentIdentity,
+  ]);
 }
 
 /**
@@ -136,12 +165,21 @@ function assetPathFor(request: ImageAssetRequest): string {
  * flight for the previous one - the same "does this resolved value still
  * belong to the current key" shape `useImageBlobUrlState` uses. Deliberately
  * NOT the blob-cache key: this exists before the header (and its
- * `contentIdentity`) ever arrives.
+ * `contentIdentity`) ever arrives. JSON-encoded for the same reason as
+ * `buildImageAssetCacheKey` - a delimiter-joined string can't tell a `|` in a
+ * path apart from the join itself.
  */
 function requestKeyFor(request: ImageAssetRequest): string {
   return request.method === "workspace"
-    ? `workspace|${request.workspacePath}|${request.filePath}`
-    : `git|${request.runningDir}|${request.filePath}|${request.previousPath ?? ""}|${request.side}|${request.stage}`;
+    ? JSON.stringify(["workspace", request.workspacePath, request.filePath])
+    : JSON.stringify([
+        "git",
+        request.runningDir,
+        request.filePath,
+        request.previousPath,
+        request.side,
+        request.stage,
+      ]);
 }
 
 /**
@@ -368,7 +406,8 @@ export function useImageAsset(
         const key = buildImageAssetCacheKey({
           hostId,
           source: assetSourceFor(normalizedRequest),
-          path: assetPathFor(normalizedRequest),
+          location: locationFor(normalizedRequest),
+          filePath: normalizedRequest.filePath,
           contentIdentity: header.contentIdentity,
         });
         cacheKeyRef.current = key;
@@ -406,14 +445,19 @@ export function useImageAsset(
           retention,
         );
         releaseLease = lease.release;
+        // `usedForFetch` is fully decided the instant `acquire` returns -
+        // it only ever flips true from INSIDE `fetcher`, called (if at all)
+        // synchronously within `acquire`'s own call stack (image-blob-cache.ts:
+        // a cache hit or an already-in-flight entry never invokes it). A
+        // losing consumer's own stream is therefore redundant right now, not
+        // only once the shared lease resolves - closing it here instead of
+        // in the `.then()` below stops the host from reading/enqueuing the
+        // same bytes twice for the full duration of the owner's transfer.
+        if (!usedForFetch) client?.close();
 
         lease.promise.then(
           (url) => {
             if (!active) return;
-            // Cache hit: `fetcher` above was never invoked, so this
-            // session's chunks are unneeded - close it instead of
-            // assembling bytes nobody will use.
-            if (!usedForFetch) client?.close();
             setResolved({
               key: requestKey,
               state: {

@@ -492,6 +492,18 @@ describe("useImageAsset", () => {
     const secondSession = mockWsStreamClient.sessions[1];
     act(() => {
       emitHeader(secondSession, "shared-identity", 3);
+    });
+
+    // `second` loses the cache race the instant its header names an entry
+    // `first` already owns - its own stream is redundant right away, not
+    // only once `first`'s transfer completes. Asserted BEFORE `first`
+    // finishes (fix 5, ticket 09): a version that deferred the close to the
+    // shared lease's `.then()` would still have `secondSession` open here,
+    // reading/enqueueing the same bytes `first` is already fetching.
+    expect(secondSession.closed).toBe(true);
+    expect(firstSession.closed).toBe(false);
+
+    act(() => {
       emitBytes(firstSession, [1, 2, 3]);
     });
 
@@ -510,8 +522,8 @@ describe("useImageAsset", () => {
     expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
     // Owning session self-closes once ITS OWN assetComplete lands
-    // (de02da59: every terminal path closes), same as the redundant
-    // second session closing immediately on the cache hit.
+    // (de02da59: every terminal path closes); the losing session was
+    // already closed above, well before this point.
     expect(firstSession.closed).toBe(true);
     expect(secondSession.closed).toBe(true);
 
@@ -737,7 +749,13 @@ describe("useImageAsset", () => {
     unmount();
 
     expect(acquireSpy).toHaveBeenCalledWith(
-      "host-1|git-old|/repo::images/logo.png|git-oid",
+      JSON.stringify([
+        "host-1",
+        "git-old",
+        "/repo",
+        "images/logo.png",
+        "git-oid",
+      ]),
       "image/png",
       expect.any(Function),
       "session",
@@ -783,7 +801,13 @@ describe("useImageAsset", () => {
 
     expect(session.closed).toBe(true);
     expect(acquireSpy).toHaveBeenCalledWith(
-      "host-1|workspace|/repo::images/logo.png|cancelled-identity",
+      JSON.stringify([
+        "host-1",
+        "workspace",
+        "/repo",
+        "images/logo.png",
+        "cancelled-identity",
+      ]),
       "image/png",
       expect.any(Function),
       "grace",
