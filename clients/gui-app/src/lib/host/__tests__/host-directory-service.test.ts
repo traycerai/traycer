@@ -70,6 +70,16 @@ const secondRemoteHostEntry: HostDirectoryEntry = {
   status: "available",
 };
 
+/** A third dialable remote, for the case where BOTH failover ends vanish. */
+const thirdRemoteHostEntry: HostDirectoryEntry = {
+  hostId: "third-remote-host",
+  label: "Third Remote",
+  kind: "remote",
+  websocketUrl: "wss://third-remote.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  status: "available",
+};
+
 function makeHost(localHost: LocalHostSnapshot | null): MockRunnerHost {
   return new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -1968,6 +1978,48 @@ describe("HostDirectoryService", () => {
         rememberedRemoteHostEntry.hostId,
       );
       expect(directory.getSelected()?.hostId).not.toBe(nonDialableOther.hostId);
+    });
+
+    it("continues a failover when the target AND the origin both vanish", async () => {
+      // The gap between the two moves D7 makes. `reconcileSelection` resolves a
+      // vanished selection from intent, and intent still names the origin the
+      // failover moved off - so when BOTH leave the registry it resolves to
+      // `null` and unbinds. `failOverFromDeadSelection` cannot recover it
+      // either: it returns immediately on a null selection. The window stranded
+      // with a perfectly dialable third host listed.
+      //
+      // The "an explicit pick resolves to null" rule is not violated by moving
+      // here: a failover already moved this window off that pick once, which is
+      // what `failoverOriginHostId` records. Continuing is the same decision.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      // Fail over off the explicit pick onto the second remote.
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      // Now BOTH the failover target and the origin leave the directory, and a
+      // third dialable host arrives. Before this fix the app unbound here.
+      remotes = [thirdRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(thirdRemoteHostEntry.hostId);
     });
 
     it("keeps explicitSelection on the dead host through failover and re-adopts when it is dialable again", async () => {

@@ -975,6 +975,35 @@ export class HostDirectoryService implements IHostDirectoryService {
       // unbound follow-up restore no longer applies; retire it.
       this.unboundFollowUpRestoreHostId = null;
     }
+    if (next === null && this.failoverOriginHostId !== null) {
+      // BOTH ends of an in-progress failover are gone: the target this app was
+      // moved to has left the directory, and so has the origin the intent
+      // still names. Unbinding here stranded the window with a dialable host
+      // sitting right there - `failOverFromDeadSelection` returns immediately
+      // on a null selection, so nothing downstream picks it up.
+      //
+      // The "an explicit pick resolves to null, because the user chose that
+      // host" rule above is not being broken. It has already been spent: a
+      // failover moved this window off that pick once, which is exactly what
+      // `failoverOriginHostId` records. Continuing that move is the same
+      // decision, not a new one.
+      //
+      // Acting at once, with no dialability damping, matches how a VANISHED
+      // host is handled everywhere here - the damping exists for a host that
+      // is listed but will not dial, which is a different signal.
+      const continuation = this.nextAvailableEntry(null);
+      if (continuation !== null) {
+        appLogger.debug(
+          "[host-directory] failover target and origin both vanished, continuing",
+          {
+            failoverOriginHostId: this.failoverOriginHostId,
+            continuationHostId: continuation.hostId,
+          },
+        );
+        this.setSelected(continuation);
+        return;
+      }
+    }
     this.setSelected(next);
   }
 
@@ -1216,7 +1245,9 @@ export class HostDirectoryService implements IHostDirectoryService {
    * just re-arm the whole failover path on the next poll.
    */
   private nextAvailableEntry(
-    excludedHostId: string,
+    // `null` excludes nothing - used when the host being moved off has already
+    // left the directory, so there is no id left to exclude.
+    excludedHostId: string | null,
   ): HostDirectoryEntry | null {
     const candidates = this.snapshot().filter(
       (entry) => entry.hostId !== excludedHostId && isEntryDialable(entry),

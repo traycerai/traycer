@@ -280,18 +280,28 @@ export function useWorktreeWorkspacesRefresh(args: {
         // The branch LIST is a separate cache with its own host-side read, so
         // the summary refresh alone leaves a branch that was deleted outside
         // Traycer sitting in the new-worktree source picker until the list
-        // refetches. Active observers refetch on invalidate; inactive entries
-        // (the list usually lives in an unmounted nested form) refetch on next
-        // mount. Deliberately NOT awaited and NOT `refetchType: "all"`: the
-        // previous await of inactive queries kept `isPending` (and the
-        // "Checking…" spinner) open across serial relay round-trips that the
-        // user was not looking at. Branch list currency is best-effort after
-        // the forced summary lands.
-        void queryClient.invalidateQueries({
+        // refetches.
+        //
+        // AWAITED, but `refetchType: "active"` only - and the two halves of
+        // that are what D3 got half right. Its concern was real: awaiting
+        // INACTIVE entries (the list usually lives in an unmounted nested
+        // form) held "Checking…" open across serial relay round-trips nobody
+        // was looking at. But the fix it reached for was dropping the await
+        // entirely, and an active-only invalidation never fetches an inactive
+        // entry in the first place - so the cost D3 avoided was already gone
+        // and not awaiting bought nothing for it.
+        //
+        // What it cost instead was the VISIBLE list. Refresh reported done
+        // while the mounted picker still showed cached branches, so the very
+        // thing that sends someone to Refresh - a branch deleted outside
+        // Traycer - was still on screen and still selectable at the moment the
+        // spinner cleared.
+        await queryClient.invalidateQueries({
           queryKey: queryKeys.hostMethodScope(
             context.hostId,
             "worktree.listBranches",
           ),
+          refetchType: "active",
         });
       },
     },
