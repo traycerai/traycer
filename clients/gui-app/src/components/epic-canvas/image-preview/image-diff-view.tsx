@@ -24,7 +24,7 @@ import {
   fitScaleFor,
   MAX_SCALE,
   MIN_SCALE,
-  ZOOM_BOUNDARY_EPSILON,
+  SCALE_EPSILON,
   ZOOM_STEP,
   type ImagePreviewTransformReport,
   type ImagePreviewTransformState,
@@ -59,7 +59,7 @@ const DEFAULT_SIDE_BOUNDS: SideBounds = {
  * (now-reset-to-default) bounds.
  */
 function sideAtMin(active: boolean, bounds: SideBounds): boolean {
-  return active && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
+  return active && bounds.scale <= bounds.minScale + SCALE_EPSILON;
 }
 
 // `maxScale` isn't part of `SideBounds` - every side's TransformWrapper is
@@ -67,7 +67,7 @@ function sideAtMin(active: boolean, bounds: SideBounds): boolean {
 // side's own image dimensions), so the ceiling check compares against it
 // directly rather than threading an always-identical value through state.
 function sideAtMax(active: boolean, bounds: SideBounds): boolean {
-  return active && bounds.scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
+  return active && bounds.scale >= MAX_SCALE - SCALE_EPSILON;
 }
 
 /**

@@ -24,7 +24,6 @@ import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
 import { formatImagePreviewCaption } from "./image-preview-caption";
 import { copyImageToClipboard } from "./image-preview-clipboard";
 import {
-  ACTUAL_SIZE_EPSILON,
   DEFAULT_ANIMATION_MS,
   effectiveMinScale,
   fitScaleFor,
@@ -32,7 +31,7 @@ import {
   MAX_SCALE,
   MIN_SCALE,
   transformMatchesFit,
-  ZOOM_BOUNDARY_EPSILON,
+  SCALE_EPSILON,
   ZOOM_STEP,
   type ContainerSize,
   type ImagePreviewTransformReport,
@@ -291,7 +290,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   // CURRENT transform (from wherever it came - gesture, toolbar, refit) IS
   // the live fit transform. No manual flag to get stuck.
   const isFitted = liveFit !== null && transformMatchesFit(transform, liveFit);
-  const isActualSize = Math.abs(transform.scale - 1) < ACTUAL_SIZE_EPSILON;
+  const isActualSize = Math.abs(transform.scale - 1) < SCALE_EPSILON;
 
   // Adjusted DURING RENDER (not an effect - react.dev's "adjusting state
   // when a prop changes" pattern), once: as soon as the initial fit
@@ -448,7 +447,7 @@ export function ImagePreview(props: ImagePreviewProps) {
       state,
       origin,
       isFitted: liveFit !== null && transformMatchesFit(state, liveFit),
-      isActualSize: Math.abs(state.scale - 1) < ACTUAL_SIZE_EPSILON,
+      isActualSize: Math.abs(state.scale - 1) < SCALE_EPSILON,
       minScale: ref.instance.setup.minScale,
     };
   }
@@ -519,9 +518,9 @@ export function ImagePreview(props: ImagePreviewProps) {
   const aspectRatio = imagePreviewAspectRatio(props.meta);
   const zoomDisabled = props.status !== "ready";
   const zoomOutDisabled =
-    zoomDisabled || transform.scale <= effectiveMin + ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled || transform.scale <= effectiveMin + SCALE_EPSILON;
   const zoomInDisabled =
-    zoomDisabled || transform.scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled || transform.scale >= MAX_SCALE - SCALE_EPSILON;
 
   function renderStage(): ReactNode {
     if (props.status === "ready" && props.url !== null) {

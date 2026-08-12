@@ -56,8 +56,8 @@ export const DEFAULT_ANIMATION_MS = 200;
 export const MIN_SCALE = 0.25;
 export const MAX_SCALE = 8;
 export const ZOOM_STEP = 0.2;
-export const ZOOM_BOUNDARY_EPSILON = 0.001;
-export const ACTUAL_SIZE_EPSILON = 0.001;
+/** Float-comparison tolerance for scale (0-1 ratio) checks - zoom-boundary and actual-size derivations both used the same value under separate names. */
+export const SCALE_EPSILON = 0.001;
 /** Pixel tolerance for "is this position the fit position" (review finding #2/#3's mode derivation) - looser than a scale epsilon since position is in raw px, not a 0-1 ratio. */
 const FIT_POSITION_EPSILON_PX = 1;
 /** Mermaid `pan-zoom-svg-viewer.tsx`'s `FIT_PADDING_PX` convention - a fit transform never sits flush against the pane edge/header. */
@@ -128,7 +128,7 @@ export function transformMatchesFit(
   fit: ImagePreviewTransformState,
 ): boolean {
   return (
-    Math.abs(transform.scale - fit.scale) < ACTUAL_SIZE_EPSILON &&
+    Math.abs(transform.scale - fit.scale) < SCALE_EPSILON &&
     Math.abs(transform.positionX - fit.positionX) < FIT_POSITION_EPSILON_PX &&
     Math.abs(transform.positionY - fit.positionY) < FIT_POSITION_EPSILON_PX
   );
