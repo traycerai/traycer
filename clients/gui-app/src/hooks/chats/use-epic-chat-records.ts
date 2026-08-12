@@ -63,6 +63,12 @@ export function useEpicChatRecordsSync(epicId: string): void {
     options: {
       enabled: epicId.length > 0 && viewerUserId.length > 0,
       staleTime: 10_000,
+      // Opt in to the table's fixed cadence. A `fixed` poll policy is OPT-IN
+      // in `useHostQuery` (only `condition` policies poll by default), so
+      // without this the 20s the table declares - and the paragraph above
+      // promises - is never armed: `refetchInterval` stays `false` and the
+      // only thing left refreshing the list is a window-focus refetch.
+      poll: true,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
@@ -89,6 +95,24 @@ export function useEpicChatRecordsSync(epicId: string): void {
  * Scoped to the method (every epic's list on that host), not to one epic's
  * params: a mutation knows the record it changed, and the epic-scoped key is
  * the params object it would have to reconstruct exactly to hit the slot.
+ *
+ * ## Why plain invalidation, and not an explicit fetch
+ *
+ * TanStack's defaults already cover the three states this key can be in when a
+ * mutation lands, so nothing more is needed here:
+ *  - MOUNTED AND ENABLED (the create-then-open case: the modal and the fork
+ *    dialog both live inside the epic route, which mounts the sync hook) -
+ *    `refetchType` defaults to `"active"`, so it refetches immediately; and
+ *    `refetchQueries` defaults to `cancelRefetch: true`, so a read that was
+ *    already in flight when the mutation landed - and would have answered from
+ *    BEFORE the write - is cancelled and re-issued rather than allowed to
+ *    settle and clear the invalidation.
+ *  - CACHED BUT INACTIVE - marked invalid, hence stale, so the next observer
+ *    to mount fetches rather than serving the cached rows.
+ *  - NOT IN THE CACHE AT ALL (the epic just opened) - the first mount fetches
+ *    anyway.
+ * A `refetchType: "all"` would additionally re-read every OTHER open epic's
+ * list on this host, since this key is method-scoped, for no gain.
  */
 export function invalidateEpicChatRecords(
   queryClient: QueryClient,

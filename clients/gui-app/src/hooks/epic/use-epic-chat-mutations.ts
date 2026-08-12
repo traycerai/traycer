@@ -234,6 +234,16 @@ export function useEpicCreateChatForHostClient(
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _params, ctx) => {
         invalidateBindingsForEpic(queryClient, ctx.hostId);
+        // Same reason as the app-wide hook above, and NOT optional here: this
+        // is the variant the in-Epic new-conversation modal and the fork
+        // dialog actually run. The created chat lands in the host's chat
+        // database and in nothing this renderer already listens to, so without
+        // this the record list is never re-read - and every create-then-open
+        // flow (`openCreatedChatWhenProjected`, the handoff's
+        // `projectedChatId`) waits on a projection that only a poll tick can
+        // deliver. Scoped to the host the request was actually SENT to, which
+        // is the one whose registry changed.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't create agent.");
