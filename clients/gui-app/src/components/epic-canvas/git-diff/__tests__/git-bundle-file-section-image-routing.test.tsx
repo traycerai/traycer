@@ -323,6 +323,25 @@ describe("<BundleFileSection /> image routing", () => {
     ).toEqual([expect.objectContaining({ side: "old" })]);
   });
 
+  it("routes a text SVG rename from old.svg to new.txt without fetching the new side", () => {
+    const changedFile = file({
+      path: "assets/new.txt",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: false,
+    });
+
+    renderSection(changedFile, node([]));
+
+    expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(
+      state.requests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "old" })]);
+  });
+
   it("keeps the new image side for old.txt to new.png without fetching the old side", () => {
     const changedFile = file({
       path: "assets/new.png",

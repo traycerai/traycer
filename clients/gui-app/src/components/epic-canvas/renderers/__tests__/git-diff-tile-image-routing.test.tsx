@@ -470,6 +470,27 @@ describe("<GitDiffTile /> image routing", () => {
     ).toEqual([expect.objectContaining({ side: "old" })]);
   });
 
+  it("routes a text SVG rename from old.svg to new.txt with the source toggle", () => {
+    const changed = changedFile({
+      path: "assets/new.txt",
+      previousPath: "assets/old.svg",
+      status: "renamed",
+      isBinary: false,
+    });
+
+    renderTile(changed);
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(
+      screen.getByText("This file is not one of the supported image formats."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
+    expect(
+      state.assetRequests.filter((request) => request?.method === "git"),
+    ).toEqual([expect.objectContaining({ side: "old" })]);
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
   it("keeps the new image side for a binary rename from old.txt to new.png without fetching the old side", () => {
     const changed = changedFile({
       path: "assets/new.png",
