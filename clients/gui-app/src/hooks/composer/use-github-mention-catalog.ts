@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  hashKey,
   keepPreviousData,
   useQueryClient,
   type QueryKey,
@@ -186,6 +187,24 @@ export function useGithubMentionCatalog(
     [queryClient],
   );
 
+  // Which slot the in-flight manual refresh will land in, so `isChecking`
+  // can tell "this scope is being refreshed" from "some scope is".
+  //
+  // One mutation observer outlives every scope this hook is rendered for - the
+  // section stays mounted while the roots, the epic and the bound host change
+  // underneath it - so `isPending` alone says only that SOMETHING is in
+  // flight. Left unscoped, changing folders mid-refresh made the new scope
+  // claim it was checking and disabled its own Refresh button until a request
+  // it never issued came back.
+  //
+  // State rather than a ref: this is read during render to derive `isChecking`,
+  // and a ref read there is both a lint error here and genuinely wrong under
+  // concurrent rendering. The two writes sit on the same edges `isPending`
+  // already flips on, so they cost no render that was not happening anyway.
+  const [pendingRefreshKey, setPendingRefreshKey] = useState<string | null>(
+    null,
+  );
+
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
     "mention.githubCatalog",
@@ -195,7 +214,10 @@ export function useGithubMentionCatalog(
     method: "mention.githubCatalog",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ destination: cacheKey, hostId: readiness.hostId }),
+      onMutate: () => {
+        setPendingRefreshKey(hashKey(cacheKey));
+        return { destination: cacheKey, hostId: readiness.hostId };
+      },
       onSuccess: (response, _variables, context) => {
         applyResponse(response, context.destination);
       },
@@ -226,6 +248,9 @@ export function useGithubMentionCatalog(
           return;
         }
         toastFromHostError(error, "Could not refresh from GitHub");
+      },
+      onSettled: () => {
+        setPendingRefreshKey(null);
       },
     },
   });
@@ -324,7 +349,9 @@ export function useGithubMentionCatalog(
     isPlaceholder: catalogQuery.isPlaceholderData,
     isLoading: enabled && answered === undefined && catalogQuery.isFetching,
     isChecking:
-      enabled && (catalogQuery.isFetching || refreshMutation.isPending),
+      enabled &&
+      (catalogQuery.isFetching ||
+        (refreshMutation.isPending && pendingRefreshKey === hashKey(cacheKey))),
     refreshManually,
   };
 }

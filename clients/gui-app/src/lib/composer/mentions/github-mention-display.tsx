@@ -1,6 +1,7 @@
 import {
   CircleCheck,
   CircleDot,
+  CircleSlash,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -11,6 +12,7 @@ import type { ReactElement } from "react";
 
 import type {
   GithubIssueMentionRow,
+  GithubMentionRepository,
   GithubMentionRow,
   GithubMentionSection,
   GithubPullRequestMentionRow,
@@ -43,9 +45,22 @@ import { MENU_ICON_CLASS } from "./mention-entry-display";
  * states extend that vocabulary; they are not a second dialect of it.
  */
 
-/** Draft is not a PR *state* on the wire - it is a flag on an open PR. */
+/**
+ * Draft is not a PR *state* on the wire - it is a flag on an open PR, and
+ * `issue-not-planned` is the same shape: a closed issue's `stateReason`.
+ */
 export type GithubMentionDisplayState =
-  "open" | "draft" | "merged" | "closed" | "issue-open" | "issue-closed";
+  | "open"
+  | "draft"
+  | "merged"
+  | "closed"
+  | "issue-open"
+  | "issue-closed"
+  | "issue-not-planned";
+
+/** How much of `host/owner/repo` a row must print to be unambiguous in scope. */
+export type GithubRepositoryQualification =
+  "none" | "repo" | "owner-repo" | "host-owner-repo";
 
 const STATE_ICON: Readonly<Record<GithubMentionDisplayState, LucideIcon>> = {
   open: GitPullRequest,
@@ -54,6 +69,7 @@ const STATE_ICON: Readonly<Record<GithubMentionDisplayState, LucideIcon>> = {
   closed: GitPullRequestClosed,
   "issue-open": CircleDot,
   "issue-closed": CircleCheck,
+  "issue-not-planned": CircleSlash,
 };
 
 const STATE_TINT: Readonly<Record<GithubMentionDisplayState, string>> = {
@@ -66,7 +82,13 @@ const STATE_TINT: Readonly<Record<GithubMentionDisplayState, string>> = {
   "issue-open": PR_STATE_TINT_CLASS.open,
   // A closed issue is resolved, not rejected - purple (the "landed" colour
   // merged PRs already use) rather than the red that means "closed unmerged".
+  // That sentence is only true of a COMPLETED closure, which is why the
+  // not-planned case below is a separate state rather than a shade of this one.
   "issue-closed": PR_STATE_TINT_CLASS.merged,
+  // Dismissed, not failed - so muted rather than the red that means something
+  // went wrong, on the same reasoning that leaves `draft` untinted. Red would
+  // read as a rejection the closure did not necessarily express.
+  "issue-not-planned": "text-muted-foreground",
 };
 
 const STATE_LABEL: Readonly<Record<GithubMentionDisplayState, string>> = {
@@ -76,13 +98,23 @@ const STATE_LABEL: Readonly<Record<GithubMentionDisplayState, string>> = {
   closed: "Closed",
   "issue-open": "Open",
   "issue-closed": "Closed",
+  "issue-not-planned": "Closed (not planned)",
 };
 
 export function githubMentionDisplayState(
   row: GithubMentionRow,
 ): GithubMentionDisplayState {
   if (row.kind === "issue") {
-    return row.state === "open" ? "issue-open" : "issue-closed";
+    if (row.state === "open") return "issue-open";
+    // `stateReason` is a nullable free-form string on the wire, so this asks
+    // whether it explicitly says something OTHER than completed rather than
+    // whether it says `completed`. A null reason is legacy or unpopulated, not
+    // a dismissal, and inventing one from an absence would be the same
+    // overclaim in the opposite direction - it keeps the settled reading.
+    if (row.stateReason !== null && row.stateReason !== "completed") {
+      return "issue-not-planned";
+    }
+    return "issue-closed";
   }
   if (row.state === "open" && row.isDraft) return "draft";
   return row.state;
@@ -112,16 +144,65 @@ export function githubMentionReference(row: GithubMentionRow): string {
 }
 
 /**
+ * How much of a row's repository has to be written for the name to identify it
+ * WITHIN THIS SCOPE - the shortest form that is still unambiguous.
+ *
+ * A boolean cannot answer this. `acme/api` and `contoso/api` in one scope are
+ * two repositories with one name, so "more than one repository, therefore
+ * print `repo`" labels both rows `api#123` and makes two distinct attachments
+ * read identically - correct paths under indistinguishable text. Rare, but a
+ * monorepo org plus a fork or a vendored upstream is exactly how it happens.
+ *
+ * Escalates only as far as the collision forces, so the common scope keeps the
+ * short name it had before.
+ */
+export function githubRepositoryQualification(
+  row: GithubMentionRow,
+  repositories: ReadonlyArray<GithubMentionRepository>,
+): GithubRepositoryQualification {
+  if (repositories.length <= 1) return "none";
+  const sharingName = repositories.filter(
+    (repository) => repository.repo === row.repo,
+  );
+  if (sharingName.length <= 1) return "repo";
+  const sharingOwner = sharingName.filter(
+    (repository) => repository.owner === row.owner,
+  );
+  return sharingOwner.length <= 1 ? "owner-repo" : "host-owner-repo";
+}
+
+/** The repository name at that qualification; empty string for `none`. */
+export function githubRepositoryQualifiedName(
+  row: GithubMentionRow,
+  qualification: GithubRepositoryQualification,
+): string {
+  switch (qualification) {
+    case "none":
+      return "";
+    case "repo":
+      return row.repo;
+    case "owner-repo":
+      return `${row.owner}/${row.repo}`;
+    case "host-owner-repo":
+      return `${row.githubHost}/${row.owner}/${row.repo}`;
+  }
+}
+
+/**
  * The row's trailing muted segment: `repo · 2h`, or just `2h` when the whole
  * scope is one repository and naming it every row would say nothing.
  */
 export function githubMentionRowTrailing(
   row: GithubMentionRow,
-  singleRepositoryScope: boolean,
+  repositories: ReadonlyArray<GithubMentionRepository>,
   now: number,
 ): string {
   const age = formatCompactRelativeTime(row.updatedAt, now);
-  return singleRepositoryScope ? age : `${row.repo} · ${age}`;
+  const name = githubRepositoryQualifiedName(
+    row,
+    githubRepositoryQualification(row, repositories),
+  );
+  return name === "" ? age : `${name} · ${age}`;
 }
 
 /**
@@ -219,8 +300,12 @@ export function githubMentionToken(row: GithubMentionRow): string {
  */
 export function githubMentionAttachmentFromRow(
   row: GithubMentionRow,
-  singleRepositoryScope: boolean,
+  repositories: ReadonlyArray<GithubMentionRepository>,
 ): GithubMentionAttachment {
+  const name = githubRepositoryQualifiedName(
+    row,
+    githubRepositoryQualification(row, repositories),
+  );
   return {
     kind: "mention",
     contextType:
@@ -230,9 +315,7 @@ export function githubMentionAttachmentFromRow(
     relPath: null,
     absolutePath: null,
     workspacePath: null,
-    label: singleRepositoryScope
-      ? `#${row.number}`
-      : `${row.repo}#${row.number}`,
+    label: name === "" ? `#${row.number}` : `${name}#${row.number}`,
     description: `${githubMentionReference(row)} · ${row.title}`,
     githubHost: row.githubHost,
     organizationLogin: row.owner,

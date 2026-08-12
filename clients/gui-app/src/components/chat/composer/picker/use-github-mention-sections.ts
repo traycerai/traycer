@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  GithubMentionRepository,
   GithubMentionRow,
   GithubMentionSection,
 } from "@traycer/protocol/host/mention-schemas";
@@ -373,16 +374,15 @@ export function useGithubMentionSections(
     limit,
   });
 
-  const singleRepositoryScope = scopeRepositories.length === 1;
   const context = useMemo<GithubMentionProviderContext>(
     () => ({
       pullRequests: sectionContext(
         openSection === "pull-requests" ? openRows : rootPullRequestRows,
-        singleRepositoryScope,
+        scopeRepositories,
       ),
       issues: sectionContext(
         openSection === "issues" ? openRows : rootIssueRows,
-        singleRepositoryScope,
+        scopeRepositories,
       ),
       supported,
       now,
@@ -393,7 +393,7 @@ export function useGithubMentionSections(
       openSection,
       rootIssueRows,
       rootPullRequestRows,
-      singleRepositoryScope,
+      scopeRepositories,
       supported,
     ],
   );
@@ -515,9 +515,9 @@ function sectionActivity(input: {
 
 function sectionContext(
   rows: ReadonlyArray<GithubMentionRow>,
-  singleRepositoryScope: boolean,
+  repositories: ReadonlyArray<GithubMentionRepository>,
 ): GithubMentionSectionContext {
-  return { rows, singleRepositoryScope };
+  return { rows, repositories };
 }
 
 /**

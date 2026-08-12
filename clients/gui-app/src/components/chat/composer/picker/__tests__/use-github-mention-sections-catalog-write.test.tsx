@@ -377,11 +377,12 @@ describe("useGithubMentionSections catalog write path", () => {
       ),
     ).toEqual([ONE_REPO]);
 
-    // singleRepositoryScope feeds chip labelling for root rows.
-    expect(result.current.context.pullRequests.singleRepositoryScope).toBe(
-      true,
-    );
-    expect(result.current.context.issues.singleRepositoryScope).toBe(true);
+    // The published repositories are what chip labelling and the trailing
+    // segment are derived from for root rows.
+    expect(result.current.context.pullRequests.repositories).toEqual([
+      ONE_REPO,
+    ]);
+    expect(result.current.context.issues.repositories).toEqual([ONE_REPO]);
   });
 
   it("records the more recently refreshed section's repositories at root", async () => {

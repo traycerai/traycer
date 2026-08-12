@@ -14,6 +14,7 @@ import { basenameOfPath } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
+  GithubMentionRepository,
   GithubMentionRow,
   GithubMentionSection,
 } from "@traycer/protocol/host/mention-schemas";
@@ -252,8 +253,15 @@ export interface ComposerMentionProviderContext {
  */
 export interface GithubMentionSectionContext {
   readonly rows: ReadonlyArray<GithubMentionRow>;
-  /** Drops the repo name from every row's trailing string when true. */
-  readonly singleRepositoryScope: boolean;
+  /**
+   * The repositories the host resolved from this scope's folders.
+   *
+   * The list rather than a `singleRepositoryScope` flag, because how a row
+   * must name its repository is not a yes/no: one repository prints no name at
+   * all, and two repositories that share a name have to print the owner as
+   * well. See `githubRepositoryQualification`.
+   */
+  readonly repositories: ReadonlyArray<GithubMentionRepository>;
 }
 
 export interface GithubMentionProviderContext {
@@ -279,7 +287,7 @@ export interface GithubMentionProviderContext {
 
 export const EMPTY_GITHUB_SECTION_CONTEXT: GithubMentionSectionContext = {
   rows: [],
-  singleRepositoryScope: false,
+  repositories: [],
 };
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
@@ -984,7 +992,7 @@ class GithubMentionProvider extends ComposerMentionProvider {
       githubRowEntry(
         row,
         this.section,
-        section.singleRepositoryScope,
+        section.repositories,
         context.github.now,
       ),
     );
@@ -1023,14 +1031,14 @@ class GithubMentionProvider extends ComposerMentionProvider {
 function githubRowEntry(
   row: GithubMentionRow,
   section: GithubMentionSection,
-  singleRepositoryScope: boolean,
+  repositories: ReadonlyArray<GithubMentionRepository>,
   now: number,
 ): MentionMenuEntry {
   return {
     id: githubMentionEntryId(section, row),
     labelPrefix: `#${row.number}`,
     label: row.title,
-    detail: githubMentionRowTrailing(row, singleRepositoryScope, now),
+    detail: githubMentionRowTrailing(row, repositories, now),
     description: githubMentionReference(row),
     // Null even though these rows DO have a last-activity clock: their age is
     // already composed into `detail` alongside the repository (`acme/web ·
@@ -1041,7 +1049,7 @@ function githubRowEntry(
     icon: githubMentionRowIcon(row),
     action: {
       kind: "complete",
-      mention: githubMentionAttachmentFromRow(row, singleRepositoryScope),
+      mention: githubMentionAttachmentFromRow(row, repositories),
     },
     preview: githubMentionPreview(row, now),
   };
