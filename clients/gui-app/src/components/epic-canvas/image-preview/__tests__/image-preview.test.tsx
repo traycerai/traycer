@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
 import { DEFAULT_ANIMATION_MS, ImagePreview } from "../image-preview";
 
@@ -17,13 +23,14 @@ function renderPreview(
   status: "loading" | "header" | "ready",
   meta: ImageAssetMeta | null,
   compact: boolean,
+  servedFromCache: boolean,
 ) {
   return render(
     <ImagePreview
       status={status}
       url={status === "ready" ? "blob:image" : null}
       meta={meta}
-      servedFromCache={false}
+      servedFromCache={servedFromCache}
       fileName="photo.png"
       compact={compact}
       gesturesEnabled
@@ -42,7 +49,7 @@ afterEach(() => {
 
 describe("<ImagePreview />", () => {
   it("shows an aspect-ratio skeleton from known header dimensions", () => {
-    renderPreview("header", META, false);
+    renderPreview("header", META, false, false);
 
     const skeleton = screen.getByTestId("image-preview-skeleton");
     expect(skeleton.style.aspectRatio).toContain(
@@ -53,14 +60,19 @@ describe("<ImagePreview />", () => {
   });
 
   it("does not render a skeleton when header dimensions are unknown", () => {
-    renderPreview("header", { ...META, width: null, height: null }, false);
+    renderPreview(
+      "header",
+      { ...META, width: null, height: null },
+      false,
+      false,
+    );
 
     expect(screen.queryByTestId("image-preview-skeleton")).toBeNull();
     expect(screen.getByText("2.0 KB")).toBeTruthy();
   });
 
   it("shows the loading spinner before the header arrives", () => {
-    const { container } = renderPreview("loading", null, false);
+    const { container } = renderPreview("loading", null, false, false);
 
     expect(
       container.querySelector(
@@ -80,7 +92,7 @@ describe("<ImagePreview />", () => {
   // `react-zoom-pan-pinch` mocked for deterministic jsdom behavior and are
   // left to that suite rather than guessed at here.
   it("renders fit/zoom toolbar controls with fit active by default, and drops the old click-to-toggle image button", () => {
-    renderPreview("ready", META, false);
+    renderPreview("ready", META, false, false);
 
     const toolbar = screen.getByRole("toolbar", {
       name: "Image preview controls",
@@ -115,12 +127,28 @@ describe("<ImagePreview />", () => {
   });
 
   it("omits the controls toolbar in compact mode", () => {
-    renderPreview("header", META, true);
+    renderPreview("header", META, true, false);
 
     expect(
       screen.queryByRole("toolbar", { name: "Image preview controls" }),
     ).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("640x480 · 2.0 KB")).toBeTruthy();
+  });
+
+  it("skips the entrance fade for cache hits but keeps it for streamed images", () => {
+    renderPreview("ready", META, false, true);
+
+    const cachedImage = screen.getByRole("img", { name: "photo.png" });
+    expect(cachedImage.className).toContain("opacity-100");
+
+    cleanup();
+    renderPreview("ready", META, false, false);
+
+    const streamedImage = screen.getByRole("img", { name: "photo.png" });
+    expect(streamedImage.className).toContain("opacity-0");
+
+    fireEvent.load(streamedImage);
+    expect(streamedImage.className).toContain("opacity-100");
   });
 });
