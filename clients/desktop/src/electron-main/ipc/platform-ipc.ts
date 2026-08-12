@@ -557,6 +557,7 @@ interface ClipboardImageInput {
 }
 
 const MAX_CLIPBOARD_IMAGE_PIXELS = 64_000_000;
+const MAX_CLIPBOARD_IMAGE_HEADER_BYTES = 64 * 1024;
 
 function parseClipboardImageInput(input: unknown): ClipboardImageInput {
   if (!isRecord(input)) {
@@ -573,7 +574,99 @@ function parseClipboardImageInput(input: unknown): ClipboardImageInput {
   ) {
     throw new Error("clipboard.writeImage requires image bytes under 30 MB");
   }
+  assertClipboardImageDimensions(type, bytes);
   return { type, bytes };
+}
+
+function assertClipboardImageDimensions(
+  type: ClipboardImageMediaType,
+  bytes: ArrayBuffer,
+): void {
+  const dimensions =
+    type === "image/png" ? pngDimensions(bytes) : jpegDimensions(bytes);
+  if (
+    dimensions === null ||
+    dimensions[0] <= 0 ||
+    dimensions[1] <= 0 ||
+    dimensions[0] > MAX_CLIPBOARD_IMAGE_PIXELS / dimensions[1]
+  ) {
+    throw new Error("clipboard image bytes are invalid");
+  }
+}
+
+function pngDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
+  const view = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 24));
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (
+    view.length < 24 ||
+    signature.some((byte, index) => view[index] !== byte) ||
+    view[12] !== 0x49 ||
+    view[13] !== 0x48 ||
+    view[14] !== 0x44 ||
+    view[15] !== 0x52
+  ) {
+    return null;
+  }
+  return [readUint32BigEndian(view, 16), readUint32BigEndian(view, 20)];
+}
+
+function jpegDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
+  const view = new Uint8Array(
+    bytes,
+    0,
+    Math.min(bytes.byteLength, MAX_CLIPBOARD_IMAGE_HEADER_BYTES),
+  );
+  if (view.length < 4 || view[0] !== 0xff || view[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 1 < view.length) {
+    if (view[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (view[offset] === 0xff) offset += 1;
+    if (offset >= view.length) return null;
+    const marker = view[offset];
+    offset += 1;
+    if (marker === 0x00) continue;
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01) continue;
+    if (marker >= 0xd0 && marker <= 0xd7) continue;
+    if (offset + 1 >= view.length) return null;
+    const segmentLength = readUint16BigEndian(view, offset);
+    if (segmentLength < 2 || offset + segmentLength > view.length) {
+      return null;
+    }
+    if (isJpegFrameMarker(marker)) {
+      if (segmentLength < 7 || offset + 7 > view.length) return null;
+      return [
+        readUint16BigEndian(view, offset + 5),
+        readUint16BigEndian(view, offset + 3),
+      ];
+    }
+    offset += segmentLength;
+  }
+  return null;
+}
+
+function isJpegFrameMarker(marker: number): boolean {
+  return (
+    (marker >= 0xc0 && marker <= 0xc3) ||
+    (marker >= 0xc5 && marker <= 0xc7) ||
+    (marker >= 0xc9 && marker <= 0xcb) ||
+    (marker >= 0xcd && marker <= 0xcf)
+  );
+}
+
+function readUint16BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) + bytes[offset + 1];
+}
+
+function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset] * 2 ** 24 +
+    bytes[offset + 1] * 2 ** 16 +
+    bytes[offset + 2] * 2 ** 8 +
+    bytes[offset + 3]
+  );
 }
 
 function clipboardImageMediaType(

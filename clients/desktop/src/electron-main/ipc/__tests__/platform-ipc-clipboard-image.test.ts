@@ -288,4 +288,32 @@ describe("platform IPC clipboard.writeImage validation", () => {
     ).rejects.toThrow(/clipboard image bytes are invalid/i);
     expect(writeImageMock).not.toHaveBeenCalled();
   });
+
+  it("rejects oversized encoded PNG dimensions before native decoding", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: pngWithDimensions(10_000, 10_000),
+        }),
+      ),
+    ).rejects.toThrow(/clipboard image bytes are invalid/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized encoded JPEG dimensions before native decoding", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/jpeg",
+          bytes: jpegWithDimensions(10_000, 10_000),
+        }),
+      ),
+    ).rejects.toThrow(/clipboard image bytes are invalid/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+  });
 });

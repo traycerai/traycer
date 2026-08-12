@@ -4,6 +4,7 @@ const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MAX_SVG_SOURCE_LENGTH = 5 * 1024 * 1024;
 const MAX_SVG_DIMENSION = 8192;
 const MAX_SVG_NODES = 10_000;
+const MAX_SVG_PATH_DATA_LENGTH = 1_000_000;
 const MAX_FILTERS = 16;
 const MAX_FILTER_PRIMITIVES = 128;
 const FORBIDDEN_DECLARATION = /<!\s*entity\b|<!\s*doctype\b[^>]*\[/i;
@@ -80,6 +81,14 @@ function assertSvgBounds(root: Element): void {
     primitives += filter.querySelectorAll("*").length;
   if (primitives > MAX_FILTER_PRIMITIVES) {
     throw new Error("SVG filters are too complex");
+  }
+
+  let pathDataLength = 0;
+  for (const path of root.querySelectorAll("path[d]")) {
+    pathDataLength += path.getAttribute("d")?.length ?? 0;
+    if (pathDataLength > MAX_SVG_PATH_DATA_LENGTH) {
+      throw new Error("SVG paths are too complex");
+    }
   }
 }
 

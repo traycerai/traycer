@@ -152,6 +152,13 @@ describe("sanitizeUntrustedSvg malicious fixtures", () => {
     ).toThrow(/filters are too complex/i);
   });
 
+  it("rejects path data that is too complex", () => {
+    const pathData = `M0 0 ${"L1 1 ".repeat(200_000)}`;
+    expect(() =>
+      sanitizeUntrustedSvg(svg(`<path d="${pathData}"/>`, "")),
+    ).toThrow(/paths are too complex/i);
+  });
+
   it("retains a safe SVG document", () => {
     const source = svg(
       '<rect x="1" y="2" width="10" height="12" fill="#0f0"/><circle cx="5" cy="5" r="2"/>',

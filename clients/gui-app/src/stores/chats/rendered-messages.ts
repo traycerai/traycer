@@ -1842,13 +1842,11 @@ function addAssistantImageProjection(
       acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
       continue;
     }
-    if (
-      block.type !== "tool_call" ||
-      block.toolName !== "image_generation" ||
-      block.parentBlockId !== null
-    ) {
+    if (block.type !== "tool_call" || block.toolName !== "image_generation") {
       continue;
     }
+    // Image-generation cards stay top-level even when their tool call belongs
+    // to a subagent, so their hashes are valid echo-deduplication targets.
     for (const result of block.imageResults) {
       if (!acc.generatedImageBlockIdByHash.has(result.attachmentHash)) {
         acc.generatedImageBlockIdByHash.set(

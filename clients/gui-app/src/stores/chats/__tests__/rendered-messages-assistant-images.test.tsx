@@ -263,6 +263,31 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     });
   });
 
+  it("deduplicates an image generation owned by a subagent", () => {
+    const source = "/generated/subagent-cat.png";
+    const hash = "hash-subagent-cat";
+    const parentedTool = {
+      ...toolCallWithImages({
+        blockId: "tool-img-subagent",
+        timestamp: 2001,
+        imageResults: [imageResult({ attachmentHash: hash })],
+      }),
+      parentBlockId: "agent-1",
+    } satisfies ContentBlock;
+    const assistant: Message = {
+      ...assistantMessage("turn-img-subagent", 2000),
+      blocks: [parentedTool, textBlock("text-1", 2002, `![cat](${source})`)],
+      imageResolutions: [resolvedEntry(source, hash, {})],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const context = textSegmentContext(result.current[0]?.segments ?? []);
+    expect(context?.deduplicatedTargetsBySource.get(source)).toEqual({
+      toolBlockId: "tool-img-subagent",
+      rowId: "assistant:turn-img-subagent",
+    });
+  });
+
   it("does not deduplicate matching paths when the resolved hashes differ", () => {
     const authored = "./relative-cat.png";
     const canonical = "/abs/generated/cat.png";
