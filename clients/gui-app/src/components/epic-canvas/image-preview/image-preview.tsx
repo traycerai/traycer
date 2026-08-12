@@ -722,6 +722,13 @@ function renderImagePreviewStage(args: {
   readonly onDecodeError: () => void;
   readonly onNaturalSize: (size: ContainerSize) => void;
 }): ReactNode {
+  // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
+  console.debug("[ticket07-trace] render-stage", {
+    status: args.status,
+    url: args.url,
+    servedFromCache: args.servedFromCache,
+    stageKind: args.stage.kind,
+  });
   if (args.status === "ready" && args.url !== null) {
     if (args.stage.kind === "measuring") {
       // Stage not yet laid out - keep the skeleton up rather than flash an
@@ -898,6 +905,13 @@ function ImageStageImg(props: {
   }, [onNaturalSize]);
   useLayoutEffect(() => {
     const complete = servedFromCache || localImgRef.current?.complete === true;
+    // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
+    console.debug("[ticket07-trace] image-stage-img-layout-effect", {
+      url: props.url,
+      servedFromCache,
+      imgComplete: localImgRef.current?.complete,
+      resolvedComplete: complete,
+    });
     setLoaded(complete);
     if (complete) reportNaturalSizeIfKnown();
   }, [props.url, servedFromCache, reportNaturalSizeIfKnown]);

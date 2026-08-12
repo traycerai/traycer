@@ -414,6 +414,13 @@ export function useImageAsset(
             // session's chunks are unneeded - close it instead of
             // assembling bytes nobody will use.
             if (!usedForFetch) client?.close();
+            // eslint-disable-next-line no-console -- ticket-07 temporary trace, see report to coordinator
+            console.debug("[ticket07-trace] asset-ready", {
+              requestKey,
+              url,
+              usedForFetch,
+              servedFromCache: !usedForFetch,
+            });
             setResolved({
               key: requestKey,
               state: {
