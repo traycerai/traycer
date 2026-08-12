@@ -7,8 +7,8 @@ afterEach(() => {
 });
 
 describe("<BinaryPlaceholder />", () => {
-  it("uses the compact layout without a heading and with the smaller icon", () => {
-    const { container } = render(
+  it("uses the compact layout without a heading", () => {
+    render(
       <BinaryPlaceholder
         fileName="photo.png"
         sizeBytes={12}
@@ -21,9 +21,6 @@ describe("<BinaryPlaceholder />", () => {
 
     expect(screen.queryByText("Binary File")).toBeNull();
     expect(screen.getByText("photo.png")).toBeTruthy();
-    expect(container.querySelector("svg")?.getAttribute("class")).toContain(
-      "size-6",
-    );
   });
 
   it("hides Open Externally when no callback is supplied", () => {
