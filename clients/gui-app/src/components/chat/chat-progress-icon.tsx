@@ -20,6 +20,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ChatProgressIconProps {
   readonly epicId: string;
   readonly chatId: string;
+  readonly originHostId: string | null;
   readonly className: string | undefined;
   readonly mutedClassName: string;
   readonly testId: string;
@@ -47,10 +48,13 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
     useEpicAgentActivityTiers().get(props.chatId) ?? false;
   const fallbackReadOnly = useEpicPermissionRole() === "viewer";
   const handle = useExistingChatSessionHandle(props.epicId, props.chatId);
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.chatId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    {
+      epicId: props.epicId,
+      chatId: props.chatId,
+    },
+    props.originHostId,
+  );
   if (handle === null) {
     return (
       <ChatProgressPresentation

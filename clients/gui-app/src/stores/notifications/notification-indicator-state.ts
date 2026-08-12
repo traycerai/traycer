@@ -22,6 +22,18 @@ export interface NotificationIndicatorState {
   readonly unreadDone: boolean;
 }
 
+/**
+ * GUI-only enrichment of the released host response. Aggregate surfaces read
+ * `epics` / `chats` exactly as before; host-bound tabs use the per-origin
+ * projection so another host's same-id lineage cannot decorate the tab.
+ */
+export type SurfaceNotificationIndicators =
+  HostNotificationsIndicatorStateResponse & {
+    readonly byOriginHostId?: Readonly<
+      Record<string, HostNotificationsIndicatorStateResponse>
+    >;
+  };
+
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
   pendingFork: false,
@@ -35,15 +47,14 @@ const EMPTY_HOST_INDICATOR_STATE = EMPTY_NOTIFICATION_INDICATOR_STATE;
 export function selectNotificationIndicatorState(
   state: Pick<AppLocalNotificationsState, "byId">,
   entity: HostNotificationsEntityRef,
-  indicators: HostNotificationsIndicatorStateResponse,
+  originHostId: string | null,
+  indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
-  const hostState =
-    entity.chatId === undefined
-      ? (indicators.epics[entity.epicId] ?? EMPTY_HOST_INDICATOR_STATE)
-      : (indicators.chats[entity.chatId] ?? EMPTY_HOST_INDICATOR_STATE);
+  const hostState = selectHostIndicatorState(indicators, entity, originHostId);
   const unreadLocalFailure = Object.values(state.byId).some(
     (entry) =>
       entry.readAt === null &&
+      (originHostId === null || entry.originHostId === originHostId) &&
       (entity.chatId === undefined
         ? notificationPayloadBelongsToEpic(entry.payload, entity.epicId)
         : notificationPayloadBelongsToEntity(entry.payload, entity)),
@@ -62,14 +73,35 @@ export function selectNotificationIndicatorState(
 
 export function useNotificationIndicatorState(
   entity: HostNotificationsEntityRef,
-  indicators: HostNotificationsIndicatorStateResponse,
+  originHostId: string | null,
+  indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
   const byId = useAppLocalNotificationsStore((state) => state.byId);
-  return selectNotificationIndicatorState({ byId }, entity, indicators);
+  return selectNotificationIndicatorState(
+    { byId },
+    entity,
+    originHostId,
+    indicators,
+  );
 }
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResponse =
   { epics: {}, chats: {} };
+
+function selectHostIndicatorState(
+  indicators: SurfaceNotificationIndicators,
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+): HostNotificationsIndicatorState {
+  const byOriginHostId = indicators.byOriginHostId;
+  const response =
+    originHostId === null || byOriginHostId === undefined
+      ? indicators
+      : (byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE);
+  return entity.chatId === undefined
+    ? (response.epics[entity.epicId] ?? EMPTY_HOST_INDICATOR_STATE)
+    : (response.chats[entity.chatId] ?? EMPTY_HOST_INDICATOR_STATE);
+}
 
 /**
  * The cloud-mode counterpart of the host's `indicatorState` RPC, computed from
@@ -77,14 +109,17 @@ export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResp
  *
  * The cloud feed is the complete VISIBLE set (the relay only ever sends whole
  * snapshots, already filtered for cleared/superseded), and every row carries
- * the entity columns, severity, kind and markers - so the four predicates are
- * exactly the host's, evaluated over rows from EVERY host rather than only the
- * connected one. Ported verbatim from
- * `hostNotificationsGetIndicatorState`: an epic aggregates all of its rows
- * including its chats', a chat aggregates only its own, and pending is
- * `resolvedAt === null` on the two request kinds. `pendingFork` is always
- * false here: fork truth is host-local and is merged from the host response
- * after this feed-row derivation, never inferred from a retained cloud row.
+ * the entity columns, severity, kind and markers, so it can mirror the host's
+ * derivation over rows from EVERY host rather than only the connected one.
+ * Pending prompts are ORed normally. Terminal rows first resolve to the newest
+ * outcome for each lifecycle group and exact entity within one origin host,
+ * whose timestamps share a clock domain. Those per-host winners are then
+ * rolled into epic state. This lets a later success replace an earlier failure
+ * from the same lifecycle without comparing clocks across hosts or allowing an
+ * independent lifecycle, host, or entity's success to hide a real failure.
+ * `pendingFork` is always false here: fork truth is host-local and is merged
+ * from the host response after this feed-row derivation, never inferred from a
+ * retained cloud row.
  *
  * Sparse on purpose: an entity with nothing lit is omitted, which
  * `selectNotificationIndicatorState`'s `?? EMPTY` lookup reads identically to
@@ -96,26 +131,167 @@ export function selectCloudNotificationIndicators(
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): HostNotificationsIndicatorStateResponse {
+  return selectCloudNotificationIndicatorProjection(rows, epicIds, chatIds)
+    .aggregate;
+}
+
+export interface CloudNotificationIndicatorProjection {
+  readonly aggregate: HostNotificationsIndicatorStateResponse;
+  readonly byOriginHostId: Readonly<
+    Record<string, HostNotificationsIndicatorStateResponse>
+  >;
+}
+
+export function selectCloudNotificationIndicatorProjection(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+  epicIds: ReadonlyArray<string>,
+  chatIds: ReadonlyArray<string>,
+): CloudNotificationIndicatorProjection {
   const wantedEpicIds = new Set(epicIds);
   const wantedChatIds = new Set(chatIds);
   if (wantedEpicIds.size === 0 && wantedChatIds.size === 0) {
-    return EMPTY_INDICATOR_STATE_RESPONSE;
+    return {
+      aggregate: EMPTY_INDICATOR_STATE_RESPONSE,
+      byOriginHostId: {},
+    };
   }
-  const epics: Record<string, HostNotificationsIndicatorState> = {};
-  const chats: Record<string, HostNotificationsIndicatorState> = {};
+  const accumulator = createCloudIndicatorAccumulator(
+    wantedEpicIds,
+    wantedChatIds,
+  );
+  const originAccumulators = new Map<string, CloudIndicatorAccumulator>();
   for (const row of Object.values(rows)) {
-    if (row === undefined) continue;
-    const contribution = indicatorContribution(row.entry);
-    if (contribution === null) continue;
-    const { epicId, chatId } = row.entry;
-    if (epicId !== null && wantedEpicIds.has(epicId)) {
-      epics[epicId] = mergeIndicatorFlags(epics[epicId], contribution);
+    if (
+      row === undefined ||
+      !cloudIndicatorEntryIsWanted(row, wantedEpicIds, wantedChatIds)
+    ) {
+      continue;
     }
-    if (chatId !== null && wantedChatIds.has(chatId)) {
-      chats[chatId] = mergeIndicatorFlags(chats[chatId], contribution);
+    collectCloudIndicatorEntry(accumulator, row);
+    const originAccumulator =
+      originAccumulators.get(row.originHostId) ??
+      createCloudIndicatorAccumulator(wantedEpicIds, wantedChatIds);
+    if (!originAccumulators.has(row.originHostId)) {
+      originAccumulators.set(row.originHostId, originAccumulator);
     }
+    collectCloudIndicatorEntry(originAccumulator, row);
+  }
+  const byOriginHostId: Record<
+    string,
+    HostNotificationsIndicatorStateResponse
+  > = {};
+  for (const [originHostId, originAccumulator] of originAccumulators) {
+    byOriginHostId[originHostId] =
+      finalizeCloudIndicatorAccumulator(originAccumulator);
+  }
+  return {
+    aggregate: finalizeCloudIndicatorAccumulator(accumulator),
+    byOriginHostId,
+  };
+}
+
+function cloudIndicatorEntryIsWanted(
+  row: HostNotificationsCloudFeedRow,
+  wantedEpicIds: ReadonlySet<string>,
+  wantedChatIds: ReadonlySet<string>,
+): boolean {
+  const { epicId, chatId } = row.entry;
+  return (
+    (epicId !== null && wantedEpicIds.has(epicId)) ||
+    (chatId !== null && wantedChatIds.has(chatId))
+  );
+}
+
+function createCloudIndicatorAccumulator(
+  wantedEpicIds: ReadonlySet<string>,
+  wantedChatIds: ReadonlySet<string>,
+): CloudIndicatorAccumulator {
+  return {
+    wantedEpicIds,
+    wantedChatIds,
+    epics: {},
+    chats: {},
+    epicTerminalWinners: new Map(),
+    chatTerminalWinners: new Map(),
+  };
+}
+
+function finalizeCloudIndicatorAccumulator(
+  accumulator: CloudIndicatorAccumulator,
+): HostNotificationsIndicatorStateResponse {
+  const { epics, chats, epicTerminalWinners, chatTerminalWinners } =
+    accumulator;
+  for (const [epicId, terminalWinners] of epicTerminalWinners) {
+    const merged = mergeTerminalContributions(
+      epics[epicId],
+      terminalEntriesForEpic(terminalWinners),
+    );
+    if (merged !== undefined) epics[epicId] = merged;
+  }
+  for (const [chatId, originWinners] of chatTerminalWinners) {
+    const merged = mergeTerminalContributions(
+      chats[chatId],
+      terminalEntriesForOrigins(originWinners),
+    );
+    if (merged !== undefined) chats[chatId] = merged;
   }
   return { epics, chats };
+}
+
+interface CloudIndicatorAccumulator {
+  readonly wantedEpicIds: ReadonlySet<string>;
+  readonly wantedChatIds: ReadonlySet<string>;
+  readonly epics: Record<string, HostNotificationsIndicatorState>;
+  readonly chats: Record<string, HostNotificationsIndicatorState>;
+  readonly epicTerminalWinners: Map<string, CloudTerminalWinners>;
+  readonly chatTerminalWinners: CloudTerminalWinners;
+}
+
+/** Exact entity -> origin host -> lifecycle group -> latest terminal entry in
+ * that host's clock. Independent lifecycle groups must never supersede one
+ * another merely because they address the same chat or epic. */
+type CloudTerminalWinners = Map<
+  string,
+  Map<string, Map<string, HostNotificationEntry>>
+>;
+
+function collectCloudIndicatorEntry(
+  accumulator: CloudIndicatorAccumulator,
+  row: HostNotificationsCloudFeedRow,
+): void {
+  const { entry, originHostId } = row;
+  const contribution = indicatorContribution(entry);
+  const { epicId, chatId } = entry;
+  if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
+    if (contribution !== null) {
+      accumulator.epics[epicId] = mergeIndicatorFlags(
+        accumulator.epics[epicId],
+        contribution,
+      );
+    }
+    retainLatestTerminal({
+      winners: terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
+      entityId: chatId === null ? "epic" : `chat:${chatId}`,
+      originHostId,
+      coalesceKey: row.coalesceKey,
+      candidate: entry,
+    });
+  }
+  if (chatId !== null && accumulator.wantedChatIds.has(chatId)) {
+    if (contribution !== null) {
+      accumulator.chats[chatId] = mergeIndicatorFlags(
+        accumulator.chats[chatId],
+        contribution,
+      );
+    }
+    retainLatestTerminal({
+      winners: accumulator.chatTerminalWinners,
+      entityId: chatId,
+      originHostId,
+      coalesceKey: row.coalesceKey,
+      candidate: entry,
+    });
+  }
 }
 
 /** `null` when the entry lights nothing, so an entity with only quiet rows is
@@ -127,17 +303,124 @@ function indicatorContribution(
     entry.kind === "approval.requested" && entry.resolvedAt === null;
   const pendingInterview =
     entry.kind === "interview.requested" && entry.resolvedAt === null;
-  const unreadFailure = entry.severity === "failure" && entry.readAt === null;
-  const unreadDone = entry.severity === "done" && entry.readAt === null;
-  if (!pendingApproval && !pendingInterview && !unreadFailure && !unreadDone) {
+  if (!pendingApproval && !pendingInterview) {
     return null;
   }
   return {
     pendingApproval,
     pendingInterview,
     pendingFork: false,
-    unreadFailure,
-    unreadDone,
+    unreadFailure: false,
+    unreadDone: false,
+  };
+}
+
+function terminalWinnersForEpic(
+  winners: Map<string, CloudTerminalWinners>,
+  epicId: string,
+): CloudTerminalWinners {
+  const existing = winners.get(epicId);
+  if (existing !== undefined) return existing;
+  const created: CloudTerminalWinners = new Map();
+  winners.set(epicId, created);
+  return created;
+}
+
+function retainLatestTerminal(input: {
+  readonly winners: CloudTerminalWinners;
+  readonly entityId: string;
+  readonly originHostId: string;
+  readonly coalesceKey: string;
+  readonly candidate: HostNotificationEntry;
+}): void {
+  if (!isTerminalEntry(input.candidate)) return;
+  const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
+  const groupWinners = terminalWinnersForOrigin(
+    originWinners,
+    input.originHostId,
+  );
+  const current = groupWinners.get(input.coalesceKey);
+  if (current === undefined || terminalEntryIsNewer(input.candidate, current)) {
+    groupWinners.set(input.coalesceKey, input.candidate);
+  }
+}
+
+function terminalEntriesForEpic(
+  winners: CloudTerminalWinners,
+): ReadonlyArray<HostNotificationEntry> {
+  return [...winners.values()].flatMap(terminalEntriesForOrigins);
+}
+
+function terminalEntriesForOrigins(
+  winners: Map<string, Map<string, HostNotificationEntry>>,
+): ReadonlyArray<HostNotificationEntry> {
+  return [...winners.values()].flatMap((group) => [...group.values()]);
+}
+
+function mergeTerminalContributions(
+  current: HostNotificationsIndicatorState | undefined,
+  entries: ReadonlyArray<HostNotificationEntry>,
+): HostNotificationsIndicatorState | undefined {
+  return entries.reduce<HostNotificationsIndicatorState | undefined>(
+    (merged, entry) => {
+      const contribution = terminalIndicatorContribution(entry);
+      return contribution === null
+        ? merged
+        : mergeIndicatorFlags(merged, contribution);
+    },
+    current,
+  );
+}
+
+function terminalWinnersForEntity(
+  winners: CloudTerminalWinners,
+  entityId: string,
+): Map<string, Map<string, HostNotificationEntry>> {
+  const existing = winners.get(entityId);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, Map<string, HostNotificationEntry>>();
+  winners.set(entityId, created);
+  return created;
+}
+
+function terminalWinnersForOrigin(
+  winners: Map<string, Map<string, HostNotificationEntry>>,
+  originHostId: string,
+): Map<string, HostNotificationEntry> {
+  const existing = winners.get(originHostId);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, HostNotificationEntry>();
+  winners.set(originHostId, created);
+  return created;
+}
+
+function isTerminalEntry(entry: HostNotificationEntry): boolean {
+  return entry.severity === "failure" || entry.severity === "done";
+}
+
+function terminalEntryIsNewer(
+  candidate: HostNotificationEntry,
+  current: HostNotificationEntry,
+): boolean {
+  if (candidate.updatedAt !== current.updatedAt) {
+    return candidate.updatedAt > current.updatedAt;
+  }
+  if ((candidate.readAt === null) !== (current.readAt === null)) {
+    return candidate.readAt === null;
+  }
+  return candidate.severity === "failure" && current.severity === "done";
+}
+
+function terminalIndicatorContribution(
+  entry: HostNotificationEntry,
+): HostNotificationsIndicatorState | null {
+  if (entry.readAt !== null || !isTerminalEntry(entry)) return null;
+  return {
+    pendingApproval: false,
+    pendingInterview: false,
+    pendingFork: false,
+    unreadFailure: entry.severity === "failure",
+    unreadDone: entry.severity === "done",
   };
 }
 
@@ -164,19 +447,41 @@ function mergeIndicatorFlags(
  * bit so local SQLite read markers can never override the cloud feed view.
  */
 export function mergeHostPendingForkIntoCloudIndicators(
-  cloud: HostNotificationsIndicatorStateResponse,
+  cloud: SurfaceNotificationIndicators,
   host: HostNotificationsIndicatorStateResponse,
-): HostNotificationsIndicatorStateResponse {
+  originHostId: string | null,
+): SurfaceNotificationIndicators {
   const pendingChats = Object.entries(host.chats).filter(
     ([, state]) => state.pendingFork,
   );
   if (pendingChats.length === 0) return cloud;
-  const chats = { ...cloud.chats };
+  const aggregate = mergePendingForkChats(cloud, pendingChats);
+  if (originHostId === null || cloud.byOriginHostId === undefined) {
+    return { ...aggregate, byOriginHostId: cloud.byOriginHostId };
+  }
+  const scoped =
+    cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE;
+  return {
+    ...aggregate,
+    byOriginHostId: {
+      ...cloud.byOriginHostId,
+      [originHostId]: mergePendingForkChats(scoped, pendingChats),
+    },
+  };
+}
+
+function mergePendingForkChats(
+  response: HostNotificationsIndicatorStateResponse,
+  pendingChats: ReadonlyArray<
+    readonly [string, HostNotificationsIndicatorState]
+  >,
+): HostNotificationsIndicatorStateResponse {
+  const chats = { ...response.chats };
   for (const [chatId] of pendingChats) {
     chats[chatId] = {
       ...(chats[chatId] ?? EMPTY_NOTIFICATION_INDICATOR_STATE),
       pendingFork: true,
     };
   }
-  return { epics: cloud.epics, chats };
+  return { epics: response.epics, chats };
 }

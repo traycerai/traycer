@@ -103,6 +103,22 @@ export type AgentServiceTierOption = z.infer<
   typeof agentServiceTierOptionSchema
 >;
 
+// Narrow, forward-compatible capabilities a model advertises beyond its core
+// text loop. Not a wire-schema change: `guiAgentModelOptionSchema.metadata`
+// stays the open `Record<string, unknown>` it always was, and this is a
+// zod shape consumers use to narrow `metadata.capabilities` through a shared
+// type instead of ad hoc casts. Do not reuse `supportsImages`/
+// `inputModalities`/`vision`/`supportsImageAttachments` for
+// `imageGeneration` - those describe image *input*, not generation.
+export const guiAgentModelCapabilitiesSchema = z.object({
+  // Absent/undefined means false - only Codex (via `parseCodexModel`) derives
+  // this today; every other bundled harness emits no `capabilities` at all.
+  imageGeneration: z.boolean().default(false),
+});
+export type GuiAgentModelCapabilities = z.infer<
+  typeof guiAgentModelCapabilitiesSchema
+>;
+
 export const guiAgentModelOptionSchema = z.object({
   harnessId: guiHarnessIdSchema,
   slug: z.string(),

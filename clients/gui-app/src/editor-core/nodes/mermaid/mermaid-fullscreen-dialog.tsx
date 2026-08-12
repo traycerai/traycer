@@ -109,6 +109,7 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
           {svg.length > 0 ? (
             <PanZoomSvgViewer
               svg={svg}
+              source="trusted"
               ariaLabel={ariaLabel}
               className={undefined}
             />

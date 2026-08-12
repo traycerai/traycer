@@ -10,6 +10,8 @@ import type {
   GuiHarnessId,
   InterviewAnswer,
   InterviewQuestion,
+  ImageResolutionEntry,
+  ImageGenerationResult,
   TodoItem,
   AgentUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -69,6 +71,26 @@ export interface SegmentTodoItem {
   text: string;
   priority: string | null;
   activeForm: string | null;
+}
+
+export interface AssistantMarkdownImageResolution {
+  readonly messageId: string;
+  readonly entry: ImageResolutionEntry;
+}
+
+export interface AssistantMarkdownImageTarget {
+  readonly toolBlockId: string;
+  readonly rowId: string;
+}
+
+export interface AssistantMarkdownImageContext {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly resolutions: ReadonlyArray<AssistantMarkdownImageResolution>;
+  readonly deduplicatedTargetsBySource: ReadonlyMap<
+    string,
+    AssistantMarkdownImageTarget
+  >;
 }
 
 export interface FileChangeSegment {
@@ -134,6 +156,8 @@ export interface ToolSegment {
   // Owning subagent block id when this call was made by a subagent (nests under
   // that subagent block). Null for top-level / main-agent tool calls.
   parentId: string | null;
+  /** Generated images carried by chat.subscribe@1.7. Normalized at projection. */
+  imageResults: ReadonlyArray<ImageGenerationResult>;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -327,7 +351,13 @@ export interface ArtifactChangeRow {
 }
 
 export type MessageSegment =
-  | { id: string; kind: "text"; markdown: string; isStreaming: boolean }
+  | {
+      id: string;
+      kind: "text";
+      markdown: string;
+      isStreaming: boolean;
+      assistantImageContext?: AssistantMarkdownImageContext;
+    }
   | ReasoningSegment
   | ToolSegment
   | FileChangeSegment
