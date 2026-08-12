@@ -436,6 +436,15 @@ interface ChatDeadTileBannerContainerProps {
   readonly hostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
+  /**
+   * The source chat's owner, when the mounting surface already carries it
+   * (the published tile's ref does). Bypasses the cloud-list lookup below,
+   * which a host with swept registry facts (post-restart) can fail to
+   * answer. `""` is treated as absent, not forwarded: the wire field is
+   * `z.string().min(1).nullable()`, so an empty owner would turn a clone
+   * that should degrade to settings-only into an outright failure.
+   */
+  readonly sourceOwnerUserId?: string;
 }
 
 export function ChatDeadTileBannerContainer(
@@ -443,14 +452,22 @@ export function ChatDeadTileBannerContainer(
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
   const bannerBinding = useHostBinding();
+  const providedOwnerUserId =
+    props.sourceOwnerUserId !== undefined && props.sourceOwnerUserId.length > 0
+      ? props.sourceOwnerUserId
+      : null;
   // Ticket 37: both banner render sites (this tile's unreachable-host arm and
   // the canvas substitution) resolve the source owner through the one hook, so
   // a chat with no local record still carries its history across the clone.
-  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+  // A surface that already knows the owner (the published tile's ref names
+  // it) passes it instead, and a `null` chatId keeps the hook's cloud query
+  // disabled - no lookup runs for an answer the caller already had.
+  const lookedUpOwnerUserId = useCloneSourceOwnerUserId({
     client: bannerBinding?.hostClient ?? null,
     epicId: props.epicId,
-    chatId: props.chatId,
+    chatId: providedOwnerUserId === null ? props.chatId : null,
   });
+  const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
