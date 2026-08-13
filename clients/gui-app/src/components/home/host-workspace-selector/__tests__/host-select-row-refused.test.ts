@@ -48,43 +48,71 @@ function staleLastSeen(): string {
 describe("hostSelectRowRefused", () => {
   it("keeps an offline host inside the relay-fuse window selectable (the recovery dial the transport would attempt)", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("offline", recentLastSeen()), false, false),
+      hostSelectRowRefused(
+        mappedEntry("offline", recentLastSeen()),
+        false,
+        false,
+      ),
     ).toBe(false);
   });
 
   it("keeps a cloud-offline host with a READY live session in this client selectable", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false, true),
+      hostSelectRowRefused(
+        mappedEntry("offline", staleLastSeen()),
+        false,
+        true,
+      ),
     ).toBe(false);
   });
 
   it("still refuses a genuinely offline host - past the fuse window, no session", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false, false),
+      hostSelectRowRefused(
+        mappedEntry("offline", staleLastSeen()),
+        false,
+        false,
+      ),
     ).toBe(true);
   });
 
   it("refuses a plan-restricted (local-only) host", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("local-only", recentLastSeen()), false, false),
+      hostSelectRowRefused(
+        mappedEntry("local-only", recentLastSeen()),
+        false,
+        false,
+      ),
     ).toBe(true);
   });
 
   it("keeps an indeterminate (unknown liveness) host selectable - a failed read is not a fact about the host", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("unknown", recentLastSeen()), false, false),
+      hostSelectRowRefused(
+        mappedEntry("unknown", recentLastSeen()),
+        false,
+        false,
+      ),
     ).toBe(false);
   });
 
   it("keeps a connectable host selectable", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), false, false),
+      hostSelectRowRefused(
+        mappedEntry("connectable", recentLastSeen()),
+        false,
+        false,
+      ),
     ).toBe(false);
   });
 
   it("refuses every remote row under the account-level plan gate, even a connectable one", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), true, false),
+      hostSelectRowRefused(
+        mappedEntry("connectable", recentLastSeen()),
+        true,
+        false,
+      ),
     ).toBe(true);
   });
 });

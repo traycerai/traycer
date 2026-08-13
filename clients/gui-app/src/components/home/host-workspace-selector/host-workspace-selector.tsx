@@ -1145,7 +1145,11 @@ function HostSelectRow(props: {
         // permitted) or an offline verdict this client holds a ready
         // live session against stays selectable - see
         // `hostSelectRowRefused` for the full derivation.
-        hostSelectRowRefused(props.host, props.remoteRestricted, hasReadySession)
+        hostSelectRowRefused(
+          props.host,
+          props.remoteRestricted,
+          hasReadySession,
+        )
       }
     >
       <HostSelectOptionContent
