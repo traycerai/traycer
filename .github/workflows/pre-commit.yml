@@ -23,6 +23,11 @@ jobs:
       # Drive `nx affected` in the workspace-checks hook off the PR base.
       NX_BASE: ${{ github.event.pull_request.base.sha }}
       NX_HEAD: ${{ github.event.pull_request.head.sha }}
+      # gui-app's type-aware `eslint .` runs against a cold cache here and has
+      # crossed Node's ~4GB default heap twice (OOM SIGABRT mid-lint, two
+      # consecutive heads). The runner has 16GB; give the hook's Node
+      # processes real headroom rather than rerunning until GC gets lucky.
+      NODE_OPTIONS: --max-old-space-size=6144
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
