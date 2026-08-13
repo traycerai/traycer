@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   createRequestContext,
@@ -54,6 +54,10 @@ class StubStreamWebSocket implements StreamWebSocketLike {
 
   fireBinary(data: Uint8Array): void {
     this.onmessage?.({ type: "binary", data });
+  }
+
+  fireClose(code: number, reason: string, wasClean: boolean): void {
+    this.onclose?.({ code, reason, wasClean });
   }
 }
 
@@ -387,6 +391,58 @@ describe("AssetStreamClient", () => {
     expect(closedCount(sockets[0])).toBe(1);
     expect(recorded.ready).toHaveLength(1);
     expect(recorded.failures).toHaveLength(0);
+  });
+
+  it("resets partial assembly when the transport reconnects", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const { callbacks, recorded } = recordingCallbacks();
+    const asset = new AssetStreamClient({
+      wsStreamClient: client,
+      method: "workspace.streamAsset",
+      params: WORKSPACE_PARAMS,
+      callbacks,
+    });
+
+    completeHandshake(sockets[0], undefined);
+    fireAssetHeader(sockets[0], 3);
+    sockets[0].fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 1,
+    });
+    sockets[0].fireBinary(new Uint8Array([1]));
+    sockets[0].fireClose(1006, "abnormal", false);
+
+    vi.advanceTimersByTime(10);
+    const reconnectedSocket = sockets[1];
+    if (reconnectedSocket === undefined) {
+      throw new Error("asset stream did not reconnect");
+    }
+    completeHandshake(reconnectedSocket, undefined);
+    fireAssetHeader(reconnectedSocket, 2);
+    reconnectedSocket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 2,
+    });
+    reconnectedSocket.fireBinary(new Uint8Array([4, 5]));
+    reconnectedSocket.fireText({
+      kind: "assetComplete",
+      hasBinaryPayload: false,
+    });
+
+    expect(recorded.headers).toHaveLength(2);
+    expect(recorded.failures).toHaveLength(0);
+    expect(recorded.ready).toHaveLength(1);
+    expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([4, 5]);
+    expect(closedCount(reconnectedSocket)).toBe(1);
+    asset.close();
+    vi.useRealTimers();
   });
 
   it("fails with length-mismatch when assembled bytes don't match the header's sizeBytes, without calling onReady", () => {

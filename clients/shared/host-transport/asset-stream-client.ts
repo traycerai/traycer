@@ -129,6 +129,12 @@ export class AssetStreamClient<
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
+      if (status === "reconnecting") {
+        this.header = null;
+        this.chunks = [];
+        this.receivedBytes = 0;
+        return;
+      }
       if (status === "closed") {
         this.handleClosed(reason);
       }
