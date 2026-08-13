@@ -1,3 +1,4 @@
+import { Info } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { CloudChatVisibility } from "@traycer/protocol/host/epic/cloud-chat";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { useChatSharingDefaultSupported } from "@/hooks/epic/use-chat-sharing-support";
 import { useEpicSetChatSharingDefault } from "@/hooks/epic/use-epic-chat-visibility-mutations";
@@ -59,19 +61,36 @@ function MyAgentsSharingSectionBody(props: {
 
   return (
     <section
-      className="flex flex-col gap-2 border-b border-border/50 p-3 last:border-b-0"
+      className="flex flex-col border-b border-border/50 p-3 last:border-b-0"
       data-testid="epic-sharing-my-agents-section"
     >
-      <h3 className="truncate text-ui-sm font-semibold tracking-wide text-foreground">
-        My agents
-      </h3>
       <div className="flex items-center justify-between gap-3">
-        <Label
-          htmlFor="epic-sharing-my-agents-switch"
-          className="min-w-0 flex-1 text-ui-sm font-normal leading-snug"
-        >
-          Share my agents with this task
-        </Label>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Label
+            htmlFor="epic-sharing-my-agents-switch"
+            className="truncate text-ui-sm font-normal text-muted-foreground"
+          >
+            Share my agents
+          </Label>
+          <TooltipWrapper
+            label={MY_AGENTS_HINT}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {/* The hint moved off the panel into this tooltip; the icon is the
+                only discoverable trace of it, so it must be focusable. */}
+            <button
+              type="button"
+              tabIndex={0}
+              aria-label="About sharing my agents"
+              className="shrink-0 cursor-default text-muted-foreground/70 outline-none focus-visible:text-foreground"
+              data-testid="epic-sharing-my-agents-hint"
+            >
+              <Info className="size-3.5" />
+            </button>
+          </TooltipWrapper>
+        </div>
         <Switch
           id="epic-sharing-my-agents-switch"
           checked={isOn}
@@ -83,9 +102,6 @@ function MyAgentsSharingSectionBody(props: {
           data-testid="epic-sharing-my-agents-switch"
         />
       </div>
-      <p className="text-ui-xs leading-relaxed text-muted-foreground">
-        {MY_AGENTS_HINT}
-      </p>
       <SharingDefaultConfirmDialog
         open={confirm !== null}
         onOpenChange={(open) => {

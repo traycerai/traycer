@@ -44,8 +44,6 @@ function SharingPanelContent(props: {
     <div className="flex flex-col">
       <SharingPanelHeader {...refreshProps} />
 
-      <MyAgentsSharingSection epicId={props.epicId} />
-
       {canInvitePeople ? (
         <PanelSection title={undefined} hint={undefined} className="gap-3">
           <InviteCard {...inviteCardProps} />
@@ -65,6 +63,10 @@ function SharingPanelContent(props: {
           <TeamsAccess {...teamsProps} />
         </PanelSection>
       ) : null}
+
+      {/* Deliberately last: the panel's primary job is granting people access;
+          the per-viewer agents default is a secondary, personal control. */}
+      <MyAgentsSharingSection epicId={props.epicId} />
 
       <ConfirmDestructiveDialog
         open={revokeDialogProps.open}
