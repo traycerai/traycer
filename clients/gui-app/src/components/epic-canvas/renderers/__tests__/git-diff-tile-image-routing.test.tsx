@@ -445,6 +445,50 @@ describe("<GitDiffTile /> image routing", () => {
     expect(changedRevisionSides[1]).not.toBe(initialSides[1]);
   });
 
+  it("remounts an in-flight image subscription for a changed git revision", () => {
+    state.asset = {
+      status: "header",
+      url: null,
+      meta: {
+        mediaType: "image/png",
+        sizeBytes: 12,
+        width: 120,
+        height: 80,
+      },
+      reason: null,
+      totalBytes: 12,
+      servedFromCache: false,
+    };
+    const rendered = renderTile(
+      changedFile({
+        path: "assets/slow.png",
+        isBinary: true,
+        stage: "staged",
+        stagedOid: "staged-1",
+      }),
+    );
+    const initialSides = screen.getAllByTestId("image-preview-side");
+    expect(initialSides).toHaveLength(2);
+
+    rerenderTile(
+      rendered,
+      changedFile({
+        path: "assets/slow.png",
+        isBinary: true,
+        stage: "staged",
+        stagedOid: "staged-2",
+      }),
+      "head-1",
+    );
+
+    const changedRevisionSides = screen.getAllByTestId("image-preview-side");
+    expect(changedRevisionSides).toHaveLength(2);
+    expect(changedRevisionSides[0]).not.toBe(initialSides[0]);
+    expect(changedRevisionSides[1]).not.toBe(initialSides[1]);
+    expect(changedRevisionSides[0]?.getAttribute("data-status")).toBe("header");
+    expect(changedRevisionSides[1]?.getAttribute("data-status")).toBe("header");
+  });
+
   it("keeps non-image binary files on BinaryPlaceholder", () => {
     renderTile(changedFile({ path: "assets/archive.zip", isBinary: true }));
 

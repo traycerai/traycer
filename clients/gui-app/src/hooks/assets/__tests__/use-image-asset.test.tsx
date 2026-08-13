@@ -715,6 +715,111 @@ describe("useImageAsset", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
   });
 
+  it("ignores a decode reporter captured before the request changes", async () => {
+    const secondRequest: ImageAssetRequest = {
+      method: "workspace",
+      workspacePath: "/repo",
+      filePath: "images/second.png",
+    };
+    const { result, rerender, unmount } = renderHook(
+      ({ request }: { readonly request: ImageAssetRequest }) =>
+        useImageAsset(request),
+      { initialProps: { request: WORKSPACE_REQUEST } },
+    );
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "stale-reporter", 3);
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    const staleReporter = result.current.reportDecodeFailure;
+
+    rerender({ request: secondRequest });
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const secondSession = mockWsStreamClient.sessions[1];
+    expect(result.current.status).toBe("loading");
+
+    act(() => {
+      staleReporter();
+    });
+    expect(result.current.status).toBe("loading");
+    expect(revokeObjectUrlMock).not.toHaveBeenCalled();
+
+    act(() => {
+      emitHeader(secondSession, "current-request", 3);
+      emitBytes(secondSession, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.url).toBe("blob:image/2");
+    unmount();
+  });
+
+  it("opens a fresh stream when a git image remounts during an in-flight transfer", () => {
+    const first = renderHook(() => useImageAsset(GIT_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(firstSession, "remount-in-flight", 3);
+    });
+    expect(first.result.current.status).toBe("header");
+    first.unmount();
+    expect(firstSession.closed).toBe(true);
+
+    const remounted = renderHook(() => useImageAsset(GIT_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const remountedSession = mockWsStreamClient.sessions[1];
+    expect(remountedSession).not.toBe(firstSession);
+    act(() => {
+      emitHeader(remountedSession, "remount-in-flight", 3);
+    });
+    expect(remounted.result.current.status).toBe("header");
+    remounted.unmount();
+  });
+
+  it("opens a new revision stream while an old consumer keeps its stream alive", async () => {
+    const first = renderHook(() => useImageAsset(GIT_REQUEST));
+    const second = renderHook(() => useImageAsset(GIT_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const sharedSession = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(sharedSession, "revision-r1", 3);
+    });
+    expect(first.result.current.status).toBe("header");
+    expect(second.result.current.status).toBe("header");
+    first.unmount();
+
+    const remounted = renderHook(() =>
+      useImageAsset({
+        ...GIT_REQUEST,
+        coalesceRevision: "git-revision-2",
+      }),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const remountedSession = mockWsStreamClient.sessions[1];
+    expect(remounted.result.current.status).toBe("loading");
+
+    act(() => {
+      emitBytes(sharedSession, [7, 8, 9]);
+    });
+    await flushPromises();
+    expect(second.result.current.status).toBe("ready");
+    expect(remounted.result.current.status).toBe("loading");
+
+    act(() => {
+      emitHeader(remountedSession, "revision-r2", 3);
+      emitBytes(remountedSession, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(remounted.result.current.status).toBe("ready");
+    expect(remounted.result.current.url).toBe("blob:image/2");
+    second.unmount();
+    remounted.unmount();
+  });
+
   it("opens a fresh stream after a decode failure discards the old entry", async () => {
     const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
     const firstSession = mockWsStreamClient.sessions[0];

@@ -481,6 +481,47 @@ describe("AssetStreamClient", () => {
     vi.useRealTimers();
   });
 
+  it("fails when a reconnect sends a chunk before its retry header", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const { callbacks, recorded } = recordingCallbacks();
+    const asset = new AssetStreamClient({
+      wsStreamClient: client,
+      method: "workspace.streamAsset",
+      params: WORKSPACE_PARAMS,
+      callbacks,
+    });
+
+    completeHandshake(sockets[0], undefined);
+    fireAssetHeader(sockets[0], 3);
+    sockets[0].fireClose(1006, "abnormal", false);
+
+    vi.advanceTimersByTime(10);
+    const reconnectedSocket = sockets[1];
+    if (reconnectedSocket === undefined) {
+      throw new Error("asset stream did not reconnect");
+    }
+    completeHandshake(reconnectedSocket, undefined);
+    reconnectedSocket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 3,
+    });
+    reconnectedSocket.fireBinary(new Uint8Array([1, 2, 3]));
+
+    expectFatal(
+      recorded,
+      reconnectedSocket,
+      "assetChunk arrived before the reconnect retry's assetHeader",
+    );
+    expect(recorded.ready).toHaveLength(0);
+    asset.close();
+    vi.useRealTimers();
+  });
+
   it("accepts the first header after reconnecting before any header arrives", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
