@@ -120,6 +120,38 @@ export function selectUnfoldedCloudChats(input: {
 }
 
 /**
+ * The folded cloud counterpart of each local chat, keyed by the LOCAL id.
+ *
+ * Visibility lives on the cloud row. After a fork the local chat publishes
+ * into a derived clone id, so a lookup on `chatId` equality would miss the
+ * row that actually carries this chat's visibility. The publication map is
+ * the same one the unfold uses; an empty map degrades to `chatId` equality.
+ *
+ * Only the viewer's own rows can fold — another owner's row that happens to
+ * share a host-minted id is a different chat.
+ */
+export function indexOwnCloudChatsByLocalId(input: {
+  readonly chats: readonly CloudChatSummary[];
+  readonly localChatIds: readonly string[];
+  readonly publicationChatIdByChatId: ReadonlyMap<string, string>;
+}): ReadonlyMap<string, CloudChatSummary> {
+  const ownByPublishedId = new Map<string, CloudChatSummary>();
+  for (const chat of input.chats) {
+    if (!cloudRowIsViewersOwn(chat)) continue;
+    ownByPublishedId.set(chat.identity.chatId, chat);
+  }
+  const byLocalId = new Map<string, CloudChatSummary>();
+  for (const localChatId of input.localChatIds) {
+    const publishedId =
+      input.publicationChatIdByChatId.get(localChatId) ?? localChatId;
+    const chat = ownByPublishedId.get(publishedId);
+    if (chat === undefined) continue;
+    byLocalId.set(localChatId, chat);
+  }
+  return byLocalId;
+}
+
+/**
  * Whether this cloud row is one of THIS viewer's local chats' backups.
  *
  * The owner check is not a refinement of the id check - it is the other half of

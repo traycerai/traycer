@@ -434,3 +434,59 @@ export const readCloudChatPayloadResponseSchema = z.object({
 export type ReadCloudChatPayloadResponse = z.infer<
   typeof readCloudChatPayloadResponseSchema
 >;
+
+// ---- Visibility mutations ---------------------------------------------- //
+//
+// Same optional-capability channel as the five reads above. New method names,
+// both `{major:1, minor:0}`, both `degrade: { kind: "unsupported" }`: a host
+// that predates them answers `E_HOST_UNSUPPORTED` and the client hides Share /
+// Mark-all-private rather than rendering a failure.
+//
+// Request keys follow the cloud-chat convention (`taskId`, not `epicId`). The
+// host is a bearer pass-through; the server owns owner-binding and ACL.
+
+/**
+ * Flip one cloud chat's visibility (`private` | `task`).
+ *
+ * The response carries the updated row so a client can reconcile its list
+ * cache without a second list hop.
+ */
+export const setCloudChatVisibilityRequestSchema = z.object({
+  taskId: z.string().min(1),
+  chatId: z.string().min(1),
+  visibility: cloudChatVisibilitySchema,
+});
+export type SetCloudChatVisibilityRequest = z.infer<
+  typeof setCloudChatVisibilityRequestSchema
+>;
+
+export const setCloudChatVisibilityResponseSchema = z.object({
+  chat: cloudChatSummarySchema,
+});
+export type SetCloudChatVisibilityResponse = z.infer<
+  typeof setCloudChatVisibilityResponseSchema
+>;
+
+/**
+ * Set this caller's per-task default visibility, optionally applying it to
+ * every chat they already own on the task.
+ *
+ * `applyToExisting: false` writes the preference only (new chats inherit it).
+ * `applyToExisting: true` also bulk-updates existing owned rows. `updatedCount`
+ * is the number of rows whose stored visibility actually changed.
+ */
+export const setChatSharingDefaultRequestSchema = z.object({
+  taskId: z.string().min(1),
+  defaultVisibility: cloudChatVisibilitySchema,
+  applyToExisting: z.boolean(),
+});
+export type SetChatSharingDefaultRequest = z.infer<
+  typeof setChatSharingDefaultRequestSchema
+>;
+
+export const setChatSharingDefaultResponseSchema = z.object({
+  updatedCount: z.number().int().nonnegative(),
+});
+export type SetChatSharingDefaultResponse = z.infer<
+  typeof setChatSharingDefaultResponseSchema
+>;

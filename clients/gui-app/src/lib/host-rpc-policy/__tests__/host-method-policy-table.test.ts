@@ -101,6 +101,32 @@ describe("host method poll policy table", () => {
     expect(HOST_METHOD_POLL_TABLE["agent.roles.relinquish"].mode).toBe("fifo");
   });
 
+  it("declares the two chat-sharing writes as independent fifo queues", () => {
+    // fifo is per (method, params). These two methods never share a
+    // coordinator queue; cross-surface ordering is the client-side
+    // one-in-flight gate, not this table.
+    expect(HOST_METHOD_POLL_TABLE["epic.setCloudChatVisibility"].mode).toBe(
+      "fifo",
+    );
+    expect(HOST_METHOD_POLL_TABLE["epic.setChatSharingDefault"].mode).toBe(
+      "fifo",
+    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("epic.setCloudChatVisibility", {
+        taskId: "task-1",
+        chatId: "chat-1",
+        visibility: "private",
+      }),
+    ).toBe("fifo");
+    expect(
+      hostRpcSchedulingPolicy.modeFor("epic.setChatSharingDefault", {
+        taskId: "task-1",
+        defaultVisibility: "private",
+        applyToExisting: true,
+      }),
+    ).toBe("fifo");
+  });
+
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
     expect(
       hostRpcSchedulingPolicy.modeFor("providers.list", { native: null }),

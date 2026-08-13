@@ -3,6 +3,8 @@ import { renderHook } from "@testing-library/react";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS,
   EPIC_COLLABORATORS_OPEN_REFRESH_MS,
@@ -42,10 +44,22 @@ const mockQueryResult = vi.hoisted((): { current: MockQueryResult } => ({
   },
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => ({ getActiveHostId: () => "host-remote" }),
-}));
+// A complete-but-inert HostRequester: `useHostQuery` is mocked below, so no
+// member is ever invoked - the shape exists only to satisfy the options type.
+const fakeClient: HostRequester<HostRpcRegistry> = {
+  getRegistry: () => {
+    throw new Error("unused in this test");
+  },
+  getActiveHost: () => null,
+  getActiveHostId: () => "host-remote",
+  getRequestContext: () => null,
+  getRequestContextUserId: () => null,
+  onChange: () => () => undefined,
+  request: () => Promise.reject(new Error("unused in this test")),
+  requestWithSignal: () => Promise.reject(new Error("unused in this test")),
+  requestWithResponseTimeout: () =>
+    Promise.reject(new Error("unused in this test")),
+};
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: CapturedHostQuery) => {
@@ -125,6 +139,7 @@ describe("useEpicCollaboratorsQuery", () => {
   it("opts the Sharing panel into table-owned fixed polling while open", () => {
     renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
         poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
@@ -136,10 +151,19 @@ describe("useEpicCollaboratorsQuery", () => {
       poll: true,
       staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
     });
+    // The caller-chosen client must reach the query untouched - host binding
+    // is this hook's caller's decision, never an ambient default.
+    expect(capturedQuery.current?.client).toBe(fakeClient);
   });
 
   it("keeps the closed-panel query relaxed and non-polling by default", () => {
-    renderHook(() => useEpicCollaboratorsQuery("epic-closed", null));
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-closed", {
+        client: fakeClient,
+        poll: undefined,
+        staleTime: undefined,
+      }),
+    );
 
     expect(capturedQuery.current?.options).toMatchObject({
       poll: false,
@@ -158,6 +182,7 @@ describe("useEpicCollaboratorsQuery", () => {
 
     const hook = renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
         poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
@@ -186,6 +211,7 @@ describe("useEpicCollaboratorsQuery", () => {
 
     const hook = renderHook(() =>
       useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
         poll: true,
         staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
       }),
