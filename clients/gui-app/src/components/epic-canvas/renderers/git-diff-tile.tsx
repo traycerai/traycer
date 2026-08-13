@@ -21,6 +21,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import {
   gitBundleGroupLabel,
+  gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
   gitStageLabel,
@@ -551,6 +552,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       <>
         {svgToggle}
         <ImageDiffView
+          key={gitImageDiffRevisionKey(props.file, props.headSha)}
           runningDir={props.node.diff.runningDir}
           filePath={props.file.path}
           previousPath={props.file.previousPath}

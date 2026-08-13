@@ -85,6 +85,29 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
   return { oldStage: stage, newStage: stage, conflicted: false };
 }
 
+/**
+ * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
+ * `useImageAsset` request key covers `(path, stage)`, never `headSha`/
+ * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
+ * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
+ * alone is unchanged. The unstaged/worktree side already has its own re-stat
+ * (pane-focus nonce, decision #11) so this isn't strictly needed there, but
+ * including `worktreeOid` too keeps one key covering every side rather than
+ * conditionally narrowing it per file. Forcing a full remount (rather than
+ * threading these into the request type) is deliberate: zoom/pan/toolbar
+ * state SHOULD reset for a genuinely different image, not just the bytes.
+ * Mirrors `git-query-keys.ts`'s `fileDiff` key - the sibling TEXT-diff cache
+ * key for the SAME file already includes all three.
+ */
+export function gitImageDiffRevisionKey(
+  file: GitChangedFile,
+  headSha: string,
+): string {
+  return [headSha, file.stagedOid ?? "none", file.worktreeOid ?? "none"].join(
+    ":",
+  );
+}
+
 export interface GitImageDiffRouting {
   readonly routeToImageDiff: boolean;
   readonly isSvg: boolean;

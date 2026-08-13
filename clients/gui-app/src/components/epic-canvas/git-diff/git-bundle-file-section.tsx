@@ -14,6 +14,7 @@ import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import { NO_HIGHLIGHT } from "@/lib/git/path-highlight";
 import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
 import {
+  gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
 } from "@/lib/git/git-diff-tile";
@@ -171,6 +172,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
     const sides = gitImageDiffSides(props.file);
     return (
       <ImageDiffView
+        key={gitImageDiffRevisionKey(props.file, props.headSha)}
         runningDir={props.node.diff.runningDir}
         filePath={props.file.path}
         previousPath={props.file.previousPath}
