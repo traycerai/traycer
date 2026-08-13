@@ -205,7 +205,31 @@ export function hostUnavailability(
  * `indeterminate` is not a refusal — it is the absence of an answer, and the
  * transport's response to an absent answer is to try.
  *
- * Lives here rather than beside the GUI's `hostTransportKey` because it is now
+ * `hasReadyLiveSession` outranks ALL of it, and that is the single rule this
+ * function exists to state once:
+ *
+ *   **a ready live session keeps the transport alive under any verdict;
+ *   confirmed refusals gate NEW dials only.**
+ *
+ * Two authorities used to answer this and they disagreed. `useHostReachability`
+ * already held that an open E2E session outranks a cloud verdict, while this
+ * gate never saw session evidence and nulled the key anyway — so the registries
+ * released the very handle the hook was protecting, and the committed tests
+ * pinned both halves of the contradiction.
+ *
+ * The hook's side is the correct one, and the asymmetry is the reason: an open
+ * session is firsthand, present-tense proof, while a verdict is a lease read
+ * that is second-hand and possibly minutes stale. If the host really is dead
+ * the session discovers it through its own death path within seconds and tears
+ * down for a reason it actually observed. Killing it from a directory read
+ * instead replaces a working tab with a dead one on weaker evidence — and if
+ * the read was wrong, nothing brings the tab back.
+ *
+ * `plan-restricted` mid-session (a downgrade with a session open) follows the
+ * same rule deliberately: the existing session survives, and the next dial
+ * refuses with the upgrade copy.
+ *
+ * Lives here rather than beside the GUI's `hostTransportKey` because it is
  * asked by more than one gate, and the gates MUST agree. `host-client`'s rebind
  * sweep and the binding-authority registry ask it to decide whether a directory
  * re-emit changed the route enough to cancel in-flight work; `transport-key`
@@ -214,7 +238,11 @@ export function hostUnavailability(
  */
 export function isConfirmedTransportRefusal(
   entry: HostDirectoryEntry,
+  hasReadyLiveSession: boolean,
 ): boolean {
+  if (hasReadyLiveSession) {
+    return false;
+  }
   const unavailability = hostUnavailability(entry);
   return unavailability === "offline" || unavailability === "plan-restricted";
 }

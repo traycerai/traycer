@@ -87,6 +87,18 @@ export interface HostDirectoryServiceOptions {
    */
   readonly remoteFetcher: RemoteHostFetcher | null;
   /**
+   * Identity of the auth context a refresh is being made ON BEHALF OF, read at
+   * the moment it is needed. `null` disables identity scoping — correct only
+   * for tests with a single implicit account.
+   *
+   * Injected rather than read off `AuthService` inside the service for the same
+   * reason `remoteFetcher` is: this class is constructed outside React and the
+   * composition root stays the one place that decides how a shell request is
+   * made. It must NOT be the bearer — that deliberately never leaves
+   * `AuthService`; a user id is enough to tell two accounts apart.
+   */
+  readonly authContextId: (() => string | null) | null;
+  /**
    * Resolves this machine's durable local host id (see
    * `lastKnownLocalHostId`). Injected like `remoteFetcher` rather than read off
    * `runnerHost` inside the service: this class is constructed outside React
@@ -145,6 +157,7 @@ export type HostDirectoryListener = (
 export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
   private readonly remoteFetcher: RemoteHostFetcher;
+  private readonly authContextId: () => string | null;
   private readonly localHostIdSeeder: () => Promise<string | null>;
   private localEntry: HostDirectoryEntry | null = null;
   /**
@@ -273,7 +286,14 @@ export class HostDirectoryService implements IHostDirectoryService {
    * (T20 / audit P4) - a foundation for T21's interval + open-time triggers,
    * which would otherwise stack requests.
    */
-  private refreshInFlight: Promise<readonly HostDirectoryEntry[]> | null = null;
+  /**
+   * The in-flight refresh, WITH the auth identity it was started for. Joining
+   * is only legal for a caller in that same identity — see `refresh()`.
+   */
+  private refreshInFlight: {
+    readonly authContextId: string | null;
+    readonly request: Promise<readonly HostDirectoryEntry[]>;
+  } | null = null;
   private readonly handleVisibilityChange = (): void => {
     if (this.isDocumentHidden()) {
       return;
@@ -293,6 +313,8 @@ export class HostDirectoryService implements IHostDirectoryService {
       options.localHostIdSeeder === null
         ? () => options.runnerHost.getLastKnownLocalHostId()
         : options.localHostIdSeeder;
+    this.authContextId =
+      options.authContextId === null ? () => null : options.authContextId;
   }
 
   /**
@@ -404,13 +426,40 @@ export class HostDirectoryService implements IHostDirectoryService {
     );
   }
 
+  /**
+   * Refresh the merged directory, coalescing concurrent callers.
+   *
+   * IDENTITY-SCOPED, at both points that need it — and needing it at two
+   * points is the lesson. `AuthService.fetchRegisteredHosts` is bearer-keyed,
+   * but this memo sits ABOVE it and returned before that key was ever
+   * consulted: an account switch while A's poll was pending joined B's
+   * mandatory refresh to A's promise, and A's hosts were committed into B's
+   * long-lived directory.
+   *
+   * Keying this memo alone does not close it either. A refresh that STARTED
+   * legally under A can still resolve after the switch, and `performRefresh`
+   * writes `remoteEntries` and reconciles the selection unconditionally — so
+   * the commit is guarded separately, inside `performRefresh`.
+   *
+   * The invariant, stated once because it keeps being rediscovered one layer
+   * at a time: **an identity guard belongs at every layer that MEMOIZES or
+   * COMMITS, not only at the one that fetches.**
+   */
   refresh(): Promise<readonly HostDirectoryEntry[]> {
-    if (this.refreshInFlight === null) {
-      this.refreshInFlight = this.performRefresh().finally(() => {
-        this.refreshInFlight = null;
-      });
+    const authContextId = this.authContextId();
+    const inFlight = this.refreshInFlight;
+    if (inFlight !== null && inFlight.authContextId === authContextId) {
+      return inFlight.request;
     }
-    return this.refreshInFlight;
+    const request = this.performRefresh(authContextId).finally(() => {
+      // Only clear OUR slot: a request superseded by an identity change must
+      // not clear the newer one when it finally settles.
+      if (this.refreshInFlight?.request === request) {
+        this.refreshInFlight = null;
+      }
+    });
+    this.refreshInFlight = { authContextId, request };
+    return request;
   }
 
   findById(hostId: string): HostDirectoryEntry | null {
@@ -656,8 +705,27 @@ export class HostDirectoryService implements IHostDirectoryService {
    * remote selection (T20 / audit P4). `signed-out` clears remotes exactly
    * as a successful empty `hosts` result would.
    */
-  private async performRefresh(): Promise<readonly HostDirectoryEntry[]> {
+  private async performRefresh(
+    initiatingAuthContextId: string | null,
+  ): Promise<readonly HostDirectoryEntry[]> {
     const outcome = await this.fetchRemoteOutcome();
+    // THE COMMIT GUARD. Everything below mutates a long-lived, app-wide object:
+    // `remoteEntries`, the selection, the emit every consumer refetches on. A
+    // read issued for account A must not write any of it after the user has
+    // become account B — that is how A's machines appeared in B's directory,
+    // and how a 401 earned by A's expired bearer cleared the list B had just
+    // legitimately loaded.
+    //
+    // Discarding is the whole action: the switch itself triggers a fresh
+    // refresh under the new identity, so there is nothing to salvage here and
+    // nothing waiting on this write.
+    if (this.authContextId() !== initiatingAuthContextId) {
+      appLogger.debug(
+        "[host-directory] discarding a refresh that resolved after an identity change",
+        { outcome: outcome.kind },
+      );
+      return this.snapshot();
+    }
     if (outcome.kind === "failed") {
       appLogger.debug(
         "[host-directory] refresh failed, retaining last-known remote entries",

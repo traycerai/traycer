@@ -3,6 +3,7 @@ import {
   isConfirmedTransportRefusal,
   isRemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
@@ -56,7 +57,8 @@ export function hostTransportKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (isConfirmedTransportRefusal(entry)) return null;
+  if (isConfirmedTransportRefusal(entry, hasReadyRemoteSession(entry.hostId)))
+    return null;
   return [
     entry.hostId,
     entry.kind,
@@ -82,7 +84,8 @@ export function dialableHostEndpoint(
   entry: HostDirectoryEntry | null,
 ): HostTransportEndpoint | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (isConfirmedTransportRefusal(entry)) return null;
+  if (isConfirmedTransportRefusal(entry, hasReadyRemoteSession(entry.hostId)))
+    return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
 }
 

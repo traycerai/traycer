@@ -1,6 +1,7 @@
 import type { HostRequestAuthority } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
 import { isConfirmedTransportRefusal } from "./remote-fetcher";
+import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 
 /** Immutable binding portion of a request authority, shared per host id. */
 export interface HostBindingAuthority {
@@ -118,7 +119,10 @@ function snapshot(entry: HostDirectoryEntry): HostTransportSnapshot {
     kind: entry.kind,
     websocketUrl: entry.websocketUrl,
     version: entry.version,
-    refused: isConfirmedTransportRefusal(entry),
+    refused: isConfirmedTransportRefusal(
+      entry,
+      hasReadyRemoteSession(entry.hostId),
+    ),
   };
 }
 

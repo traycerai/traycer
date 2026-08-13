@@ -201,6 +201,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
         localHostIdSeeder: () =>
           queryClient.fetchQuery(localHostIdQueryOptions(runnerHost)),
+        // The USER id, never the bearer — that deliberately never leaves
+        // `AuthService`, and telling two accounts apart does not need it.
+        authContextId: () =>
+          auth.getCurrentSessionSnapshot().profile?.userId ?? null,
       });
 
       let runtime: HostRuntime<Registry> | null = null;

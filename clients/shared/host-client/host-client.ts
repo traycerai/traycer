@@ -8,6 +8,7 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 import type { HostDirectoryEntry } from "./host-directory";
 import {
   isConfirmedTransportRefusal,
@@ -781,8 +782,10 @@ function sameHostTransport(
     previous.kind === next.kind &&
     previous.websocketUrl === next.websocketUrl &&
     previous.version === next.version &&
-    isConfirmedTransportRefusal(previous) ===
-      isConfirmedTransportRefusal(next) &&
+    isConfirmedTransportRefusal(
+      previous,
+      hasReadyRemoteSession(previous.hostId),
+    ) === isConfirmedTransportRefusal(next, hasReadyRemoteSession(next.hostId)) &&
     remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
 }
