@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -83,6 +84,13 @@ const ITEM: WorkspaceRunItem = {
 };
 
 afterEach(cleanup);
+// Unconditional, because the in-test `vi.useRealTimers()` below is NOT
+// reached when an assertion before it throws - and fake timers left installed
+// leak into every later test in the file, which then fails for a reason that
+// has nothing to do with what it is testing.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("folder-mapping refresh affordance", () => {
   it("forces one re-derive when the picker opens, so the chip's stale branch heals on the way in", async () => {
@@ -291,6 +299,135 @@ describe("folder-mapping refresh affordance", () => {
     ).toBe(1);
   });
 
+  it("shows Couldn't verify — Retry when the injected refresh reports verifyFailed", async () => {
+    const refresh = vi.fn(() => Promise.resolve());
+    const state: WorktreeWorkspacesRefresh = {
+      refresh,
+      isRefreshing: false,
+      checkedAt: Date.now(),
+      canRefresh: true,
+      verifyFailed: true,
+      refreshGeneration: 1,
+    };
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: true }}
+      >
+        <TooltipProvider>
+          <WorkspaceFolderSummaryControl
+            items={[ITEM]}
+            readOnly={false}
+            bindingResolved
+            addFolderPending={false}
+            addFolderDisabled={false}
+            addFolderDisabledReason={null}
+            onAddFolder={NOOP_ADD}
+            onUpdate={null}
+            updateEnabled={false}
+            updatePending={false}
+            onDiscardStaged={null}
+            onEditEnvironment={NOOP}
+            refresh={state}
+            popoverTestId="home-workspace-rows-popover"
+            popoverSide="top"
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    // Open arms a manual refresh spinner; wait until that settles so the
+    // failure footer is not masked by "Checking…".
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workspace-folders-verify-failed").textContent,
+      ).toContain("Couldn't verify");
+    });
+    const callsBeforeRetry = refresh.mock.calls.length;
+    fireEvent.click(screen.getByTestId("workspace-folders-refresh-retry"));
+    expect(refresh.mock.calls.length).toBe(callsBeforeRetry + 1);
+  });
+
+  it("switches to the failure footer after the external refresh deadline, and Retry starts a fresh deadline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let generation = 1;
+    // Real refresh bumps generation like the production hook so the
+    // deadline key advances on each attempt.
+    const refresh = vi.fn(async () => {
+      generation += 1;
+      state.current = {
+        ...state.current,
+        isRefreshing: true,
+        verifyFailed: false,
+        refreshGeneration: generation,
+      };
+      view.rerender(tree());
+      // Never settles — models a hung host across attempts.
+      await new Promise<void>(() => undefined);
+    });
+    const state: { current: WorktreeWorkspacesRefresh } = {
+      current: {
+        refresh,
+        isRefreshing: true,
+        checkedAt: null,
+        canRefresh: true,
+        verifyFailed: false,
+        refreshGeneration: generation,
+      },
+    };
+    const tree = (): ReactNode => (
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: true }}
+      >
+        <TooltipProvider>
+          <WorkspaceFolderSummaryControl
+            items={[ITEM]}
+            readOnly={false}
+            bindingResolved
+            addFolderPending={false}
+            addFolderDisabled={false}
+            addFolderDisabledReason={null}
+            onAddFolder={NOOP_ADD}
+            onUpdate={null}
+            updateEnabled={false}
+            updatePending={false}
+            onDiscardStaged={null}
+            onEditEnvironment={NOOP}
+            refresh={state.current}
+            popoverTestId="home-workspace-rows-popover"
+            popoverSide="top"
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>
+    );
+    const view = render(tree());
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    await screen.findByTestId("workspace-refresh-footer");
+    expect(screen.getByText("Checking…")).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(
+      screen.getByTestId("workspace-folders-verify-failed").textContent,
+    ).toContain("Couldn't verify");
+    const retry = screen.getByTestId("workspace-folders-refresh-retry");
+    fireEvent.click(retry);
+    expect(refresh).toHaveBeenCalled();
+    // Fresh attempt is Checking… again — previous attempt's expired timer
+    // must not suppress the spinner on the next generation.
+    expect(screen.getByText("Checking…")).toBeTruthy();
+    expect(screen.queryByTestId("workspace-folders-verify-failed")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(
+      screen.getByTestId("workspace-folders-verify-failed").textContent,
+    ).toContain("Couldn't verify");
+    vi.useRealTimers();
+  });
+
   it("does not steal R back from a newer overlay just because its own refresh finished", async () => {
     // `claimBareKey` is last-claim-wins, so re-claiming is a priority change,
     // not a no-op. The picker's key handler closes over `useRefreshSpinner`'s
@@ -368,6 +505,8 @@ function renderControl(over: {
         isRefreshing: false,
         checkedAt: over.checkedAt,
         canRefresh: over.canRefresh,
+        verifyFailed: false,
+        refreshGeneration: 0,
       }
     : null;
   const tree = (paneFocused: boolean): ReactNode => (

@@ -1,10 +1,13 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,16 +18,18 @@ import {
 } from "../credentials";
 import {
   createCredentialsMutationStore,
+  CredentialsStoreUnavailableError,
+  spentBaseMarkerPath,
   type CredentialsMutationStore,
   type RefreshFn,
   type RefreshResult,
 } from "../credentials-mutation";
+import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
 
 const CREDS: StoredCredentials = {
   token: "tok-0",
   refreshToken: "rt-0",
-  authnBaseUrl: "http://localhost:21001",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
 };
@@ -421,7 +426,6 @@ describe("credentials mutation store", () => {
     const CANDIDATE = {
       token: "cand-tok",
       refreshToken: "cand-rt",
-      authnBaseUrl: "http://localhost:21001",
     };
 
     it("spends the candidate and first-writes the refreshed pair stamped with the probed identity (applied)", async () => {
@@ -439,7 +443,6 @@ describe("credentials mutation store", () => {
       expect(onDisk).toEqual({
         token: "cand-tok::r",
         refreshToken: "rt::cand-tok",
-        authnBaseUrl: CANDIDATE.authnBaseUrl,
         savedAt: expect.any(String),
         user: MIGRATED_IDENTITY,
       });
@@ -504,8 +507,14 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "arms the firstWrite continuation with the minted pair on commit failure (commit-failed)",
       async () => {
-        const store = makeStore(refreshStub(rotateOk).fn);
-        chmodSync(workDir, 0o500); // freeze: the post-spend commit cannot land
+        // Freeze INSIDE the refresh stub - after the fail-closed marker arm
+        // and the spend - so only the post-spend commit fails.
+        const store = makeStore(
+          refreshStub((token) => {
+            chmodSync(workDir, 0o500);
+            return rotateOk(token);
+          }).fn,
+        );
         const failed = await store.migrateFirstWrite({
           candidate: CANDIDATE,
           identity: MIGRATED_IDENTITY,
@@ -631,11 +640,14 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "overlays the minted pair on read, then lands it on retry",
       async () => {
-        const refresh = refreshStub(rotateOk);
+        // Freeze INSIDE the refresh (after the fail-closed marker arm and the
+        // spend) so only the post-spend WAL write cannot land.
+        const refresh = refreshStub((token) => {
+          chmodSync(workDir, 0o500);
+          return rotateOk(token);
+        });
         const store = makeStore(refresh.fn);
         await seedSignedIn(store);
-        // Freeze the directory so the post-spend WAL write cannot land.
-        chmodSync(workDir, 0o500);
         const result = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: CREDS.token,
@@ -662,10 +674,18 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "R9: a rotate entered while a continuation is pending drives it first and never re-adopts the spent base",
       async () => {
-        const refresh = refreshStub(rotateOk);
+        // Freeze once, inside the FIRST refresh only: the arm and spend land,
+        // the commit fails, and the later rotate's refresh works unfrozen.
+        let frozen = false;
+        const refresh = refreshStub((token) => {
+          if (!frozen) {
+            frozen = true;
+            chmodSync(workDir, 0o500);
+          }
+          return rotateOk(token);
+        });
         const store = makeStore(refresh.fn);
         await seedSignedIn(store);
-        chmodSync(workDir, 0o500);
         const failed = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: CREDS.token,
@@ -695,10 +715,14 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "R9: a re-entered rotate is refused (commit-failed) while the continuation stays unresolved, never re-spending the base",
       async () => {
-        const refresh = refreshStub(rotateOk);
+        // Freeze inside the refresh: the post-spend commit cannot land, and
+        // the dir STAYS frozen so the continuation cannot resolve either.
+        const refresh = refreshStub((token) => {
+          chmodSync(workDir, 0o500);
+          return rotateOk(token);
+        });
         const store = makeStore(refresh.fn);
         await seedSignedIn(store);
-        chmodSync(workDir, 0o500); // freeze: the post-spend commit cannot land
         const first = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: CREDS.token,
@@ -722,6 +746,458 @@ describe("credentials mutation store", () => {
         expect(refresh.calls()).toBe(1); // no second spend
         expect(store.hasPendingContinuation()).toBe(true);
         chmodSync(workDir, 0o700); // afterEach also restores
+      },
+    );
+  });
+
+  describe("spent-base marker (cross-process double-spend gate)", () => {
+    // The production path, not a local rebuild of the suffix: if this drifted,
+    // every `existsSync(markerPath())` assertion below would hold against a
+    // file nothing writes and the "marker is cleared" cases would go vacuous.
+    function markerPath(): string {
+      return spentBaseMarkerPath(credentialsPath);
+    }
+
+    function sha256(token: string): string {
+      return createHash("sha256").update(token, "utf8").digest("hex");
+    }
+
+    // A marker as another LIVE process would have armed it: the vitest
+    // parent's pid + real fingerprint, so the provably-dead probe sees a
+    // living foreign owner.
+    function writeForeignMarker(over: {
+      readonly token: string;
+      readonly ageMs: number;
+    }): void {
+      // Every deferral case below turns on this owner being a DIFFERENT live
+      // process. If the runner ever gives a worker no distinguishable parent,
+      // the marker would read as OUR OWN and the `spend-pending` assertions
+      // would silently invert into "reclaimed and spent" - fail loudly instead.
+      expect(process.ppid).not.toBe(process.pid);
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(over.token),
+          at: new Date(Date.now() - over.ageMs).toISOString(),
+          ownerPid: process.ppid,
+          ownerFingerprint: queryPidStartFingerprint(process.ppid),
+        }),
+        { mode: 0o600 },
+      );
+    }
+
+    async function waitUntil(check: () => boolean): Promise<void> {
+      const deadline = Date.now() + 3_000;
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error("waitUntil timed out");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+
+    it("defers with spend-pending on a live foreign owner's fresh marker, spending nothing", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("spend-pending");
+      expect(stub.calls()).toBe(0);
+      // The marker survives - the owner still needs it.
+      expect(existsSync(markerPath())).toBe(true);
+    });
+
+    it("reclaims a foreign marker past the TTL and spends", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 61_000 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("reclaims a provably-dead owner's marker immediately", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      // A pid that cannot be a live process paired with a real-shaped record.
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(CREDS.token),
+          at: new Date().toISOString(),
+          ownerPid: 2 ** 22 - 7,
+          ownerFingerprint: "long-gone",
+        }),
+        { mode: 0o600 },
+      );
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+    });
+
+    it("ignores an orphaned marker for a superseded base", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: "some-older-token", ageMs: 0 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("keeps its own marker armed across a network-ambiguous refresh, without self-blocking the retry", async () => {
+      let mode: "network" | "ok" = "network";
+      const stub = refreshStub((token) =>
+        mode === "network" ? { kind: "network-error" } : rotateOk(token),
+      );
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+
+      const first = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(first.outcome).toBe("refresh-network");
+      // The ambiguous spend leaves the marker guarding the base for siblings.
+      expect(existsSync(markerPath())).toBe(true);
+      const marker = JSON.parse(readFileSync(markerPath(), "utf8")) as {
+        spentTokenDigest: string;
+        ownerPid: number;
+      };
+      expect(marker.spentTokenDigest).toBe(sha256(CREDS.token));
+      expect(marker.ownerPid).toBe(process.pid);
+
+      // The owner's own retry is not blocked by its own marker.
+      mode = "ok";
+      const second = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(second.outcome).toBe("applied");
+      expect(stub.calls()).toBe(2);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("clears the marker on an explicit refresh rejection", async () => {
+      const stub = refreshStub(() => ({ kind: "rejected" }));
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("refresh-rejected");
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("a landed interactive sign-in clears any marker", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+
+      await seedSignedIn(store);
+
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("a future-dated foreign marker still defers (liveness dominates a clock step)", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      // `at` 30s in the future: a backward clock step between the owner's
+      // write and this read. The owner is live, so the spend must still defer.
+      writeForeignMarker({ token: CREDS.token, ageMs: -30_000 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("spend-pending");
+      expect(stub.calls()).toBe(0);
+    });
+
+    it("treats a torn marker as no marker (a crash mid-write precedes any spend)", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeFileSync(markerPath(), '{"spentTokenDigest": "tru', { mode: 0o600 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+    });
+
+    it("fails closed when a marker exists but cannot be read", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      // A directory at the marker path: readFile faults (EISDIR), proving
+      // nothing about a sibling's in-flight spend - so no spend may proceed.
+      mkdirSync(markerPath());
+
+      await expect(
+        store.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        }),
+      ).rejects.toBeInstanceOf(CredentialsStoreUnavailableError);
+      expect(stub.calls()).toBe(0);
+      expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+        CREDS.token,
+      );
+    });
+
+    it.runIf(canForceCommitFailure)(
+      "refuses to spend when the marker cannot be armed (fail-closed canary)",
+      async () => {
+        const stub = refreshStub(rotateOk);
+        const store = makeStore(stub.fn);
+        await seedSignedIn(store);
+        // Freeze the credentials+meta dir BEFORE the rotate: the arm write is
+        // the first mutation to hit it, and must refuse the spend outright -
+        // a store that cannot record the spend would also fail the commit.
+        chmodSync(workDir, 0o500);
+
+        await expect(
+          store.rotate({
+            expectedUserId: CREDS.user.id,
+            expectedToken: CREDS.token,
+            refreshTokenOverride: null,
+            signal: null,
+          }),
+        ).rejects.toBeInstanceOf(CredentialsStoreUnavailableError);
+        expect(stub.calls()).toBe(0);
+
+        chmodSync(workDir, 0o700);
+        expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+          CREDS.token,
+        );
+      },
+    );
+
+    describe("migration spends under the same marker protocol", () => {
+      const MIGRATED_IDENTITY = {
+        id: "u2",
+        email: "grace@traycer.ai",
+        name: "Grace",
+      };
+      const CANDIDATE = {
+        token: "cand-tok",
+        refreshToken: "cand-rt",
+      };
+
+      it("defers with spend-pending on a live foreign migrator's candidate marker, spending nothing", async () => {
+        const stub = refreshStub(rotateOk);
+        const store = makeStore(stub.fn);
+        writeForeignMarker({ token: CANDIDATE.token, ageMs: 0 });
+
+        const result = await store.migrateFirstWrite({
+          candidate: CANDIDATE,
+          identity: MIGRATED_IDENTITY,
+          expectedFile: null,
+          signal: null,
+        });
+
+        expect(result.outcome).toBe("spend-pending");
+        expect(stub.calls()).toBe(0);
+        expect(existsSync(markerPath())).toBe(true);
+      });
+
+      it("defers on a live foreign marker for the FILE's base pair (an in-flight rotate)", async () => {
+        const stub = refreshStub(rotateOk);
+        const store = makeStore(stub.fn);
+        await seedSignedIn(store);
+        writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+
+        const result = await store.migrateFirstWrite({
+          candidate: CANDIDATE,
+          identity: MIGRATED_IDENTITY,
+          expectedFile: CREDS,
+          signal: null,
+        });
+
+        expect(result.outcome).toBe("spend-pending");
+        expect(stub.calls()).toBe(0);
+      });
+
+      it("keeps its marker armed across a network-ambiguous spend; a sibling migrator defers", async () => {
+        const storeA = makeStore(
+          refreshStub(() => ({ kind: "network-error" })).fn,
+        );
+        const ambiguous = await storeA.migrateFirstWrite({
+          candidate: CANDIDATE,
+          identity: MIGRATED_IDENTITY,
+          expectedFile: null,
+          signal: null,
+        });
+        expect(ambiguous.outcome).toBe("refresh-network");
+        // The candidate may have been consumed server-side: the marker stays.
+        const marker = JSON.parse(readFileSync(markerPath(), "utf8")) as {
+          spentTokenDigest: string;
+          ownerPid: number;
+        };
+        expect(marker.spentTokenDigest).toBe(sha256(CANDIDATE.token));
+        expect(marker.ownerPid).toBe(process.pid);
+
+        // Sibling-process view (in-process stores share our pid, so re-stamp
+        // the owner as the live parent), then a competing migration.
+        writeForeignMarker({ token: CANDIDATE.token, ageMs: 0 });
+        const stubB = refreshStub(rotateOk);
+        const storeB = makeStore(stubB.fn);
+        const deferred = await storeB.migrateFirstWrite({
+          candidate: CANDIDATE,
+          identity: MIGRATED_IDENTITY,
+          expectedFile: null,
+          signal: null,
+        });
+        expect(deferred.outcome).toBe("spend-pending");
+        expect(stubB.calls()).toBe(0);
+      });
+
+      it.runIf(canForceCommitFailure)(
+        "holds the marker through a commit failure and releases it when the continuation lands",
+        async () => {
+          const store = makeStore(
+            refreshStub((token) => {
+              chmodSync(workDir, 0o500);
+              return rotateOk(token);
+            }).fn,
+          );
+          const failed = await store.migrateFirstWrite({
+            candidate: CANDIDATE,
+            identity: MIGRATED_IDENTITY,
+            expectedFile: null,
+            signal: null,
+          });
+          expect(failed.outcome).toBe("commit-failed");
+          expect(store.hasPendingContinuation()).toBe(true);
+          // Armed before the freeze; guards the spent candidate for siblings.
+          expect(existsSync(markerPath())).toBe(true);
+
+          chmodSync(workDir, 0o700);
+          // Wait on the marker too, not just the flag: the continuation clears
+          // `pending` BEFORE it awaits the marker unlink (both still under the
+          // lock, so no other process can observe the gap - but this in-process
+          // reader can, and did, flakily).
+          await waitUntil(
+            () => !store.hasPendingContinuation() && !existsSync(markerPath()),
+          );
+          expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+            "cand-tok::r",
+          );
+        },
+      );
+    });
+
+    it.runIf(canForceCommitFailure)(
+      "arms the marker through a post-spend commit failure; a foreign owner defers; the landed continuation releases it",
+      async () => {
+        const stubA = refreshStub((token) => {
+          // Freeze the credentials+meta dir AFTER the marker is armed and the
+          // spend has happened, so only the WAL commit fails.
+          chmodSync(workDir, 0o500);
+          return rotateOk(token);
+        });
+        const storeA = makeStore(stubA.fn);
+        await seedSignedIn(storeA);
+
+        const failed = await storeA.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(failed.outcome).toBe("commit-failed");
+        expect(storeA.hasPendingContinuation()).toBe(true);
+        // The marker landed BEFORE the freeze and guards the spent base.
+        expect(existsSync(markerPath())).toBe(true);
+
+        // Simulate the sibling-PROCESS view: in-process, store B shares our
+        // pid, so re-stamp the marker's owner as the (live) parent process.
+        chmodSync(workDir, 0o700);
+        writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+        chmodSync(workDir, 0o500);
+
+        const stubB = refreshStub(rotateOk);
+        const storeB = makeStore(stubB.fn);
+        const deferred = await storeB.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(deferred.outcome).toBe("spend-pending");
+        expect(stubB.calls()).toBe(0);
+
+        // Unfreeze: A's continuation lands the minted pair and releases the
+        // marker; B then adopts via the normal superseded path.
+        chmodSync(workDir, 0o700);
+        // Same barrier as the migration case above: `pending` is cleared before
+        // the marker unlink is awaited, so the flag alone races the release.
+        await waitUntil(
+          () => !storeA.hasPendingContinuation() && !existsSync(markerPath()),
+        );
+
+        const adopted = await storeB.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(adopted.outcome).toBe("superseded");
+        expect(stubB.calls()).toBe(0);
+        expect(adopted.credentials?.token).toBe(`${CREDS.token}::r`);
       },
     );
   });

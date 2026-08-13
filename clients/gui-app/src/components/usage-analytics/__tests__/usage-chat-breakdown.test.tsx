@@ -46,7 +46,7 @@ describe("UsageChatBreakdown", () => {
         ]}
       />,
     );
-    const rows = screen.getAllByRole("listitem");
+    const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Fix the flaky test"),
       expect.stringContaining("Subagent: verify the fix"),
@@ -55,7 +55,7 @@ describe("UsageChatBreakdown", () => {
 
   it("falls back to the raw chatId when the chat is not in the open tree (e.g. swept)", () => {
     render(<UsageChatBreakdown rows={[bucket({ chatId: "chat-unknown" })]} />);
-    const rows = screen.getAllByRole("listitem");
+    const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("chat-unknown"),
     ]);
@@ -70,15 +70,24 @@ describe("UsageChatBreakdown", () => {
         ]}
       />,
     );
-    const rows = screen.getAllByRole("listitem");
+    const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Fix the flaky test"),
       expect.stringContaining("Subagent: verify the fix"),
     ]);
   });
 
-  it("shows an explicit empty state rather than a bare empty list", () => {
+  it("shows an explicit empty state rather than a bare empty table", () => {
     render(<UsageChatBreakdown rows={[]} />);
     expect(screen.getByTestId("usage-chat-breakdown-empty")).not.toBeNull();
+  });
+
+  it("renders as a real table with named columns", () => {
+    render(<UsageChatBreakdown rows={[bucket({ chatId: "chat-1" })]} />);
+    const table = screen.getByRole("table");
+    expect(table.getAttribute("data-testid")).toBe("usage-chat-breakdown");
+    expect(
+      screen.getAllByRole("columnheader").map((header) => header.textContent),
+    ).toEqual(["Chat / agent", "Tokens", "Cost"]);
   });
 });

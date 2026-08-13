@@ -108,6 +108,40 @@ export async function runFixAction(
   }
 }
 
+/**
+ * How a doctor fix action can be carried out for the host being shown.
+ *
+ * The taxonomy is the doctor half of the same question the rest of the Overview
+ * answers per button: not "is this local?" but "is there a mechanism that can
+ * actually do this from here?".
+ *
+ *   - `rpc`         — `host-restart` / `host-start` route to `host.restart`, and
+ *     `host-logs` to `diagnostics.logs.tail`. Both work for any reachable host,
+ *     local or remote, which is the whole point.
+ *   - `local-bridge` — the three repair-a-down-host actions, on THIS computer,
+ *     where the CLI bridge can still run them.
+ *   - `copy-command` — the same three for a host on another machine. Nothing
+ *     here can reach that box's service manager or its ports, so the honest
+ *     affordance is the command to run there. Not a fallback for a missing RPC:
+ *     these repair a host that is typically not answering RPCs at all, which is
+ *     why the plan dropped their remote verbs on purpose.
+ */
+export type DoctorFixRoute = "rpc" | "local-bridge" | "copy-command";
+
+export function doctorFixRoute(input: {
+  readonly fixAction: string;
+  readonly isLocalMachine: boolean;
+  readonly hasLocalBridge: boolean;
+}): DoctorFixRoute {
+  if (input.fixAction === "host-restart" || input.fixAction === "host-start") {
+    return "rpc";
+  }
+  if (input.fixAction === "host-logs") return "rpc";
+  return input.isLocalMachine && input.hasLocalBridge
+    ? "local-bridge"
+    : "copy-command";
+}
+
 export function parseFreePortInput(
   issue: HostDoctorIssue,
 ): FreePortAndRestartInput | null {

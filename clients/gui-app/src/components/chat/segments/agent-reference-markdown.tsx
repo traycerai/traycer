@@ -36,12 +36,14 @@ export function AgentReferenceMarkdown({
   markdown,
   proseSize,
   quotable,
+  imageRendering,
   components,
 }: {
   readonly isStreaming: boolean;
   readonly markdown: string;
   readonly proseSize: "compact" | "normal";
   readonly quotable: boolean;
+  readonly imageRendering?: "assistant" | "standard";
   /**
    * Per-surface overrides merged OVER the shared agent-reference set, for a
    * surface whose link semantics differ from chat's. `null` for surfaces that
@@ -70,6 +72,7 @@ export function AgentReferenceMarkdown({
       className={null}
       proseSize={proseSize}
       components={mergedComponents}
+      imageRendering={imageRendering}
       remarkPlugins={null}
       rehypePlugins={AGENT_REFERENCE_REHYPE_PLUGINS}
       quotable={quotable}

@@ -6,8 +6,18 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContext } from "@traycer/protocol/auth/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useWorkspaceEntries } from "../use-workspace-entries";
+
+const OTHER_HOST_ENTRY: HostDirectoryEntry = {
+  hostId: "host-test-2",
+  label: "Test Host 2",
+  kind: "mock",
+  websocketUrl: "ws://host2.test",
+  version: "test",
+  status: "available",
+};
 
 let messenger: MockHostMessenger<HostRpcRegistry>;
 let hostClient: HostClient<HostRpcRegistry>;
@@ -120,6 +130,53 @@ describe("useWorkspaceEntries", () => {
         requestId: "request-test",
       }),
     ]);
+  });
+
+  it("drops placeholder data across a host switch instead of showing the previous host's matches", async () => {
+    let resolveGated: (() => void) | null = null;
+    messenger.setHandlers({
+      "workspace.mentionFiles": (params) => {
+        // Gate only the request issued under the second host, so the first
+        // host's result is settled and cached before the switch.
+        if (params.roots[0] === "/repo-2") {
+          return new Promise<void>((resolve) => {
+            resolveGated = resolve;
+          }).then(() => ({ entries: [legacyFileSuggestion()] }));
+        }
+        return { entries: [legacyFileSuggestion()] };
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ root }: { readonly root: string }) =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [
+            {
+              method: "workspace.mentionFiles",
+              params: { roots: [root], query: "app", limit: 8 },
+            },
+          ],
+        }),
+      { wrapper, initialProps: { root: "/repo" } },
+    );
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+
+    act(() => {
+      hostClient.bind(OTHER_HOST_ENTRY);
+    });
+    rerender({ root: "/repo-2" });
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    // Host boundary: the previous host's matches must not render as placeholder
+    // data for the new host's in-flight request.
+    expect(result.current.data).toHaveLength(0);
+
+    act(() => {
+      resolveGated?.();
+    });
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
   });
 
   it("does not request suggestions without request descriptors", () => {

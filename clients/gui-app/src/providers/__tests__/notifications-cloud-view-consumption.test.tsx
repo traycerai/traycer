@@ -280,7 +280,7 @@ function applyCloudSnapshot(
   });
 }
 
-function focusChat(epicId: string, chatId: string): void {
+function focusChat(epicId: string, chatId: string, hostId: string): void {
   act(() => {
     const tabId = useEpicCanvasStore.getState().openEpicTab(epicId, "Epic");
     useEpicCanvasStore.getState().openTileInTab(
@@ -290,7 +290,7 @@ function focusChat(epicId: string, chatId: string): void {
         instanceId: `${chatId}-instance`,
         type: "chat",
         name: "Chat",
-        hostId: mockLocalHostEntry.hostId,
+        hostId,
       }),
     );
   });
@@ -381,7 +381,7 @@ afterEach(() => {
 });
 
 describe("cloud-mode view consumption", () => {
-  it("marks a visited chat's terminal rows read across hosts", async () => {
+  it("marks only the focused host's terminal rows read", async () => {
     renderProvider();
     applyCloudSnapshot(
       [
@@ -401,18 +401,13 @@ describe("cloud-mode view consumption", () => {
       1,
     );
 
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, mockLocalHostEntry.hostId);
 
     await waitFor(() => {
-      expect([...calls.cloudMarkRead].sort()).toEqual([
-        "entry-foreign",
-        "entry-local",
-      ]);
+      expect(calls.cloudMarkRead).toEqual(["entry-local"]);
     });
     expect(readAtFor("entry-local")).not.toBeNull();
-    // The foreign entry is the one the v1 entity RPC structurally cannot
-    // reach: it never entered the connected host's SQLite.
-    expect(readAtFor("entry-foreign")).not.toBeNull();
+    expect(readAtFor("entry-foreign")).toBeNull();
     expect(calls.hostMarkRead).toEqual([]);
   });
 
@@ -435,7 +430,7 @@ describe("cloud-mode view consumption", () => {
       1,
     );
 
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
 
     await waitFor(() => {
       expect(calls.cloudMarkRead).toEqual(["entry-done"]);
@@ -476,7 +471,7 @@ describe("cloud-mode view consumption", () => {
   it("consumes a row that arrives while the chat is already in view", async () => {
     applyCloudSnapshot([], 1);
     renderProvider();
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await waitFor(() => {
       expect(useEpicCanvasStore.getState().activeTabId).not.toBeNull();
     });
@@ -513,7 +508,7 @@ describe("cloud-mode view consumption", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await waitFor(() => {
       expect(calls.cloudMarkRead).toHaveLength(1);
     });
@@ -552,7 +547,7 @@ describe("cloud-mode view consumption", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await waitFor(() => {
       expect(calls.cloudMarkRead).toHaveLength(1);
     });
@@ -596,7 +591,7 @@ describe("cloud-mode view consumption", () => {
       1,
     );
 
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await waitFor(() => {
       expect(useEpicCanvasStore.getState().activeTabId).not.toBeNull();
     });
@@ -616,6 +611,7 @@ describe("cloud-mode view consumption", () => {
     act(() => {
       useAppLocalNotificationsStore.getState().upsert({
         id: "terminal-1",
+        originHostId: OTHER_HOST_ID,
         updatedAt: 1,
         readAt: null,
         kind: "terminal.closed",
@@ -626,7 +622,7 @@ describe("cloud-mode view consumption", () => {
       });
     });
 
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
 
     await waitFor(() => {
       expect(
@@ -669,7 +665,7 @@ describe("cloud-mode view-consumption teardown", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -703,7 +699,7 @@ describe("cloud-mode view-consumption teardown", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -757,7 +753,7 @@ describe("cloud-mode view-consumption retries", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await settle(0);
   }
 
@@ -883,7 +879,7 @@ describe("cloud-mode view-consumption retries", () => {
       ],
       1,
     );
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     await settle(0);
 
     // Three rows to consume, but only one request may be parked at the gate.
@@ -924,7 +920,7 @@ describe("local-mode view consumption", () => {
       1,
     );
 
-    focusChat(EPIC_ID, CHAT_ID);
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });

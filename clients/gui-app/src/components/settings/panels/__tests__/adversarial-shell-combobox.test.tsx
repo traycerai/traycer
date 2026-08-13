@@ -17,6 +17,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
+import { bridgeShellProbeSource } from "@/components/settings/panels/shell/use-bridge-shell-config-controller";
 
 // Spy on the toast boundary so a Browse rejection can be asserted to route
 // through it (and NOT surface as an unhandled promise rejection).
@@ -40,12 +41,13 @@ const ZSH: TraycerDetectedShell = {
   missing: false,
 };
 
-function makeHost(
-  configure: ((cli: MockTraycerCli) => void) | undefined,
-): IRunnerHost {
+function makeHost(configure: ((cli: MockTraycerCli) => void) | undefined): {
+  readonly host: IRunnerHost;
+  readonly cli: MockTraycerCli;
+} {
   const cli = new MockTraycerCli();
   configure?.(cli);
-  return new MockRunnerHost({
+  const host = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
     localHost: null,
@@ -54,13 +56,14 @@ function makeHost(
     hasLocalHost: undefined,
     traycerCli: cli,
   });
+  return { host, cli };
 }
 
 function renderCombobox(props: {
   readonly onAdd: ((path: string) => void) | undefined;
   readonly configure: ((cli: MockTraycerCli) => void) | undefined;
 }) {
-  const host = makeHost(props.configure);
+  const { host, cli } = makeHost(props.configure);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -71,6 +74,7 @@ function renderCombobox(props: {
           value="/bin/zsh"
           synthesised={false}
           shells={[ZSH]}
+          probeSource={bridgeShellProbeSource(cli)}
           disabled={false}
           onSelect={() => undefined}
           onAdd={props.onAdd ?? (() => undefined)}

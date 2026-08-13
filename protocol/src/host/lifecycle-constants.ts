@@ -11,6 +11,13 @@
 export const SHUTDOWN_FORCE_EXIT_MS = 30_000;
 
 /**
+ * Deliberate host restart. This remains non-zero so every service supervisor
+ * relaunches the host, while the CLI supervisor recognizes it as intentional
+ * rather than recording a crash or spending relaunch budget.
+ */
+export const RESTART_EXIT_CODE = 87;
+
+/**
  * Extra headroom the CLI's stop/restart poll keeps ABOVE the watchdog. The CLI
  * grace (`SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS`) must stay above
  * the watchdog: if the CLI gives up first it reports a spurious "stop did not

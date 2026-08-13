@@ -70,21 +70,16 @@ export interface SettingsSection {
   readonly label: string;
   readonly icon: LucideIcon;
   readonly group: SettingsSectionGroupId;
-  /**
-   * Host-scoped, but only reachable when the selected host is the one running
-   * on this computer — because the section is backed by the on-disk config
-   * store through the local CLI bridge rather than by a host RPC.
-   *
-   * This is a TRANSPORT limit, never a scope one. Shell config decides how a
-   * host launches terminals and harnesses, and `hostLogLevel` is a field of
-   * that same per-host config; both belong to whichever host they sit next to.
-   * An earlier pass let the missing RPC push these two sections out of the
-   * host group entirely, which put the app right back to "memorise the
-   * exceptions". They stay in the group and say plainly when the selected host
-   * is out of reach — see `RequiresLocalHostNotice`.
-   */
-  readonly requiresLocalHost: boolean;
 }
+
+// No `requiresLocalHost` flag any more. It marked Shell and Diagnostics as
+// reachable only while the selected host was the one running on this computer,
+// because both were backed by the on-disk config store through the local CLI
+// bridge. `config.*` / `diagnostics.*` retired that limit: every section here
+// reads the selected host over its own RPC, so no row can be unreachable for a
+// reason the sidebar would have to encode. (The one surviving local path —
+// this computer's host with its process stopped — is a per-panel FALLBACK that
+// keeps those pages working, not a restriction on reaching them.)
 
 /**
  * Order is meaningful twice over: it drives the leader-digit shortcuts
@@ -95,8 +90,7 @@ export interface SettingsSection {
  * Only the first ten entries can carry a digit
  * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`); Shell and Diagnostics are the
  * eleventh and twelfth and go without, which are the right two to lose —
- * both are `requiresLocalHost` support surfaces and the rarest destinations
- * here.
+ * both are support surfaces and the rarest destinations here.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal switch, the command palette and remembered tab paths all key
@@ -108,36 +102,31 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "General",
     icon: SettingsIcon,
     group: "app",
-    requiresLocalHost: false,
   },
   {
     id: "appearance",
     label: "Appearance",
     icon: Palette,
     group: "app",
-    requiresLocalHost: false,
   },
   {
     id: "keybindings",
     label: "Keybindings",
     icon: Keyboard,
     group: "app",
-    requiresLocalHost: false,
   },
   {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
     group: "account",
-    requiresLocalHost: false,
   },
   // Account, not Host: what this reports is the ACCOUNT's token and cost
   // spend, with the host as one filter INSIDE the page (defaulting to all of
   // them). Under the sidebar's host picker it would have put two competing
   // host scopes on one screen, with the outer one unable to describe the
   // number the inner one produced. It still reads through a host client -
-  // every RPC does - but that is a transport fact, not a scope one, the same
-  // distinction `requiresLocalHost` draws for Shell and Diagnostics.
+  // every RPC does - but that is a transport fact, not a scope one.
   //
   // Moving it here cost Shell its leader digit: the group must stay
   // contiguous (see this array's doc comment), so Usage had to land beside
@@ -150,7 +139,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Usage",
     icon: LineChart,
     group: "account",
-    requiresLocalHost: false,
   },
   // The host group. Everything here is scoped by the picker that heads it.
   {
@@ -158,28 +146,24 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Overview",
     icon: Server,
     group: "host",
-    requiresLocalHost: false,
   },
   {
     id: "providers",
     label: "Providers",
     icon: Boxes,
     group: "host",
-    requiresLocalHost: false,
   },
   {
     id: "worktrees",
     label: "Worktrees",
     icon: GitBranch,
     group: "host",
-    requiresLocalHost: false,
   },
   {
     id: "notifications",
     label: "Notifications",
     icon: Bell,
     group: "host",
-    requiresLocalHost: false,
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent
   // and model get chosen when spawning child agents. It does not manage the
@@ -191,21 +175,18 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Agent selection",
     icon: Bot,
     group: "host",
-    requiresLocalHost: false,
   },
   {
     id: "shell",
     label: "Shell",
     icon: TerminalSquare,
     group: "host",
-    requiresLocalHost: true,
   },
   {
     id: "diagnostics",
     label: "Diagnostics",
     icon: Activity,
     group: "host",
-    requiresLocalHost: true,
   },
 ];
 

@@ -2,6 +2,12 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
+import {
+  imageByteLengthSchema,
+  imageDimensionSchema,
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 /**
  * Discriminated union of content blocks rendered inside an assistant
@@ -234,6 +240,24 @@ export const backgroundTaskOutputSchema = z.object({
 });
 export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
 
+// One generated/edited image produced by a tool call (Codex `image_generation`
+// and future equivalents), carried on the `tool_call` content block and its
+// `tool_call.completed` runtime event. `attachmentHash` is the render source
+// (SHA-256 content address into the epic attachment map); `filePath` is
+// display-only metadata, never the render source. Array from day one - a
+// single tool call can produce more than one image.
+export const imageGenerationResultSchema = z.object({
+  attachmentHash: imageSha256HexSchema,
+  mediaType: supportedImageMediaTypeSchema,
+  byteLength: imageByteLengthSchema,
+  width: imageDimensionSchema.default(null),
+  height: imageDimensionSchema.default(null),
+  alt: z.string().nullable().default(null),
+  revisedPrompt: z.string().nullable().default(null),
+  filePath: z.string().nullable().default(null),
+});
+export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -294,8 +318,36 @@ export const toolCallBlockSchema = z.object({
   // a genuine failure. `status` itself is unchanged - this only adds the
   // finer distinction. Defaulted so pre-existing blocks parse cleanly.
   stopped: z.boolean().default(false),
+  // Images this call produced (`chat.subscribe@1.7`). Defaulted so blocks
+  // persisted before this field existed parse cleanly. See
+  // `imageGenerationResultSchema`.
+  imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
+// existed (`chat.subscribe@1.0-1.6`). Bound (via the frozen content-block
+// union below) to every released `chat.subscribe` minor so those lines can
+// never observe image data - see `contentBlockSchemaPreImage`. Hand-frozen,
+// NOT derived from the live shape via `.omit()`, so a future field added to
+// the live block cannot silently leak onto a released wire line.
+export const toolCallBlockSchemaPreImage = z.object({
+  ...baseBlockFields,
+  status: actionBlockStatus,
+  type: z.literal("tool_call"),
+  toolName: z.string(),
+  inputSummary: z.string().nullable().default(null),
+  inputDetail: toolInputDetailSchema.nullable().default(null),
+  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+  error: z.string().nullable(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  progress: z.string().nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  startedAt: z.number().nullable().default(null),
+  endedAt: z.number().nullable().default(null),
+  backgroundTask: z.boolean().nullable().default(false),
+  stopped: z.boolean().default(false),
+});
 
 // `diffSource: "snapshot"` ⇒ `reason: "snapshot"` and contents non-null
 // (or single-null for create/delete). Any other reason ⇒ `"none"` and
@@ -920,6 +972,30 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
   artifactOperationBlockSchema,
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
+
+// Wire-freeze copy of `contentBlockSchema` with `tool_call` swapped for its
+// pre-image freeze (`toolCallBlockSchemaPreImage`) - the only member that
+// gains image data. Bound (via the frozen message/chat schemas) to every
+// released `chat.subscribe@1.0-1.6` minor so those lines structurally match
+// the shipped wire and can never observe `imageResults`. Every other member
+// reuses the live sub-schema (same convention as `messageSchemaPreInReplyTo`).
+export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
+  textBlockSchema,
+  reasoningBlockSchema,
+  toolCallBlockSchemaPreImage,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchema,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
 
 // The on-disk/wire shape - identical to `ContentBlock` except
 // `autonomous_resume`, whose persisted member carries `wakeTriggers` instead

@@ -9,8 +9,8 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import {
   LEGACY_HOST_RESOLVED_AT,
   type WorktreeBinding,
-  type WorktreeHostEntryV14,
-  type WorktreeWorkspaceSummaryV14,
+  type WorktreeHostEntryV15,
+  type WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -269,7 +269,7 @@ function useOwnerMetadata(client: HostClient<HostRpcRegistry>) {
 function worktreeEntry(args: {
   readonly branch: string;
   readonly resolvedAt: number | null;
-}): WorktreeHostEntryV14 {
+}): WorktreeHostEntryV15 {
   return {
     worktreePath: WORKTREE_PATH,
     repoLabel: "acme/app",
@@ -290,6 +290,7 @@ function worktreeEntry(args: {
     submodules: [],
     atBaseCommit: false,
     resolvedAt: args.resolvedAt,
+    presence: "present",
   };
 }
 
@@ -297,7 +298,7 @@ function workspaceSummary(args: {
   readonly workspacePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
-}): WorktreeWorkspaceSummaryV14 {
+}): WorktreeWorkspaceSummaryV15 {
   return {
     workspacePath: args.workspacePath,
     isGitRepo: true,
@@ -317,6 +318,7 @@ function workspaceSummary(args: {
     scripts: null,
     repoBranchPrefix: { status: "absent" },
     resolvedAt: args.resolvedAt,
+    presence: "present",
   };
 }
 

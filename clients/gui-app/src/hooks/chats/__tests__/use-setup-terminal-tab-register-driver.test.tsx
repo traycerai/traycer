@@ -34,6 +34,7 @@ const WORKTREE_ENTRY: WorktreeBindingEntry = {
 
 function createHandle() {
   return createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: USER_ID,

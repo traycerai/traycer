@@ -47,12 +47,30 @@ import { isConcealed } from "@/components/settings/host-scope/concealment-test-h
 const {
   mutateSpy,
   capturedQueryClients,
+  removeFromAccountSpy,
+  removeFromAccountHostIds,
 }: {
   readonly mutateSpy: Mock;
   readonly capturedQueryClients: Array<HostClient<HostRpcRegistry> | null>;
+  readonly removeFromAccountSpy: Mock;
+  /** Which host id the account-removal hook was BOUND to, per render. */
+  readonly removeFromAccountHostIds: string[];
 } = vi.hoisted(() => ({
   mutateSpy: vi.fn(),
   capturedQueryClients: [],
+  removeFromAccountSpy: vi.fn(),
+  removeFromAccountHostIds: [],
+}));
+
+// "Remove from account" is an ACCOUNT write, not host RPC and not the local
+// bridge — it goes out through `AuthService` over the host binding. Mocked at
+// the hook the way this suite already mocks the uninstall hook, so the row's
+// gating and copy can be tested without standing up an auth boundary.
+vi.mock("@/hooks/auth/use-deregister-host-mutation", () => ({
+  useDeregisterHostFromAccount: (hostId: string) => {
+    removeFromAccountHostIds.push(hostId);
+    return { mutate: removeFromAccountSpy, isPending: false };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -113,6 +131,8 @@ function remoteHost(hostId: string): HostScopeOption {
 beforeEach(() => {
   mutateSpy.mockClear();
   capturedQueryClients.length = 0;
+  removeFromAccountSpy.mockClear();
+  removeFromAccountHostIds.length = 0;
   runnerHostMock.hostManagement = null;
 });
 
@@ -265,6 +285,43 @@ describe("HostDangerZone", () => {
     expect(mutateSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("names the host and states what survives in the snapshots-clear confirmation", () => {
+    // Pinned DIRECTLY here because nothing else can reach it. The Overview's
+    // parity comparison reads the panel's rendered prose, and Radix renders
+    // dialogs through a portal — outside that subtree — so a copy regression in
+    // any confirmation is invisible to it. Dialog copy is therefore pinned in
+    // the suite that owns the dialog, which is this one.
+    //
+    // Two claims, both load-bearing for a destructive action:
+    //
+    //  - it NAMES the host. This row's whole history is a destructive control
+    //    taking its target from somewhere the user could not see; a dialog that
+    //    said "this host" would put that ambiguity back at the last moment.
+    //  - it separates what is LOST from what SURVIVES. "Cleared snapshots
+    //    cannot be restored" is the irreversibility; "conversation history and
+    //    checkpoint records stay visible" is the reassurance that makes the
+    //    action legible. Dropping the second half would read as a history wipe
+    //    and is the more likely regression, because it is the part that sounds
+    //    optional.
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
+    const copy = screen.getByRole("dialog").textContent;
+
+    expect(copy).toContain("host-b");
+    expect(copy).toMatch(/cannot be restored/i);
+    expect(copy).toMatch(/conversation history and checkpoint records stay/i);
+    expect(copy).toMatch(/undo is disabled for past turns/i);
+  });
+
   it("keeps uninstall reachable in the empty-account recovery state", () => {
     // "No host row" is an enrollment fact, not an installation fact: an
     // install that completed while sign-in did not leaves components on this
@@ -304,5 +361,132 @@ describe("HostDangerZone", () => {
       />,
     );
     expect(screen.queryByText(/Remove Traycer/)).toBeNull();
+  });
+
+  it("offers Remove from account for a remote host, and never the word deregister", () => {
+    // The remote counterpart to Remove Traycer, on a THIRD capability plane:
+    // an account write that needs no route to the machine.
+    //
+    // The copy rule is not a style preference. This app already says
+    // "Deregister" one card away in the Advanced disclosure, for OS-SERVICE
+    // deregistration — a machine-local repair with nothing in common with
+    // ending a host's membership of an account. Two destructive controls
+    // sharing a verb is how someone reaches for the wrong one.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+
+    const row = screen.getByTestId("settings-remove-host-from-account");
+    expect(isConcealed(row)).toBe(false);
+    expect(screen.getByTestId("host-danger-zone").textContent).not.toMatch(
+      /deregister/i,
+    );
+    // Bound to the host it is rendered for — the hook, the button and the
+    // dialog all close over the same id, so a scope change cannot retarget it.
+    expect(removeFromAccountHostIds).toContain("host-b");
+  });
+
+  it("does not offer account removal for this computer's host", () => {
+    // This computer gets Remove Traycer, which actually removes something.
+    // Offering both would present two destructive buttons whose difference is
+    // invisible until afterwards.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-local",
+            name: "This Mac",
+            isLocalMachine: true,
+          }),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+    expect(
+      screen.queryByTestId("settings-remove-host-from-account"),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
+  });
+
+  it("withholds account removal for a host that has no registry row", () => {
+    // A directory-only host has no account membership to end, so the row would
+    // be a destructive control with nothing behind it.
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-b",
+            isLocalMachine: false,
+            registered: false,
+          }),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+    expect(
+      screen.queryByTestId("settings-remove-host-from-account"),
+    ).toBeNull();
+  });
+
+  it("tells the truth in the confirmation: nothing is uninstalled, and the host does NOT come back on its own", () => {
+    // Pinned because the copy is a claim about behaviour two repos away, and
+    // the first version of it was WRONG in the reassuring direction — it said a
+    // running host "re-enrols on its own and comes back".
+    //
+    // It does not. `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt`
+    // and clears the presence lease (no revoke, nothing touched on the box).
+    // The host's next heartbeat 404s and it reads that as `not-registered`, but
+    // `reconcile()` then finds the on-box device credential still present and
+    // still matching, takes `adoptActiveCredential()` and RETURNS — before
+    // either enrollment source, and `registerHost()` is the only caller that
+    // clears `deregisteredAt`. So it loops instead of recovering, and the
+    // interactive login path sits below that same early return, which is why
+    // the copy must not offer "sign in again" as the remedy either.
+    //
+    // This asserts the NEGATIVE claims explicitly. A dialog that quietly
+    // promises self-recovery is worse than one that says nothing: it is the
+    // reason someone would leave a host removed and expect it back.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-remove-host-from-account"));
+    const dialog = screen.getByRole("dialog");
+    const copy = dialog.textContent;
+    expect(copy).toMatch(/nothing on that machine changes/i);
+    // The two negatives, stated rather than implied.
+    expect(copy).toMatch(/won't rejoin on its own/i);
+    expect(copy).toMatch(
+      /signing in on that machine again won't bring it back/i,
+    );
+    // ...and the one positive that IS true: the row is deregistered, not
+    // revoked, so the id survives and a re-setup restores name and settings.
+    expect(copy).toMatch(/host ID is kept/i);
+    expect(copy).not.toMatch(/deregister/i);
+    // The refuted claim, pinned as ABSENT. Without this the copy could drift
+    // back to promising self-recovery and every assertion above would still
+    // pass.
+    expect(copy).not.toMatch(/re-enrols on its own|re-enrolls on its own/i);
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from account" }),
+    );
+    expect(removeFromAccountSpy).toHaveBeenCalledTimes(1);
   });
 });

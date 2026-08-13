@@ -33,6 +33,7 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
@@ -809,10 +810,12 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isReady()).toBe(false);
         expect(session.isClosed()).toBe(false);
 
-        const error: unknown = await session.sendUnary("host.status", {}).then(
-          () => null,
-          (reason: unknown) => reason,
-        );
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
         expect(error).toBeInstanceOf(RetryableTransportError);
 
         // `host_attached` out of detached means the host rebuilt its Noise
@@ -1025,48 +1028,240 @@ describe("RemoteSession dial-failure logging", () => {
   it("rejects on a TERMINAL session as a non-retryable transport failure", async () => {
     // "Not ready" covers two opposite futures. A dialing session will become
     // ready; a closed one never will - `close()` is terminal and `start()`
-    // only re-dials from idle. Calling both retryable makes the retry wrapper
-    // spend its whole budget on a session that cannot answer, and makes any UI
-    // reading the class as "still connecting" wait for a ready boundary no one
-    // will ever emit (the Providers panel did exactly that).
+    // only re-dials from idle. Waiting on a closed session would park forever,
+    // and calling it retryable would make the retry wrapper spend its whole
+    // budget on a session that cannot answer (the Providers panel did exactly
+    // that). A CLOSED session must reject immediately, non-retryable.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     const session = buildSession(relay, lease, null);
     session.close();
     expect(session.isClosed()).toBe(true);
 
-    const error: unknown = await session.sendUnary("host.status", {}).then(
-      () => null,
-      (reason: unknown) => reason,
-    );
+    const error: unknown = await session
+      .sendUnary("host.status", {}, null)
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
 
     expect(error).toBeInstanceOf(HostTransportFailureError);
     expect(error).not.toBeInstanceOf(RetryableTransportError);
   });
 
-  it("still rejects a session that is merely DIALING as retryable", async () => {
-    // The other side of the same branch, so the change above reads as a
-    // narrowing rather than a blanket downgrade: a session on its way to ready
-    // keeps its retry license, which is what the pre-send no-dispatch
-    // guarantee exists for.
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      expect(session.isReady()).toBe(false);
-      expect(session.isClosed()).toBe(false);
+  it(
+    "awaits the ready boundary and then sends while the session is still dialing",
+    async () => {
+      // D5.2: a still-dialing session is no longer rejected pre-send. The
+      // call parks on the session's own phase machine and dispatches once the
+      // fake relay completes the attach - which is the contract every consumer
+      // that races a fresh remote session's first dial now depends on.
+      const statusContract = defineRpcContract({
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({ ready: z.boolean() }),
+      });
+      const statusRegistry: VersionedRpcRegistry =
+        defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+          "host.status": {
+            1: {
+              latestMinor: 0,
+              versions: {
+                0: {
+                  contract: statusContract,
+                  upgradeFromPreviousVersion: null,
+                },
+              },
+              downgradePathsFromLatest: {},
+            },
+          },
+        });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryResult = { ready: true };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        expect(session.isReady()).toBe(false);
+        expect(session.isClosed()).toBe(false);
 
-      const error: unknown = await session.sendUnary("host.status", {}).then(
-        () => null,
-        (reason: unknown) => reason,
-      );
+        const resultPromise = session.sendUnary("host.status", {}, null);
+        // Still not ready when the call is issued - the await-ready path must
+        // hold rather than reject.
+        expect(session.isReady()).toBe(false);
 
-      expect(error).toBeInstanceOf(RetryableTransportError);
-    } finally {
-      session.close();
-    }
-  });
+        const result = await resultPromise;
+        expect(session.isReady()).toBe(true);
+        expect(result).toEqual({ ready: true });
+        expect(relay.unaryRequests).toHaveLength(1);
+        expect(relay.unaryRequests[0]?.method).toBe("host.status");
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "rejects an in-flight sendUnary as retryable when the attach attempt fails mid-dial",
+    async () => {
+      // A parked caller is riding THIS attach attempt: if the socket drops
+      // before ready, the wait must reject RetryableTransportError (pre-send,
+      // so the caller's retry license buys a fresh attach) rather than hang.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      // Factory whose sockets die before the handshake can finish - same
+      // shape as a DNS/refused mid-dial.
+      const deadFactory: IStreamWebSocketFactory = {
+        create: (): StreamWebSocketLike => {
+          const socket = new FakeSocket(
+            () => undefined,
+            () => undefined,
+          );
+          queueMicrotask(() => {
+            socket.onclose?.({
+              code: 1006,
+              reason: "mid-dial-drop",
+              wasClean: false,
+            });
+          });
+          return socket;
+        },
+      };
+      const options = buildSessionOptions(relay, lease, null);
+      const session = new RemoteSession({
+        ...options,
+        webSocketFactory: deadFactory,
+      });
+      try {
+        session.start();
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        // RetryableTransportError extends HostTransportFailureError - the
+        // pin is that the class carries the retry license (subclass), not a
+        // terminal transport failure alone.
+        expect(error).toBeInstanceOf(RetryableTransportError);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "rejects an in-flight sendUnary as non-retryable when the session goes terminal mid-wait",
+    async () => {
+      // A plan-restricted grant is terminal: a parked caller must get
+      // HostTransportFailureError (with fatal details), not hang forever and
+      // not inherit a retry license for a session that will never answer.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        grantProvider: () =>
+          Promise.resolve({ kind: "plan-restricted" as const }),
+      });
+      try {
+        session.start();
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        expect(
+          (error as HostTransportFailureError).fatalDetails,
+        ).not.toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "rejects a parked sendUnary when the caller's authority aborts mid-dial",
+    async () => {
+      // Parking on the phase machine only became safe once the caller could
+      // still get out. A cancelled TanStack read (or a replaced host binding)
+      // aborts its authority; without this the call stayed parked for the
+      // whole dial, holding the request coordinator's active slot, and then
+      // dispatched to the host anyway at the ready boundary.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      const controller = new AbortController();
+      try {
+        session.start();
+        expect(session.isReady()).toBe(false);
+        const pending = session.sendUnary("host.status", {}, controller.signal);
+        controller.abort();
+
+        const error: unknown = await pending.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(HostRequestAbortedError);
+        // Never dispatched: the abort landed before any frame was enqueued,
+        // and the session going ready afterwards must not resurrect it.
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not dispatch a request whose authority aborted between the ready boundary and the send",
+    async () => {
+      // The ordering the post-wait recheck exists for, and the one the abort
+      // LISTENER cannot catch. Queuing the abort as a microtask from the
+      // availability listener puts it ahead of the waiter's own continuation:
+      // `settleReadyWaiters(true)` resolves (and DISPOSES this waiter's abort
+      // listener) first, then the queued abort runs, and only then does
+      // `sendUnary` resume - already past every guard except the recheck
+      // immediately before the enqueue.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      const controller = new AbortController();
+      session.subscribeAvailabilityRecovered(() => {
+        queueMicrotask(() => {
+          controller.abort();
+        });
+      });
+      try {
+        session.start();
+        const error: unknown = await session
+          .sendUnary("host.status", {}, controller.signal)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRequestAbortedError);
+        // Never reached the wire, even though the session DID become ready.
+        expect(session.isReady()).toBe(true);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 });
 
 describe("RemoteSession negotiated-manifest publication", () => {
@@ -1187,7 +1382,7 @@ describe("RemoteSession absent optional method", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.syntheticUnsupported", {})
+          .sendUnary("host.syntheticUnsupported", {}, null)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1305,6 +1500,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
         const result: unknown = await session.sendUnary(
           "host.syntheticSkewFallback",
           { label: "x" },
+          null,
         );
         // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.

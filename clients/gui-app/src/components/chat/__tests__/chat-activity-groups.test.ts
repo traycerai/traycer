@@ -970,6 +970,51 @@ describe("chat activity grouping", () => {
     );
   });
 
+  it("promotes image_generation tools from the started frame by exact toolName", () => {
+    // Promotion must fire on toolName alone so the card owns its row from the
+    // first started frame (empty imageResults, still streaming) - not only after
+    // results land.
+    const started: Extract<MessageSegment, { kind: "tool" }> = {
+      ...toolSegment("tool-img", "image_generation", {
+        prompt: "a misty pier at dawn",
+      }),
+      isStreaming: true,
+    };
+    const timeline = buildActiveTimeline([
+      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
+      started,
+      commandSegment("command-1", "bun test", false, null),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected promoted image_generation segment");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected tool segment");
+    }
+    expect(timeline[1].segment.toolName).toBe("image_generation");
+    expect(timeline[1].segment.isStreaming).toBe(true);
+  });
+
+  it("keeps a near-miss tool name folded into the activity group", () => {
+    // Exact toolName pin: `image_generation` promotes; lookalikes must not.
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-1", "image_generation_helper", {
+        prompt: "should stay grouped",
+      }),
+      toolSegment("tool-2", "generate_image", { prompt: "also grouped" }),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual(["activity_group"]);
+  });
+
   it("renders matched interviews as answered-question items and suppresses the raw question tool", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("tool-1", "question", {
@@ -1280,6 +1325,7 @@ function toolSegment(
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
+    imageResults: [],
     startedAt: 0,
     durationMs: null,
     parentId: null,
@@ -1309,6 +1355,7 @@ function a2aToolSegment(
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
+    imageResults: [],
     startedAt: 0,
     durationMs: null,
     parentId: null,

@@ -3,7 +3,6 @@ import {
   formatDateRangeLabel,
   formatDayLabel,
   formatMetricValue,
-  niceCeil,
 } from "@/lib/usage-analytics/format-metric-value";
 
 describe("formatMetricValue", () => {
@@ -55,16 +54,5 @@ describe("formatDateRangeLabel", () => {
 
   it("renders nothing for an empty day list", () => {
     expect(formatDateRangeLabel([])).toBe("");
-  });
-});
-
-describe("niceCeil", () => {
-  it("rounds up to the nearest clean 1/2/5/10 step", () => {
-    expect(niceCeil(0)).toBe(0);
-    expect(niceCeil(0.8)).toBe(1);
-    expect(niceCeil(1.4)).toBe(2);
-    expect(niceCeil(3)).toBe(5);
-    expect(niceCeil(7)).toBe(10);
-    expect(niceCeil(42)).toBe(50);
   });
 });

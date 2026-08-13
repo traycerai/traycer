@@ -51,9 +51,6 @@ type UpdateHostVersionPolicyMutation = UseMutationResult<
  */
 export function HostRegistryUpdates(props: {
   readonly item: HostListItem;
-  /** True for the host running on this computer, which also owns a local
-   *  controller — so the copy must not promise "next check-in" there. */
-  readonly isLocalHost: boolean;
 }): ReactNode {
   const { item } = props;
   const mutation = useUpdateHostVersionPolicy(item.hostId);
@@ -79,10 +76,21 @@ export function HostRegistryUpdates(props: {
         />
         <div className="min-w-0 flex-1">
           <p className="text-ui-sm text-foreground">Auto-update</p>
+          {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
+              saying "Installs new versions when no sessions are running."
+              locally — which was fiction. The pin is applied by the HOST's own
+              update reconciler, on its own independent ~20s poll, reading the
+              coordination snapshot its check-in populates
+              (`update-reconciler.ts` — no locality branch anywhere in it). The
+              local machine's CLI controller is a different mechanism entirely:
+              it backs the MANUAL apply button, not this policy. The fork
+              therefore described a path that does not exist, omitted the
+              latency that does, and — because the two variants render the same
+              component — made the Overview visibly differ for local and remote
+              hosts on a page whose whole premise is that it does not. */}
           <p className="text-ui-xs text-muted-foreground">
-            {props.isLocalHost
-              ? "Installs new versions when no sessions are running."
-              : "Applied on this host's next check-in (~20s), when no sessions are running."}
+            Applied on this host&apos;s next check-in (~20s), when no sessions
+            are running.
           </p>
         </div>
         {pill === null ? null : (

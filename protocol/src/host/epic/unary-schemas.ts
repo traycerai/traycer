@@ -37,6 +37,10 @@ import {
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
+import {
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 export const LatestEpicArtifactKindSchema = getRecordSchema(
   commonRecordRegistry,
@@ -1165,6 +1169,123 @@ export const setChatArchivedResponseSchema = z.object({
 });
 export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
+>;
+
+// Optional two-phase artifact-image ingest. Prepare validates and retains
+// recoverable bytes; finish commits the artifact reference index or aborts.
+export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;
+const MAX_ARTIFACT_IMAGE_BASE64_LENGTH =
+  4 * Math.ceil(MAX_ARTIFACT_IMAGE_BYTES / 3);
+const artifactImageBase64Schema = z
+  .string()
+  .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+
+export const prepareArtifactImageRequestSchema = z.object({
+  epicId: z.string(),
+  source: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("bytes"), base64: artifactImageBase64Schema }),
+    z.object({ kind: z.literal("remote"), url: z.string().url() }),
+  ]),
+});
+export type PrepareArtifactImageRequest = z.infer<
+  typeof prepareArtifactImageRequestSchema
+>;
+
+const artifactImageIngestErrorStateSchema = z.enum([
+  "invalid-path",
+  "blocked-path",
+  "consent-required",
+  "oversized",
+  "invalid-image",
+  "not-found",
+  "budget-exceeded",
+  "io-error",
+]);
+export const prepareArtifactImageResponseSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    operationId: z.string(),
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
+    src: z.string(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    state: artifactImageIngestErrorStateSchema,
+    message: z.string(),
+  }),
+]);
+export type PrepareArtifactImageResponse = z.infer<
+  typeof prepareArtifactImageResponseSchema
+>;
+
+const finishArtifactImageRequestBaseSchema = z.object({
+  epicId: z.string(),
+  artifactId: z.string(),
+  operationId: z.string(),
+});
+export const finishArtifactImageRequestSchema = z.discriminatedUnion("commit", [
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(true) }),
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(false) }),
+]);
+export type FinishArtifactImageRequest = z.infer<
+  typeof finishArtifactImageRequestSchema
+>;
+
+export const artifactImageFinishResponseFixtures = {
+  commit: {
+    committed: { committed: true },
+    notYetConverged: { status: "not-yet-converged" },
+    unknownOperation: { status: "unknown-operation" },
+  },
+  abort: {
+    aborted: { status: "aborted" },
+    unknownOperation: { status: "unknown-operation" },
+  },
+} as const;
+
+export const commitArtifactImageResponseSchema = z.union([
+  z.object({
+    committed: z.literal(
+      artifactImageFinishResponseFixtures.commit.committed.committed,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.notYetConverged.status,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.unknownOperation.status,
+    ),
+  }),
+]);
+export type CommitArtifactImageResponse = z.infer<
+  typeof commitArtifactImageResponseSchema
+>;
+
+export const abortArtifactImageResponseSchema = z.union([
+  z.object({
+    status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.abort.unknownOperation.status,
+    ),
+  }),
+]);
+export type AbortArtifactImageResponse = z.infer<
+  typeof abortArtifactImageResponseSchema
+>;
+
+export const finishArtifactImageResponseSchema = z.union([
+  commitArtifactImageResponseSchema,
+  abortArtifactImageResponseSchema,
+]);
+export type FinishArtifactImageResponse = z.infer<
+  typeof finishArtifactImageResponseSchema
 >;
 
 export const reparentChatRequestSchema = z.object({

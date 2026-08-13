@@ -1,5 +1,7 @@
 /**
- * Snapshot frozen catalog response schemas for the three id-carrying methods.
+ * Snapshot frozen catalog response schemas for the three id-carrying methods,
+ * plus the frozen `providers.list` REQUEST lines (that method is the one whose
+ * request shape has its own freeze history - see the `native` rows below).
  *
  *   bun run protocol/scripts/compat/snapshot-frozen-catalog-lines.ts > \
  *     protocol/src/host/__tests__/__fixtures__/frozen-catalog-lines.ts
@@ -26,12 +28,15 @@ import {
   listGuiHarnessesResponseSchemaV60,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
+  providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -68,6 +73,26 @@ const FIXTURES = {
   "providers.list@4.0": dump(providersListResponseSchemaV40),
   "providers.list@5.0": dump(providersListResponseSchemaV50),
   "providers.list@6.0": dump(providersListResponseSchemaV60),
+  // Pinned BEFORE the line ships - the only row here that is. Every row above
+  // it was added after a released tag caught a field already riding it, so each
+  // one only ever locked in drift that had already happened. v7.0 is the head
+  // line, and the next major's fields are already designed, so this row is the
+  // one that gets to prevent the leak instead of recording it.
+  //
+  // This dump is DEEP: it walks `providerProfileSchema`,
+  // `providerNativeCapabilitiesSchema`, `nativeListResultSchema` and every
+  // other sub-schema the frozen v7.0 shape still references live. That is what
+  // makes those live references safe - growth inside one of them fails this
+  // snapshot rather than quietly changing what v7.0 serializes. When it fails,
+  // hand-freeze the sub-schema that grew; do not regenerate to green.
+  "providers.list@7.0": dump(providersListResponseSchemaV70),
+  // The REQUEST lines carry their own freeze history (`native` grew the
+  // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
+  // them), and nothing pinned them locally until now - the tag-based gate was
+  // the only thing that could see it. Two rows cover every line: v1.0..v6.0 all
+  // share `providersListRequestSchemaBeforeV70`, and v7.0 has its own.
+  "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
+  "providers.list@7.0 request": dump(providersListRequestSchemaV70),
 };
 
 const HEADER =

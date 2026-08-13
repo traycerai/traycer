@@ -68,6 +68,22 @@ export function agentEntrySecondaryContext(
   return parts.join(" · ");
 }
 
+/**
+ * The menu ROW's trailing text for an Agent, as opposed to the preview
+ * panel's `agentEntrySecondaryContext`: no interface label ("Chat",
+ * "Terminal") - the row's trailing slot shows the Agent's last-activity
+ * time, which is what helps pick between same-named rows - while the
+ * harness name and the reference-only marker disambiguate.
+ */
+function agentEntryRowDetail(entry: EpicAgentMentionEntry): string {
+  const parts: string[] = [];
+  if (entry.kind === "epic-terminal-agent") {
+    parts.push(TUI_AGENT_HARNESS_LABELS[entry.harnessId]);
+  }
+  if (!entry.runtimeSupportsMessageDelivery) parts.push(REFERENCE_ONLY_LABEL);
+  return parts.join(" · ");
+}
+
 function isAgentEntry(
   entry: MentionSuggestionEntry,
 ): entry is EpicAgentMentionEntry {
@@ -79,8 +95,9 @@ export function detailForSuggestion(entry: MentionSuggestionEntry): string {
     return dirnameOfPath(entry.relPath);
   }
   // Agent rows are always current-Task, so the epic title the artifact rows use
-  // here carries no signal; interface + capability disambiguate instead.
-  if (isAgentEntry(entry)) return agentEntrySecondaryContext(entry);
+  // here carries no signal; harness + capability disambiguate, and the row
+  // renders its last-activity time as a separate trailing element.
+  if (isAgentEntry(entry)) return agentEntryRowDetail(entry);
   // Two shells started in the same Task routinely share a title; the working
   // directory is what tells them apart.
   if (entry.kind === "epic-terminal") return entry.cwd;

@@ -28,7 +28,7 @@ import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notific
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
   isDocumentFocused,
-  readFocusedHostNotificationPresenceEntity,
+  readFocusedHostNotificationPresence,
 } from "@/lib/notifications/notification-presence";
 import {
   buildNotificationActivationEnvelope,
@@ -352,14 +352,35 @@ function renderNotificationToast(
 function suppressedByFocusedEntity(
   parsed: ParsedNotificationActivationPayload | null,
 ): boolean {
+  if (parsed === null) return false;
   const route = activationRoute(parsed);
   if (route === null) return false;
   const entity = notificationEntityFromPayload(route);
   if (entity === null) return false;
-  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  const focused = readFocusedHostNotificationPresence();
   return (
-    focusedEntity !== null &&
-    notificationEntityMatchesPresence(entity, focusedEntity)
+    focused !== null &&
+    notificationOriginMatchesFocus(
+      activationOriginHostId(parsed),
+      focused.originHostId,
+    ) &&
+    notificationEntityMatchesPresence(entity, focused.entity)
+  );
+}
+
+function activationOriginHostId(
+  parsed: ParsedNotificationActivationPayload,
+): string | null {
+  return parsed.kind === "v1" ? parsed.envelope.originHostId : null;
+}
+
+function notificationOriginMatchesFocus(
+  originHostId: string | null,
+  focusedOriginHostId: string | null,
+): boolean {
+  return (
+    focusedOriginHostId === null ||
+    (originHostId !== null && originHostId === focusedOriginHostId)
   );
 }
 
@@ -400,15 +421,16 @@ export function displayHostChannelEmission(
 ): void {
   const rows = entries.map(rowFromHostEntry);
   const emissionDeliveryKey = feedRowsDeliveryKey(rows);
-  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  const focused = readFocusedHostNotificationPresence();
   const visibleRows =
-    focusedEntity === null
+    focused === null ||
+    !notificationOriginMatchesFocus(originHostId, focused.originHostId)
       ? rows
       : rows.filter((_row, index) => {
           const entity = notificationEntityFromHostEntry(entries[index]);
           return (
             entity === null ||
-            !notificationEntityMatchesPresence(entity, focusedEntity)
+            !notificationEntityMatchesPresence(entity, focused.entity)
           );
         });
   displayFeedRows(visibleRows, target, originHostId, emissionDeliveryKey);
@@ -422,13 +444,17 @@ export function displayCloudSnapshotArrivals(
   entries: ReadonlyArray<HostNotificationsCloudFeedRow>,
   target: NotificationDisplayTarget,
 ): void {
-  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  const focused = readFocusedHostNotificationPresence();
   for (const entry of entries) {
     const entity = notificationEntityFromHostEntry(entry.entry);
     if (
-      focusedEntity !== null &&
+      focused !== null &&
+      notificationOriginMatchesFocus(
+        entry.originHostId,
+        focused.originHostId,
+      ) &&
       entity !== null &&
-      notificationEntityMatchesPresence(entity, focusedEntity)
+      notificationEntityMatchesPresence(entity, focused.entity)
     ) {
       continue;
     }
@@ -451,7 +477,7 @@ export function displayAppLocalNotification(
     target,
     {
       deliveryKey,
-      originHostId: null,
+      originHostId: entry.originHostId ?? null,
       foregroundAppLocal: { userId, entry },
     },
   );

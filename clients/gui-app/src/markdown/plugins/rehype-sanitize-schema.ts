@@ -84,6 +84,24 @@ export function extendTraycerSanitizeSchema(schema: Schema): Schema {
   };
 }
 
+/** Assistant-only image source protocols. Other markdown surfaces keep the
+ * shared schema above, which deliberately owns only link destinations. */
+export function extendAssistantImageSanitizeSchema(schema: Schema): Schema {
+  const traycerSchema = extendTraycerSanitizeSchema(schema);
+  return {
+    ...traycerSchema,
+    protocols: {
+      ...traycerSchema.protocols,
+      src: [
+        ...(traycerSchema.protocols?.src ?? []),
+        "data",
+        "file",
+        ...DRIVE_LETTER_SCHEMES,
+      ],
+    },
+  };
+}
+
 /**
  * Standalone product schema (tests / docs). Prefer
  * {@link extendTraycerSanitizeSchema} when composing with Tailmark's base.

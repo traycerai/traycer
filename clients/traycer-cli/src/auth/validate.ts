@@ -5,12 +5,7 @@ import {
 } from "../../../shared/auth/auth-validation";
 import { config } from "../config";
 import { createCliLogger, type ILogger } from "../logger";
-import {
-  credentialsWithEffectiveAuthnBaseUrl,
-  effectiveAuthnBaseUrl,
-  readCredentials,
-  type StoredCredentials,
-} from "../store/credentials";
+import { readCredentials, type StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
 export type ValidationOutcome =
@@ -43,9 +38,8 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     hasToken: stored.token.length > 0,
     hasRefreshToken: stored.refreshToken.length > 0,
   });
-  const authnBaseUrl = effectiveAuthnBaseUrl(stored.authnBaseUrl);
   const validation = await validateAuthTokenIdentityAccessOnly(
-    authnBaseUrl,
+    config.authnBaseUrl,
     stored.token,
   );
   if (validation.kind === "network-error") {
@@ -84,10 +78,7 @@ async function reconcileValidProfile(
       userChanged: false,
       credentialsPersisted: false,
     });
-    return {
-      kind: "valid",
-      credentials: credentialsWithEffectiveAuthnBaseUrl(stored),
-    };
+    return { kind: "valid", credentials: stored };
   }
   const result = await runWithCliStore((store) =>
     store.updateProfile({
@@ -99,7 +90,7 @@ async function reconcileValidProfile(
   const persisted = result.outcome === "applied";
   // The stored access token validated to `nextUser`, so pair them in the
   // reported credentials whether or not the advisory persist landed (a sibling
-  // rotate/logout can supersede it). `whoami` reads only `user`/`authnBaseUrl`.
+  // rotate/logout can supersede it). `whoami` reads only `user`.
   const next: StoredCredentials =
     persisted && result.credentials !== null
       ? result.credentials
@@ -109,10 +100,7 @@ async function reconcileValidProfile(
     userChanged: true,
     credentialsPersisted: persisted,
   });
-  return {
-    kind: "valid",
-    credentials: credentialsWithEffectiveAuthnBaseUrl(next),
-  };
+  return { kind: "valid", credentials: next };
 }
 
 /**
@@ -145,15 +133,11 @@ async function rotateStaleCredentials(
       // applied/superseded/commit-failed always carry the pair; the null guard
       // is defensive.
       return result.credentials !== null
-        ? {
-            kind: "valid",
-            credentials: credentialsWithEffectiveAuthnBaseUrl(
-              result.credentials,
-            ),
-          }
+        ? { kind: "valid", credentials: result.credentials }
         : { kind: "rejected" };
     case "refresh-network":
     case "lock-busy":
+    case "spend-pending":
       logger.warn("Stored credential validation rotate hit transient failure", {
         environment: config.environment,
         outcome: result.outcome,
