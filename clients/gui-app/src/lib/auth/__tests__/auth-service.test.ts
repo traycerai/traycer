@@ -166,43 +166,91 @@ function ok(): Promise<Response> {
   return Promise.resolve(new Response("{}", { status: 200 }));
 }
 
+function authenticatedUserPayload(
+  teamSubscriptions: readonly unknown[],
+): Record<string, unknown> {
+  return {
+    user: {
+      id: "user-1",
+      name: "Test User",
+      providerId: "gh-1",
+      providerHandle: "test-user",
+      providerType: "GITHUB",
+      email: "test@example.com",
+      avatarUrl: null,
+      activatedAt: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      lastSeenAt: null,
+      privacyMode: false,
+      isLearningEnabled: true,
+    },
+    userSubscription: {
+      id: "sub-1",
+      userID: "user-1",
+      orgID: null,
+      teamID: null,
+      customerId: "cus-1",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      subscriptionExpiry: null,
+      trialEndsAt: null,
+      subscriptionStatus: "FREE",
+      hasPaymentMethod: false,
+      isInTrial: false,
+      rechargeRateSeconds: 0,
+    },
+    teamSubscriptions,
+    payAsYouGoUsage: { allowPayAsYouGo: false },
+  };
+}
+
 function okWithProfile(): Promise<Response> {
   return Promise.resolve(
+    new Response(JSON.stringify(authenticatedUserPayload([])), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function okWithShareableTeam(): Promise<Response> {
+  return Promise.resolve(
     new Response(
-      JSON.stringify({
-        user: {
-          id: "user-1",
-          name: "Test User",
-          providerId: "gh-1",
-          providerHandle: "test-user",
-          providerType: "GITHUB",
-          email: "test@example.com",
-          avatarUrl: null,
-          activatedAt: null,
-          createdAt: "2024-01-01T00:00:00.000Z",
-          updatedAt: "2024-01-01T00:00:00.000Z",
-          lastSeenAt: null,
-          privacyMode: false,
-          isLearningEnabled: true,
-        },
-        userSubscription: {
-          id: "sub-1",
-          userID: "user-1",
-          orgID: null,
-          teamID: null,
-          customerId: "cus-1",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          updatedAt: "2024-01-01T00:00:00.000Z",
-          subscriptionExpiry: null,
-          trialEndsAt: null,
-          subscriptionStatus: "FREE",
-          hasPaymentMethod: false,
-          isInTrial: false,
-          rechargeRateSeconds: 0,
-        },
-        teamSubscriptions: [],
-        payAsYouGoUsage: { allowPayAsYouGo: false },
-      }),
+      JSON.stringify(
+        authenticatedUserPayload([
+          {
+            id: "team-sub-1",
+            userID: "user-1",
+            orgID: null,
+            teamID: "team-1",
+            customerId: "cus-team-1",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            subscriptionExpiry: null,
+            trialEndsAt: null,
+            subscriptionStatus: "PRO",
+            hasPaymentMethod: true,
+            isInTrial: false,
+            bundleSummary: {
+              bundleTotal: 0,
+              bundleConsumed: 0,
+              bundleRemaining: 0,
+            },
+            totalPlanCredits: 0,
+            rechargeRateSeconds: 0,
+            hasActiveBundle: false,
+            team: {
+              id: "team-1",
+              slug: "acme",
+              avatarUrl: null,
+              privacyMode: false,
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z",
+            },
+          },
+        ]),
+      ),
       {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -1482,6 +1530,77 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
     expect(useAuthStore.getState().shareableTeams).toEqual([]);
+  });
+
+  it("upgrades a cached session through a reactive host 401 without dropping pending validation", async () => {
+    // Offline start projects cache (empty teams / null subscription). A host
+    // UNAUTHORIZED then rotates the stale access token via revalidateCurrentContext
+    // — not the recovery tick. rotateLiveBearer must not clear pending, or the
+    // next recovery tick settles already-signed-in and teams stay empty.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "cached-stale-token", refreshToken: "cached-stale-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
+    expect(useAuthStore.getState().subscriptionStatus).toBeNull();
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore).not.toBeNull();
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer cached-stale-token"
+      ) {
+        return status(401);
+      }
+      if (
+        url === REFRESH_URL &&
+        init?.headers?.Authorization === "Bearer cached-stale-token"
+      ) {
+        return okWithRefreshToken("post-401-token");
+      }
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer post-401-token"
+      ) {
+        return okWithShareableTeam();
+      }
+      return status(500);
+    });
+
+    const outcome = await service.revalidateCurrentContext();
+    expect(outcome?.kind).toBe("valid");
+    expect(service.getCurrentSessionSnapshot().token).toBe("post-401-token");
+    expect(provider.current()).toBe(contextBefore);
+    // Rotation returned AuthenticatedUser to the caller but must not have
+    // marked the cache validated: Zustand still holds the empty projection.
+    expect(useAuthStore.getState().shareableTeams).toEqual([]);
+    expect(useAuthStore.getState().subscriptionStatus).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(provider.current()).toBe(contextBefore);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
+    expect(useAuthStore.getState().shareableTeams).toEqual([
+      { teamId: "team-1", slug: "acme", avatarUrl: null },
+    ]);
   });
 
   it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {

@@ -398,8 +398,10 @@ export class AuthService {
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
   // True while the live bearer was projected from the credentials-file cache
-  // because authn was unreachable. Recovery must keep probing; a validated
-  // session (applySignedIn / rotateLiveBearer) or sign-out clears this.
+  // because authn was unreachable. Recovery must keep probing; only
+  // applySignedIn / applySignedOut / dispose clear this. rotateLiveBearer
+  // must not — a reactive 401 can rotate the cached bearer without ever
+  // applying an AuthenticatedUser.
   private sessionPendingValidation = false;
 
   constructor(options: AuthServiceOptions) {
@@ -1812,7 +1814,6 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
-    this.sessionPendingValidation = false;
     this.contextProvider.rotateCurrentBearer({ userId, bearerToken });
     this.currentBearer = bearerToken;
     this.emitSessionSnapshot();
