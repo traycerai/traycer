@@ -107,6 +107,10 @@ import {
   readCloudChatPayloadResponseSchema,
   resolveCloudChatHeadRequestSchema,
   resolveCloudChatHeadResponseSchema,
+  setChatSharingDefaultRequestSchema,
+  setChatSharingDefaultResponseSchema,
+  setCloudChatVisibilityRequestSchema,
+  setCloudChatVisibilityResponseSchema,
 } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   listChatPublicationTargetsRequestSchema,
@@ -661,6 +665,25 @@ export const epicReadCloudChatPayloadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: readCloudChatPayloadRequestSchema,
   responseSchema: readCloudChatPayloadResponseSchema,
+});
+
+// Visibility mutations sit beside the five cloud-chat reads. Same channel:
+// brand-new names, `{major:1, minor:0}`, `degrade: unsupported`. The five
+// reads plus these two freeze together at the next release. Request keys
+// use `taskId` (cloud-chat convention), not `epicId`.
+
+export const epicSetCloudChatVisibilityV10 = defineRpcContract({
+  method: "epic.setCloudChatVisibility",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setCloudChatVisibilityRequestSchema,
+  responseSchema: setCloudChatVisibilityResponseSchema,
+});
+
+export const epicSetChatSharingDefaultV10 = defineRpcContract({
+  method: "epic.setChatSharingDefault",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatSharingDefaultRequestSchema,
+  responseSchema: setChatSharingDefaultResponseSchema,
 });
 
 // ---- Publication identity (a host-LOCAL read, not a cloud read) -------- //
