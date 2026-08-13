@@ -464,7 +464,7 @@ describe("cloud-derived notification indicators", () => {
     });
   });
 
-  it("rolls a foreign-host chat entry up into its epic indicator", async () => {
+  it("does not roll a deleted foreign-host chat entry up into its epic indicator", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
       [
@@ -484,7 +484,7 @@ describe("cloud-derived notification indicators", () => {
     });
 
     await waitFor(() => {
-      expect(indicatorText("epic")).toBe("pendingApproval");
+      expect(indicatorText("epic")).toBe("none");
     });
     expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
