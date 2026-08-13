@@ -20,8 +20,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostUnavailability,
+  isConfirmedTransportRefusal,
   type HostUnavailability,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
@@ -68,6 +70,17 @@ interface NotificationRowProps {
  * A CONFIRMED refusal still disables, because for those the action really has
  * nowhere to go: `offline` (the host is detached) and `plan-restricted` (no
  * remote route exists to it on this account's plan).
+ *
+ * "Confirmed" is asked through `isConfirmedTransportRefusal` - the SAME
+ * ready-session-aware gate the activation path itself dials through
+ * (`ensureOriginHostSelected` -> `dialableHostEndpoint`) - not by re-reading
+ * the raw verdict here. The two must agree, and a hand-rolled second gate is
+ * how they stop agreeing: reading `hostUnavailability` directly greyed out a
+ * cloud-`offline` origin this client held a READY live session to (firsthand
+ * proof the route works, which every other gate lets outrank the registry),
+ * and refused the fuse-window recovery dial the transport would have
+ * attempted. `hostUnavailability` now supplies only the per-reason copy once
+ * the refusal is confirmed.
  */
 function originRefusal(input: {
   readonly row: MergedNotificationRow;
@@ -79,8 +92,17 @@ function originRefusal(input: {
   if (!requiresOriginHost) return null;
   if (input.row.originHostId === null) return "offline";
   if (input.originEntry === null) return "offline";
-  const unavailability = hostUnavailability(input.originEntry);
-  return unavailability === "indeterminate" ? null : unavailability;
+  if (
+    !isConfirmedTransportRefusal(
+      input.originEntry,
+      hasReadyRemoteSession(input.originEntry.hostId),
+    )
+  ) {
+    return null;
+  }
+  // Confirmed refusals are exactly `offline` / `plan-restricted`; the verdict
+  // read here only picks which copy the row renders.
+  return hostUnavailability(input.originEntry);
 }
 
 /**

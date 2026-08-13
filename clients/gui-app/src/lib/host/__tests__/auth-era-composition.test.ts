@@ -167,16 +167,24 @@ interface HostsEndpoint {
   /** Bearers to hold open instead of answering, plus their resolvers. */
   readonly hold: (bearer: string) => void;
   readonly release: (bearer: string, response: Response) => void;
+  /**
+   * Bearers the HOSTS endpoint 401s even though they are otherwise valid -
+   * the transient mid-rotation refusal (`/api/v3/user` keeps answering, so
+   * nothing signs the session out).
+   */
+  readonly deny: (bearer: string) => void;
   readonly handler: FetchHandler;
 }
 
 function hostsEndpoint(): HostsEndpoint {
   const bearers: string[] = [];
   const held = new Set<string>();
+  const denied = new Set<string>();
   const pending = new Map<string, (response: Response) => void>();
   return {
     bearers,
     hold: (bearer) => held.add(bearer),
+    deny: (bearer) => denied.add(bearer),
     release: (bearer, response) => {
       const resolve = pending.get(bearer);
       pending.delete(bearer);
@@ -200,6 +208,9 @@ function hostsEndpoint(): HostsEndpoint {
           return new Promise<Response>((resolve) => {
             pending.set(bearer, resolve);
           });
+        }
+        if (denied.has(bearer)) {
+          return Promise.resolve(new Response(null, { status: 401 }));
         }
         const userId = ACCOUNT_BY_BEARER.get(bearer);
         const hostId =
@@ -482,6 +493,47 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     expect(await directoryHostIds(composition.directory)).toEqual([
       "account-a-host",
     ]);
+  });
+
+  it("retains the directory and the bound remote selection when the registry 401s a STILL-CURRENT bearer", async () => {
+    const endpoint = hostsEndpoint();
+    restoreFetch = installFetch(endpoint.handler);
+    const composition = buildComposition();
+    await startSignedInAs(composition, TOKEN_A, "user-a");
+    await vi.waitFor(async () => {
+      expect(await directoryHostIds(composition.directory)).toEqual([
+        "account-a-host",
+      ]);
+    });
+    composition.directory.selectById("account-a-host");
+    expect(composition.directory.getSelected()?.hostId).toBe("account-a-host");
+
+    // Drain startup before marking: a refresh still in flight would be
+    // JOINED rather than re-issued (that coalescing is deliberate), and this
+    // probe needs the DENIED answer to be the one its refresh consumes.
+    await composition.directory.refresh();
+    const mark = endpoint.bearers.length;
+
+    // The registry rejects the CURRENT bearer - proactive rotation has not
+    // landed yet, so no era transition exists for the generation fence to
+    // catch: the same credential that filled the directory observes this
+    // 401. `AuthService.fetchRegisteredHosts` deliberately does not sign out
+    // on it (a background list poll must never force a sign-out), and the
+    // directory must be no more destructive than the auth layer: retain the
+    // last-known entries and the bound selection, recover on the next poll.
+    // Mapping it to `signed-out` cleared every remote entry and unbound the
+    // active remote host mid-session on a transient credential blip.
+    endpoint.deny(TOKEN_A);
+    await composition.directory.refresh();
+
+    // The refusal really went out (and went out under the current bearer) -
+    // without this, a refresh that silently joined an older in-flight read
+    // would make the retention assertions below pass vacuously.
+    expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A]);
+    expect(await directoryHostIds(composition.directory)).toEqual([
+      "account-a-host",
+    ]);
+    expect(composition.directory.getSelected()?.hostId).toBe("account-a-host");
   });
 });
 

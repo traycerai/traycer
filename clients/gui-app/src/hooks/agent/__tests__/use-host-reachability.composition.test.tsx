@@ -290,6 +290,73 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     expect(result.current.unavailability).toBe("offline");
   });
 
+  it("flips to reachable when a fuse-recovery dial becomes ready with NO directory change", async () => {
+    // The transition the memo used to miss: a recovery dial succeeding
+    // changes NO directory value (the registry row stays `offline` for up to
+    // the lease TTL), so a memo keyed only on directory-query state kept
+    // returning "unreachable" - a dead surface over a working session. The
+    // hook now subscribes to session readiness itself.
+    const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+    const entry = directoryEntry("host-late-ready", "offline", recentLastSeen);
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-late-ready"),
+      {
+        wrapper: wrapper(queryClient),
+      },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
+
+    // The dial completes: readiness flips, the directory does not.
+    readySessionHosts.value.add("host-late-ready");
+
+    await waitFor(
+      () => {
+        expect(result.current.status).toBe("reachable");
+      },
+      { timeout: 5_000 },
+    );
+    expect(result.current.unavailability).toBeNull();
+  });
+
+  it("drops back to unreachable when the ready session is lost with NO directory change", async () => {
+    // The inverse direction: a session dying is also invisible to the
+    // directory query, and a stale "reachable" would keep a live-looking
+    // surface on a host whose only proof of life just disappeared.
+    const entry = directoryEntry(
+      "host-session-lost",
+      "offline",
+      STALE_LAST_SEEN,
+    );
+    directoryRef.value = makeDirectory([entry]).directory;
+    readySessionHosts.value = new Set(["host-session-lost"]);
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-session-lost"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("reachable");
+    });
+
+    readySessionHosts.value.delete("host-session-lost");
+
+    await waitFor(
+      () => {
+        expect(result.current.status).toBe("unreachable");
+      },
+      { timeout: 5_000 },
+    );
+    expect(result.current.unavailability).toBe("offline");
+  });
+
   it("reports reachable for a connectable host, with no unavailability reason", async () => {
     const entry = directoryEntry("host-online", "connectable", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;

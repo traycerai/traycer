@@ -2,6 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostUnavailability,
+  isRelayFuseRecoveryCandidate,
   isRemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectory } from "@/lib/host";
@@ -75,6 +76,14 @@ export function hostDirectoryEntryEquals(
     // "we don't know" for the rest of the session. Comparing the verdict
     // strictly subsumes the coarse bit (`dialable` ⇔ `null`).
     hostUnavailability(a) === hostUnavailability(b) &&
+    // The recovery-dial window (F7), same reason as the service's twin: it is
+    // recomputed from `lastSeenAt` recency at every projection, so an
+    // `offline` row whose only change is aging past the 4h fuse cap flips
+    // this field while every other compared field (including the derived
+    // verdict, still `offline`) stays identical. Swallowing that flip pinned
+    // `relayFuseGrace: true` on every consumer of this hook forever -
+    // recovery dials permitted indefinitely past the documented cap.
+    isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
     // Not part of the base shape (R-1): a same-host public-key rotation
     // (re-enrollment / corruption recovery) would otherwise be swallowed by
     // this cache - every base field can stay byte-identical - permanently

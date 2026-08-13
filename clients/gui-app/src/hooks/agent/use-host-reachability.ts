@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   hostUnavailability,
@@ -50,6 +50,7 @@ export interface HostReachability {
  */
 export function useHostReachability(hostId: string): HostReachability {
   const list = useHostDirectoryList();
+  const hasReadySession = useRemoteSessionReadiness(hostId);
   return useMemo<HostReachability>(() => {
     if (list.data === undefined) {
       // The directory query is disabled when no host binding exists
@@ -143,7 +144,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // cloud verdict reached minutes ago through a different leg. Without this
     // the directory could kill the surfaces of a host this client is actively
     // talking to.
-    if (hasReadyRemoteSession(hostId)) {
+    if (hasReadySession) {
       return { status: "reachable", hostLabel, unavailability: null };
     }
     if (unavailability === "indeterminate") {
@@ -160,5 +161,42 @@ export function useHostReachability(hostId: string): HostReachability {
     // differently to a person, though, so the reason travels with the verdict
     // and the banners branch on it rather than all saying "offline".
     return { status: "unreachable", hostLabel, unavailability };
-  }, [hostId, list.data, list.fetchStatus]);
+  }, [hostId, list.data, list.fetchStatus, hasReadySession]);
+}
+
+/**
+ * How often the ready-session evidence is re-read. Session readiness settles
+ * within seconds of a dial (`isConfirmedTransportRefusal`'s contract), so a
+ * one-second bound keeps the dead surface honest without meaningful cost -
+ * the poll is a scan of the small in-memory session cache, and a tick whose
+ * value is unchanged re-renders nothing (`useSyncExternalStore` compares
+ * snapshots).
+ */
+const REMOTE_SESSION_READINESS_POLL_MS = 1_000;
+
+/**
+ * Reactive view of `hasReadyRemoteSession(hostId)`.
+ *
+ * The session cache is a pull-only module map - nothing pushes an event when
+ * a session becomes ready or dies - and a readiness flip changes NO directory
+ * value (a fuse-recovery dial succeeding leaves the registry row `offline`
+ * for up to the lease TTL). Reading it inside the directory-keyed memo above
+ * therefore froze the answer: a surface stayed "unreachable" while a working
+ * session was open, and could stay "reachable" after the session died, until
+ * some unrelated directory emit happened by. With no store to subscribe to,
+ * the subscription is a bounded poll; `useSyncExternalStore` turns it into a
+ * proper snapshot the memo can key on.
+ */
+function useRemoteSessionReadiness(hostId: string): boolean {
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    const timer = setInterval(onStoreChange, REMOTE_SESSION_READINESS_POLL_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const getSnapshot = useCallback(
+    () => hasReadyRemoteSession(hostId),
+    [hostId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

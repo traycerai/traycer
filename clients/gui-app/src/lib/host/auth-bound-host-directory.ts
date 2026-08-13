@@ -16,17 +16,35 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
  * exposing a separate raw-bearer getter (the bearer deliberately never leaves
  * `AuthService`).
  *
- * The era is passed straight through, unread. This layer must not interpret
- * it: it does not hold the credential, so any check it performed would be on
- * some other reading of the auth state than the one the request will actually
- * use. `AuthService` holds both the bearer and the era that bearer belongs
- * to, and refuses a mismatch there.
+ * The era is passed straight through to the fetch, and the CREDENTIAL check
+ * stays out of this layer: it does not hold the bearer, so any is-this-the
+ * -right-credential check it performed would be on some other reading of the
+ * auth state than the one the request will actually use. `AuthService` holds
+ * both the bearer and the era that bearer belongs to, and refuses a mismatch
+ * there. The one thing this layer DOES read off the era is `identity`, below,
+ * to classify a `null` answer - that is interpreting the outcome it was
+ * handed, not second-guessing which credential to send.
  *
  * Maps `fetchRegisteredHosts()`'s contract onto `RemoteHostFetchOutcome`
- * (T20 / audit P4): a `null` return (no bearer, or one the registry
- * rejected - `AuthService` deliberately does not distinguish the two so a
- * background poll never forces a sign-out) becomes `signed-out`; a thrown
- * network error - or a refused era - becomes `failed` so
+ * (T20 / audit P4). A `null` return is TWO different facts, and the era the
+ * refresh was issued for is what tells them apart:
+ *
+ *  - `era.identity === null` - the refresh was issued for a signed-out
+ *    session, and `AuthService` answered from its absent bearer. That is the
+ *    authoritative clear (`signed-out`), exactly as before.
+ *  - `era.identity !== null` - the fetch passed the issue-time era check (the
+ *    live credential still IS this era's, so a bearer was on the wire) and
+ *    the registry 401'd it anyway: the rare mid-rotation 401 `AuthService`
+ *    itself deliberately does not sign out on. Mapping it to `signed-out`
+ *    made the directory clear every remote entry and unbind the active
+ *    remote host mid-session on a transient credential blip, with recovery
+ *    waiting on the next poll. It is `failed` - the retain-last-known path -
+ *    and a REAL sign-out still clears: sign-out commits a new era (identity
+ *    `null`, generation bumped) before announcing, so an in-flight fetch for
+ *    the old era throws `SupersededAuthEraError` (also `failed`) and the
+ *    transition-driven refresh under the new era performs the clear.
+ *
+ * A thrown network error - or a refused era - becomes `failed` so
  * `HostDirectoryService.refresh()` retains the last-known remote entries
  * instead of wiping the merged directory and unbinding an active remote
  * selection.
@@ -39,7 +57,13 @@ export function buildDefaultRemoteFetcher(
     try {
       const response = await auth.fetchRegisteredHosts(era);
       if (response === null) {
-        return { kind: "signed-out" };
+        // See the mapping contract above: only a refresh issued for a
+        // signed-out era may read `null` as the authoritative clear. For a
+        // signed-in era, `null` can only be the registry 401-ing a bearer
+        // that is still current - a transient, retriable failure.
+        return era.identity === null
+          ? { kind: "signed-out" }
+          : { kind: "failed" };
       }
       return {
         kind: "hosts",

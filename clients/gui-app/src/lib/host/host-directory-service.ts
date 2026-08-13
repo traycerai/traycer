@@ -8,6 +8,7 @@ import {
   fetchRemoteHosts,
   hostUnavailability,
   isConfirmedHostDeath,
+  isRelayFuseRecoveryCandidate,
   isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
@@ -1784,6 +1785,14 @@ function hostDirectoryEntriesEqual(
     // confirmed `offline` is not-dialable on both sides, and swallowing that
     // emit would freeze every surface reading the reason at "we don't know".
     hostUnavailability(a) === hostUnavailability(b) &&
+    // The recovery-dial window (F7). Computed at projection time from
+    // `lastSeenAt` recency, so an `offline` row whose ONLY change is aging
+    // past RELAY_FUSE_MAX_ATTACH_MS flips this field and nothing else this
+    // comparison reads (the derived verdict stays `offline` on both sides).
+    // Without it that flip was swallowed as a field-identical poll tick, and
+    // every consumer kept a `relayFuseGrace: true` entry forever - recovery
+    // dials permitted indefinitely past the documented 4h cap.
+    isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
     remotePublicKeyOf(a) === remotePublicKeyOf(b)
   );
 }

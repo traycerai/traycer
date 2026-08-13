@@ -7,6 +7,8 @@ import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
+  isRemoteHostDirectoryEntry,
+  RELAY_FUSE_MAX_ATTACH_MS,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -1294,6 +1296,84 @@ describe("HostDirectoryService", () => {
     await directory.refresh();
 
     expect(observed).toHaveLength(1);
+  });
+
+  it("notifies onChange when an offline row's ONLY change is its relay-fuse grace aging past the cap", async () => {
+    // The registry row itself never changes: same host, same `offline`
+    // verdict, same `lastSeenAt`. What changes is the clock - the projection
+    // recomputes `relayFuseGrace` from recency on every fetch, so once
+    // `lastSeenAt` ages past RELAY_FUSE_MAX_ATTACH_MS the flag flips while
+    // every other compared field (including the derived verdict) stays
+    // identical. Swallowing that emission left every consumer holding
+    // `relayFuseGrace: true` forever - recovery dials permitted indefinitely
+    // past the documented 4h cap.
+    const lastSeenAt = "2026-07-03T12:00:00.000Z";
+    const lastSeenMs = Date.parse(lastSeenAt);
+    const item = {
+      hostId: "fuse-aging-host",
+      displayName: "Fuse Aging Host",
+      platform: "Ubuntu",
+      kind: "personal",
+      publicKey: "pk-fuse-aging-host",
+      createdAt: "2026-07-01T12:00:00.000Z",
+      status: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.4.2",
+        lastSeenAt,
+      },
+      updatePolicy: "manual",
+    } as const;
+    // The SAME registry row projected at two moments, by the REAL projection
+    // (not hand-flipped flags): one minute after last-seen, then one tick
+    // past the fuse cap.
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(lastSeenMs + 60_000);
+    const inGrace = hostListItemToDirectoryEntry(
+      item,
+      "wss://relay.example.test/attach",
+    );
+    nowSpy.mockReturnValue(lastSeenMs + RELAY_FUSE_MAX_ATTACH_MS + 1);
+    const aged = hostListItemToDirectoryEntry(
+      item,
+      "wss://relay.example.test/attach",
+    );
+    nowSpy.mockRestore();
+    expect(inGrace.relayFuseGrace).toBe(true);
+    expect(aged.relayFuseGrace).toBe(false);
+
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [inGrace] },
+      { kind: "hosts", entries: [aged] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    const observed: Array<readonly HostDirectoryEntry[]> = [];
+    directory.onChange((entries) => {
+      observed.push(entries);
+    });
+
+    await directory.refresh();
+
+    expect(observed).toHaveLength(1);
+    const emitted = observed[0]?.find(
+      (entry) => entry.hostId === "fuse-aging-host",
+    );
+    expect(
+      emitted !== undefined && isRemoteHostDirectoryEntry(emitted)
+        ? emitted.relayFuseGrace
+        : null,
+    ).toBe(false);
   });
 
   it("retains the last-known remote entries and selection when a refresh fails (T20 / audit P4)", async () => {
