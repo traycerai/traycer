@@ -57,6 +57,7 @@ function openSession(
     query,
     commit: () => undefined,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }
