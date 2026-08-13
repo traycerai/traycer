@@ -110,8 +110,8 @@ function UsageSettingsPanelBody(props: {
   // Checked BEFORE `support`, because with no active host `support` is
   // permanently `null` - there is no host to hand shake with, so the pending
   // branch below could never resolve and would spin forever. This section is
-  // `requiresLocalHost: false` and reachable on a fresh install, so that
-  // state is genuinely reachable and needs a terminal answer, which is what
+  // reachable on a fresh install, so that state is genuinely reachable and
+  // needs a terminal answer, which is what
   // `HostScopeGate`'s own empty branch used to provide here.
   if (props.activeHostId === null && !props.hostsResolving) {
     return (

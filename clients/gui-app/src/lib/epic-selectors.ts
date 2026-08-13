@@ -34,6 +34,7 @@ import type {
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -1329,6 +1330,32 @@ export function useChatById(id: string | null): ChatProjection | null {
   return useEpicStore((s) => {
     if (id === null) return null;
     if (Object.hasOwn(s.chats.byId, id)) return s.chats.byId[id];
+    return null;
+  });
+}
+
+/**
+ * WHY a chat's record was retracted from this session, or `null` if it was not.
+ *
+ * The record table can only say a row is GONE. This says which of the two
+ * honest things an open tab may claim about that: `deleted` (the chat is gone
+ * for everyone) or `revoked` (it still exists; this viewer may no longer see
+ * it). Only the push stream carries the distinction - a poll that stops
+ * returning a row cannot - so this reads `null` on any host without
+ * `host.chatRecords.subscribe`, and the tab keeps the pre-existing
+ * reachability-derived end states.
+ *
+ * A single per-id scalar, so a retraction of one chat re-renders only the tab
+ * rendering that chat.
+ */
+export function useEpicChatRetraction(
+  chatId: string | null,
+): ChatRecordRemovalReason | null {
+  return useEpicStore((s) => {
+    if (chatId === null) return null;
+    if (Object.hasOwn(s.chatRetractions, chatId)) {
+      return s.chatRetractions[chatId];
+    }
     return null;
   });
 }

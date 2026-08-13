@@ -517,6 +517,29 @@ export type WorktreeWorkspaceSummaryV14 = z.infer<
   typeof worktreeWorkspaceSummarySchemaV14
 >;
 
+/**
+ * Whether the selected host can see a workspace path as a directory. `absent`
+ * deliberately includes both a missing path and a path that is a regular file:
+ * neither can be used as a workspace directory. An unverifiable path remains
+ * `present` while its `resolvedAt` is `null`, so clients keep rendering its
+ * pending state instead of turning an inconclusive probe into an absence fact.
+ */
+export const workspacePresenceSchema = z.enum(["present", "absent"]);
+export type WorkspacePresence = z.infer<typeof workspacePresenceSchema>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.5 summary. Adds the host-local path
+ * presence fact while preserving `resolvedAt: null` as the signal that a
+ * failed or inconclusive probe remains pending.
+ */
+export const worktreeWorkspaceSummarySchemaV15 =
+  worktreeWorkspaceSummarySchemaV14.extend({
+    presence: workspacePresenceSchema,
+  });
+export type WorktreeWorkspaceSummaryV15 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV15
+>;
+
 export const worktreeListByWorkspacePathsRequestSchemaV14 =
   worktreeListByWorkspacePathsRequestSchemaV13;
 export type WorktreeListByWorkspacePathsRequestV14 =
@@ -528,6 +551,23 @@ export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
 });
 export type WorktreeListByWorkspacePathsResponseV14 = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchemaV14
+>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.5 request. Unchanged from v1.4; this
+ * minor adds the response presence fact only.
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV15 =
+  worktreeListByWorkspacePathsRequestSchemaV14;
+export type WorktreeListByWorkspacePathsRequestV15 =
+  WorktreeListByWorkspacePathsRequestV14;
+
+export const worktreeListByWorkspacePathsResponseSchemaV15 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV15 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV15
 >;
 
 export const worktreeBranchSchema = z.object({
@@ -1038,6 +1078,17 @@ export const worktreeHostEntrySchemaV14 = worktreeHostEntrySchemaV12.extend({
 export type WorktreeHostEntryV14 = z.infer<typeof worktreeHostEntrySchemaV14>;
 
 /**
+ * `worktree.listAllForHost` v1.5 entry. Every row originates from the host's
+ * successful managed-worktree directory walk, so current hosts report it as
+ * present; the common enum keeps both worktree list methods on the same
+ * release surface.
+ */
+export const worktreeHostEntrySchemaV15 = worktreeHostEntrySchemaV14.extend({
+  presence: workspacePresenceSchema,
+});
+export type WorktreeHostEntryV15 = z.infer<typeof worktreeHostEntrySchemaV15>;
+
+/**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
  * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
  * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
@@ -1182,6 +1233,22 @@ export const worktreeListAllForHostResponseSchemaV14 = z.object({
 });
 export type WorktreeListAllForHostResponseV14 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV14
+>;
+
+/**
+ * `worktree.listAllForHost` v1.5 request. Unchanged from v1.4; this minor
+ * adds the response presence fact only.
+ */
+export const worktreeListAllForHostRequestSchemaV15 =
+  worktreeListAllForHostRequestSchemaV14;
+export type WorktreeListAllForHostRequestV15 = WorktreeListAllForHostRequestV14;
+
+export const worktreeListAllForHostResponseSchemaV15 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV15),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV15 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV15
 >;
 
 /**

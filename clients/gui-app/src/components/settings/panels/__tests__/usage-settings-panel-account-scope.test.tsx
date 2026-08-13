@@ -200,7 +200,7 @@ describe("<UsageSettingsPanel /> account-group scoping", () => {
   it("gives a terminal answer with no active host, rather than spinning forever", async () => {
     // With no active host there is nothing to hand shake with, so the support
     // signal stays `null` permanently - the pending branch could never
-    // resolve. This section is `requiresLocalHost: false`, so a fresh install
+    // resolve. This section is reachable for any scope, so a fresh install
     // reaches exactly this state.
     activeHostIdHolder.current = null;
     renderPanel();

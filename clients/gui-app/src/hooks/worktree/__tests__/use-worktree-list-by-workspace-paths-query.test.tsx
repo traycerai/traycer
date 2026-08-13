@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
@@ -17,10 +20,11 @@ describe("useWorktreeListByWorkspacePathsForClient", () => {
   });
 
   // The folder picker keys this query on the path set, so adding/removing a
-  // folder lands on a fresh cache entry. Without `keepPreviousData` the new key
-  // reports `isLoading`, which the picker projects onto every row as "Loading
-  // folder metadata…" — the whole list flashes on each edit. This locks in the
-  // retain-previous-while-refetching behavior that keeps the surviving rows.
+  // folder lands on a fresh cache entry. Without same-host `keepPreviousData`
+  // the new key reports `isLoading`, which the picker projects onto every row
+  // as "Loading folder metadata…" — the whole list flashes on each edit. This
+  // locks in the retain-previous-while-refetching behavior that keeps the
+  // surviving rows (only under the same host — see the host-switch test).
   it("retains the prior result while a changed path set refetches", async () => {
     const fixture = createFixture();
     const rendered = renderHook(
@@ -71,17 +75,61 @@ describe("useWorktreeListByWorkspacePathsForClient", () => {
     });
     expect(rendered.result.current.isPlaceholderData).toBe(false);
   });
+
+  // D1: after a host switch the previous host's summaries must not render as
+  // the new host's truth. Same-host path-set edits still retain (test above).
+  it("drops placeholder data when the bound host changes", async () => {
+    const fixture = createFixture();
+    const rendered = renderHook(
+      () =>
+        useWorktreeListByWorkspacePathsForClient(fixture.client, {
+          workspacePaths: ["/repo/a"],
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(workspacePathsOf(rendered.result.current.data)).toEqual([
+        "/repo/a",
+      ]);
+    });
+
+    let release: () => void = () => undefined;
+    fixture.setGate(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    act(() => {
+      fixture.client.bind(mockRemoteHostEntry);
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.isFetching).toBe(true);
+    });
+    // Host boundary: no previous-host payload as placeholder.
+    expect(rendered.result.current.data).toBeUndefined();
+    expect(rendered.result.current.isPlaceholderData).toBe(false);
+
+    release();
+    await waitFor(() => {
+      expect(workspacePathsOf(rendered.result.current.data)).toEqual([
+        "/repo/a",
+      ]);
+    });
+  });
 });
 
 function workspacePathsOf(
   data:
-    | { readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14> }
+    | { readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV15> }
     | undefined,
 ): ReadonlyArray<string> {
   return (data?.workspaces ?? []).map((workspace) => workspace.workspacePath);
 }
 
-function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummaryV14 {
+function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummaryV15 {
   return {
     workspacePath,
     isGitRepo: false,
@@ -91,6 +139,7 @@ function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummaryV14 {
     scripts: null,
     repoBranchPrefix: { status: "absent" },
     resolvedAt: 1,
+    presence: "present",
   };
 }
 

@@ -105,6 +105,7 @@ const LOCAL_SNAPSHOT: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "this-mac",
   displayName: "This Mac",
+  availability: "available",
 };
 
 const ORIGIN_HOST: HostDirectoryEntry = {

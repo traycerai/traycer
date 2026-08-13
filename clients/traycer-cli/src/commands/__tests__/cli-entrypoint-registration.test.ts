@@ -66,6 +66,32 @@ vi.mock("../../installer/download-stage", () => ({
   },
 }));
 
+// Keep `host update`'s commander parse assertion on the real command wiring
+// while making its no-op backfill deterministic and side-effect free.
+//
+// Spread the real module rather than replacing it: a bare factory drops every
+// OTHER export, and `writeHostInstallRecordAt`, `writeHostInstallRecord` and
+// `deleteHostInstallRecord` are imported by command paths this suite also
+// registers. Those would resolve to `undefined` and fail as "not a function",
+// which reads as a broken command rather than a truncated mock.
+vi.mock("../../manifest/host-install", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../manifest/host-install")>()),
+  readHostInstallRecord: async () => ({
+    installId: "install-test",
+    version: "1.0.0",
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: "1.0.0" },
+    archiveSha256: null,
+    signatureVerifiedAt: null,
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: "/tmp/traycer-host",
+  }),
+}));
+
 // `host apply`'s registration also goes through `withCliLock` - mocking it
 // alongside the installer core (rather than only `commands/host-apply.ts`)
 // keeps the --force/--no-service forwarding and `ctx.progress` wiring
@@ -140,6 +166,18 @@ vi.mock("../../host/stamp-runtime", () => ({
       installGeneration: "id:test",
     };
   },
+}));
+
+vi.mock("../../commands/host-status", () => ({
+  hostStatusCommand: async () => ({ data: null, human: null, exitCode: 0 }),
+}));
+
+vi.mock("../../commands/config-env-list", () => ({
+  buildConfigEnvListCommand: () => async () => ({
+    data: [],
+    human: null,
+    exitCode: 0,
+  }),
 }));
 
 // Replaces only `runCommand` (which owns `process.exit` - see
@@ -429,6 +467,204 @@ describe("traycer CLI entrypoint registration", () => {
     // event per invocation above.
     expect(mocks.progressEvents).toHaveLength(3);
     expect(mocks.progressEvents[0]).toMatchObject({ stage: "resolve" });
+  });
+
+  it("host update parses --version/--force and forwards both explicit and latest requests", async () => {
+    mocks.downloadCalls.length = 0;
+
+    const explicit = buildProgram();
+    explicit.exitOverride();
+    await explicit.parseAsync(
+      ["host", "update", "--version", "2.1.0", "--force"],
+      { from: "user" },
+    );
+
+    const latest = buildProgram();
+    latest.exitOverride();
+    await latest.parseAsync(["host", "update"], { from: "user" });
+
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "2.1.0", automatic: false },
+      { environment: "production", versionRequest: null, automatic: false },
+    ]);
+  });
+
+  it("rewrites host update --version under a Node-style argv, not just a user-style one", async () => {
+    // The offset used to be guessed by comparing argv[0]/argv[1] against
+    // process.argv. Any caller supplying its OWN node-style prefix therefore
+    // computed offset 0, the command path read as [exec, script, "host", ...],
+    // the host-update check failed, and --version fell through to root - which
+    // prints the CLI version instead of selecting a host version. The offset
+    // now comes from Commander's `from` contract.
+    mocks.downloadCalls.length = 0;
+
+    const nodeStyle = buildProgram();
+    nodeStyle.exitOverride();
+    await nodeStyle.parseAsync(
+      [
+        "/custom/node",
+        "/custom/traycer.js",
+        "host",
+        "update",
+        "--version",
+        "3.1.4",
+      ],
+      { from: "node" },
+    );
+
+    // Default options are node-style too, so an omitted `from` must behave the
+    // same way rather than falling back to the old comparison.
+    const defaultStyle = buildProgram();
+    defaultStyle.exitOverride();
+    await defaultStyle.parseAsync([
+      "/other/node",
+      "/other/traycer.js",
+      "host",
+      "update",
+      "--version",
+      "3.1.5",
+    ]);
+
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "3.1.4", automatic: false },
+      { environment: "production", versionRequest: "3.1.5", automatic: false },
+    ]);
+  });
+
+  // Split one contract per `it`, deliberately. As a single case these eight
+  // shared a `try`/`finally` and a stdout spy, so the first failure hid the
+  // rest and the title named a count that had already drifted from the body.
+  it("root --version prints the program version and exits zero", async () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const rootVersion = buildProgram();
+      rootVersion.exitOverride();
+      await expect(
+        rootVersion.parseAsync(["--version"], { from: "user" }),
+      ).rejects.toMatchObject({ code: "commander.version", exitCode: 0 });
+      expect(write).toHaveBeenCalledWith(
+        `${rootVersion.version()}\n`,
+        expect.any(Function),
+      );
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("accepts a global option interleaved before its subcommand", async () => {
+    const hostInterleaved = buildProgram();
+    hostInterleaved.exitOverride();
+    await expect(
+      hostInterleaved.parseAsync(["host", "--json", "status"], {
+        from: "user",
+      }),
+    ).resolves.toBeDefined();
+
+    const configInterleaved = buildProgram();
+    configInterleaved.exitOverride();
+    await expect(
+      configInterleaved.parseAsync(["config", "--quiet", "env", "list"], {
+        from: "user",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("accepts a global option after the leaf command", async () => {
+    const leafFinal = buildProgram();
+    leafFinal.exitOverride();
+    await expect(
+      leafFinal.parseAsync(["host", "status", "--json"], { from: "user" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("host update forwards an explicit --version and a bare invocation as latest", async () => {
+    mocks.downloadCalls.length = 0;
+    const explicit = buildProgram();
+    explicit.exitOverride();
+    await explicit.parseAsync(["host", "update", "--version", "2.2.0"], {
+      from: "user",
+    });
+    const bare = buildProgram();
+    bare.exitOverride();
+    await bare.parseAsync(["host", "update"], { from: "user" });
+    expect(mocks.downloadCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "2.2.0",
+        automatic: false,
+      },
+      { environment: "production", versionRequest: null, automatic: false },
+    ]);
+  });
+
+  it("config shell set passes everything after -- through untouched", async () => {
+    const shellPassthrough = buildProgram();
+    shellPassthrough.exitOverride();
+    const shellSet = expectCommand(shellPassthrough, [
+      "config",
+      "shell",
+      "set",
+    ]);
+    let observedShellArgs: readonly string[] = [];
+    shellSet.action((shellArgs: readonly string[]) => {
+      observedShellArgs = shellArgs;
+    });
+    await shellPassthrough.parseAsync(
+      ["config", "shell", "set", "--", "host", "update", "--version", "2.6.0"],
+      { from: "user" },
+    );
+    expect(observedShellArgs).toEqual(["host", "update", "--version", "2.6.0"]);
+  });
+
+  it("host update rejects a -- passthrough as excess arguments", async () => {
+    const updatePassthrough = buildProgram();
+    updatePassthrough.exitOverride();
+    await expect(
+      updatePassthrough.parseAsync(
+        ["host", "update", "--", "--version", "2.6.0"],
+        { from: "user" },
+      ),
+    ).rejects.toMatchObject({
+      code: "commander.excessArguments",
+      message: expect.stringContaining("--version"),
+    });
+  });
+
+  it("host update never advertises the internal --host-update-version spelling", () => {
+    const program = buildProgram();
+    const updateCommand = expectCommand(program, ["host", "update"]);
+    expect(updateCommand.helpInformation()).not.toContain(
+      "--host-update-version",
+    );
+  });
+
+  it("host update --help prints the --version <version> spelling users type", () => {
+    // The spelling users actually type has to be discoverable, or the command
+    // advertises "a registry version" and gives no way to name one. It cannot
+    // be a registered option (root `--version` owns that token - that
+    // collision is why the rewrite exists), so help TEXT carries it.
+    //
+    // Asserted against what `--help` actually prints, not `helpInformation()`:
+    // the latter renders only the built-in sections, so `addHelpText` content
+    // is invisible to it and this pin would pass while the user still saw
+    // nothing.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const updateCommand = expectCommand(program, ["host", "update"]);
+      updateCommand.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("--version <version>");
+      expect(printedHelp).toContain("Update to this exact registry version");
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("host apply exposes --force and a hidden --no-service option, wired to the shared runner", () => {

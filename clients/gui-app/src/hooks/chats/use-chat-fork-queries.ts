@@ -10,6 +10,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { invalidateNotificationIndicators } from "@/lib/notifications/notification-indicator-cache";
+import { invalidateChatPublicationTargets } from "@/hooks/chats/use-chat-publication-targets";
 
 /**
  * The client's whole remaining fork surface: an OBSERVATION, never a choice.
@@ -50,6 +51,12 @@ import { invalidateNotificationIndicators } from "@/lib/notifications/notificati
  * cached would never surface. Each change in the open episode invalidates the
  * existing notification-indicator query family: the host's indicator holder is
  * authoritative, while this poll supplies the missing live open/close edge.
+ *
+ * That same edge is the only fork signal any OTHER client-side cache gets, so
+ * it drives the fork-derived caches too - today the chat publication-target
+ * map (see `useRefreshForkDerivedCachesOnForkLifecycle`). Anything whose
+ * correctness changes the moment a fork mints a redirect belongs on this edge
+ * rather than on its own poll.
  */
 export function useChatForkEventQuery(): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "host.chatFork.get">,
@@ -74,7 +81,7 @@ export function useChatForkEventQuery(): UseQueryResult<
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
-  useRefreshNotificationIndicatorsOnForkLifecycle(hostId, query.data);
+  useRefreshForkDerivedCachesOnForkLifecycle(hostId, query.data);
   return query;
 }
 
@@ -83,7 +90,29 @@ interface ObservedForkIndicatorLifecycle {
   readonly key: string | null;
 }
 
-function useRefreshNotificationIndicatorsOnForkLifecycle(
+/**
+ * Every cache whose answer a fork can invalidate, refreshed on the open/close
+ * edges of the host's fork episode.
+ *
+ * Two of them, and they fail differently, which is why both hang off one edge
+ * rather than each growing its own poll:
+ *
+ * - `host.notifications.indicatorState` owns the per-chat `pendingFork` bit and
+ *   has no push channel, so an episode that opens after its last read stays
+ *   invisible.
+ * - `epic.listChatPublicationTargets` owns the chat -> publication-row redirect
+ *   the sidebar folds the cloud list on, and caches it for five minutes because
+ *   a redirect is minted once in a chat's life. A FORK is that once. Without
+ *   this, a sidebar mounted before the fork keeps folding post-fork rows under
+ *   the pre-fork `chatId` for the rest of that stale window, and the forked
+ *   chat renders its own backup as a phantom second row.
+ *
+ * Both are host-scoped and this query is app-wide, so the ACTIVE host id is the
+ * right scope for both: a fork episode is a fact about the host that detected
+ * it. `hostId` is captured in the observed key so a host swap re-establishes a
+ * baseline instead of reading the previous host's episode as an edge.
+ */
+function useRefreshForkDerivedCachesOnForkLifecycle(
   hostId: string | null,
   response: ResponseOfMethod<HostRpcRegistry, "host.chatFork.get"> | undefined,
 ): void {
@@ -107,6 +136,7 @@ function useRefreshNotificationIndicatorsOnForkLifecycle(
       return;
     }
     invalidateNotificationIndicators(queryClient, hostId, null);
+    invalidateChatPublicationTargets(queryClient, hostId);
   }, [hostId, queryClient, response]);
 }
 

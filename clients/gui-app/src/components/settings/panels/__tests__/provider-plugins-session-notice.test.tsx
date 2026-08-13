@@ -111,6 +111,7 @@ function pluginsState(
         },
       },
       skills: null,
+      modelProviders: null,
     },
     selected: { kind: "path" },
     candidates: [],

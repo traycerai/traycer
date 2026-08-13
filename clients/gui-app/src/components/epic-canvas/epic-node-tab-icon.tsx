@@ -92,7 +92,9 @@ function EpicNodeTabIconContent(props: {
       <ChatProgressIcon
         epicId={props.epicId}
         chatId={props.node.id}
-        originHostId={props.node.hostId}
+        // The tab ref's bound host - tabs bind a host for life, so this is the
+        // host whose session this tab's tile opened.
+        hostId={props.node.hostId}
         className={props.className}
         mutedClassName="text-muted-foreground"
         testId="chat-tab-spinner"

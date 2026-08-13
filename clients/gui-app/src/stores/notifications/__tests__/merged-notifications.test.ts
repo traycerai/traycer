@@ -537,6 +537,7 @@ describe("merged notifications feed", () => {
       resolvedAt: null,
       sourceRef: null,
       originHostId: "host-a",
+      providerPackAttribution: null,
       category: "system",
     });
   });

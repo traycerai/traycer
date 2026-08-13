@@ -8,6 +8,7 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
+import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
@@ -29,6 +30,26 @@ interface MockHostReachability {
   readonly hostLabel: string;
 }
 
+/**
+ * The props the tile handed `ChatDeadTileBannerContainer`, per mount. The
+ * container's own hook wiring (clone offer, owner lookup) is `chat-tile`'s
+ * unit; what THIS suite owns is which props the copy's tile threads into it -
+ * in particular that the ref's `ownerUserId` rides along instead of being
+ * re-resolved from the cloud list.
+ */
+interface DeadTileBannerContainerProps {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly chatId: string;
+  readonly sourceHostId: string;
+  readonly hostLabel: string;
+  readonly reason: ChatDeadTileBannerReason;
+  readonly testId: string;
+  readonly sourceOwnerUserId?: string;
+}
+
+const deadTileBannerContainerProps: DeadTileBannerContainerProps[] = [];
+
 const mockUseCloudChatTranscript = vi.fn<() => CloudChatTranscriptState>();
 const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
@@ -48,11 +69,41 @@ vi.mock("@/hooks/chats/use-chat-replica-read", () => ({
   useChatReplicaRead: (args: { readonly enabled: boolean }) =>
     mockUseChatReplicaRead(args),
 }));
-vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
-  ChatTileSessionView: (props: { readonly readOnlyNotice: string | null }) => (
-    <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
-  ),
+// The real banner's Report action reaches for app context this suite does
+// not mount; the banner around it (message, Clone button) stays real.
+vi.mock("@/components/report-issue/report-issue-action", () => ({
+  ReportIssueAction: () => null,
 }));
+vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
+  const { ChatDeadTileBanner } = await vi.importActual<
+    typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
+  >("@/components/epic-canvas/renderers/dead-tile-banner");
+  return {
+    ChatTileSessionView: (props: {
+      readonly readOnlyNotice: string | null;
+    }) => (
+      <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
+    ),
+    // Stubbed at the container boundary - the real container runs the clone
+    // offer's host-runtime subscription and the owner lookup's cloud query,
+    // neither of which this suite mounts providers for. It records the props
+    // and renders the REAL `ChatDeadTileBanner`, so the Clone affordance the
+    // tests assert on is the genuine article.
+    ChatDeadTileBannerContainer: (props: DeadTileBannerContainerProps) => {
+      deadTileBannerContainerProps.push(props);
+      return (
+        <ChatDeadTileBanner
+          hostLabel={props.hostLabel}
+          reason={props.reason}
+          onClone={() => undefined}
+          cloning={false}
+          className={undefined}
+          testId={props.testId}
+        />
+      );
+    },
+  };
+});
 vi.mock("@/components/epic-canvas/renderers/published-chat-notice", () => ({
   // The notice's own copy is its unit's business; what this suite asserts is
   // WHICH state the tile hands it, so the state kind is surfaced as an attribute.
@@ -81,6 +132,18 @@ const NODE: PublishedChatTileRef = {
   chatId: "chat-1",
   ownerUserId: "user-1",
   ownerHostId: "owner-host-1",
+};
+
+/**
+ * The SAME ref shape the canvas builds when this device's own connected host
+ * answers `CHAT_NOT_VISIBLE` for one of its chats (tickets 47/48): the
+ * serving host and the owning host are one machine, which is exactly what
+ * `hostId === ownerHostId` says. Nothing about it is probed - the copy's
+ * footer has to read that off the ref.
+ */
+const SAME_HOST_NODE: PublishedChatTileRef = {
+  ...NODE,
+  ownerHostId: NODE.hostId,
 };
 
 function refusedUnpublished(): CloudChatTranscriptState {
@@ -209,6 +272,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  deadTileBannerContainerProps.length = 0;
 });
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -390,6 +454,32 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     expect(view.textContent).not.toContain("which is offline");
   });
 
+  it("drops the other-machine phrasing when the copy's owner IS the serving host", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue({
+      status: "reachable",
+      hostLabel: "Ada's Mac",
+    });
+
+    render(
+      <PublishedChatTile
+        node={SAME_HOST_NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    // Same state as the test above (reachable owner, synced copy) - only the
+    // ref differs, and that alone must move the footer off copy that reads
+    // the reader's own machine as somewhere else.
+    expect(view.textContent).toContain("no longer on this host");
+    expect(view.textContent).not.toContain("lives on");
+    expect(view.textContent).not.toContain("from this device");
+  });
+
   it("appends the unreadable-item count to the replica lock reason", () => {
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
     mockUseChatReplicaRead.mockReturnValue(replicaOkWithUnreadableBlock());
@@ -407,5 +497,100 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     expect(view.textContent).toContain(
       "1 item needs a newer version of Traycer to render",
     );
+  });
+});
+
+describe("PublishedChatTile - dead-tile clone banner", () => {
+  it("mounts the clone banner above the transcript when the owner is unreachable and not this host", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    const banner = screen.getByTestId("published-chat-dead-tile-chat-1");
+    expect(banner).not.toBeNull();
+    // The genuine Clone affordance, not just the banner chrome.
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    // The banner sits ABOVE the transcript, not under it.
+    const view = screen.getByTestId("chat-tile-session-view");
+    expect(
+      banner.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("threads the ref's owner into the container instead of leaving it to the cloud-list lookup", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      chatId: "chat-1",
+      sourceHostId: "owner-host-1",
+      hostLabel: "Ada's Mac",
+      reason: "host-offline",
+      testId: "published-chat-dead-tile-chat-1",
+      // Off the ref - a post-restart host with swept registry facts cannot
+      // answer the lookup, and the ref knew the owner the whole time.
+      sourceOwnerUserId: "user-1",
+    });
+  });
+
+  it("mounts no banner once the owner is reachable", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue({
+      status: "reachable",
+      hostLabel: "Ada's Mac",
+    });
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+  });
+
+  it("mounts no banner when the copy's owner IS the serving host, even while unreachable", () => {
+    // The canvas-substitution case: `tab-group-view` already mounts its own
+    // banner above this tile there, so a second one here would double it.
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+
+    render(
+      <PublishedChatTile
+        node={SAME_HOST_NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
   });
 });

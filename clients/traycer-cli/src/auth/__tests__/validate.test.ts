@@ -75,7 +75,6 @@ const ORIGINAL_SLOT = process.env[DEV_DESKTOP_SLOT_ENV];
 const storedCreds = {
   token: "stored-token",
   refreshToken: "stored-refresh",
-  authnBaseUrl: "http://localhost:21001",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "old@traycer.ai", name: "Old" },
 };
@@ -138,30 +137,29 @@ describe("validateStoredCredentials", () => {
     expect(outcome).toMatchObject({
       kind: "valid",
       credentials: {
-        authnBaseUrl: config.authnBaseUrl,
         user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
       },
     });
   });
 
-  it("keeps dev validation on the serialized credentials URL when no run slot is active", async () => {
+  it("validates against the configured authn URL outside a run slot too (the file carries no URL)", async () => {
     delete process.env[DEV_DESKTOP_SLOT_ENV];
 
     await validateStoredCredentials();
 
     expect(identityMock).toHaveBeenCalledWith(
-      "http://localhost:21001",
+      config.authnBaseUrl,
       "stored-token",
     );
   });
 
-  it("keeps production validation on the serialized credentials URL", async () => {
+  it("validates against the configured authn URL in production", async () => {
     config.environment = "production";
 
     await validateStoredCredentials();
 
     expect(identityMock).toHaveBeenCalledWith(
-      "http://localhost:21001",
+      config.authnBaseUrl,
       "stored-token",
     );
   });
@@ -200,7 +198,6 @@ describe("validateStoredCredentials", () => {
       credentials: {
         token: "fresh-token",
         refreshToken: "fresh-refresh",
-        authnBaseUrl: "http://localhost:21001",
         savedAt: "2026-02-01T00:00:00.000Z",
         user: storedCreds.user,
       },
@@ -216,7 +213,7 @@ describe("validateStoredCredentials", () => {
     });
     expect(outcome).toMatchObject({
       kind: "valid",
-      credentials: { token: "fresh-token", authnBaseUrl: config.authnBaseUrl },
+      credentials: { token: "fresh-token" },
     });
   });
 
@@ -250,7 +247,6 @@ describe("validateStoredCredentials", () => {
       credentials: {
         token: "foreign-token",
         refreshToken: "foreign-refresh",
-        authnBaseUrl: "http://localhost:21001",
         savedAt: "2026-02-01T00:00:00.000Z",
         user: { id: "u2", email: "other@traycer.ai", name: "Other" },
       },
@@ -265,17 +261,13 @@ describe("validateStoredCredentials", () => {
       credentials: {
         token: "sibling-token",
         refreshToken: "sibling-refresh",
-        authnBaseUrl: "http://localhost:21001",
         savedAt: "2026-02-01T00:00:00.000Z",
         user: storedCreds.user,
       },
     });
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
-      credentials: {
-        token: "sibling-token",
-        authnBaseUrl: config.authnBaseUrl,
-      },
+      credentials: { token: "sibling-token" },
     });
   });
 

@@ -136,7 +136,13 @@ const chatSessions = new Map<string, ManagedCommandChatSessionStub>();
 function chatSession(chatId: string): ManagedCommandChatSessionStub {
   const existing = chatSessions.get(chatId);
   if (existing !== undefined) return existing;
-  const created = installManagedCommandChatSession({ epicId: EPIC_ID, chatId });
+  const created = installManagedCommandChatSession({
+    epicId: EPIC_ID,
+    chatId,
+    // The same host the surfaces below are wrapped in via `TabHostProvider` -
+    // chat sessions are keyed by (epic, chat, host).
+    hostId: "host-1",
+  });
   chatSessions.set(chatId, created);
   return created;
 }

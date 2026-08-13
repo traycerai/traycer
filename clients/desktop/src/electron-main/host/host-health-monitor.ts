@@ -80,10 +80,16 @@ import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
  * flows - so checking afterwards would prevent the SIGTERM while still
  * inflicting the outage it exists to avoid.
  *
- * A host that stays unreachable for a very long time is eventually surfaced
- * anyway (`UNREACHABLE_DEMOTE_MS`) so the user has a Retry button, but it is
- * still never auto-killed: deciding to restart a process that is running is
- * the user's call, not this watchdog's.
+ * That shield used to expire: after `UNREACHABLE_DEMOTE_MS` the monitor let the
+ * demote through so the renderer would offer a Retry button. It no longer does,
+ * and the deletion is the point of int #48. A demote is the renderer being told
+ * the host is GONE, and on 2026-08-11 that verdict locked every chat on a
+ * healthy staging machine read-only for two hours while the same host answered
+ * renderer RPCs in milliseconds. "Unreachable for a long time" is still not
+ * "dead", and a live host is now reported as `busy` for as long as it stays
+ * live - a degraded badge, not a tombstone. Restarting a wedged host remains
+ * the user's call and remains reachable, through Settings -> Host rather than
+ * through a card this watchdog fabricates by lying about liveness.
  */
 
 const HEALTH_POLL_INTERVAL_MS = 15_000;
@@ -92,29 +98,31 @@ const HEALTH_POLL_INTERVAL_MS = 15_000;
 const CONFIRMED_DOWN_AFTER_FAILURES = 2;
 /**
  * How long the endpoint may stay continuously unreachable - with the process
- * demonstrably alive - before the renderer is shown the unavailable card so
- * manual Retry becomes reachable.
+ * demonstrably alive - before this monitor says so at WARN.
  *
- * This escalates the UI only. It deliberately does NOT authorize a kill:
- * "unreachable for a long time" is not "dead", and every automatic restart
- * still has to get past the governor's liveness gate. A genuinely deadlocked
- * host is recovered by the user pressing Retry - an explicit decision, rather
- * than a guess this watchdog makes on their behalf.
+ * Diagnostics only. It used to gate a demote (show the renderer the
+ * unavailable card so manual Retry became reachable); int #48 removed that,
+ * because a demote asserts the host is gone and a process we just proved is
+ * alive is not gone. The line stays because "alive but silent for ten minutes"
+ * is genuinely worth finding in a support report - it is the signature of a
+ * real deadlock, as opposed to the epic-open stall this shield exists for.
  */
-const UNREACHABLE_DEMOTE_MS = 600_000;
+const UNREACHABLE_WARN_MS = 600_000;
 
 /**
- * How long to wait before asking again about a host that was already demoted
- * and is demonstrably ALIVE.
+ * How long to wait before asking the OS again about a host that is
+ * demonstrably ALIVE and not answering.
  *
- * That state is terminal until something outside this monitor changes it: the
- * process exits, or the user presses Retry. Asking at tick cadence cannot make
- * either happen sooner, and each ask is not free - the liveness probe spawns a
- * child process (`ps` on POSIX, `tasklist` plus `powershell` on Windows), so a
- * wedge lasting an afternoon would spawn thousands of them for an answer that
- * cannot change. Only the `alive` denial waits: a lock-deferred or failed
- * respawn still retries on the very next tick, because those outcomes CAN
- * change on their own.
+ * Each ask is not free: the liveness probe spawns a child process (`ps` on
+ * POSIX, `tasklist` plus `powershell` on Windows). Since int #48 the busy hold
+ * no longer expires, so a wedge lasting an afternoon would otherwise spawn one
+ * every other tick, indefinitely, for an answer that changes at most once.
+ *
+ * Two paths share the interval: the `alive` respawn denial, and the busy
+ * shield's own liveness re-read. Only those two wait - a lock-deferred or
+ * failed respawn still retries on the very next tick, because those outcomes
+ * CAN change on their own, and any reachable observation clears the throttle
+ * so a fresh outage is judged on fresh evidence.
  *
  * The cost of the wait is bounded and small - a host that dies while wedged is
  * picked up within this window rather than within one tick.
@@ -200,6 +208,8 @@ export function startHostHealthMonitor(
   // Rate-limits the "busy" log to once per stall rather than once per tick, so
   // a long epic open leaves one line instead of dozens.
   let busyLogged = false;
+  // Same once-per-stall rate limit as `busyLogged`, for the long-stall WARN.
+  let longStallLogged = false;
   // When the endpoint first became unreachable in the CURRENT outage. Reset by
   // any reachable observation, so only a continuously unreachable host reaches
   // the demote window.
@@ -208,6 +218,11 @@ export function startHostHealthMonitor(
   // ALIVE_RECHECK_INTERVAL_MS: this throttles the ONE path that would otherwise
   // re-probe a demoted-but-living host forever.
   let nextRecoveryAttemptAt = 0;
+  // Earliest tick that may re-ask the OS whether a held-busy host still
+  // exists. See ALIVE_RECHECK_INTERVAL_MS: the hold is now unbounded in time,
+  // so without this the shield would spawn a `ps` (or `tasklist` +
+  // `powershell`) every other tick for as long as the stall lasts.
+  let nextLivenessCheckAt = 0;
 
   const isDisposed = (): boolean => disposed || deps.host.isDisposed;
 
@@ -283,26 +298,41 @@ export function startHostHealthMonitor(
     snapshot: DesktopLocalHostSnapshot,
     now: number,
   ): Promise<boolean> => {
+    const unreachableForMs =
+      unreachableSince === null ? 0 : now - unreachableSince;
+    // The throttle arms only in the LONG-stall regime - the same boundary the
+    // demote used to sit on. Before it, a dying host is still checked every
+    // pass, because that is the window where a stall most often turns out to
+    // be a death and prompt detection is what keeps `absent` honest. After it,
+    // the answer has been the same for ten minutes and each re-ask spawns a
+    // child process, so it coasts and picks up a death within one interval.
+    const longStall = unreachableForMs >= UNREACHABLE_WARN_MS;
+    if (longStall && now < nextLivenessCheckAt) {
+      return true;
+    }
     const liveness = await readLiveness(deps.host.pidMetadataFile);
     if (isDisposed()) return false;
     if (liveness === "dead") {
+      nextLivenessCheckAt = 0;
       // The process is gone - or its pid was recycled onto something else -
       // so fall through to the existing dead-host handling.
       busyLogged = false;
+      longStallLogged = false;
       return false;
     }
-    const unreachableForMs =
-      unreachableSince === null ? 0 : now - unreachableSince;
-    if (unreachableForMs >= UNREACHABLE_DEMOTE_MS) {
-      // Alive, but nothing has answered for a very long time. Let the demote
-      // proceed so the renderer offers Retry - and still refuse to kill it
-      // here: restarting a running process is the user's call.
+    if (longStall) {
+      nextLivenessCheckAt = now + ALIVE_RECHECK_INTERVAL_MS;
+    }
+    if (longStall && !longStallLogged) {
+      // Alive, but nothing has answered for a very long time. Say so loudly -
+      // and then keep holding. This arm used to `return false`, letting the
+      // reload demote the snapshot; that is the 2026-08-11 outage, and the
+      // liveness answer we just read is the reason it is wrong.
+      longStallLogged = true;
       log.warn(
-        "[host-health] host process alive but unreachable for a long time - surfacing manual recovery",
+        "[host-health] host process alive but unreachable for a long time - holding it busy, not dead",
         { pid: snapshot.pid, unreachableForMs },
       );
-      busyLogged = false;
-      return false;
     }
     if (!busyLogged) {
       busyLogged = true;
@@ -329,6 +359,16 @@ export function startHostHealthMonitor(
         if (!recoveryPending) {
           consecutiveFailures = 0;
           unreachableSince = null;
+          // Not idle: converge. A null snapshot with nothing scheduled to
+          // re-examine it is the exact shape of the two-hour 2026-08-11 wedge -
+          // the pid-file watcher is edge-triggered on WRITES, so a host that
+          // is already up and simply never rewrites pid.json produces no edge
+          // and nothing else here would ever look again. This is a read-only
+          // disk re-read plus a probe; it starts nothing and kills nothing, so
+          // recovery OWNERSHIP still belongs to the flows this branch defers
+          // to. Bounded at the tick cadence and cheap when there is no host
+          // (one ENOENT read).
+          await deps.host.reloadSnapshotFromDisk();
           return;
         }
         // Throttled only after an `alive` denial (see
@@ -357,10 +397,21 @@ export function startHostHealthMonitor(
       ) {
         consecutiveFailures = 0;
         busyLogged = false;
+        longStallLogged = false;
         unreachableSince = null;
+        // The endpoint answered. Hand that straight to the lifecycle, which
+        // owns the renderer-facing verdict and may still be publishing `busy`
+        // from an earlier stall. On 2026-08-11 probes like this one succeeded
+        // for two hours while the renderer was never told - nothing carried
+        // the good news across. This is that edge; it no-ops once the verdict
+        // is already `available`.
+        deps.host.noteEndpointAnswered();
         // A reachable host is new information, so the next outage is judged
         // immediately rather than serving out a throttle earned by the last one.
         nextRecoveryAttemptAt = 0;
+        // A reachable host is new information: the next outage gets a fresh
+        // liveness read rather than coasting on a throttle the last one earned.
+        nextLivenessCheckAt = 0;
         governor.noteHealthy();
         return;
       }
@@ -406,6 +457,15 @@ export function startHostHealthMonitor(
           { pid: surfaced.pid },
         );
         unreachableSince = null;
+        // Convergence ends the current stall just as a direct reachable probe
+        // does, so the once-per-stall log latches and the liveness-read
+        // throttle reset with it. Without this, a host that answers exactly
+        // one probe (this reload's) and then stalls again would serve its next
+        // long stall silently - the WARN latched by the previous outage never
+        // cleared.
+        busyLogged = false;
+        longStallLogged = false;
+        nextLivenessCheckAt = 0;
         // One reachable observation starts the sustained-health clock; it does
         // not by itself forgive the attempt budget. A freshly spawned host
         // answers exactly one probe before stalling again, and treating that as

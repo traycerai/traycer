@@ -22,6 +22,8 @@ export {
   runnerQueryKeys,
   supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
+export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
+export { hostMaintenanceMutationKeys } from "@/lib/query-keys/host-maintenance-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export { migrationMutationKeys } from "@/lib/query-keys/migration-mutation-keys";
 export {
@@ -46,10 +48,12 @@ export {
   nativeSkillsListParams,
   providersNativeQueryKeys,
 } from "@/lib/query-keys/providers-native-query-keys";
+export { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 
 export const queryKeys = {

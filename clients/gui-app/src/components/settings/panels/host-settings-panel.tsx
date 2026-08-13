@@ -1,4 +1,3 @@
-import { useState, type ReactNode } from "react";
 import {
   queryOptions,
   useMutation,
@@ -6,44 +5,21 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
-import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
-import { AdvancedDisclosure } from "@/components/settings/panels/host-settings-advanced-disclosure";
-import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
-import {
-  useLocalHostSnapshot,
-  useNowMs,
-} from "@/components/settings/panels/host-settings-panel-hooks";
-import {
-  customNameFromDraft,
-  deriveStatus,
-  extractErrorMessage,
-  findReleasedAt,
-} from "@/components/settings/panels/host-settings-panel-model";
-import {
-  HostIdentityCard,
-  HostIdRow,
-  ThisWindowCard,
-  ThisWindowCardStandalone,
-} from "@/components/settings/host-scope/host-identity-card";
-import {
-  HostDangerZone,
-  LocalRecoveryDangerZone,
-} from "@/components/settings/host-scope/host-danger-zone";
+import type { HostDoctorIssue as RpcDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import {
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
-import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
-import { HostSummaryCard } from "@/components/settings/panels/host-settings-summary-card";
-import { HostUpdateRegion } from "@/components/settings/panels/host-settings-update-region";
-import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
-import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
-import { SettingsGroup } from "@/components/settings/settings-group";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
+import { HostRecoveryConsole } from "@/components/settings/panels/host-recovery-console";
+import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
+import { runFixAction } from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { useSettingsDensity } from "@/providers/settings-density-context";
-import { cn } from "@/lib/utils";
+import { HostRuntimeContext } from "@/lib/host";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   runnerMutationKeys,
   runnerQueryKeys,
@@ -51,854 +27,375 @@ import {
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
-import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
-import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
-import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
-import { useRunnerInstallVersion } from "@/hooks/runner/use-runner-install-version-mutation";
-import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
+import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 import type {
-  ApplyStagedOk,
-  BusyContinuation,
-  CliInstallManifestSnapshot,
-  HostAvailableSnapshot,
+  HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
-  HostNameSettings,
-  HostRegistryUpdateState,
   IHostManagement,
-  InstallVersionOk,
   IRunnerHost,
-  MutationOutcome,
+  LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
-
-type SettingsUpdateIntent = "apply" | "installVersion";
-
-interface SettingsBusyState {
-  readonly intent: SettingsUpdateIntent;
-  readonly continuation: BusyContinuation;
-  readonly message: string;
-  // The pin being installed, when `intent === "installVersion"` - needed so
-  // a `"retry-with-force"` Force click re-submits `installVersion{pin, force}`
-  // rather than losing which version was being pinned.
-  readonly pin: string | null;
-}
-
-interface SettingsTerminalOutcomeState {
-  readonly intent: SettingsUpdateIntent;
-  readonly message: string;
-  readonly pin: string | null;
-}
-
-export function HostSettingsPanel() {
-  const runnerHost = useRunnerHost();
-  const scope = useHostScope();
-  const management = runnerHost.hostManagement;
-  // Keyed by scoped host, both variants: every piece of page state below — an
-  // open restart confirmation, a busy-force prompt, a half-typed rename —
-  // belongs to ONE host. `HostRegistryUpdates` already buys this per-row;
-  // without it here, a scope switch while a confirmation was open left the
-  // dialog mounted and armed at the local bridge under another host's page.
-  const scopeKey = scope.hostId ?? "unresolved";
-  if (management === null) {
-    return <HostSettingsPanelWithoutManagement key={scopeKey} />;
-  }
-  return (
-    <HostSettingsPanelInner
-      key={scopeKey}
-      management={management}
-      runnerHost={runnerHost}
-    />
-  );
-}
+import type { ReactNode } from "react";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 /**
- * Shells without the Traycer CLI (web, mobile) can still ADMINISTER a host
- * over its RPC — they simply cannot install, restart or register a local
- * service, because there is no local service here. So the page keeps the
- * scoped host's identity and says exactly which capability is missing instead
- * of degrading to a bare sentence.
+ * The one Overview page, and the one decision about which surface it shows.
+ *
+ * The page proper (`HostOverviewPanel`) reads the SCOPED HOST'S OWN RPC and is
+ * identical for a machine on this desk and a machine in a datacenter. The
+ * recovery console (`HostRecoveryConsole`) is what remains of the old
+ * CLI-bridge page: it renders only for THIS COMPUTER, and only when there is no
+ * host process here to answer — install, start and re-register a service that
+ * is down.
+ *
+ * The split is the SUBJECT plus the presence of a process, never reachability
+ * as a page-level gate. Gating the console on dialability is what once removed
+ * Install and Start in exactly the state they exist for; gating the RPC page on
+ * "is this local?" is what gave remote hosts a thinner page in a different
+ * dialect. Both mistakes are named here because both were shipped.
  */
-function HostSettingsPanelWithoutManagement() {
+export function HostSettingsPanel() {
   const scope = useHostScope();
-  const registryItem = scope.host?.item ?? null;
-  return (
-    <SettingsPanelShell
-      title="Overview"
-      description={
-        scope.host === null
-          ? "Status and maintenance for the selected host."
-          : `Status and maintenance for ${scope.host.name}.`
-      }
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-    >
-      {scope.host === null || scope.status === "vanished" ? (
-        // Nothing resolved to administer, so the gate owns the whole panel and
-        // says which of the two reasons it is.
-        <HostScopeGate
-          scope={scope}
-          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-        >
-          {null}
-        </HostScopeGate>
-      ) : (
-        <div className="flex flex-col gap-5">
-          <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
-            <ThisWindowCard scope={scope} host={scope.host} />
-          </HostIdentityCard>
-          <p className="px-1 text-ui-sm text-muted-foreground">
-            Installing and restarting a local host service is only available in
-            the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
-          </p>
-          {/* Update policy is an ACCOUNT-level write — `PATCH /api/v3/hosts/:id`
-              through AuthService — applied by the host on its next check-in. It
-              needs neither the CLI bridge this shell lacks nor a live route to
-              the machine. `MyHostsList` exposed auto-update, a version pin and
-              force here; deleting it without re-homing these controls removed
-              update management from web and mobile entirely, for a machine the
-              account fully owns. */}
-          {registryItem === null ? null : (
-            <SettingsGroup
-              title="Updates"
-              tone="default"
-              dataTestId="host-updates"
-              fill={false}
-            >
-              <div className="[&>*:first-child]:border-t-0">
-                <HostRegistryUpdates
-                  key={registryItem.hostId}
-                  item={registryItem}
-                  isLocalHost={scope.host.isLocalMachine}
-                />
-              </div>
-            </SettingsGroup>
-          )}
-          {/* Not gated from out here. The two rows inside sit on different
-              capability planes — clearing snapshots is host RPC, removing
-              Traycer is the local CLI bridge — so the region gates its own
-              rows and renders nothing when it has neither. In this shell there
-              is no CLI bridge at all, so only the snapshots row can appear. */}
-          <HostDangerZone scope={scope} />
-        </div>
-      )}
-    </SettingsPanelShell>
-  );
+  // Keyed by scoped host: every piece of page state below — an open restart
+  // confirmation, a half-typed rename, a doctor sheet — belongs to ONE host.
+  // Without this, a scope switch while a confirmation was open left the dialog
+  // mounted and armed against the host the page had just moved away from.
+  const scopeKey = scope.hostId ?? "unresolved";
+  return <HostSettingsPanelInner key={scopeKey} />;
 }
 
-interface HostSettingsPanelInnerProps {
-  readonly management: IHostManagement;
-  readonly runnerHost: IRunnerHost;
-}
-
-// Panel aggregates many independent settings sections / async states; the
-// branch count reflects surfaced concerns, not reducible nesting.
-// eslint-disable-next-line complexity
-function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
-  const { management, runnerHost } = props;
-  const queryClient = useQueryClient();
+function HostSettingsPanelInner() {
+  const scope = useHostScope();
+  const runnerHost = useRunnerHost();
   const compact = useSettingsDensity() === "compact";
-  const scope = useHostScope();
-  const nowMs = useNowMs();
-  const [doctorOpen, setDoctorOpen] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [hostNameDraftOverride, setHostNameDraftOverride] = useState<
-    string | null
-  >(null);
-  const [restartConfirmOpen, setRestartConfirmOpen] = useState<boolean>(false);
-  const [includePreReleases, setIncludePreReleases] = useState(false);
-  const [busy, setBusy] = useState<SettingsBusyState | null>(null);
-  const [terminalOutcome, setTerminalOutcome] =
-    useState<SettingsTerminalOutcomeState | null>(null);
+  const management = runnerHost.hostManagement;
   const localHost = useLocalHostSnapshot(runnerHost);
-  const hostIdCopy = useClipboardCopy({
-    resetMs: 1600,
-    onSuccess: () => toast.success("Host ID copied"),
-    onError: () => toast.error("Couldn't copy the host ID"),
-  });
 
-  // The scoped host is the SUBJECT of this page. The local service console
-  // below renders only when that subject is the host running on this computer
-  // — a remote host has no local service to install, restart or register, and
-  // pretending otherwise is what produced two cards describing one host in two
-  // dialects.
+  // Re-provided so every hook beneath this resolves to the SELECTED host rather
+  // than the ambient one — the Providers-panel pattern, with its `status ===
+  // "ready"` guard. `null` for `following` (the ambient binding already IS this
+  // host's) and for every non-ready status.
+  const scopedBinding = useScopedHostBinding(scope);
+
+  // The scoped host is the SUBJECT of this page.
+  //
   // `?? false`, never `?? true`. A null host means the scope resolved to
   // NOTHING — vanished, unreachable, or still loading — and defaulting that to
-  // "yes, this is your machine" put this computer's install / restart /
-  // deregister-service console on screen under a host that no longer exists.
-  // The gate below withholds the body in those states; this is the second
-  // line, so a future caller that forgets the gate fails closed.
-  // Declared before the queries because it also gates the five local-bridge
-  // queries: their results render only in the local branch, so a remote scope
-  // was paying five CLI-bridge calls per visit for data nothing displayed.
+  // "yes, this is your machine" put this computer's install / restart console
+  // on screen under a host that no longer exists. The gate below withholds the
+  // body in those states; this is the second line, so a future caller that
+  // forgets the gate fails closed.
   const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
 
-  // The fresh-install carve-out. On a first run there is no local host id
-  // yet, so the union has no local row at all: the scope resolves to NOTHING
-  // and the honest-state rule above would leave only an empty notice — while
-  // the CLI bridge sits right here reporting `not-installed`, which is the
-  // one state the install console exists for. An EMPTY account (both lists
-  // answered, nothing failed, no vanished pick) is exactly when this
-  // computer's console is recovery rather than misattribution: there is no
-  // other host the controls could be mistaken for.
+  // The fresh-install carve-out. On a first run there is no local host id yet,
+  // so the union has no local row at all: the scope resolves to NOTHING and the
+  // honest-state rule above would leave only an empty notice — while the CLI
+  // bridge sits right here reporting `not-installed`, which is the one state
+  // the install console exists for. An EMPTY account (both lists answered,
+  // nothing failed, no vanished pick) is exactly when this computer's console
+  // is recovery rather than misattribution: there is no other host the controls
+  // could be mistaken for.
   const emptyAccountLocalRecovery =
     scope.host === null &&
     scope.vanishedHostId === null &&
     scope.hosts.length === 0 &&
     !scope.isLoading &&
     !scope.listsFailed;
-  const showLocalConsole = scopedIsLocalMachine || emptyAccountLocalRecovery;
 
-  // Canonical two-lane `HostControllerStatus` (Host Update Layer Redesign
-  // Tech Plan), shared with the landing-page banner, the tray/menu, and any
-  // other open window via the same query key. The mutation lane drives the
-  // progress banner and the disable-gating below regardless of which surface
-  // (or the background auto-update reconciler) actually started the
-  // operation; the download lane is purely informational here and never
-  // disables anything (Renderer surfaces cutover ticket).
-  const statusQuery = useRunnerHostControllerStatusQuery();
-  const controllerStatus = statusQuery.data;
-  const mutationLane = controllerStatus?.mutation ?? null;
-  const sharedMutationActive = mutationLane !== null;
-  const progress = mutationLane;
-
-  const {
-    data: availableSnapshot,
-    error: availableError,
-    isFetching: availableFetching,
-    isPending: availablePending,
-  } = useQuery(
-    queryOptions<HostAvailableSnapshot>({
-      queryKey: runnerQueryKeys.hostAvailableVersions(
-        management,
-        includePreReleases,
-      ),
-      queryFn: () => management.availableVersions({ includePreReleases }),
-      staleTime: 5 * 60 * 1000,
-      enabled: showLocalConsole,
-    }),
-  );
-
-  const { data: registryState, isFetching: registryFetching } = useQuery(
-    queryOptions<HostRegistryUpdateState>({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
-      queryFn: () => management.registryCheck({ force: false }),
-      staleTime: 60 * 60 * 1000,
-      enabled: showLocalConsole,
-    }),
-  );
-
-  const { data: installedRecord, isPending: installedPending } = useQuery(
-    queryOptions<HostInstalledRecord | null>({
-      queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      queryFn: () => management.installedRecord(),
-      staleTime: 30_000,
-      enabled: showLocalConsole,
-    }),
-  );
-
-  const { data: cliManifest } = useQuery(
-    queryOptions<CliInstallManifestSnapshot | null>({
-      queryKey: runnerQueryKeys.hostCliManifest(management),
-      queryFn: () => management.cliManifest(),
-      staleTime: 5 * 60 * 1000,
-      enabled: showLocalConsole,
-    }),
-  );
-
-  const {
-    data: hostNameSettings,
-    isPending: hostNamePending,
-    isError: hostNameError,
-  } = useQuery(
-    queryOptions<HostNameSettings>({
-      queryKey: runnerQueryKeys.hostName(management),
-      queryFn: () => management.getHostName(),
-      staleTime: 30_000,
-      enabled: showLocalConsole,
-    }),
-  );
-
-  const persistedHostNameDraft =
-    hostNameSettings === undefined
-      ? ""
-      : (hostNameSettings.customName ?? hostNameSettings.systemName);
-  const hostNameDraft = hostNameDraftOverride ?? persistedHostNameDraft;
-
-  const invalidate = (): void => {
-    void queryClient.invalidateQueries({
-      queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
-    });
-    void queryClient.invalidateQueries({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
-    });
-    void queryClient.invalidateQueries({
-      queryKey: runnerQueryKeys.hostInstalledRecord(management),
-    });
-  };
-
-  // Bootstrap "Install host" (shown only when `status === "not-installed"`).
-  // Busy is structurally unreachable here (nothing can hold the mutation
-  // lane on a host that was never installed), so this reuses the gate's
-  // throw-on-non-ok convergeReady hook rather than the Force/Defer flow.
-  const convergeReadyMutation = useRunnerConvergeReady();
-
-  const applyStagedMutation = useRunnerApplyStaged();
-  const activateInstalledMutation = useRunnerActivateInstalled();
-  const installVersionMutation = useRunnerInstallVersion();
-
-  const handleApplyOutcome = (
-    outcome: MutationOutcome<ApplyStagedOk>,
-  ): void => {
-    if (outcome.kind === "ok") {
-      toast.success(`Updated host to v${outcome.value.appliedVersion}`);
-      useHostUpdateBannerStore
-        .getState()
-        .clearSnooze(outcome.value.appliedVersion);
-      setBusy(null);
-      setTerminalOutcome(null);
-      invalidate();
-      return;
-    }
-    if (outcome.kind === "busy") {
-      setBusy({
-        intent: "apply",
-        continuation: outcome.continuation,
-        message: outcome.message,
-        pin: null,
-      });
-      return;
-    }
-    setBusy(null);
-    setTerminalOutcome({
-      intent: "apply",
-      message: outcome.message,
-      pin: null,
-    });
-  };
-
-  const handleInstallVersionOutcome = (
-    outcome: MutationOutcome<InstallVersionOk>,
-    pin: string,
-  ): void => {
-    if (outcome.kind === "ok") {
-      toast.success(`Installed host v${outcome.value.installedVersion}`);
-      useHostUpdateBannerStore
-        .getState()
-        .clearSnooze(outcome.value.installedVersion);
-      setBusy(null);
-      setTerminalOutcome(null);
-      invalidate();
-      return;
-    }
-    if (outcome.kind === "busy") {
-      setBusy({
-        intent: "installVersion",
-        continuation: outcome.continuation,
-        message: outcome.message,
-        pin,
-      });
-      return;
-    }
-    setBusy(null);
-    setTerminalOutcome({
-      intent: "installVersion",
-      message: outcome.message,
-      pin,
-    });
-  };
-
-  const runApply = (force: boolean): void => {
-    applyStagedMutation.mutate(
-      { trigger: "manual", force },
-      { onSuccess: handleApplyOutcome },
-    );
-  };
-
-  const runInstallVersion = (pin: string, force: boolean): void => {
-    installVersionMutation.mutate(
-      { pin, force },
-      { onSuccess: (outcome) => handleInstallVersionOutcome(outcome, pin) },
-    );
-  };
-
-  // Force continuation after a post-commit busy outcome (packaged macOS):
-  // activates the already-committed install rather than re-running the
-  // consumed apply/pin.
-  const runForceActivate = (): void => {
-    if (busy === null) return;
-    const { intent, pin } = busy;
-    activateInstalledMutation.mutate(
-      { force: true },
-      {
-        onSuccess: (outcome) => {
-          if (outcome.kind === "ok") {
-            toast.success("Host activated");
-            setBusy(null);
-            setTerminalOutcome(null);
-            invalidate();
-            return;
-          }
-          if (outcome.kind === "busy") {
-            setBusy({
-              intent,
-              continuation: outcome.continuation,
-              message: outcome.message,
-              pin,
-            });
-            return;
-          }
-          setBusy(null);
-          setTerminalOutcome({ intent, message: outcome.message, pin });
-        },
-      },
-    );
-  };
-
-  const restartMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostRestart(),
-    mutationFn: () => management.restartHost(),
-    onSuccess: (result) => {
-      setRestartConfirmOpen(false);
-      // `declined` resolves (rather than rejecting) because it is not an
-      // error - the host deliberately was not restarted and a later retry
-      // succeeds on its own; see `toastHostRestartDeclined`.
-      if (result.kind === "declined") {
-        toastHostRestartDeclined(result.message);
-        return;
-      }
-      toast.success("Host restart requested");
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
-      invalidate();
-    },
-    onError: (err) => {
-      setRestartConfirmOpen(false);
-      toastFromRunnerError(err, "Couldn't restart host");
-    },
+  // Which surface this computer's host gets, and the bridge that would run it.
+  const recoveryManagement = useRecoveryConsoleManagement({
+    management,
+    localHost,
+    connectable: scope.host?.connectable ?? false,
+    scopedIsLocalMachine,
+    emptyAccountLocalRecovery,
   });
 
-  const registerServiceMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostRegisterService(),
-    mutationFn: async () => {
-      const outcome = await management.registerService();
-      if (outcome.kind !== "ok") {
-        throw new Error(outcome.message);
-      }
-      return outcome.value;
-    },
-    onSuccess: () => {
-      toast.success("Service registered");
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
-      invalidate();
-    },
-    onError: (err) => {
-      toastFromRunnerError(err, "Couldn't register service");
-    },
-  });
+  // The doctor's three repair-a-down-host fixes still run over the bridge when
+  // the host being shown is this computer. Owned here rather than inside the
+  // sheet because `IHostManagement` is a property of the SHELL, not of the
+  // scoped host, and the sheet must not be able to reach for it by accident for
+  // a host on another machine.
+  const localDoctorFix = useLocalDoctorFixMutation(management);
 
-  const deregisterServiceMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostDeregisterService(),
-    mutationFn: () => management.deregisterService(),
-    onSuccess: () => {
-      toast.success("Service deregistered");
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
-      invalidate();
-    },
-    onError: (err) => toastFromRunnerError(err, "Couldn't deregister service"),
-  });
+  // Keeps a `false` capability answer refutable. See the hook below.
+  useOverviewCapabilityProbe(scope);
 
-  const refreshRegistryMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostRegistryCheck(),
-    mutationFn: () => management.registryCheck({ force: true }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(
-        runnerQueryKeys.hostRegistryUpdate(management),
-        data,
-      );
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
-      });
-    },
-    onError: (err) =>
-      toastFromRunnerError(err, "Couldn't refresh the update check"),
-  });
+  const description =
+    scope.host === null
+      ? "Status, updates and maintenance for the selected host."
+      : `Status, updates and maintenance for ${scope.host.name}.`;
 
-  const hostNameMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostNameSet(),
-    mutationFn: (customName: string | null) =>
-      management.setHostName({ customName }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(runnerQueryKeys.hostName(management), data);
-      setHostNameDraftOverride(null);
-      setEditingName(false);
-      toast.success("Host name updated");
-    },
-    onError: (err) => toastFromRunnerError(err, "Couldn't update host name"),
-  });
-
-  // Disables off the mutation lane only - a background download (the
-  // download lane) must never disable unrelated actions here (Renderer
-  // surfaces cutover ticket).
-  const anyPending =
-    convergeReadyMutation.isPending ||
-    applyStagedMutation.isPending ||
-    activateInstalledMutation.isPending ||
-    installVersionMutation.isPending ||
-    restartMutation.isPending ||
-    registerServiceMutation.isPending ||
-    deregisterServiceMutation.isPending ||
-    // A mutation started from another surface (the landing-page banner, a
-    // second window, the tray/menu, or the background auto-update
-    // reconciler) - none of this panel's own mutations are pending, but the
-    // mutation lane is still held, so every trigger here must stay disabled
-    // too.
-    sharedMutationActive;
-  const installPending =
-    convergeReadyMutation.isPending || mutationLane?.kind === "ensure";
-  const updatePending =
-    applyStagedMutation.isPending || mutationLane?.kind === "apply";
-  const registerPending =
-    registerServiceMutation.isPending || mutationLane?.kind === "register";
-
-  const status = deriveStatus(localHost, installedRecord);
-  const statusPending = status === undefined;
-  const latestReleasedAt = findReleasedAt(
-    availableSnapshot,
-    registryState?.latestVersion ?? null,
-  );
-  const packageManagerUpgrade = cliManifest?.packageManagerUpgrade ?? null;
-
-  const handleRefreshRegistry = (): void => {
-    refreshRegistryMutation.mutate();
-  };
-
-  const handleRetryTerminalOutcome = (): void => {
-    if (terminalOutcome === null) return;
-    const { intent, pin } = terminalOutcome;
-    setTerminalOutcome(null);
-    if (intent === "apply") {
-      runApply(false);
-    } else if (pin !== null) {
-      runInstallVersion(pin, false);
-    }
-  };
-
-  // ONE Updates card, holding both halves of a host's update story.
+  // Say NOTHING about a host the scope cannot resolve. This is the whole-panel
+  // gate, and it is now safe to use one: unlike the old page, everything below
+  // describes the scoped host, so there is no region that would be wrongly
+  // withheld by it.
   //
-  // They are genuinely two mechanisms — the local controller stages and
-  // applies a build on this computer, while the account registry carries the
-  // policy and target version any host reads on its next check-in — and they
-  // used to live on two different pages because of it. A person does not have
-  // two update questions, so the mechanisms sit in one card and the copy
-  // distinguishes them.
-  const registryItem = scope.host?.item ?? null;
-  let dangerZone: ReactNode = null;
-  if (scope.host !== null) {
-    dangerZone = <HostDangerZone scope={scope} />;
-  } else if (showLocalConsole && (installedRecord ?? null) !== null) {
-    dangerZone = <LocalRecoveryDangerZone />;
-  }
+  // The carve-out is stated as "...and there is no recovery console to offer",
+  // not as the carve-out flag itself. A fresh install has no row to resolve, so
+  // the gate must stand aside for the console that creates the first host — but
+  // a shell with no CLI bridge (web, mobile) has no console either, and there
+  // the gate's "No hosts yet" is the only honest thing on the page.
+  const unresolved =
+    (scope.host === null && recoveryManagement === null) ||
+    scope.status === "vanished";
 
-  const localUpdateRegion =
-    scopedIsLocalMachine && status?.state !== "not-installed" ? (
-      <HostUpdateRegion
-        registryState={registryState}
-        registryFetching={registryFetching || refreshRegistryMutation.isPending}
-        anyPending={anyPending}
-        updatePending={updatePending}
-        latestReleasedAt={latestReleasedAt}
-        nowMs={nowMs}
-        updateReady={controllerStatus?.updateReady ?? false}
-        stagedVersion={controllerStatus?.stagedVersion ?? null}
-        downloadProgress={controllerStatus?.download?.progress ?? null}
-        onUpdate={() => runApply(false)}
-        onRefresh={handleRefreshRegistry}
-      />
-    ) : null;
-  const updatesCard =
-    localUpdateRegion === null && registryItem === null ? null : (
-      <SettingsGroup
-        title="Updates"
-        tone="default"
-        dataTestId="host-updates"
-        fill={false}
-      >
-        {/* Every row brings its own top rule as a separator; the first one
-            would otherwise double up with the card's own border. */}
-        <div className="[&>*:first-child]:border-t-0">
-          {localUpdateRegion}
-          {registryItem === null ? null : (
-            // Keyed by host: every piece of state inside — an open drain-gate
-            // confirmation, a half-typed version pin — belongs to ONE host, so
-            // changing hosts must destroy it rather than re-point it. The
-            // controls also capture their target at arm time; this is the
-            // structural half of the same guarantee.
-            <HostRegistryUpdates
-              key={registryItem.hostId}
-              item={registryItem}
-              isLocalHost={scopedIsLocalMachine}
-            />
-          )}
-        </div>
-      </SettingsGroup>
-    );
+  const body = renderOverviewBody({
+    scope,
+    unresolved,
+    compact,
+    recoveryManagement,
+    runnerHost,
+    emptyAccountLocalRecovery,
+    // Only ever this computer's snapshot, and only when this computer is the
+    // SUBJECT. Handing it over for a remote row would print a local pid under
+    // another machine's name.
+    localHost: scopedIsLocalMachine ? localHost : null,
+    hasLocalBridge: management !== null && scopedIsLocalMachine,
+    onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
+    localDoctorFixPendingCode: localDoctorFix.isPending
+      ? localDoctorFix.variables.code
+      : null,
+  });
 
-  return (
+  const shell = (
     <SettingsPanelShell
       title="Overview"
       // The card below names the host, in bigger type, next to its status and
-      // its Rename control. Repeating it as the page title printed the same
+      // its Edit name control. Repeating it as the page title printed the same
       // string twice, two lines apart, and made the header look like a bug.
-      description={
-        scope.host === null
-          ? "Status, updates and maintenance for the selected host."
-          : `Status, updates and maintenance for ${scope.host.name}.`
-      }
+      description={description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      {/* Overview owes the same contract as the rest of its group — say NOTHING
-          about a host the scope cannot resolve, which is how a vanished remote
-          host once ended up showing this computer's service console — but it
-          cannot buy that with the whole-panel gate the others use, because most
-          of what it renders never touches the scoped host's RPC:
-
-            - the local service console runs over the CLI bridge
-              (`IHostManagement`), and it is the RECOVERY surface. Gating it on
-              dialability took Install / Start / Restart away in precisely the
-              state they exist for: a local host that is stopped while this
-              window is active on some other machine. The page offered "Can't
-              reach this computer" and no way to fix it.
-            - the Updates card writes update policy through the account API,
-              which a host applies on its next check-in. It needs no route.
-
-          So the gate now wraps the one region that IS host RPC. What replaces
-          it above is the weaker, correct question — did the scope settle on a
-          host at all — and `scopedIsLocalMachine` (`?? false`) is what keeps a
-          non-local host from reaching the local console. One carve-out: an
-          EMPTY account with the CLI bridge present renders the console anyway
-          (`emptyAccountLocalRecovery`) — a first run has no local host id and
-          therefore no row to resolve, and hiding Install behind "No hosts
-          yet" left a fresh install with no way to create its first host. */}
-      {(scope.host === null && !emptyAccountLocalRecovery) ||
-      scope.status === "vanished" ? (
-        <HostScopeGate
-          scope={scope}
-          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-        >
-          {null}
-        </HostScopeGate>
-      ) : (
-        <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-          {showLocalConsole || scope.host === null ? null : (
-            <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
-              <ThisWindowCard scope={scope} host={scope.host} />
-              <HostIdRow
-                hostId={scope.host.hostId}
-                onCopy={(value) => hostIdCopy.copy(value)}
-              />
-            </HostIdentityCard>
-          )}
-
-          {showLocalConsole ? null : updatesCard}
-
-          {showLocalConsole ? (
-            <>
-              {packageManagerUpgrade !== null ? (
-                <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
-              ) : null}
-
-              <HostSummaryCard
-                status={status}
-                statusPending={statusPending}
-                banner={{
-                  progress,
-                  terminalOutcome:
-                    terminalOutcome === null
-                      ? null
-                      : { message: terminalOutcome.message },
-                  onRetryTerminalOutcome: handleRetryTerminalOutcome,
-                  onDismissTerminalOutcome: () => setTerminalOutcome(null),
-                }}
-                nameEdit={{
-                  settings: hostNameSettings,
-                  pending: hostNamePending,
-                  error: hostNameError,
-                  draft: hostNameDraft,
-                  savePending: hostNameMutation.isPending,
-                  editing: editingName,
-                  onDraftChange: (value) => setHostNameDraftOverride(value),
-                  onSave: () => {
-                    hostNameMutation.mutate(
-                      customNameFromDraft(hostNameDraft, hostNameSettings),
-                    );
-                  },
-                  onReset: () => {
-                    hostNameMutation.mutate(null);
-                  },
-                  onOpenEditing: () => setEditingName(true),
-                  onCancel: () => {
-                    setEditingName(false);
-                    setHostNameDraftOverride(null);
-                  },
-                }}
-                actions={{
-                  anyPending,
-                  installPending,
-                  restartPending: restartMutation.isPending,
-                  onInstall: () =>
-                    convergeReadyMutation.mutate(
-                      { force: false },
-                      {
-                        onSuccess: (outcome) => {
-                          if (outcome.kind === "ok" && outcome.value.running) {
-                            toast.success(
-                              outcome.value.version !== null
-                                ? `Installed host v${outcome.value.version}`
-                                : "Host installed",
-                            );
-                          }
-                          invalidate();
-                        },
-                        onError: (err) => {
-                          toastFromRunnerError(err, "Couldn't install host");
-                        },
-                      },
-                    ),
-                  onRestart: () => setRestartConfirmOpen(true),
-                  onOpenDoctor: () => setDoctorOpen(true),
-                }}
-                updates={{
-                  // Rendered in the Updates card below instead, so the page has
-                  // exactly one place that answers "is this host up to date?".
-                  hidden: true,
-                  registryState,
-                  registryFetching:
-                    registryFetching || refreshRegistryMutation.isPending,
-                  anyPending,
-                  updatePending,
-                  latestReleasedAt,
-                  nowMs,
-                  updateReady: controllerStatus?.updateReady ?? false,
-                  stagedVersion: controllerStatus?.stagedVersion ?? null,
-                  downloadProgress:
-                    controllerStatus?.download?.progress ?? null,
-                  onUpdate: () => runApply(false),
-                  onRefresh: handleRefreshRegistry,
-                }}
-              />
-
-              {updatesCard}
-
-              {/* Null only in the fresh-install carve-out, where there is no
-                host row yet for this card to describe. */}
-              {scope.host === null ? null : (
-                <ThisWindowCardStandalone scope={scope} host={scope.host} />
-              )}
-
-              <SettingsGroup
-                title="Installation"
-                tone="default"
-                dataTestId={undefined}
-                fill={false}
-              >
-                <InstallationDetailsDisclosure
-                  record={installedRecord ?? null}
-                  loading={installedPending}
-                />
-                <AdvancedDisclosure
-                  installedVersion={installedRecord?.version ?? null}
-                  availableSnapshot={availableSnapshot}
-                  availablePending={availablePending}
-                  availableErrorMessage={extractErrorMessage(
-                    availableError,
-                    registryState,
-                  )}
-                  availableFetching={availableFetching}
-                  includePreReleases={includePreReleases}
-                  registryState={registryState}
-                  statusState={status?.state}
-                  anyPending={anyPending}
-                  registerPending={registerPending}
-                  deregisterPending={deregisterServiceMutation.isPending}
-                  onInstallVersion={(version) =>
-                    runInstallVersion(version, false)
-                  }
-                  onRegisterService={() => registerServiceMutation.mutate()}
-                  onDeregisterService={() => deregisterServiceMutation.mutate()}
-                  onRefreshAvailable={handleRefreshRegistry}
-                  onIncludePreReleasesChange={setIncludePreReleases}
-                />
-              </SettingsGroup>
-            </>
-          ) : null}
-
-          {/* No list of the OTHER hosts, and no "Add host": a page about one
-            host is the wrong place to manage the collection it belongs to.
-            The switcher in the sidebar owns both.
-
-            Not gated from out here either: clearing snapshots is host RPC and
-            needs a live route, but removing Traycer runs over the local CLI
-            bridge and is exactly what someone reaches for when the service is
-            stopped or broken. A gate around both took the recovery action away
-            in the only state that needs it, so the region gates its own rows.
-
-            With no host row the RPC row has nothing to clear — but "no row"
-            is an enrollment fact, not an installation fact: an install that
-            completed while sign-in did not leaves components on this machine
-            with nothing in the account, and this page is the only uninstall
-            surface. In the same empty-account carve-out that shows the
-            install console, a record of installed components keeps the
-            local-bridge removal row reachable; a truly fresh machine (no
-            record) still shows nothing. */}
-          {dangerZone}
-        </div>
-      )}
-
-      <RestartHostConfirmDialog
-        open={restartConfirmOpen}
-        onOpenChange={(open) => {
-          if (!open) setRestartConfirmOpen(false);
-        }}
-        isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
-      />
-      <DoctorSheet
-        open={doctorOpen}
-        onOpenChange={setDoctorOpen}
-        management={management}
-      />
-      <HostBusyForceDeferDialog
-        open={busy !== null}
-        message={busy?.message ?? ""}
-        isForcing={
-          applyStagedMutation.isPending ||
-          installVersionMutation.isPending ||
-          activateInstalledMutation.isPending
-        }
-        forceLabel={
-          busy?.continuation === "activate" ? "Force restart" : "Force update"
-        }
-        onForce={() => {
-          if (busy === null) return;
-          if (busy.continuation === "activate") {
-            runForceActivate();
-            return;
-          }
-          if (busy.intent === "apply") {
-            runApply(true);
-          } else if (busy.pin !== null) {
-            runInstallVersion(busy.pin, true);
-          }
-        }}
-        onDefer={() => {
-          setBusy(null);
-        }}
-      />
+      {body}
     </SettingsPanelShell>
   );
+
+  if (scopedBinding === null) return shell;
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding}>
+      {shell}
+    </HostRuntimeContext.Provider>
+  );
+}
+
+/**
+ * Keeps a stale `false` capability answer from becoming permanent.
+ *
+ * This page parks reads on those answers — the identity read, the installation
+ * read, and the buttons around them — and the reads that would produce the next
+ * handshake are exactly the ones a `false` turns off. Without a counterweight, a
+ * host upgraded in place under the same id keeps its stale verdict and the page
+ * keeps promising an update that already happened. The probe keeps one bounded
+ * released-floor read mounted while that is true; the response is unused, the
+ * handshake is the point.
+ *
+ * `scope.client`, never the ambient one: probing the wrong machine would refresh
+ * a capability record for a host this page is not showing.
+ */
+function useOverviewCapabilityProbe(scope: HostScope): void {
+  const identitySupported = useHostMethodSupport(
+    scope.hostId,
+    "host.identity.get",
+  );
+  const installInfoSupported = useHostMethodSupport(
+    scope.hostId,
+    "host.getInstallationInfo",
+  );
+  useHostCapabilityProbe({
+    client: scope.client,
+    stale: identitySupported === false || installInfoSupported === false,
+    incarnation: [
+      scope.host?.version ?? null,
+      scope.host?.connectable ?? false,
+    ],
+  });
+}
+
+/**
+ * The recovery console's precondition, and the bridge that would drive it.
+ *
+ * Returns the bridge when this computer's host has no process to answer for
+ * itself, and `null` otherwise — so the caller narrows `IHostManagement` by
+ * using the answer rather than re-deriving it, and there is exactly one place
+ * that decides when the CLI-bridge surface appears.
+ */
+function useRecoveryConsoleManagement(input: {
+  readonly management: IHostManagement | null;
+  readonly localHost: LocalHostSnapshot | null;
+  readonly connectable: boolean;
+  readonly scopedIsLocalMachine: boolean;
+  readonly emptyAccountLocalRecovery: boolean;
+}): IHostManagement | null {
+  const { management, scopedIsLocalMachine, emptyAccountLocalRecovery } = input;
+  // "Not installed" is a BRIDGE fact with no RPC twin: a host that was never
+  // installed cannot answer `host.getInstallationInfo`, or anything else.
+  //
+  // Reading it for a local scope is free — `useHostScope` runs this exact query
+  // under this exact key for every shell with a bridge, so this observer shares
+  // that cache entry rather than adding a call.
+  const installedQuery = useQuery(
+    queryOptions<HostInstalledRecord | null>({
+      queryKey:
+        management === null
+          ? runnerQueryKeys.hostInstalledRecordUnavailable()
+          : runnerQueryKeys.hostInstalledRecord(management),
+      queryFn:
+        management === null
+          ? skipInstalledRecord
+          : () => management.installedRecord(),
+      enabled:
+        management !== null &&
+        (scopedIsLocalMachine || emptyAccountLocalRecovery),
+      staleTime: 30_000,
+    }),
+  );
+
+  // `deriveStatus`'s "not-installed" state, which is why the live snapshot is
+  // part of it rather than the record alone.
+  //
+  // A live local process outranks a missing install record: someone running the
+  // host from a checkout HAS no record, and reading that as "not installed"
+  // would offer Install for a host answering RPCs right now. It is also what
+  // keeps the page from FLIPPING surfaces. The record arrives asynchronously, so
+  // a record-only rule renders the RPC page first and swaps to the console when
+  // it lands — destroying anything opened in between, which is how a restart
+  // confirmation gets dismissed out from under a click. With the snapshot in the
+  // conjunct a running host never enters this branch, and a stopped one is
+  // already caught by `!connectable` on the very first render.
+  const notInstalled =
+    input.localHost === null &&
+    installedQuery.isSuccess &&
+    installedQuery.data === null;
+
+  const applies =
+    (scopedIsLocalMachine && (!input.connectable || notInstalled)) ||
+    emptyAccountLocalRecovery;
+  return applies ? management : null;
+}
+
+/**
+ * Which of the three surfaces the page is showing, in one place.
+ *
+ * Extracted from the panel so the decision reads as three named, mutually
+ * exclusive outcomes rather than a chain of conditions embedded in JSX — the
+ * shape that let "local" and "unresolved" quietly overlap in the old page.
+ */
+function renderOverviewBody(input: {
+  readonly scope: HostScope;
+  readonly unresolved: boolean;
+  readonly compact: boolean;
+  readonly recoveryManagement: IHostManagement | null;
+  readonly runnerHost: IRunnerHost;
+  readonly emptyAccountLocalRecovery: boolean;
+  readonly localHost: LocalHostSnapshot | null;
+  readonly hasLocalBridge: boolean;
+  readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
+  readonly localDoctorFixPendingCode: string | null;
+}): ReactNode {
+  const { scope, recoveryManagement } = input;
+  if (input.unresolved) {
+    return (
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        {null}
+      </HostScopeGate>
+    );
+  }
+  if (recoveryManagement !== null) {
+    return (
+      <div className={cn("flex flex-col", input.compact ? "gap-3.5" : "gap-5")}>
+        <HostRecoveryConsole
+          management={recoveryManagement}
+          runnerHost={input.runnerHost}
+          scope={scope}
+          emptyAccountLocalRecovery={input.emptyAccountLocalRecovery}
+        />
+      </div>
+    );
+  }
+  return (
+    <HostOverviewPanel
+      scope={scope}
+      localHost={input.localHost}
+      hasLocalBridge={input.hasLocalBridge}
+      onLocalDoctorFix={input.onLocalDoctorFix}
+      localDoctorFixPendingCode={input.localDoctorFixPendingCode}
+    />
+  );
+}
+
+/**
+ * Stand-in `queryFn` for the disabled installed-record query.
+ *
+ * TanStack requires one even when `enabled` is false, and a rejecting stub is
+ * the honest shape: if it ever runs, the `enabled` guard above it is wrong and
+ * should fail loudly rather than resolve a fake `null` that would read as
+ * "nothing is installed" — and put the install console on screen.
+ */
+function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+/**
+ * The doctor's local-only repairs (`service-install`, `free-port-and-restart`,
+ * `host-install-latest`) over the CLI bridge.
+ *
+ * These stay local by design and not for want of an RPC: they repair a host
+ * that is down or broken, and such a host generally cannot answer one. The
+ * remote degrade is the terminal command, not a remote verb — the plan dropped
+ * those deliberately, because they would be dead controls.
+ *
+ * The issue shape crosses transports here. The RPC report and the bridge report
+ * describe the same CLI diagnostics, and `runFixAction` reads only `fixAction`
+ * and `details`, so the bridge runner serves both.
+ */
+/**
+ * What the bridge fix actually did, carried out of `mutationFn` so the
+ * callbacks can tell "applied" from "the host declined to restart". A
+ * discriminated pair rather than a bare boolean, because the declined arm is
+ * the only one with a message and the applied arm must never carry one.
+ */
+type LocalDoctorFixOutcome =
+  | { readonly applied: true; readonly declinedMessage: null }
+  | { readonly applied: false; readonly declinedMessage: string };
+
+function useLocalDoctorFixMutation(management: IHostManagement | null) {
+  const queryClient = useQueryClient();
+  // `mutationFn` REPORTS the outcome; it does not announce it. Raising the
+  // toasts inside it also collapsed "declined" into a resolved promise, so
+  // `onSuccess` invalidated the installed-record query after a fix that never
+  // ran - a re-read charged to a change that did not happen.
+  return useMutation<LocalDoctorFixOutcome, Error, RpcDoctorIssue>({
+    mutationKey: runnerMutationKeys.hostRunDoctor(),
+    mutationFn: async (issue) => {
+      if (management === null) {
+        throw new Error("This shell has no local Traycer CLI to run that fix.");
+      }
+      // No conversion: the two `HostDoctorIssue` declarations are the same
+      // seven fields with the same severity union, because they describe the
+      // same CLI diagnostic — one arrived over the wire and one over the
+      // bridge. `runFixAction` reads only `fixAction` and `details`.
+      const issueForBridge: BridgeDoctorIssue = issue;
+      const result = await runFixAction(management, issueForBridge);
+      return result.kind === "declined"
+        ? { applied: false, declinedMessage: result.message }
+        : { applied: true, declinedMessage: null };
+    },
+    onSuccess: (outcome) => {
+      if (!outcome.applied) {
+        toastHostRestartDeclined(outcome.declinedMessage);
+        return;
+      }
+      toast.success("Fix applied");
+      if (management === null) return;
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.hostInstalledRecord(management),
+      });
+    },
+    onError: (error) => toastFromRunnerError(error, "Fix failed"),
+  });
 }

@@ -42,6 +42,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     ...overrides,
   };

@@ -39,7 +39,6 @@ export interface StoredCredentials {
   // The separately-delivered refresh token (post raw-JWS cutover). Sent in the
   // `POST /api/v3/auth/refresh` body; both rotate on refresh.
   readonly refreshToken: string;
-  readonly authnBaseUrl: string;
   readonly savedAt: string;
   readonly user: {
     readonly id: string;
@@ -94,7 +93,16 @@ export async function readCredentialsFile(
   return parseStoredCredentials(parsed);
 }
 
-/** Total decoder for the on-disk shape; `null` on any structural mismatch. */
+/**
+ * Total decoder for the on-disk shape; `null` on any structural mismatch.
+ *
+ * Unknown keys are ignored, deliberately: files written before the
+ * `authnBaseUrl` removal carry that extra field, and they must keep parsing as
+ * valid sessions (the field simply disappears on the next write). The authn
+ * endpoint is the READER's build-time/env config, never file content — a URL
+ * read off disk is whichever stack happened to write last, not the authority
+ * this process is configured against.
+ */
 export function parseStoredCredentials(
   parsed: unknown,
 ): StoredCredentials | null {
@@ -104,7 +112,6 @@ export function parseStoredCredentials(
   if (
     typeof obj.token !== "string" ||
     typeof obj.refreshToken !== "string" ||
-    typeof obj.authnBaseUrl !== "string" ||
     typeof obj.savedAt !== "string" ||
     user === null ||
     typeof user !== "object"
@@ -122,7 +129,6 @@ export function parseStoredCredentials(
   return {
     token: obj.token,
     refreshToken: obj.refreshToken,
-    authnBaseUrl: obj.authnBaseUrl,
     savedAt: obj.savedAt,
     user: { id: userObj.id, email: userObj.email, name: userObj.name },
   };

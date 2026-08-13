@@ -1,5 +1,8 @@
 import { useState } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { HostDoctorCard } from "@/components/settings/panels/host-doctor-card";
+import { HostDoctorRpcCard } from "@/components/settings/panels/host-doctor-rpc-card";
 import {
   INITIAL_RECURRENCE_STATE,
   type RecurrenceState,
@@ -11,16 +14,41 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
+import type { OverviewDegradeReason } from "@/components/settings/panels/host-overview-model";
+import type { HostRpcRegistry } from "@/lib/host";
+
+/**
+ * Which mechanism produces the report.
+ *
+ * `rpc` is the ordinary path for every reachable host, local or remote: the
+ * host shells its OWN CLI, so the report describes the machine the page names.
+ * `bridge` runs the CLI on THIS computer, and survives for exactly one caller —
+ * the recovery console, where the local host cannot answer an RPC because it is
+ * not running. Reaching for the bridge anywhere else would go back to reporting
+ * this computer's diagnostics under another host's name.
+ */
+export type DoctorSheetSource =
+  | { readonly kind: "bridge" }
+  | {
+      readonly kind: "rpc";
+      readonly client: HostClient<HostRpcRegistry> | null;
+      readonly hostName: string;
+      readonly isLocalMachine: boolean;
+      readonly hasLocalBridge: boolean;
+      readonly degrade: OverviewDegradeReason | null;
+      /** Runs a local-only repair on this computer via the CLI bridge. */
+      readonly onLocalFix: (issue: HostDoctorIssue) => void;
+      readonly localFixPendingCode: string | null;
+    };
 
 interface DoctorSheetProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly management: IHostManagement;
+  readonly source: DoctorSheetSource;
 }
 
 export function DoctorSheet(props: DoctorSheetProps) {
-  const { open, onOpenChange } = props;
+  const { open, onOpenChange, source } = props;
   const [recurrence, setRecurrence] = useState<RecurrenceState>(
     INITIAL_RECURRENCE_STATE,
   );
@@ -30,19 +58,51 @@ export function DoctorSheet(props: DoctorSheetProps) {
         <SheetHeader>
           <SheetTitle>Host doctor</SheetTitle>
           <SheetDescription>
-            Diagnostics for the local host, with one-click fixes for common
-            issues.
+            {source.kind === "rpc"
+              ? `Diagnostics ${source.hostName} ran on itself, with one-click fixes where this app can apply them.`
+              : "Diagnostics for the host on this computer, with one-click fixes for common issues."}
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
+          {/* Mounted only while open, in both branches: the report is produced
+              by running a process on the host, so it must be a consequence of
+              opening this sheet rather than of the panel rendering. */}
           {open ? (
-            <HostDoctorCard
-              recurrenceState={recurrence}
+            <DoctorSheetBody
+              source={source}
+              recurrence={recurrence}
               onRecurrenceChange={setRecurrence}
             />
           ) : null}
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function DoctorSheetBody(props: {
+  readonly source: DoctorSheetSource;
+  readonly recurrence: RecurrenceState;
+  readonly onRecurrenceChange: (next: RecurrenceState) => void;
+}) {
+  const { source } = props;
+  if (source.kind === "bridge") {
+    return (
+      <HostDoctorCard
+        recurrenceState={props.recurrence}
+        onRecurrenceChange={props.onRecurrenceChange}
+      />
+    );
+  }
+  return (
+    <HostDoctorRpcCard
+      client={source.client}
+      hostName={source.hostName}
+      isLocalMachine={source.isLocalMachine}
+      hasLocalBridge={source.hasLocalBridge}
+      degrade={source.degrade}
+      onLocalFix={source.onLocalFix}
+      localFixPendingCode={source.localFixPendingCode}
+    />
   );
 }

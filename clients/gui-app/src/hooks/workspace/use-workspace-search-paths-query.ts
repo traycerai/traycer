@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { keepPreviousData, type UseQueryResult } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -13,7 +13,9 @@ import type {
   WorkspaceSearchPathsResponse,
   WorkspaceSearchSource,
 } from "@traycer/protocol/host/workspace/unary-schemas";
+import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-same-host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
 const WORKSPACE_SEARCH_PATHS_LIMIT = 50;
 
@@ -41,8 +43,10 @@ export interface UseWorkspaceSearchPathsArgs {
  * a change of Epic, host, root, or query mints a new key and a late in-flight
  * response for the previous selection is discarded rather than applied. The
  * response also echoes `epicId`/`root` so callers can defensively drop a stale
- * payload. `keepPreviousData` keeps the last results visible while the next
- * keystroke's request is in flight, so the list does not blank between strokes.
+ * payload. Same-host `keepPreviousData` keeps the last results visible while
+ * the next keystroke's request is in flight (no blank between strokes), but
+ * drops the prior payload across a host switch so another host's filesystem
+ * never renders as this one's results.
  */
 export function useWorkspaceSearchPaths(
   args: UseWorkspaceSearchPathsArgs,
@@ -120,6 +124,7 @@ function useWorkspaceSearchPathsCore(args: {
   HostRpcError
 > {
   const trimmedQuery = args.query.trim();
+  const { hostId } = useReactiveHostReadiness(args.client);
   const params = useMemo(
     () => ({
       epicId: args.epicId,
@@ -139,7 +144,7 @@ function useWorkspaceSearchPathsCore(args: {
     options: {
       enabled: args.enabled,
       staleTime: 5_000,
-      placeholderData: keepPreviousData,
+      placeholderData: keepPreviousDataForSameHost(hostId),
     },
   });
 }

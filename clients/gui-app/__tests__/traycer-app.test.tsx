@@ -82,6 +82,7 @@ const localSnapshot: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 const TRAYCER_APP_TEST_TIMEOUT_MS = 30_000;
 
@@ -310,7 +311,6 @@ describe("<TraycerApp />", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "dev-runner-token",
         refreshToken: "dev-runner-token-refresh",
-        authnBaseUrl: host.authnBaseUrl,
         savedAt: "2024-01-01T00:00:00.000Z",
         user: {
           id: "user-1",
@@ -390,7 +390,6 @@ describe("<TraycerApp />", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "dev-runner-token",
         refreshToken: "dev-runner-token-refresh",
-        authnBaseUrl: host.authnBaseUrl,
         savedAt: "2024-01-01T00:00:00.000Z",
         user: {
           id: "user-1",
@@ -451,7 +450,6 @@ describe("<TraycerApp />", () => {
     host.tokenStoreEntries.set("traycer.token", {
       token: "dev-runner-token",
       refreshToken: "dev-runner-token-refresh",
-      authnBaseUrl: host.authnBaseUrl,
       savedAt: "2024-01-01T00:00:00.000Z",
       user: {
         id: "user-1",

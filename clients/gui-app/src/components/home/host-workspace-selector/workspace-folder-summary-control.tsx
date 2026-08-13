@@ -1,4 +1,10 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Popover,
   PopoverContent,
@@ -27,8 +33,15 @@ import type { WorkspaceRunItem } from "./workspace-run-item";
 
 // Disk-bound git reads over a handful of folders - no network probe, unlike
 // the owner hover card's `gh` leg. Still a leash, so a wedged host can't
-// strand the button disabled.
+// strand the button disabled. Caps the *local* spinner contribution of a
+// manual trigger; the mutation's own `isPending` is capped separately by
+// {@link EXTERNAL_REFRESH_DEADLINE_MS}.
 const WORKSPACE_REFRESH_TIMEOUT_MS = 15_000;
+
+// Safety cap on the refresh mutation's contribution to "Checking…". Past this
+// the footer switches to "Couldn't verify — Retry" instead of spinning forever
+// against a hung host. Independent of the local 15s trigger timeout above.
+const EXTERNAL_REFRESH_DEADLINE_MS = 30_000;
 
 // Module scope so the identity is stable when there is nothing to refresh -
 // a fresh arrow per render would re-bind the key listener on every render.
@@ -40,10 +53,84 @@ interface SummaryOverlayState {
 }
 
 /**
+ * Caps an external `isRefreshing` contribution to the spinner at ~30s, keyed
+ * to `attemptId` so a Retry after timeout starts a fresh deadline rather than
+ * inheriting the previous attempt's expired timer. No setState-on-clear: when
+ * `isRefreshing` is false the exceeded flag is simply not applied.
+ */
+function useExternalRefreshDeadline(args: {
+  readonly isRefreshing: boolean;
+  readonly attemptId: number;
+}): boolean {
+  const { isRefreshing, attemptId } = args;
+  // Stores the attempt id that timed out — compared to the live attemptId so
+  // a new generation cannot be treated as already expired.
+  const [timedOutAttemptId, setTimedOutAttemptId] = useState<number | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!isRefreshing) return;
+    const capturedAttemptId = attemptId;
+    const timerId = window.setTimeout(() => {
+      setTimedOutAttemptId(capturedAttemptId);
+    }, EXTERNAL_REFRESH_DEADLINE_MS);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [isRefreshing, attemptId]);
+  return isRefreshing && timedOutAttemptId === attemptId;
+}
+
+/**
  * Resting folder control shared by landing and in-epic composers. It is the
  * single owner of the empty-state shortcut: resolved + no folders renders
  * "Add folder" directly instead of a "No workspace linked" summary popover.
  */
+interface WorkspaceRefreshUi {
+  readonly checkedAt: number | null;
+  readonly refreshing: boolean;
+  readonly verifyFailed: boolean;
+  readonly canRefresh: boolean;
+  readonly retryBlocked: boolean;
+  readonly triggerRefresh: () => void;
+}
+
+/**
+ * Owns the refresh spinner + 30s external deadline so the summary control's
+ * complexity stays under the ESLint cap. Keys the deadline to
+ * `refreshGeneration` so Retry after a timeout starts a fresh window.
+ */
+function useWorkspaceRefreshUi(
+  refreshState: WorktreeWorkspacesRefresh | null,
+): WorkspaceRefreshUi {
+  const isExternalRefreshing = refreshState?.isRefreshing ?? false;
+  const refreshGeneration = refreshState?.refreshGeneration ?? 0;
+  const externalDeadlineExceeded = useExternalRefreshDeadline({
+    isRefreshing: isExternalRefreshing,
+    attemptId: refreshGeneration,
+  });
+  const refreshSpinner = useRefreshSpinner({
+    onRefresh: refreshState?.refresh ?? NOOP_REFRESH,
+    // Past the deadline the mutation may still be pending, but it no longer
+    // drives the spinner — Retry is re-enabled without stacking a second
+    // "external" block on the first attempt's expired timer.
+    externalRefreshing: isExternalRefreshing && !externalDeadlineExceeded,
+    timeoutMs: WORKSPACE_REFRESH_TIMEOUT_MS,
+  });
+  return {
+    checkedAt: refreshState?.checkedAt ?? null,
+    refreshing: refreshSpinner.refreshing,
+    verifyFailed:
+      (refreshState?.verifyFailed ?? false) || externalDeadlineExceeded,
+    canRefresh: refreshState?.canRefresh ?? false,
+    // While a non-deadline-exceeded attempt is still in flight, Retry must not
+    // stack a parallel force. After the deadline, spinner contribution drops so
+    // Retry is enabled even if the hung mutation has not settled.
+    retryBlocked: refreshSpinner.refreshing && !externalDeadlineExceeded,
+    triggerRefresh: refreshSpinner.trigger,
+  };
+}
+
 export function WorkspaceFolderSummaryControl(props: {
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly readOnly: boolean;
@@ -73,14 +160,9 @@ export function WorkspaceFolderSummaryControl(props: {
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
   });
-  const refreshState = props.refresh;
-  const refreshSpinner = useRefreshSpinner({
-    onRefresh: refreshState?.refresh ?? NOOP_REFRESH,
-    externalRefreshing: refreshState?.isRefreshing ?? false,
-    timeoutMs: WORKSPACE_REFRESH_TIMEOUT_MS,
-  });
-  const triggerRefresh = refreshSpinner.trigger;
-  const canRefresh = refreshState?.canRefresh ?? false;
+  const refreshUi = useWorkspaceRefreshUi(props.refresh);
+  const triggerRefresh = refreshUi.triggerRefresh;
+  const canRefresh = refreshUi.canRefresh;
   const popoverOpen = overlayState.workspacePopoverOpen;
   // Bound at the WINDOW, not on the popover content: the content prevents its
   // own open-autofocus (so a click never yanks the caret out of the composer),
@@ -287,11 +369,13 @@ export function WorkspaceFolderSummaryControl(props: {
             bindingResolved={props.bindingResolved}
           />
         </div>
-        {refreshState === null ? null : (
+        {props.refresh === null ? null : (
           <WorkspaceRefreshFooter
-            checkedAt={refreshState.checkedAt}
-            refreshing={refreshSpinner.refreshing}
-            canRefresh={canRefresh}
+            checkedAt={refreshUi.checkedAt}
+            refreshing={refreshUi.refreshing}
+            verifyFailed={refreshUi.verifyFailed}
+            canRefresh={refreshUi.canRefresh}
+            retryBlocked={refreshUi.retryBlocked}
             onRefresh={triggerRefresh}
           />
         )}
@@ -310,9 +394,43 @@ export function WorkspaceFolderSummaryControl(props: {
 function WorkspaceRefreshFooter(props: {
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
+  readonly verifyFailed: boolean;
   readonly canRefresh: boolean;
+  /** True while a non-deadline-exceeded attempt is still spinning. */
+  readonly retryBlocked: boolean;
   readonly onRefresh: () => void;
 }): ReactNode {
+  // Failure takes priority over "Checking…": a settled error or the external
+  // deadline leaves the footer in a recoverable state rather than a silent
+  // return to the idle stamp (or an eternal spinner).
+  if (props.verifyFailed && !props.refreshing) {
+    return (
+      <div
+        className="shrink-0 bg-popover px-3"
+        data-testid="workspace-refresh-footer"
+      >
+        <div className="flex items-center justify-between gap-2 border-t border-border/25 py-1.5">
+          <span
+            className="text-ui-xs text-muted-foreground"
+            data-testid="workspace-folders-verify-failed"
+          >
+            Couldn&apos;t verify —
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-label="Retry verifying folder details"
+            disabled={!props.canRefresh || props.retryBlocked}
+            onClick={props.onRefresh}
+            data-testid="workspace-folders-refresh-retry"
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       className="shrink-0 bg-popover px-3"

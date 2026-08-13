@@ -52,6 +52,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
       hostId: TERMINAL_NODE.hostId,
+      terminalName: TERMINAL_NODE.name,
       target: {
         kind: "terminal",
         epicId: "epic-1",

@@ -1,7 +1,7 @@
 import { config } from "../config";
 import { createCliLogger } from "../logger";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
-import { effectiveAuthnBaseUrl, readCredentials } from "../store/credentials";
+import { readCredentials } from "../store/credentials";
 
 /**
  * The CLI's host-auth boundary.
@@ -30,12 +30,11 @@ export interface HostAuth {
  * host with an empty bearer.
  */
 export async function resolveHostAuth(): Promise<HostAuth | null> {
-  // Both `createCliLogger` (via `cliLogPath`) and `effectiveAuthnBaseUrl`
-  // below resolve the dev-desktop slot, which throws on a malformed
-  // `DEV_DESKTOP_SLOT`. Pre-check it here so that failure surfaces as "no
-  // usable host auth" (matching this function's `HostAuth | null` contract)
-  // instead of an uncaught throw - the same slot value, so if this doesn't
-  // throw, neither downstream call will.
+  // `createCliLogger` (via `cliLogPath`) resolves the dev-desktop slot, which
+  // throws on a malformed `DEV_DESKTOP_SLOT`. Pre-check it here so that failure
+  // surfaces as "no usable host auth" (matching this function's
+  // `HostAuth | null` contract) instead of an uncaught throw - the same slot
+  // value, so if this doesn't throw, neither will the downstream call.
   try {
     devDesktopSlotForEnvironment(config.environment, process.env);
   } catch {
@@ -59,7 +58,7 @@ export async function resolveHostAuth(): Promise<HostAuth | null> {
   });
   return {
     token: stored.token,
-    authnBaseUrl: effectiveAuthnBaseUrl(stored.authnBaseUrl),
+    authnBaseUrl: config.authnBaseUrl,
     userId: stored.user.id,
   };
 }

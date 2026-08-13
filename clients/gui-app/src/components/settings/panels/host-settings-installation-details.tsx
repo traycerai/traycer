@@ -4,11 +4,39 @@ import {
   formatSource,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { cn } from "@/lib/utils";
-import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
+import type { HostInstallSourceTag } from "@traycer-clients/shared/platform/runner-host";
+
+/**
+ * The install record as either reader states it.
+ *
+ * The local CLI bridge (`HostInstalledRecord`) and the host's own
+ * `host.getInstallationInfo` return the same record — they read the same
+ * `install.json`, through the shared protocol module the maintenance ticket
+ * moved it into. They differ only in nullability at the edges, so this is their
+ * intersection rather than a third format: the host is authoritative about its
+ * own installation, and the bridge is what answers when the host cannot.
+ */
+export interface InstallationDetailsRecord {
+  readonly version: string;
+  readonly installedAt: string;
+  readonly source: HostInstallSourceTag;
+  readonly archiveSha256: string | null;
+  readonly signatureVerifiedAt: string | null;
+  readonly platform: string;
+  readonly arch: string;
+}
 
 interface InstallationDetailsDisclosureProps {
-  readonly record: HostInstalledRecord | null;
+  readonly record: InstallationDetailsRecord | null;
   readonly loading: boolean;
+  /**
+   * What "no record" means here, because it is not always the same thing. The
+   * bridge says "nothing is installed on this computer"; the host says
+   * `unmanaged`, which means it is running from a checkout or a hand-unpacked
+   * tree and has no install record to read. Rendering the first sentence for
+   * the second state told every developer their host was missing.
+   */
+  readonly emptyMessage: string;
 }
 
 export function InstallationDetailsDisclosure(
@@ -19,7 +47,7 @@ export function InstallationDetailsDisclosure(
     <HostSettingsDisclosure label="Installation details" defaultOpen={false}>
       {record === null ? (
         <div className="text-ui-sm text-muted-foreground">
-          {loading ? "Reading install record…" : "No host currently installed."}
+          {loading ? "Reading install record…" : props.emptyMessage}
         </div>
       ) : (
         <dl className="flex flex-col gap-3 text-ui-sm">
@@ -55,7 +83,7 @@ export function InstallationDetailsDisclosure(
             }
             testId="settings-host-verification"
           />
-          {record.archiveSha256.length > 0 ? (
+          {record.archiveSha256 !== null && record.archiveSha256.length > 0 ? (
             <DetailField
               label="SHA-256"
               value={record.archiveSha256}

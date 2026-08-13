@@ -6,6 +6,8 @@ import { HostNameEditForm } from "@/components/settings/panels/host-settings-nam
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
 import { HostUpdateRegion } from "@/components/settings/panels/host-settings-update-region";
 import {
+  customNameFromDraft,
+  persistedDraftFromIdentity,
   statusColorClass,
   statusDescription,
   statusLabel,
@@ -142,7 +144,14 @@ export function HostSummaryCard(props: HostSummaryCardProps): ReactNode {
             settings={nameEdit.settings}
             pending={nameEdit.pending}
             draftName={nameEdit.draft}
+            persistedDraft={persistedDraftFromIdentity(nameEdit.settings)}
             savePending={nameEdit.savePending}
+            // The BRIDGE rule: this card is the recovery console's, and the
+            // console writes this computer's name file. See
+            // `customNameFromDraft` for why the RPC page cannot share it.
+            toCustomName={(draft) =>
+              customNameFromDraft(draft, nameEdit.settings)
+            }
             onDraftNameChange={nameEdit.onDraftChange}
             onSave={nameEdit.onSave}
             onReset={nameEdit.onReset}

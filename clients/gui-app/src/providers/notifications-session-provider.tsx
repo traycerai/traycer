@@ -570,6 +570,14 @@ export function NotificationsSessionProvider(
     }
     if (notificationFeedMode === "cloud") {
       if (localStreamClient === null) return;
+      // The cloud feed owns host/agent rows only. Collaboration events are
+      // still written to the per-user Notifications room, so cloud mode must
+      // keep that replica live alongside the relay or sharing notifications
+      // disappear after the mode-transition reset below.
+      disposerRef.current = openNotificationsStream(
+        createNotificationsStream,
+        onAuthError,
+      );
       cloudDisposerRef.current = openCloudNotificationsStream(
         localStreamClient,
         onAuthError,
@@ -728,14 +736,14 @@ export function NotificationsSessionProvider(
       previousFeedModeRef.current = notificationFeedMode;
       tearDown();
       // A cloud-to-local capability change must never leave cloud rows on
-      // screen, and the reverse must begin with no local fallback rows.
+      // screen. Renderer-local failure rows survive either direction because
+      // no host or cloud feed can reproduce them.
       resetCloudRelaySession();
       // Entering either cloud-only state must also discard the retained v1
       // cursor and rows. Selectors are gated, but this prevents a later mode
       // transition from treating stale local pagination as current truth.
       if (notificationFeedMode !== "local") {
         useHostNotificationsStore.getState().reset();
-        useAppLocalNotificationsStore.getState().reset();
         useNotificationsStore.getState().reset();
       }
     }

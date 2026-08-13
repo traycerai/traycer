@@ -6,7 +6,7 @@
 export type ScrollToEndPillState =
   | { readonly kind: "hidden" }
   | { readonly kind: "plain" }
-  | { readonly kind: "streaming" }
+  | { readonly kind: "streaming"; readonly workingVerb: string }
   | { readonly kind: "new-reply" };
 
 export function resolveScrollToEndPillState(input: {
@@ -20,9 +20,12 @@ export function resolveScrollToEndPillState(input: {
   /** A turn completed while the reader was away (not `following-end`) and
    *  they have not yet returned to the tail. */
   readonly unseenCompletion: boolean;
+  readonly workingVerb: string;
 }): ScrollToEndPillState {
   if (!input.visible) return { kind: "hidden" };
-  if (input.turnRunning) return { kind: "streaming" };
+  if (input.turnRunning) {
+    return { kind: "streaming", workingVerb: input.workingVerb };
+  }
   if (input.unseenCompletion) return { kind: "new-reply" };
   return { kind: "plain" };
 }

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPlanActionsContext } from "@/components/chat/chat-plan-actions-context";
 import type { ChatPlanActionsContextValue } from "@/components/chat/chat-plan-actions-context";
 import { PlanSegment } from "@/components/chat/segments/plan-segment";
+import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import type { PlanSegmentModel } from "@/stores/composer/chat-store";
 
 interface CapturedPlanQueryArgs {
@@ -53,6 +54,34 @@ vi.mock("@/hooks/agent/use-agent-plan-query", () => ({
   },
 }));
 
+/**
+ * The PUBLISHED plan's content channel.
+ *
+ * `isError` and an "unavailable" answer are separate controls on purpose: both
+ * leave the modal with no full markdown, and the whole point of the published
+ * failure state is that the modal must not describe them the same way.
+ */
+const cloudPayload = vi.hoisted<{ isError: boolean; refetches: number }>(
+  () => ({
+    isError: false,
+    refetches: 0,
+  }),
+);
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatPayload: (args: { readonly enabled: boolean }) => ({
+    data:
+      args.enabled && !cloudPayload.isError
+        ? { kind: "unavailable" }
+        : undefined,
+    isError: args.enabled && cloudPayload.isError,
+    refetch: (): Promise<void> => {
+      cloudPayload.refetches += 1;
+      return Promise.resolve();
+    },
+  }),
+}));
+
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
 }));
@@ -68,6 +97,8 @@ describe("PlanSegment", () => {
       isError: false,
     };
     implement.mockReset();
+    cloudPayload.isError = false;
+    cloudPayload.refetches = 0;
   });
 
   afterEach(() => {
@@ -339,6 +370,45 @@ describe("PlanSegment", () => {
     expect(within(card).getByText("Preview-only plan body")).toBeTruthy();
   });
 
+  it("offers a retry when a published plan's full content read FAILED", () => {
+    // Error is not absence. The exhausted-retry case used to render "Full plan
+    // content is unavailable", which tells the reader their plan is gone when
+    // only the network was missing - and offers them nothing to do about it.
+    cloudPayload.isError = true;
+    renderPublishedPlan();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand plan" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).queryByText(
+        "Full plan content is unavailable. Showing the saved preview.",
+      ),
+    ).toBeNull();
+    // The saved preview is still shown underneath - a retryable fault is not a
+    // reason to blank the plan.
+    expect(within(dialog).getByText("Preview-only plan body")).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByTestId("plan-content-retry"));
+    expect(cloudPayload.refetches).toBe(1);
+  });
+
+  it("keeps the unavailable banner, and offers no retry, when the cloud ANSWERED", () => {
+    // The complement: a payload the owner never uploaded is a settled fact, and
+    // re-asking cannot change it.
+    renderPublishedPlan();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand plan" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "Full plan content is unavailable. Showing the saved preview.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByTestId("plan-content-retry")).toBeNull();
+  });
+
   it("renders exactly the find-indexed card text inside the find-unit anchor", () => {
     const steps = Array.from({ length: 6 }, (_value, index) => ({
       id: `step-${index}`,
@@ -386,6 +456,29 @@ describe("PlanSegment", () => {
     expect(text).not.toContain("Secret dialog-only paragraph");
   });
 });
+
+function renderPublishedPlan() {
+  return render(
+    <PublishedChatSourceProvider
+      source={{
+        identity: {
+          taskId: "task-1",
+          chatId: "chat-1",
+          ownerUserId: "someone-else",
+        },
+        client: null,
+      }}
+    >
+      {planElement(
+        planSegment({
+          fullContentRef: { kind: "plan_content", hash: "hash-1" },
+          contentIdentity: "hash-1",
+        }),
+        planActionContext({ canAct: true, pending: false }),
+      )}
+    </PublishedChatSourceProvider>,
+  );
+}
 
 function renderPlan(segment: PlanSegmentModel) {
   return renderPlanWithContext(

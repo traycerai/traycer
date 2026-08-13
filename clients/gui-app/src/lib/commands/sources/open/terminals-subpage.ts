@@ -47,6 +47,7 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 function terminalWorkspaceLeaf(
   ctx: CommandContext,
@@ -66,7 +67,7 @@ function terminalWorkspaceLeaf(
       const liveEntry = hostClient.resolveHostById(target.hostId);
       if (
         liveEntry === null ||
-        liveEntry.status !== "available" ||
+        !isHostReachable(liveEntry.status) ||
         liveEntry.websocketUrl === null
       ) {
         return;
@@ -330,7 +331,7 @@ function useNewTerminalWorkspaceItems(
       .filter(
         (entry) =>
           entry.hostId !== activeHostId &&
-          entry.status === "available" &&
+          isHostReachable(entry.status) &&
           entry.websocketUrl !== null,
       )
       .map((entry) => {

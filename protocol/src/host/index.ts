@@ -2,20 +2,27 @@ export * from "./agent";
 export * from "./asset-stream-schemas";
 export * from "./chat-fork";
 export * from "./comments";
+export * from "./config";
+export * from "./diagnostics";
 export * from "./editor";
 export * from "./epic";
 export * from "./git-asset-stream";
 export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";
+export * from "./identity";
 export * from "./lifecycle";
+export * from "./maintenance";
 export * from "./managed-command";
 export * from "./migration";
+export * from "./mention-contracts";
+export * from "./mention-schemas";
 export * from "./notifications";
 export * from "./pr-contracts";
 export * from "./pr-schemas";
 export * from "./rate-limit";
 export * from "./released-floor";
+export * from "./restart";
 export * from "./runtime-capabilities";
 export * from "./speech";
 export * from "./status";
@@ -40,10 +47,12 @@ export {
   worktreeListAllForHostV11,
   worktreeListAllForHostV13,
   worktreeListAllForHostV14,
+  worktreeListAllForHostV15,
   worktreeListAllForHostUpgradeV10ToV11,
   worktreeListAllForHostUpgradeV11ToV12,
   worktreeListAllForHostUpgradeV12ToV13,
   worktreeListAllForHostUpgradeV13ToV14,
+  worktreeListAllForHostUpgradeV14ToV15,
   worktreeImportV10,
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
@@ -56,11 +65,13 @@ export {
   worktreeListByWorkspacePathsV12,
   worktreeListByWorkspacePathsV13,
   worktreeListByWorkspacePathsV14,
+  worktreeListByWorkspacePathsV15,
   worktreeListByWorkspacePathsUpgradeV10ToV11,
   workspacePrepareFoldersUpgradeV10ToV11,
   worktreeListByWorkspacePathsUpgradeV11ToV12,
   worktreeListByWorkspacePathsUpgradeV12ToV13,
   worktreeListByWorkspacePathsUpgradeV13ToV14,
+  worktreeListByWorkspacePathsUpgradeV14ToV15,
   worktreeRetrySetupV10,
   workspaceBindingRemoveEntryV10,
   worktreeSetEntryModeV10,
@@ -99,6 +110,7 @@ export {
   worktreeHostEntrySchemaV11,
   worktreeHostEntrySchemaV12,
   worktreeHostEntrySchemaV14,
+  worktreeHostEntrySchemaV15,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
@@ -109,6 +121,8 @@ export {
   worktreeListAllForHostResponseSchemaV13,
   worktreeListAllForHostRequestSchemaV14,
   worktreeListAllForHostResponseSchemaV14,
+  worktreeListAllForHostRequestSchemaV15,
+  worktreeListAllForHostResponseSchemaV15,
   worktreeImportEntrySchema,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
@@ -130,6 +144,8 @@ export {
   worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeListByWorkspacePathsRequestSchemaV14,
   worktreeListByWorkspacePathsResponseSchemaV14,
+  worktreeListByWorkspacePathsRequestSchemaV15,
+  worktreeListByWorkspacePathsResponseSchemaV15,
   repoBranchPrefixStateSchema,
   worktreeScriptRefSchema,
   worktreeScriptsAtRefSchema,
@@ -154,6 +170,8 @@ export {
   worktreeWorkspaceSummarySchema,
   worktreeWorkspaceSummarySchemaV13,
   worktreeWorkspaceSummarySchemaV14,
+  worktreeWorkspaceSummarySchemaV15,
+  workspacePresenceSchema,
   type DiskWorktreeEntry,
   type OsScript,
   type WorkspaceScripts,
@@ -180,6 +198,7 @@ export {
   type WorktreeHostEntryV11,
   type WorktreeHostEntryV12,
   type WorktreeHostEntryV14,
+  type WorktreeHostEntryV15,
   type WorktreeListAllForHostRequest,
   type WorktreeListAllForHostResponse,
   type WorktreeListAllForHostRequestV11,
@@ -190,6 +209,8 @@ export {
   type WorktreeListAllForHostResponseV13,
   type WorktreeListAllForHostRequestV14,
   type WorktreeListAllForHostResponseV14,
+  type WorktreeListAllForHostRequestV15,
+  type WorktreeListAllForHostResponseV15,
   type WorktreeImportEntry,
   type WorktreeImportRequest,
   type WorktreeImportResponse,
@@ -212,6 +233,8 @@ export {
   type WorktreeListByWorkspacePathsResponseV13,
   type WorktreeListByWorkspacePathsRequestV14,
   type WorktreeListByWorkspacePathsResponseV14,
+  type WorktreeListByWorkspacePathsRequestV15,
+  type WorktreeListByWorkspacePathsResponseV15,
   type RepoBranchPrefixState,
   type WorktreeScriptRef,
   type WorktreeScriptsAtRef,
@@ -236,6 +259,8 @@ export {
   type WorktreeWorkspaceSummary,
   type WorktreeWorkspaceSummaryV13,
   type WorktreeWorkspaceSummaryV14,
+  type WorktreeWorkspaceSummaryV15,
+  type WorkspacePresence,
 } from "./worktree-schemas";
 
 export {

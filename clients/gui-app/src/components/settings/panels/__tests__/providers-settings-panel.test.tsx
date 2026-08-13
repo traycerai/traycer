@@ -15,6 +15,7 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
@@ -161,6 +162,12 @@ const providerMocks = vi.hoisted(() => ({
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
+  /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
+  refreshedHostIds: [] as string[],
+  /** The app-wide binding. Null unless a test opts into a distinct ambient. */
+  ambientBinding: null as {
+    hostClient: { getActiveHostId: () => string };
+  } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
 }));
@@ -454,9 +461,25 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
-vi.mock("@/hooks/providers/use-refresh-providers", () => ({
-  useRefreshProviders: () => providerMocks.refreshProviders,
-}));
+vi.mock("@/hooks/providers/use-refresh-providers", async () => {
+  const { useContext } = await import("react");
+  const { HostRuntimeContext } = await import("@/lib/host/runtime");
+  return {
+    // Resolves its client the way the real hook does - off
+    // `HostRuntimeContext` - rather than being handed one. That is the whole
+    // point: a stub that ignores context cannot tell a header inside the
+    // provider from a header outside it, which is exactly the bug this suite
+    // needs to be able to fail on.
+    useRefreshProviders: () => {
+      const binding = useContext(HostRuntimeContext);
+      const hostId = binding?.hostClient.getActiveHostId() ?? "ambient";
+      return async () => {
+        providerMocks.refreshedHostIds.push(hostId);
+        await providerMocks.refreshProviders();
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({
@@ -511,6 +534,19 @@ vi.mock("@/lib/host", async (importOriginal) => {
     ...actual,
     useHostBinding: () => null,
     useHostClient: () => null,
+  };
+});
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    // `HostRuntimeContext` stays REAL - the panel's provider swap is the thing
+    // under test. Only the ambient binding is faked, and it is null by DEFAULT
+    // so every existing test keeps the shape it was written against. A non-null
+    // one is what lets the provider actually wrap the shell, which is the only
+    // way the wrong-host regression can observe anything at all.
+    useHostBinding: () => providerMocks.ambientBinding,
   };
 });
 
@@ -603,12 +639,22 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+/**
+ * The only thing the panel calls on a scope client, so the only thing a stub
+ * has to be. Named rather than asserted: the real `HostClient` is far wider
+ * than this test needs, and casting to it would be claiming a shape nothing
+ * here provides.
+ */
+type ScopeClientStub = { readonly getActiveHostId: () => string };
+
 const hostScopeMocks: {
-  client: null;
+  status: HostScopeStatus | undefined;
+  client: ScopeClientStub | null;
   setHostId: Mock<(hostId: string) => void>;
   hostId: string;
   host: HostScopeOption | undefined;
 } = vi.hoisted(() => ({
+  status: undefined,
   client: null,
   setHostId: vi.fn<(hostId: string) => void>(),
   hostId: "host-a",
@@ -621,9 +667,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () =>
-      hostScopeFixture({
-        client: hostScopeMocks.client,
+    useHostScope: () => ({
+      ...hostScopeFixture({
         setHostId: hostScopeMocks.setHostId,
         hostId: hostScopeMocks.hostId,
         // `host: undefined` must be OMITTED, not passed: the fixture's final
@@ -631,7 +676,16 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
         ...(hostScopeMocks.host === undefined
           ? {}
           : { host: hostScopeMocks.host }),
+        // Same omit-don't-pass rule as `host`: an explicit undefined would
+        // clobber the fixture's derived status.
+        ...(hostScopeMocks.status === undefined
+          ? {}
+          : { status: hostScopeMocks.status }),
       }),
+      // Spread OUTSIDE the fixture call: the stub satisfies what the panel
+      // uses, not the full `HostClient` the fixture's type demands.
+      client: hostScopeMocks.client,
+    }),
   };
 });
 
@@ -775,6 +829,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
       remove: [...BOTH_SCOPES],
     },
   },
+  modelProviders: null,
 };
 
 const CURSOR_TABS: ProviderNativeCapabilities = {
@@ -804,6 +859,7 @@ const CURSOR_TABS: ProviderNativeCapabilities = {
       remove: ["global"],
     },
   },
+  modelProviders: null,
 };
 
 const ENV_ONLY_TABS: ProviderNativeCapabilities = {
@@ -811,6 +867,7 @@ const ENV_ONLY_TABS: ProviderNativeCapabilities = {
   mcp: null,
   plugins: null,
   skills: null,
+  modelProviders: null,
 };
 
 type TestProfileInput = {
@@ -1042,6 +1099,17 @@ function openProfilesTab(): void {
 }
 
 /**
+ * The SAME tab for a provider without managed profiles, which is most of them.
+ *
+ * The label is per-provider now: the tab holds profiles and usage limits, and
+ * for a provider that cannot have profiles it holds only the second - so
+ * promising them in the rail was promising a section that is not there.
+ */
+function openUsageLimitsTab(): void {
+  selectTab("Usage limits");
+}
+
+/**
  * The provider header and tab rail are PINNED rows; only the active tab's body
  * scrolls.
  *
@@ -1170,6 +1238,12 @@ describe("<ProvidersSettingsPanel />", () => {
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
     hostScopeMocks.host = undefined;
+    // Reset alongside the rest: a test that pins an unusable status would
+    // otherwise leave every later one scoped to a host with no client.
+    hostScopeMocks.status = undefined;
+    providerMocks.refreshedHostIds.length = 0;
+    providerMocks.ambientBinding = null;
+    hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1267,12 +1341,12 @@ describe("<ProvidersSettingsPanel />", () => {
     // Not consumed here: the pane stays on the rail's first provider rather
     // than opening the deep link's target on the wrong machine. The probe is
     // that provider's DEFAULT tab, which is the first entry of
-    // PROVIDER_TAB_ORDER it supports - "Profiles & Limits" here, since
+    // PROVIDER_TAB_ORDER it supports - "Usage limits" here, since
     // FULL_TABS advertises `usage` and `providerState` leaves the API key
     // unsupported so no Account tab precedes it.
     expect(
       screen
-        .getByRole("tab", { name: "Profiles & Limits" })
+        .getByRole("tab", { name: "Usage limits" })
         .getAttribute("data-state"),
     ).toBe("active");
     expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
@@ -1525,6 +1599,7 @@ describe("<ProvidersSettingsPanel />", () => {
             mcp: SAMPLE_MCP,
             plugins: null,
             skills: null,
+            modelProviders: null,
           },
           apiKey: { supported: true, configured: false, source: null },
         }),
@@ -1596,6 +1671,7 @@ describe("<ProvidersSettingsPanel />", () => {
               traycerSessionToolsNotice: true,
             },
             skills: null,
+            modelProviders: null,
           },
         }),
       ],
@@ -2055,8 +2131,83 @@ describe("<ProvidersSettingsPanel />", () => {
     // The controls the header DOES own still render - so this test fails if
     // the fix that moved them inside the gate ever drops them entirely.
     expect(
-      screen.getByRole("button", { name: "Refresh providers" }),
+      screen.getByRole("button", { name: "Refresh all providers" }),
     ).toBeDefined();
+  });
+
+  it("puts the global status on the heading row, and says it is global", () => {
+    // `checkedAt` is a max over every provider and Refresh re-probes all of
+    // them; at the card's top-right it sat inches from the selected provider's
+    // Enabled toggle and read as that provider's own status.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const status = screen.getByTestId("providers-global-status");
+    expect(status.textContent).toContain("All providers");
+    expect(
+      status.contains(
+        screen.getByRole("button", { name: "Refresh all providers" }),
+      ),
+    ).toBe(true);
+    expect(document.querySelector("header")?.contains(status)).toBe(true);
+  });
+
+  it("refreshes the SELECTED host, never the ambient one", async () => {
+    // The wrong-host bug's actual signature. DOM absence cannot see it: the
+    // failure was never a missing control, it was a present control resolving
+    // the wrong client - so this gives the two hosts distinct identities and
+    // asks which one Refresh reached.
+    //
+    // Moving `HostRuntimeContext.Provider` back below the header - the exact
+    // historical regression - makes this fail, because the header would then
+    // resolve `ambient` instead of the selected host.
+    providerMocks.ambientBinding = {
+      hostClient: { getActiveHostId: () => "host-ambient" },
+    };
+    hostScopeMocks.status = "ready";
+    hostScopeMocks.client = { getActiveHostId: () => "host-selected" };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh all providers" }),
+    );
+    await waitFor(() => {
+      expect(providerMocks.refreshedHostIds).toEqual(["host-selected"]);
+    });
+    expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
+  });
+
+  it("mounts NO global control - and no RPC - until the scope is ready", () => {
+    // The real invariant, and the reason this control was kept out of the
+    // header for a round. `headerAction` is not gated, so it is only safe
+    // because `HostRuntimeContext.Provider` wraps the whole shell EXACTLY when
+    // the scope resolved a client. Mounted any earlier, `useHostClient()` falls
+    // back to the ambient host - which is how Refresh once re-probed and
+    // rewrote the provider list of a host the page was not showing.
+    //
+    // "Not in the header" was the wrong thing to pin: it forbids a safe
+    // implementation. What must hold is that nothing renders, and nothing is
+    // requested, while the scope is unresolved.
+    hostScopeMocks.status = "unreachable";
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByTestId("providers-global-status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh all providers" }),
+    ).toBeNull();
   });
 
   it("blocks disabling the last enabled provider", () => {
@@ -2115,13 +2266,11 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
+    openUsageLimitsTab();
 
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(
-      screen.getByRole("tab", { name: "Profiles & Limits" }),
-    ).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
@@ -2131,7 +2280,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
@@ -2297,7 +2446,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // from the RAIL'S FIRST provider actively wrong: opencode has no API key
     // and defaults to `usage`, and because amp also advertises `usage` the
     // stale value survives `resolveTabForProvider` and the pane settles on
-    // "Profiles & Limits" - never showing the key field the CTA exists to
+    // the usage tab - never showing the key field the CTA exists to
     // reach.
     useProvidersFocusStore.getState().setFocusHarnessId("amp");
 
@@ -2330,12 +2479,12 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
     ).toBe("active");
-    // Discriminating: "Profiles & Limits" is rendered and selectable for amp,
+    // Discriminating: the usage tab is rendered and selectable for amp,
     // so this is the deep link picking the right one of two live tabs rather
     // than the wrong one being absent.
     expect(
       screen
-        .getByRole("tab", { name: "Profiles & Limits" })
+        .getByRole("tab", { name: "Usage limits" })
         .getAttribute("data-state"),
     ).toBe("inactive");
     expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
@@ -4982,7 +5131,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // Profiles & Limits is now the default first tab for providers without an
+    // The usage tab is now the default first tab for providers without an
     // API-key Account tab, so startSignIn opens the dialog immediately. That
     // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
     // fail getByRole("tab") without { hidden: true }.

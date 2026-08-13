@@ -9,7 +9,7 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
-import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
   IpcHostController,
   IpcHostLifecycle,
@@ -167,7 +167,8 @@ vi.mock("electron-log", () => ({
 }));
 
 class FakeHost extends EventEmitter implements IpcHostLifecycle {
-  private snapshot: DesktopLocalHostSnapshot | null = null;
+  private snapshot: DesktopPublishedHostSnapshot | null = null;
+  noteEndpointAnsweredCalls = 0;
   notifyRespawningCalls = 0;
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
@@ -178,11 +179,15 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   identityEnrollmentFile = "/tmp/fake-traycer-host/identity/enrollment.json";
   isDisposed = false;
 
-  getSnapshot(): DesktopLocalHostSnapshot | null {
+  getSnapshot(): DesktopPublishedHostSnapshot | null {
     return this.snapshot;
   }
 
-  setSnapshot(next: DesktopLocalHostSnapshot | null): void {
+  noteEndpointAnswered(): void {
+    this.noteEndpointAnsweredCalls += 1;
+  }
+
+  setSnapshot(next: DesktopPublishedHostSnapshot | null): void {
     this.snapshot = next;
     this.emit("change", next);
   }
@@ -192,7 +197,7 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
     this.snapshot = null;
     this.emit("change", null);
   }
-  async reloadSnapshotFromDisk(): Promise<DesktopLocalHostSnapshot | null> {
+  async reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null> {
     this.reloadSnapshotCalls += 1;
     return this.getSnapshot();
   }
@@ -631,6 +636,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         // Remote Host Support: host-registry read (§7) and version-policy
         // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.deregisterHostFromAccount,
         RunnerHostInvoke.listRegisteredHosts,
         RunnerHostInvoke.updateHostVersionPolicy,
         RunnerHostInvoke.listUserSessions,
@@ -646,6 +652,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.openMicrophoneSettings,
         RunnerHostInvoke.requestHostRespawn,
         RunnerHostInvoke.lastKnownLocalHostId,
+        RunnerHostInvoke.localHostSnapshot,
         RunnerHostInvoke.traySetIndicator,
         RunnerHostInvoke.traySetEpics,
         RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -1883,6 +1890,7 @@ describe("RunnerIpcBridge", () => {
       pid: 1001,
       systemHostName: "host-a",
       displayName: "host-a",
+      availability: "available",
     });
     hostB.setSnapshot({
       hostId: "host-b",
@@ -1891,6 +1899,7 @@ describe("RunnerIpcBridge", () => {
       pid: 1002,
       systemHostName: "host-b",
       displayName: "host-b",
+      availability: "available",
     });
     bridgeA.deliverTrayEpicSelected("epic-a");
 
@@ -1908,6 +1917,7 @@ describe("RunnerIpcBridge", () => {
           pid: 1001,
           systemHostName: "host-a",
           displayName: "host-a",
+          availability: "available",
         },
       },
       {
@@ -1929,6 +1939,7 @@ describe("RunnerIpcBridge", () => {
           pid: 1002,
           systemHostName: "host-b",
           displayName: "host-b",
+          availability: "available",
         },
       },
     ]);
@@ -1951,6 +1962,7 @@ describe("RunnerIpcBridge", () => {
       pid: 1234,
       systemHostName: "local-1",
       displayName: "local-1",
+      availability: "available",
     });
 
     const bridge = new mod.RunnerIpcBridge({

@@ -14,6 +14,7 @@ import type { ChatForkEvent } from "@traycer/protocol/host/chat-fork/schemas";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
+import { useChatPublicationTargets } from "@/hooks/chats/use-chat-publication-targets";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -39,6 +40,13 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
   return { ...actual, useHostClient: () => requireHostClient() };
 });
 
+// The indicator hook resolves its own client from a host id (so the surfaces
+// that mount it need no host plumbing of their own). This suite builds the
+// `HostClient` itself, so the resolver is pointed straight at it.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => requireHostClient(),
+}));
+
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => mockLocalHostEntry.hostId,
 }));
@@ -48,6 +56,7 @@ vi.mock("sonner", () => ({
 }));
 
 const CHAT_ID = "chat-1";
+const EPIC_ID = "epic-1";
 
 interface Harness {
   readonly queryClient: QueryClient;
@@ -70,6 +79,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       () => {
         const fork = useChatForkEventQuery();
         const indicators = useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
           epicIds: [],
           chatIds: [CHAT_ID],
           enabled: true,
@@ -139,6 +149,94 @@ describe("fork lifecycle notification-indicator refresh", () => {
       ),
     ).toHaveLength(3);
   });
+
+  it("re-reads the chat publication-target map on the same fork edge, inside its 5-minute stale window", async () => {
+    const harness = createHarness(null);
+    const { result } = renderHook(
+      () => {
+        const fork = useChatForkEventQuery();
+        const targets = useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          enabled: true,
+        });
+        return {
+          redirectedTo:
+            targets.data === undefined
+              ? undefined
+              : (targets.data.redirected[0]?.publicationChatId ?? null),
+          refetchFork: fork.refetch,
+        };
+      },
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+
+    await waitFor(() => expect(result.current.redirectedTo).toBeNull());
+    expect(
+      harness.calls.filter(
+        (method) => method === "epic.listChatPublicationTargets",
+      ),
+    ).toHaveLength(1);
+
+    // The host detects the fork and mints the redirect. Nothing here touches
+    // the targets query: no remount, no key change, and `staleTime` still has
+    // five minutes to run. Only the fork edge can make it read again.
+    harness.forkEvent.value = sampleForkEvent();
+    await act(async () => {
+      await result.current.refetchFork();
+    });
+
+    await waitFor(() =>
+      expect(result.current.redirectedTo).toBe("chat-1-forked"),
+    );
+    expect(
+      harness.calls.filter(
+        (method) => method === "epic.listChatPublicationTargets",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("leaves the publication-target map alone while the episode is unchanged", async () => {
+    const harness = createHarness(null);
+    const { result } = renderHook(
+      () => {
+        const fork = useChatForkEventQuery();
+        useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          enabled: true,
+        });
+        return { refetchFork: fork.refetch };
+      },
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+
+    await waitFor(() =>
+      expect(
+        harness.calls.filter(
+          (method) => method === "epic.listChatPublicationTargets",
+        ),
+      ).toHaveLength(1),
+    );
+
+    // Two more fork polls that report the SAME (empty) episode. The lifecycle
+    // key is unchanged, so this must not turn a five-minute cache into a poll.
+    await act(async () => {
+      await result.current.refetchFork();
+      await result.current.refetchFork();
+    });
+
+    expect(
+      harness.calls.filter((method) => method === "host.chatFork.get"),
+    ).toHaveLength(3);
+    expect(
+      harness.calls.filter(
+        (method) => method === "epic.listChatPublicationTargets",
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 function createHarness(initialEvent: ChatForkEvent | null): Harness {
@@ -167,6 +265,17 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
         "host.notifications.indicatorState": () => {
           calls.push("host.notifications.indicatorState");
           return indicatorResponse(forkEvent.value !== null);
+        },
+        // The redirect the sidebar folds the cloud list on. It is minted BY the
+        // fork, so its answer flips exactly across the episode this test drives.
+        "epic.listChatPublicationTargets": () => {
+          calls.push("epic.listChatPublicationTargets");
+          return {
+            redirected:
+              forkEvent.value === null
+                ? []
+                : [{ chatId: CHAT_ID, publicationChatId: "chat-1-forked" }],
+          };
         },
       },
     }),

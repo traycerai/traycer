@@ -18,7 +18,6 @@ import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
-import { useSurfaceReadiness } from "@/components/layout/host-readiness-controller-context";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -69,7 +68,6 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const readiness = useReactiveHostReadiness(
     binding === null ? null : binding.hostClient,
   );
-  const defaultHostReadiness = useSurfaceReadiness("default-host", null);
   const transportKey = useReactiveHostTransportKey(
     binding === null ? null : binding.hostClient,
   );
@@ -79,15 +77,22 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // the effect below keeps the SAME client rather than rebuilding on every
   // `transportKey` change. `null` until both are known - the "host
   // communication may start" gate, equivalent to the old `readiness.isReady`.
-  const remoteAwareIdentityKey = useReactiveOwnerIdentityKey(
+  // The BOUND HOST IDENTITY is the whole gate. It used to be composed with
+  // `useSurfaceReadiness("default-host")`, which made the app-wide stream
+  // client exist only while the default-host surface reported ready - and
+  // that inverted the dependency it was supposed to protect. The stream's
+  // ready boundary drives `notifyAvailabilityRecovered()`, the ONLY designed
+  // signal that un-strands host-scoped queries left in a terminal error state
+  // (`availability-recovery.ts`); withholding the client until readiness is
+  // `ready` means the one mechanism that can RESTORE readiness is disabled
+  // for exactly as long as readiness is broken. A host that restarts, or a
+  // compat probe that failed mid-dial, then needs a manual Retry to come
+  // back. The client is built from the identity the client is bound to; the
+  // effect below still refuses to build one without a bound host and a live
+  // request context, which is the real precondition.
+  const identityKey = useReactiveOwnerIdentityKey(
     binding === null ? null : binding.hostClient,
   );
-  // The default-host surface-readiness gate composes with the remote-aware
-  // owner identity (R-1): the key stays null - no stream client exists -
-  // until the default-host surface reports ready, exactly as the plain
-  // hostId+userId key behaved before remote hosts widened the identity.
-  const identityKey =
-    defaultHostReadiness.kind === "ready" ? remoteAwareIdentityKey : null;
   const requestContextUserId = readiness.requestContextUserId;
   const [value, setValue] = useState<StreamRuntimeBinding | null>(null);
   // Liveness escape hatch: bumped when the served client turns out to be

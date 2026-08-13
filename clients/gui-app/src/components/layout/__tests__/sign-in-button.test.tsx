@@ -407,10 +407,11 @@ describe("<SignInButton />", () => {
       );
     });
     // UI is signed out but the file is kept so a sibling rotation can recover.
+    // No `authnBaseUrl`: the stored session carries only the token pair and
+    // the cached identity - the origin lives on the host's own config.
     expect(await host.tokenStore.get()).toEqual({
       token: "revoked-stored-token",
       refreshToken: "revoked-stored-token-refresh",
-      authnBaseUrl: host.authnBaseUrl,
       // `expect.any(String)` is an `any`-typed matcher; type it as the string
       // field it stands in for so the object literal stays free of unsafe `any`.
       savedAt: expect.any(String) as string,

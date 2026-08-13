@@ -10,6 +10,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { config } from "../../config";
 
 // Native Packaging legacy-JSON migration
 // (ticket:e86b8372-…/a9fa5e4c-…). The previously plain-JSON commands -
@@ -220,7 +221,6 @@ describe("whoami runner migration", () => {
         kind: "valid",
         credentials: {
           token: "tok",
-          authnBaseUrl: "https://authn.example.com",
           savedAt: "2026-05-15T00:00:00Z",
           user: { id: "u1", email: "user@example.com", name: "User One" },
         },
@@ -236,7 +236,8 @@ describe("whoami runner migration", () => {
       data: {
         status: "valid",
         user: { id: "u1", email: "user@example.com", name: "User One" },
-        authnBaseUrl: "https://authn.example.com",
+        // whoami reports the CONFIGURED authn origin - the file carries no URL.
+        authnBaseUrl: config.authnBaseUrl,
       },
     });
     // No free-form stdout other than NDJSON.
@@ -298,7 +299,6 @@ describe("whoami runner migration", () => {
         kind: "valid",
         credentials: {
           token: "tok",
-          authnBaseUrl: "https://authn.example.com",
           savedAt: "2026-05-15T00:00:00Z",
           user: { id: "u1", email: "user@example.com", name: "User One" },
         },

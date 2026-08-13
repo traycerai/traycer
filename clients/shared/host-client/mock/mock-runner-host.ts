@@ -68,6 +68,10 @@ import {
   type UpdateHostVersionPolicyFetchResult,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import {
+  deregisterHostViaHttp,
+  type DeregisterHostFetchResult,
+} from "../host-deregister-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -358,6 +362,14 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
+  }
+
   async openExternalLink(url: string): Promise<void> {
     this.openedExternalLinks.push(url);
   }
@@ -411,7 +423,6 @@ export class MockRunnerHost implements IRunnerHost {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: identity,
       });
@@ -500,7 +511,6 @@ export class MockRunnerHost implements IRunnerHost {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: refreshed.token,
         refreshToken: refreshed.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: credentialsIdentityFromAuthenticatedUser(lProbe.user),
       });

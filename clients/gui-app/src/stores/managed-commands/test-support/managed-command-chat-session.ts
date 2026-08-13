@@ -32,29 +32,39 @@ const TEST_SCOPE_KEY = "managed-command-test-scope";
 export function installManagedCommandChatSession(args: {
   readonly epicId: string;
   readonly chatId: string;
+  /** The host this session belongs to - part of the registry's session
+   *  identity, so the surface under test must be bound to the same one. */
+  readonly hostId: string;
 }): ManagedCommandChatSessionStub {
-  const { epicId, chatId } = args;
+  const { epicId, chatId, hostId } = args;
   const registry = __getChatSessionRegistryForTests();
   let captured: ChatStreamCallbacks | null = null;
 
-  registry.acquire(epicId, chatId, TEST_SCOPE_KEY, (storeEpicId, storeChatId) =>
-    createChatSessionStore({
-      hostId: "host-a",
-      epicId: storeEpicId,
-      chatId: storeChatId,
-      userId: null,
-      streamClientFactory: (_epicId, _chatId, callbacks) => {
-        captured = callbacks;
-        return {
-          sendAction: () => undefined,
-          close: () => undefined,
-          sameTurnSteeringProtocolSupported: () => true,
-        };
-      },
-      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-      onAuthError: null,
-      onProviderAuthError: null,
-    }),
+  registry.acquire(
+    {
+      epicId,
+      chatId,
+      hostId,
+      scopeKey: TEST_SCOPE_KEY,
+    },
+    (storeEpicId, storeChatId) =>
+      createChatSessionStore({
+        hostId,
+        epicId: storeEpicId,
+        chatId: storeChatId,
+        userId: null,
+        streamClientFactory: (_epicId, _chatId, callbacks) => {
+          captured = callbacks;
+          return {
+            sendAction: () => undefined,
+            close: () => undefined,
+            sameTurnSteeringProtocolSupported: () => true,
+          };
+        },
+        streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+        onAuthError: null,
+        onProviderAuthError: null,
+      }),
   );
 
   const callbacks = (): ChatStreamCallbacks => {
@@ -79,7 +89,7 @@ export function installManagedCommandChatSession(args: {
       callbacks().onConnectionStatus(status, reason);
     },
     dispose: () => {
-      registry.forceRelease(epicId, chatId);
+      registry.forceRelease(epicId, chatId, hostId);
     },
   };
 }

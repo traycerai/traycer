@@ -37,6 +37,10 @@ import { CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR } from "@/components/chat/cha
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { resolveScrollToEndPillState } from "@/components/chat/chat-scroll-to-end-pill-state";
 import { ScrollToEndPill } from "@/components/chat/scroll-to-end-pill";
+import {
+  pickWorkingVerb,
+  WorkingVerbContext,
+} from "@/components/chat/working-verb";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle";
 import {
@@ -88,6 +92,7 @@ import type {
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
+  use,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -1770,10 +1775,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         },
         onSettledValid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedFreeNavigation();
           restorePersistencePendingRef.current = false;
         },
         onSettledInvalid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedFreeNavigation();
           acceptExhaustedPersistedRestoreFallback(
             restorePersistencePendingRef,
             pendingMeasuredFreeRestoreRef,
@@ -2370,6 +2377,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const turnRunning =
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
+  const contextWorkingVerb = use(WorkingVerbContext);
+  const workingVerb = contextWorkingVerb ?? pickWorkingVerb(taskId);
   // Behavior contract: pill visibility mirrors the latch's single live
   // follow authority: immediate hide at the edge and immediate show on the
   // first confirmed reader departure.
@@ -2377,6 +2386,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     visible: showScrollToBottom,
     turnRunning,
     unseenCompletion: hasUnseenTurnCompletion,
+    workingVerb,
   });
 
   return (

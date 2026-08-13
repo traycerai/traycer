@@ -6,7 +6,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { WorktreeHostEntryV14 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV15 } from "@traycer/protocol/host";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -24,7 +24,7 @@ afterEach(() => {
   clearEpicCreateSeedPending("epic-1");
 });
 
-function entry(branch: string): WorktreeHostEntryV14 {
+function entry(branch: string): WorktreeHostEntryV15 {
   return {
     worktreePath: "/wt/app",
     branch,
@@ -45,6 +45,7 @@ function entry(branch: string): WorktreeHostEntryV14 {
     submodules: [],
     atBaseCommit: false,
     resolvedAt: 1,
+    presence: "present",
   };
 }
 

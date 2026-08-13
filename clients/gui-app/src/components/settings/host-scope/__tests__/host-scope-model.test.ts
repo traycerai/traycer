@@ -344,24 +344,28 @@ describe("transientClientEntry", () => {
 });
 
 describe("buildHostScopeOptions name resolution", () => {
-  it("prefers this machine's fresh directory label over a stale registry name", () => {
-    // Renaming the local host rewrites its directory label at once, while the
-    // registry only catches up after a check-in and the ~15s poll. Preferring
-    // the registry left the sidebar showing the old name for tens of seconds
-    // after a rename the user had just watched succeed.
+  it("prefers the registry name for THIS MACHINE too, with no local exception", () => {
+    // The local-machine special case is gone, and this pins its absence.
+    //
+    // It existed because a rename wrote a local file the registry never learned
+    // about — the registry name went stale for good, so the fresher directory
+    // label was the only honest answer for this computer. The heartbeat now
+    // publishes the host's `effectiveName` and authn writes it to
+    // `displayName`, so the registry is kept fresh for every host and the two
+    // sources agree. Re-adding the exception would reintroduce a way for them
+    // not to, and this list is the UNREACHABLE-host answer: a reachable host is
+    // named by `host.identity.get` at the panel, one layer up.
     expect(
       buildOne({
-        entry: entry({ hostId: "host-a", kind: "local", label: "New Name" }),
-        item: registryItem("Stale Registry Name"),
+        entry: entry({ hostId: "host-a", kind: "local", label: "Old Label" }),
+        item: registryItem("Registry Name"),
         localHostId: "host-a",
         remoteHostsPlanRestricted: false,
       }).name,
-    ).toBe("New Name");
+    ).toBe("Registry Name");
   });
 
   it("still prefers the registry name for a host that is not this machine", () => {
-    // The registry display name is what "Edit name" writes for remote hosts,
-    // so the exception must stay scoped to the local machine.
     expect(
       buildOne({
         entry: entry({ hostId: "host-a", label: "directory-label" }),
@@ -370,6 +374,19 @@ describe("buildHostScopeOptions name resolution", () => {
         remoteHostsPlanRestricted: false,
       }).name,
     ).toBe("Deliberate Name");
+  });
+
+  it("falls back to the directory label when the registry has no name", () => {
+    // The rung below: a directory-only host, or a registry row whose
+    // `displayName` is empty, must still render something a person recognizes.
+    expect(
+      buildOne({
+        entry: entry({ hostId: "host-a", label: "directory-label" }),
+        item: registryItem(null),
+        localHostId: "host-a",
+        remoteHostsPlanRestricted: false,
+      }).name,
+    ).toBe("directory-label");
   });
 
   it("falls back to the registry name for a local host that is down", () => {

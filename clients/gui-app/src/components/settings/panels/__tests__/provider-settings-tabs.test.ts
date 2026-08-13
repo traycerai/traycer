@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
+import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import {
   PROVIDER_TAB_ORDER,
+  providerTabLabel,
   supportedTabsFor,
 } from "@/components/settings/panels/provider-settings-tabs";
 
@@ -12,7 +14,13 @@ const ALL_TABS: readonly ProviderSettingsTab[] = [
   "mcp",
   "plugins",
   "skills",
+  "modelProviders",
 ];
+
+/** What a provider that is not the `opencode` module advertises. */
+const WITHOUT_MODEL_PROVIDERS: readonly ProviderSettingsTab[] = ALL_TABS.filter(
+  (tab) => tab !== "modelProviders",
+);
 
 /**
  * Deliberately a PURE test, not a render of `ProvidersSettingsPanel`.
@@ -128,6 +136,40 @@ describe("supportedTabsFor", () => {
     expect(tabs).not.toContain("usage");
   });
 
+  it("shows Model Providers only for a host that advertises it", () => {
+    // The whole graceful-degrade story for this tab: an old host, an old CLI
+    // below the version gate, or any provider that is not the `opencode`
+    // module simply leaves the id out, and the tab is then absent - there is no
+    // client-side derivation to disagree with that.
+    expect(
+      supportedTabsFor({
+        apiKeySupported: false,
+        advertised: WITHOUT_MODEL_PROVIDERS,
+      }),
+    ).not.toContain("modelProviders");
+    expect(
+      supportedTabsFor({ apiKeySupported: false, advertised: ALL_TABS }),
+    ).toContain("modelProviders");
+  });
+
+  it("keeps Model Providers out of the default-tab position", () => {
+    // It sits after env and before the inventory tabs, so adding it cannot
+    // change which tab a provider opens on.
+    const before = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: WITHOUT_MODEL_PROVIDERS,
+    });
+    const after = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: ALL_TABS,
+    });
+    expect(after[0]).toBe(before[0]);
+    expect(after.indexOf("modelProviders")).toBeGreaterThan(
+      after.indexOf("env"),
+    );
+    expect(after.indexOf("modelProviders")).toBeLessThan(after.indexOf("mcp"));
+  });
+
   it("leaves an API-key provider with at least one reachable tab", () => {
     // A provider advertising nothing at all: the derived Account tab is what
     // stops the pane rendering a bare tab rail.
@@ -137,5 +179,51 @@ describe("supportedTabsFor", () => {
         advertised: [],
       }),
     ).toEqual(["account"]);
+  });
+
+  describe("the usage tab's label", () => {
+    // The tab holds managed profiles AND usage limits, but profiles exist for
+    // exactly two providers - so a fixed "Profiles & Limits" promised a section
+    // that is not there on the other ten.
+    const LABELS = {
+      general: "CLI & Args",
+      account: "Account",
+      usage: "Profiles & Limits",
+      env: "Env",
+      mcp: "MCP",
+      plugins: "Plugins",
+      skills: "Skills",
+      modelProviders: "Model Providers",
+    } as const;
+
+    it("promises profiles only where profiles exist", () => {
+      for (const providerId of ["claude-code", "codex"] as const) {
+        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
+          "Profiles & Limits",
+        );
+      }
+    });
+
+    it("names what the tab actually holds everywhere else", () => {
+      // The panel's own words: the section inside is headed "Usage limits".
+      // Every provider id except the two profile-backed ones, so a newly added
+      // provider cannot regress to the profiles label without failing here.
+      const everywhereElse = providerIdSchema.options.filter(
+        (id) => id !== "claude-code" && id !== "codex",
+      );
+      for (const providerId of everywhereElse) {
+        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
+          "Usage limits",
+        );
+      }
+    });
+
+    it("leaves every other tab's label alone", () => {
+      // Only `usage` varies, and the tab ID never does - it is the wire enum.
+      for (const tab of ["general", "env", "mcp", "skills"] as const) {
+        expect(providerTabLabel(tab, LABELS, "grok")).toBe(LABELS[tab]);
+        expect(providerTabLabel(tab, LABELS, "claude-code")).toBe(LABELS[tab]);
+      }
+    });
   });
 });

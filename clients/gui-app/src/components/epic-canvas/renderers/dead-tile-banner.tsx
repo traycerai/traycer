@@ -327,13 +327,35 @@ export function ChatHostStartingBanner(
 }
 
 /**
- * Two distinct causes land on this ONE banner (chat-sync-v2 ticket 35): the
- * bound host is genuinely unreachable, or the host answered but this chat's
- * row isn't there (`chat.subscribe` terminated with `CHAT_NOT_VISIBLE` -
- * ticket 35's view-arm). "is offline" is false for the second cause, so the
- * copy branches on `reason` rather than always naming the host as down.
+ * Three distinct causes land on this ONE banner, and no two of them are the
+ * same sentence (chat-sync-v2 tickets 35 and 49):
+ *
+ * - `host-offline` - the bound host is genuinely unreachable. Nothing was
+ *   asked and nothing answered, so the host is what has to come back.
+ * - `chat-not-visible` - a reachable host that is NOT this device answered,
+ *   and answered that it has nothing for this chat (`chat.subscribe`
+ *   terminated `CHAT_NOT_VISIBLE`). "is offline" would be false here.
+ * - `chat-not-on-this-host` - the same answer, from the host this device is
+ *   connected to (a leased-identity twin, a store this identity never
+ *   adopted). Naming that host as a place the history "isn't available"
+ *   reads as "your own machine is unreachable" - the lie that sent two live
+ *   debugging sessions after a healthy host on 2026-08-11. The host
+ *   ANSWERED; the chat is what is missing. The clone it offers also lands on
+ *   this same machine, so the "stays bound to <label>" disclosure the other
+ *   two carry has nothing left to disclose.
+ * - `chat-no-longer-shared` - the record plane RETRACTED this chat from this
+ *   viewer (`remove` with reason `revoked`: unshared, flipped back to private,
+ *   or epic-membership loss). The one member of this taxonomy that is not about
+ *   a host at all - the chat exists, its host is fine, and it is the VIEWER's
+ *   entitlement that changed. It is also the only one with nothing to offer:
+ *   the other three all end in "clone it and carry on", which needs read access
+ *   to a transcript this viewer no longer has.
  */
-export type ChatDeadTileBannerReason = "host-offline" | "chat-not-visible";
+export type ChatDeadTileBannerReason =
+  | "host-offline"
+  | "chat-not-visible"
+  | "chat-not-on-this-host"
+  | "chat-no-longer-shared";
 
 export interface ChatDeadTileBannerProps {
   readonly hostLabel: string;
@@ -350,6 +372,16 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     readonly message: (hostLabel: string) => ReactNode;
     readonly reportTitle: string;
     readonly reportMessage: string;
+    /**
+     * Whether this reason ends in an action the reader can actually take.
+     *
+     * Three of the four do: the transcript is readable (as a published copy or
+     * from the owner host) and cloning carries it onto a live host. `revoked`
+     * does not - the clone would have to read bytes the server just stopped
+     * serving this viewer, so offering the button would be an invitation to a
+     * failure. Same reasoning `ChatHostStartingBanner` withholds it under.
+     */
+    readonly offersClone: boolean;
   }
 > = {
   "host-offline": {
@@ -362,6 +394,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent host is offline",
     reportMessage: "The agent's bound host is offline.",
+    offersClone: true,
   },
   "chat-not-visible": {
     message: (hostLabel) => (
@@ -373,13 +406,55 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent history unavailable",
     reportMessage: "The agent's history could not be found on its bound host.",
+    offersClone: true,
+  },
+  // Deliberately names no host: the one it would name is the machine the
+  // reader is looking at, and every label this device could print for it
+  // ("mac-mini", the raw id) reads as somewhere else. Nor does it offer to
+  // wait - the host already answered, so there is nothing to come back.
+  "chat-not-on-this-host": {
+    message: () => (
+      <>
+        This agent&apos;s history is no longer on this host. Showing the last
+        published copy; cloning creates a new agent from it.
+      </>
+    ),
+    reportTitle: "Agent history missing on this host",
+    reportMessage:
+      "The connected host answered that it no longer has this agent's history.",
+    offersClone: true,
+  },
+  // Names no host on purpose, like the arm above it, but for the opposite
+  // reason: there is nothing wrong with any host here. Saying "on <label>"
+  // would invite the reader to go looking at a machine that is working
+  // perfectly. Nor does it say WHICH revocation happened (unshared vs
+  // shared->private vs removed from the epic) - the feed does not tell this
+  // client, and guessing would be worse than the fact itself.
+  "chat-no-longer-shared": {
+    message: () => (
+      <>
+        This agent is no longer shared with you. Its transcript is no longer
+        available here.
+      </>
+    ),
+    reportTitle: "Agent is no longer shared",
+    reportMessage: "Access to this agent was revoked while its tab was open.",
+    offersClone: false,
   },
 };
 
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
   return (
+    // A live region, like the other two chat banners: which of the three
+    // truths above is on screen is carried ONLY by this sentence, and the
+    // banner appears (and swaps between reasons) mid-session without any
+    // focus move - unannounced, a screen-reader user is told nothing about
+    // why the composer beneath it locked. Polite `status` rather than
+    // `alert`: nothing here is urgent and the transcript stays readable.
     <div
+      role="status"
+      data-reason={props.reason}
       data-testid={props.testId}
       className={cn(
         "flex items-center gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-ui-sm text-warning-foreground",
@@ -387,15 +462,17 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       )}
     >
       <span className="min-w-0 flex-1">{copy.message(props.hostLabel)}</span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.cloning}
-        onClick={props.onClone}
-      >
-        Clone agent
-      </Button>
+      {copy.offersClone ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.cloning}
+          onClick={props.onClone}
+        >
+          Clone agent
+        </Button>
+      ) : null}
       <ReportIssueAction
         context={createReportIssueContext({
           title: copy.reportTitle,

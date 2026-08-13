@@ -83,6 +83,14 @@ import {
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
+import {
+  compareProviderPackLocalFirst,
+  parseProviderPackNotificationAttribution,
+  providerPackViewingLocalityFromShell,
+  type ProviderPackNotificationAttribution,
+} from "@/lib/notifications/provider-pack-notification-attribution";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
   "host" | "app-local" | "global" | "cloud";
@@ -113,6 +121,13 @@ export interface MergedNotificationRow {
    * relayed the feed. Feed mutations never use it - they address the entry.
    * `null` for rows with no meaningful origin. */
   readonly originHostId: string | null;
+  /**
+   * D7: parsed host-attributed provider-pack payload (update / floor / pin
+   * lifecycle), or null. Render uses this with the **local** host id (not
+   * ambient active) to caption and de-emphasise other machines' pack-store
+   * events without dropping `needs_action` evidence.
+   */
+  readonly providerPackAttribution: ProviderPackNotificationAttribution | null;
   /** Product-vocabulary category, mapped from `source` at the projection
    * boundary so consumers never branch on the internal source seam. */
   readonly category: NotificationCategory;
@@ -210,9 +225,9 @@ export function mergedUnreadCount(input: {
   return input.hostUnread + input.appLocalUnread + input.globalUnread;
 }
 
-/** Every merged row, newest-first across all three sources - the shared base
- * the id/Attention/Recent projections all derive from without recomputing
- * their own source subscriptions. */
+/** Every merged row, newest-first across the active feed plus renderer-local
+ * failures - the shared base the id/Attention/Recent projections all derive
+ * from without recomputing their own source subscriptions. */
 function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   const activeHostId = useReactiveActiveHostId();
@@ -224,22 +239,26 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const appLocalById = useAppLocalNotificationsStore((state) => state.byId);
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   return useMemo(() => {
-    if (feedMode === "cloud") {
-      const rows = Object.values(cloudRows)
-        .filter(
-          (row): row is HostNotificationsCloudFeedRow => row !== undefined,
-        )
-        .map(rowFromCloudFeedRow);
-      rows.sort(compareFeedCandidates);
-      return rows;
-    }
-    if (feedMode === "upgrade-required") return [];
     const globalEntriesById = new Map(
       globalEntries.map((entry) => [entry.id, entry]),
     );
     const orderedGlobalEntries = globalIds
       .map((id) => globalEntriesById.get(id))
       .filter((entry): entry is NotificationEntry => entry !== undefined);
+    if (feedMode === "cloud") {
+      const rows: MergedNotificationRow[] = [
+        ...Object.values(cloudRows)
+          .filter(
+            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+          )
+          .map(rowFromCloudFeedRow),
+        ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
+        ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
+      ];
+      rows.sort(compareFeedCandidates);
+      return rows;
+    }
+    if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
       ...hostIds.map((id) =>
         rowFromHostEntryForOrigin(hostById[id], activeHostId),
@@ -295,10 +314,20 @@ interface AttentionOrderEntry {
 }
 
 /** Attention, blocking-first then failures, newest first within each tier.
- * Never filtered - Attention is complete and filter-invariant by design. */
+ * Never filtered - Attention is complete and filter-invariant by design.
+ * Within the same tier, this machine's pack-store events sort ahead of other
+ * machines' (D7 de-emphasis: listed, but local leads). */
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
+  const localHost = useReactiveLocalHostEntry();
+  const runnerHost = useRunnerHostOrNull();
+  const hasLocalHost = runnerHost?.hasLocalHost ?? false;
+  const localHostId = localHost?.hostId ?? null;
   return useMemo(() => {
+    const viewing = providerPackViewingLocalityFromShell({
+      hasLocalHost,
+      localHostId,
+    });
     const attentionRows: AttentionOrderEntry[] = rows
       .map((row) => ({
         row,
@@ -316,30 +345,69 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
         } => entry.classification.section === "attention",
       )
       .map(({ row, classification }) => ({ row, tier: classification.tier }));
-    attentionRows.sort((a, b) =>
-      compareAttentionOrder(
+    attentionRows.sort((a, b) => {
+      const tierOrder = compareAttentionOrder(
         { tier: a.tier, createdAt: a.row.createdAt, feedId: a.row.feedId },
         { tier: b.tier, createdAt: b.row.createdAt, feedId: b.row.feedId },
-      ),
-    );
+      );
+      // Only re-order by machine when attention tier is equal — never
+      // promote a failure over a blocking remote row.
+      if (a.tier !== b.tier) return tierOrder;
+      return compareProviderPackLocalFirst(
+        {
+          attribution: a.row.providerPackAttribution,
+          createdAt: a.row.createdAt,
+          feedId: a.row.feedId,
+        },
+        {
+          attribution: b.row.providerPackAttribution,
+          createdAt: b.row.createdAt,
+          feedId: b.row.feedId,
+        },
+        viewing,
+      );
+    });
     return attentionRows.map((entry) => entry.row.feedId);
-  }, [rows]);
+  }, [rows, hasLocalHost, localHostId]);
 }
 
 /** Every non-attention row, chronological, filtered by the open-session
  * Unread-only/category selections. Attention rows are always excluded
- * regardless of filter state. */
+ * regardless of filter state. Local pack-store rows lead remote ones (D7). */
 export function useRecentNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
   const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
   const categories = useNotificationsPopoverStore((state) => state.categories);
+  const localHost = useReactiveLocalHostEntry();
+  const runnerHost = useRunnerHostOrNull();
+  const hasLocalHost = runnerHost?.hasLocalHost ?? false;
+  const localHostId = localHost?.hostId ?? null;
   return useMemo(() => {
+    const viewing = providerPackViewingLocalityFromShell({
+      hasLocalHost,
+      localHostId,
+    });
     return rows
       .filter((row) => classifyNotificationLifecycle(row).section === "recent")
       .filter((row) => categories.has(row.category))
       .filter((row) => !unreadOnly || row.readAt === null)
+      .sort((a, b) =>
+        compareProviderPackLocalFirst(
+          {
+            attribution: a.providerPackAttribution,
+            createdAt: a.createdAt,
+            feedId: a.feedId,
+          },
+          {
+            attribution: b.providerPackAttribution,
+            createdAt: b.createdAt,
+            feedId: b.feedId,
+          },
+          viewing,
+        ),
+      )
       .map((row) => row.feedId);
-  }, [rows, unreadOnly, categories]);
+  }, [rows, unreadOnly, categories, hasLocalHost, localHostId]);
 }
 
 function rowFromLocalFeedId(input: {
@@ -350,18 +418,18 @@ function rowFromLocalFeedId(input: {
   readonly globalEntry: NotificationEntry | null;
   readonly hostOriginId: string | null;
 }): MergedNotificationRow | null {
-  if (input.feedMode !== "local") return null;
   switch (input.parsed.source) {
     case "host":
-      return input.hostEntry === null
+      return input.feedMode !== "local" || input.hostEntry === null
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
-      return input.appLocalEntry === null
+      return input.feedMode === "upgrade-required" ||
+        input.appLocalEntry === null
         ? null
         : rowFromAppLocalEntry(input.appLocalEntry);
     case "global":
-      return input.globalEntry === null
+      return input.feedMode === "upgrade-required" || input.globalEntry === null
         ? null
         : rowFromGlobalEntry(input.globalEntry);
     case "cloud":
@@ -413,7 +481,9 @@ export function useMergedNotificationUnreadCount(): number {
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  if (feedMode === "cloud") return cloudSummary?.unreadCount ?? 0;
+  if (feedMode === "cloud") {
+    return (cloudSummary?.unreadCount ?? 0) + appLocalUnread + globalUnread;
+  }
   if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
     hostUnread,
@@ -453,10 +523,11 @@ export function useNotificationBellState(): NotificationBellState {
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
     if (cloudSummary === null) return { kind: "unknown" };
-    if (cloudSummary.attentionCount > 0) {
-      return { kind: "attention", count: cloudSummary.attentionCount };
+    const attention = cloudSummary.attentionCount + appLocalUnread;
+    if (attention > 0) {
+      return { kind: "attention", count: attention };
     }
-    return cloudSummary.unreadCount > 0
+    return cloudSummary.unreadCount + appLocalUnread + globalUnread > 0
       ? { kind: "quietDot" }
       : { kind: "clear" };
   }
@@ -554,6 +625,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (state) => state.unreadRecentStatus === "error",
   );
   const cloudVersion = useCloudNotificationsStore((state) => state.version);
+  const cloudConnectionState = useCloudNotificationsStore(
+    (state) => state.connectionState,
+  );
 
   const markCloudUnavailable = (): void => {
     useCloudNotificationsStore.getState().setConnectionState("unavailable");
@@ -1009,6 +1083,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         const feedId = typeof target === "string" ? target : target.feedId;
         const parsed = parseFeedId(feedId);
         if (parsed === null) return;
+        if (parsed.source === "app-local") {
+          if (feedMode === "upgrade-required") return;
+          appLocalMarkAsRead(parsed.sourceId, Date.now());
+          return;
+        }
         if (parsed.source === "cloud") {
           if (feedMode !== "cloud" || typeof target === "string") return;
           useCloudNotificationsStore
@@ -1017,20 +1096,17 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudMarkRead.mutate({ entryId: target.sourceId });
           return;
         }
-        if (feedMode !== "local") return;
-        if (parsed.source === "host") {
-          if (client === null) return;
-          markHostRead.mutate({
-            feedId,
-            sourceId: parsed.sourceId,
-          });
-          return;
-        }
         if (parsed.source === "global") {
+          if (feedMode === "upgrade-required") return;
           globalMarkAsRead(parsed.sourceId);
           return;
         }
-        appLocalMarkAsRead(parsed.sourceId, Date.now());
+        if (feedMode !== "local") return;
+        if (client === null) return;
+        markHostRead.mutate({
+          feedId,
+          sourceId: parsed.sourceId,
+        });
       },
       resolve: (row) => {
         if (row.source === "cloud") {
@@ -1058,7 +1134,16 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         });
       },
       markAllAsRead: () => {
-        if (feedMode === "cloud" && cloudVersion !== null) {
+        if (feedMode === "cloud") {
+          // Renderer-local failures never replicate into the cloud feed, so
+          // they (and the collaboration entries in the Notifications room)
+          // must be acknowledged alongside it rather than hidden behind the
+          // cloud-only early return below.
+          appLocalMarkAllAsRead(Date.now());
+          globalMarkAllAsRead();
+          if (cloudConnectionState !== "connected" || cloudVersion === null) {
+            return;
+          }
           // `cloudVersion` belongs to the rendered action closure, whereas a
           // frame can update the store before the click reaches this handler.
           // Do not locally consume rows that the versioned bulk command will
@@ -1232,6 +1317,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       client,
       feedMode,
       cloudVersion,
+      cloudConnectionState,
       captureCloudMutationContext,
       isCurrentCloudMutation,
       cloudMarkRead,
@@ -1308,6 +1394,9 @@ function rowFromHostEntryForOrigin(
   originHostId: string | null,
 ): MergedNotificationRow {
   const presentation = formatHostNotificationPresentation(entry);
+  const providerPackAttribution = parseProviderPackNotificationAttribution(
+    entry.payload,
+  );
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
@@ -1325,6 +1414,7 @@ function rowFromHostEntryForOrigin(
     resolvedAt: "resolvedAt" in entry ? entry.resolvedAt : null,
     sourceRef: entry.sourceRef,
     originHostId,
+    providerPackAttribution,
     category: categoryForNotificationSource("host"),
   };
 }
@@ -1349,6 +1439,7 @@ export function rowFromAppLocalEntry(
     resolvedAt: null,
     sourceRef: null,
     originHostId: entry.originHostId ?? null,
+    providerPackAttribution: null,
     category: categoryForNotificationSource("app-local"),
   };
 }
@@ -1373,6 +1464,7 @@ export function rowFromGlobalEntry(
     resolvedAt: null,
     sourceRef: null,
     originHostId: null,
+    providerPackAttribution: null,
     category: categoryForNotificationSource("global"),
   };
 }
@@ -1383,6 +1475,9 @@ export function rowFromCloudFeedRow(
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
     row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+  const providerPackAttribution = parseProviderPackNotificationAttribution(
+    row.entry.payload,
+  );
   return {
     feedId: cloudNotificationFeedId(row.entryId),
     source: "cloud",
@@ -1401,6 +1496,7 @@ export function rowFromCloudFeedRow(
     resolvedAt: "resolvedAt" in row.entry ? row.entry.resolvedAt : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
+    providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
 }

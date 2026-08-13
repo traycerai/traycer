@@ -1,24 +1,44 @@
 // The panel is host-scoped now (shell config / log levels are fields of the
 // selected host's own config), so it reads `useHostScope`. Mock at that
-// boundary: these suites render the panel bare, without the host runtime and
+// boundary: this suite renders the panel bare, without the host runtime and
 // query providers the real hook needs.
+const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
+  current: {},
+}));
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () => hostScopeFixture({}),
+    useHostScope: () => hostScopeFixture(scopeOverrides.current),
   };
 });
+
+const hostBindingMock = vi.hoisted(
+  (): { current: { readonly hostClient: unknown } | null } => ({
+    current: null,
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => hostBindingMock.current };
+});
+
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
-  MockRunnerHost,
-  MockTraycerCli,
-} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import {
+  CONFIG_SHELL_METHODS,
+  buildConfigHostFixture,
+} from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 
 // `isWindows()` is computed once at module load from UA hints, so the host
 // platform is faked through a togglable mock rather than a per-test navigator
@@ -32,26 +52,44 @@ vi.mock("@/lib/keybindings/platform", async (importActual) => ({
 afterEach(() => {
   cleanup();
   platformState.windows = true;
+  resetNegotiatedManifests();
+  scopeOverrides.current = {};
+  hostBindingMock.current = null;
 });
 
 function renderPanel(path: string): void {
-  const cli = new MockTraycerCli();
-  cli.shellConfig = { path, args: [], synthesised: false };
-  const host: IRunnerHost = new MockRunnerHost({
+  const hostId = "host-a";
+  const fixture = buildConfigHostFixture({ hostId, isLocalMachine: true });
+  fixture.cli.shellConfig = { path, args: [], synthesised: false };
+  recordNegotiatedHostMethods(hostId, CONFIG_SHELL_METHODS);
+
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine: true,
+      connectable: true,
+    }),
+    hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  hostBindingMock.current = { hostClient: fixture.client };
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
     localHost: null,
     hosts: [],
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
-    traycerCli: cli,
+    traycerCli: undefined,
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={host}>
+      <RunnerHostProvider runnerHost={runnerHost}>
         <ShellSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
