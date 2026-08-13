@@ -68,6 +68,25 @@ export interface HostScope {
   readonly nowMs: number;
 }
 
+/**
+ * WHERE a surface keeps its pick, handed in rather than imported, so the host
+ * model below is not welded to one store.
+ *
+ * Settings owns the original (`settings-host-scope-store`, deliberately not
+ * persisted); the header's usage popover owns a second, persisted one. They
+ * are separate SELECTIONS on purpose — someone watching one machine's rate
+ * limits has not thereby asked to administer it — but they must not become
+ * separate host MODELS, because two answers to "what is this host called and
+ * can I reach it" is exactly the drift `HostScopeOption` was introduced to
+ * end. Everything below this line is therefore shared verbatim.
+ */
+export interface HostScopeSelection {
+  /** `null` means "follow the active host" — not "no host". */
+  readonly scopedHostId: string | null;
+  /** `null` returns to following the active host. */
+  readonly setScopedHostId: (hostId: string | null) => void;
+}
+
 const HEALTHY_PRESENCE: HostPresenceHealth = {
   status: "healthy",
   reason: null,
@@ -91,6 +110,21 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
  * than one more picker among five.
  */
 export function useHostScope(): HostScope {
+  const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
+  const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
+  return useHostScopeFor({ scopedHostId, setScopedHostId });
+}
+
+/**
+ * The host model itself, over whichever selection the caller owns. Splitting
+ * this out from `useHostScope` was the whole change: the rules that make a
+ * scope safe — `resolveScopedHost`'s refusal to silently retarget a vanished
+ * pick, `transientClientEntry`'s `connectable` gate, `deriveHostScopeStatus` —
+ * are properties of reading somebody else's host, not properties of Settings.
+ * A second surface that re-derived them would eventually re-derive one of them
+ * wrongly.
+ */
+export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   const ambientClient = useHostClient();
   const binding = useHostBinding();
   const runnerHost = useRunnerHost();
@@ -104,8 +138,7 @@ export function useHostScope(): HostScope {
   // offer a remote route the other two surfaces already refuse.
   const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
 
-  const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
-  const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
+  const { scopedHostId, setScopedHostId } = selection;
 
   const directory = directoryQuery.data;
   const registry = registryQuery.data;

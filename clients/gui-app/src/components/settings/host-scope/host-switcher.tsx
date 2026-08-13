@@ -37,7 +37,13 @@ const SEARCH_THRESHOLD = 6;
 
 /**
  * THE host selector. There is exactly one of these in Settings, and it heads
- * the sidebar group whose sections it scopes.
+ * the sidebar group whose sections it scopes. The header's usage popover
+ * mounts the same component to head ITS panes (`rate-limit-popover.tsx`) —
+ * reuse, not a second picker: two controls over one concept is precisely the
+ * fragmentation the next paragraph describes, and it does not stop being that
+ * because the second one lives outside Settings. What differs between the two
+ * is only the SELECTION each writes to (`HostScopeSelection`), never the row
+ * vocabulary or the scoping mechanism.
  *
  * It replaced four separate `Select`s (Providers' header, Worktrees' toolbar,
  * the snapshots row, the agent-instructions strip) that differed in width,

@@ -4,9 +4,20 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
-import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
-import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import {
+  useHeaderRateLimitBars,
+  type HeaderRateLimitBar,
+} from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useRateLimitHostScope } from "@/hooks/rate-limits/use-rate-limit-host-scope";
+import {
+  useRateLimitProfileSelection,
+  type RateLimitProfileSelection,
+} from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { HostRuntimeContext } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -15,19 +26,62 @@ import { cn } from "@/lib/utils";
 
 const EMPTY_BAR_KEYS = ["primary", "secondary"] as const;
 
+/** Stable identity so the placeholder path never re-renders on a new array. */
+const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
+
 /**
- * Header trigger for the provider rate-limit popover. Its compact outlined
- * surface combines a recognizable gauge icon with the two live usage bars, so
- * the control still reads as an intentional button when both fills are 0%.
- * Clicking opens the popover in any glyph state, including empty (which lands
- * on the zero-provider CTA).
+ * Header trigger for the provider rate-limit popover, scoped to the host the
+ * popover's own picker selected.
+ *
+ * The scope is resolved HERE, above both the glyph and the popover, and
+ * re-provided as this subtree's `HostRuntimeContext`. That one swap is what
+ * re-targets the whole surface: every hook below reaches its host through
+ * `useHostClient()` / `useReactiveActiveHostId()`, and both read the binding
+ * from context, so the query keys, the serial fetch queue's scope and the
+ * invalidations all move together and cannot end up describing different
+ * machines. Nothing outside this subtree moves — picking a host to WATCH is
+ * not picking where new work lands (`stores/rate-limits/rate-limit-popover-store`).
+ *
+ * `useScopedHostBinding` returns null while the pick is the active host, which
+ * is why the provider is conditional: there the ambient binding already IS the
+ * scoped one, and re-providing a copy would only detach this subtree from
+ * binding updates.
+ */
+export function RateLimitIconButton(): ReactNode {
+  const { scope, hasExplicitPick } = useRateLimitHostScope();
+  const scopedBinding = useScopedHostBinding(scope);
+  const trigger = (
+    <ScopedRateLimitIconButton
+      scope={scope}
+      hasExplicitPick={hasExplicitPick}
+    />
+  );
+  if (scopedBinding === null) return trigger;
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding}>
+      {trigger}
+    </HostRuntimeContext.Provider>
+  );
+}
+
+/**
+ * Its compact outlined surface combines a recognizable gauge icon with the two
+ * live usage bars, so the control still reads as an intentional button when
+ * both fills are 0%. Clicking opens the popover in any glyph state, including
+ * empty (which lands on the zero-provider CTA).
  *
  * Never gates on data loading: `useHeaderRateLimitBars` returns `[]` both
  * before any provider has data and when zero providers are configured, and
  * both render the same neutral empty tracks - there is no separate loading
  * state and no fabricated placeholder usage.
  */
-export function RateLimitIconButton(): ReactNode {
+function ScopedRateLimitIconButton({
+  scope,
+  hasExplicitPick,
+}: {
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
+}): ReactNode {
   const [open, setOpen] = useState(false);
   useTitleBarDragSuppression("rate-limits", open);
   // One subscription bridge owns active-chat + per-harness profile state for
@@ -35,14 +89,32 @@ export function RateLimitIconButton(): ReactNode {
   // same snapshot down avoids N duplicate chat-store subscriptions when the
   // Overview renders several multi-profile provider blocks.
   const profileSelection = useRateLimitProfileSelection();
-  const bars = useHeaderRateLimitBars(profileSelection);
-  const isEmpty = bars.length === 0;
-  const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
+  // A PICK that has not resolved to its own client leaves this subtree on the
+  // AMBIENT binding, so mounting the bars here would draw one host's usage
+  // under a glyph that stands for another - and the glyph, unlike every panel
+  // in the popover, has no room to name the host it is describing. The neutral
+  // placeholder is the honest reading, and keeping the hook out of the tree
+  // (rather than discarding its output) also stops it driving fetch-on-mount
+  // subprocesses against the host the user did not choose.
+  //
+  // Without a pick there is no second host to confuse this one with: the
+  // ambient binding is the only thing the glyph has ever meant, and an
+  // `unreachable` active host is the routine blip the envelope's last-good
+  // retention is built to ride out. Blanking the bars there would be a
+  // regression paid by every single-host user for a picker they never opened.
+  const scopedToOwnHost = !hasExplicitPick || isHostScopeUsable(scope.status);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label="Usage limits"
+        // The host belongs in the label only when it is NOT the obvious one.
+        // Naming the active host on every hover would train people to ignore
+        // the one case the words exist for.
+        label={
+          scope.isViewingActive
+            ? "Usage limits"
+            : `Usage limits · ${scope.hostLabel}`
+        }
         side="top"
         sideOffset={6}
         align={undefined}
@@ -56,52 +128,86 @@ export function RateLimitIconButton(): ReactNode {
             data-testid="rate-limit-header-button"
             className="gap-1.5 bg-muted/30 px-2 text-muted-foreground shadow-xs hover:text-foreground"
           >
-            <Gauge
-              data-testid="rate-limit-gauge-icon"
-              className={cn(
-                "size-3.5",
-                isDegraded && "text-amber-600 dark:text-amber-400",
-              )}
-              aria-hidden
-            />
-            <span
-              aria-hidden
-              className="inline-flex flex-col items-start gap-[2.5px]"
-            >
-              {isEmpty
-                ? EMPTY_BAR_KEYS.map((key) => (
-                    <span
-                      key={key}
-                      data-testid="rate-limit-bar-track"
-                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
-                    />
-                  ))
-                : bars.map((bar) => (
-                    <span
-                      key={`${bar.providerId}-${bar.windowLabel}`}
-                      data-testid="rate-limit-bar-track"
-                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
-                    >
-                      <span
-                        data-testid="rate-limit-bar-fill"
-                        className={cn(
-                          "absolute inset-y-0 left-0 rounded-[2px]",
-                          rateLimitWindowSeverityBarClassName(bar.severity),
-                        )}
-                        style={{
-                          width: `${rateLimitWindowFillPercent(bar.usedPercent)}%`,
-                        }}
-                      />
-                    </span>
-                  ))}
-            </span>
+            {scopedToOwnHost ? (
+              <LiveRateLimitGlyph profileSelection={profileSelection} />
+            ) : (
+              <RateLimitGlyph bars={NO_BARS} />
+            )}
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
       <RateLimitPopover
         onClose={() => setOpen(false)}
         profileSelection={profileSelection}
+        scope={scope}
+        hasExplicitPick={hasExplicitPick}
       />
     </Popover>
+  );
+}
+
+/**
+ * The glyph over live data. Split from `RateLimitGlyph` so the hook is mounted
+ * only when this subtree is actually bound to the host being displayed - see
+ * `scopedToOwnHost` above.
+ */
+function LiveRateLimitGlyph({
+  profileSelection,
+}: {
+  readonly profileSelection: RateLimitProfileSelection;
+}): ReactNode {
+  const bars = useHeaderRateLimitBars(profileSelection);
+  return <RateLimitGlyph bars={bars} />;
+}
+
+function RateLimitGlyph({
+  bars,
+}: {
+  readonly bars: ReadonlyArray<HeaderRateLimitBar>;
+}): ReactNode {
+  const isEmpty = bars.length === 0;
+  const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
+  return (
+    <>
+      <Gauge
+        data-testid="rate-limit-gauge-icon"
+        className={cn(
+          "size-3.5",
+          isDegraded && "text-amber-600 dark:text-amber-400",
+        )}
+        aria-hidden
+      />
+      <span
+        aria-hidden
+        className="inline-flex flex-col items-start gap-[2.5px]"
+      >
+        {isEmpty
+          ? EMPTY_BAR_KEYS.map((key) => (
+              <span
+                key={key}
+                data-testid="rate-limit-bar-track"
+                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+              />
+            ))
+          : bars.map((bar) => (
+              <span
+                key={`${bar.providerId}-${bar.windowLabel}`}
+                data-testid="rate-limit-bar-track"
+                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+              >
+                <span
+                  data-testid="rate-limit-bar-fill"
+                  className={cn(
+                    "absolute inset-y-0 left-0 rounded-[2px]",
+                    rateLimitWindowSeverityBarClassName(bar.severity),
+                  )}
+                  style={{
+                    width: `${rateLimitWindowFillPercent(bar.usedPercent)}%`,
+                  }}
+                />
+              </span>
+            ))}
+      </span>
+    </>
   );
 }
