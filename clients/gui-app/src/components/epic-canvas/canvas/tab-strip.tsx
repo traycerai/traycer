@@ -10,7 +10,6 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
-  Activity,
   FileDiff,
   FilePlus,
   GitPullRequest,
@@ -67,6 +66,8 @@ import {
   isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -1002,6 +1003,13 @@ function TabIcon(props: {
   const boundHostReachability = useHostReachability(
     props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
+  // glyph and the name in one tab can never disagree about whether the shell is
+  // watching. Unconditional for hook order; an empty id resolves to null.
+  const managedCommand = useManagedCommandInEpic(
+    props.epicId,
+    isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
+  );
   if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
@@ -1014,7 +1022,16 @@ function TabIcon(props: {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isManagedCommandOutputTileRef(props.tab)) {
-    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
+    // A tab opened for a shell whose chat has no live session yet resolves to
+    // nothing; the quiet glyph is the honest guess, since a watcher announces
+    // itself the moment its record lands.
+    return (
+      <ManagedCommandMonitorIcon
+        monitoring={managedCommand !== null && managedCommand.monitoring}
+        decorative
+        className="size-3.5"
+      />
+    );
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;

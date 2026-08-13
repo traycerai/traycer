@@ -79,7 +79,6 @@ import { ManagedCommandBadge } from "@/components/chat/queued-message-surface";
 import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
-import { useManagedCommandAttentionStore } from "@/stores/managed-commands/managed-command-attention-store";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
@@ -185,10 +184,6 @@ beforeEach(() => {
   stopAllMutate.mockClear();
   stopAllFlight.isPending = false;
   streamSupport.value = "supported";
-  useManagedCommandAttentionStore.setState(
-    useManagedCommandAttentionStore.getInitialState(),
-    true,
-  );
   epicHandle = createOpenEpicStore({
     epicId: EPIC_ID,
     streamClientFactory: noopStreamClientFactory,
@@ -809,199 +804,48 @@ describe("the chat's Shells menu", () => {
     expect(
       screen.queryByTestId("managed-command-chat-menu-running"),
     ).toBeNull();
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
   });
 
-  it("lights attention for a failure only - never a clean exit, monitoring or not", () => {
+  it("keeps a failure out of the chip entirely - the count is running, nothing else", () => {
     renderMenu();
     act(() => {
       setCommands(
         [
-          // Failed: its ending is not the one it promised.
-          exited({ id: "shell-failed", monitoring: false }),
-          // A monitoring shell that exited cleanly stopped watching, which its
-          // own final digest already says. The badge is for failures.
-          exited({
-            id: "watcher-clean-exit",
-            status: {
-              state: "exited",
-              exitCode: 0,
-              signal: null,
-              exitedAtMs: 20,
-            },
-          }),
-          // Asked for by a human or an agent: never news.
-          command({
-            id: "stopped-by-someone",
-            status: { state: "stopped", stoppedAtMs: 20 },
-          }),
-          // A clean run ended the way it said it would.
-          exited({
-            id: "shell-clean",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 0,
-              signal: null,
-              exitedAtMs: 20,
-            },
-          }),
+          command({ id: "live" }),
+          // A shell that died non-zero is the loudest thing this chip used to
+          // say. It is routine now: the agent that started it is the one who
+          // has to care, so the chip counts what is live and stays neutral.
+          exited({ id: "failed", monitoring: false }),
         ],
         CHAT_ID,
       );
     });
 
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
-  });
-
-  it("lets attention beat running, then clears it once the menu has been opened", () => {
-    renderMenu();
-    act(() => {
-      setCommands(
-        [command({ id: "live" }), exited({ id: "failed", monitoring: false })],
-        CHAT_ID,
-      );
-    });
-
-    // Both apply; the failure is the thing to say.
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-running"),
-    ).toBeNull();
-
-    openMenu();
-    // The row spells the outcome out, so the badge has nothing left to report.
-    expect(
-      screen.getByTestId("managed-command-menu-row-failed").textContent,
-    ).toContain("Exited · code 1");
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
     expect(
       screen.getByTestId("managed-command-chat-menu-running").textContent,
     ).toBe("1");
+    expect(trigger$()?.getAttribute("aria-label")).toBe("Shells, 1 running");
+    // The chip's own colour, not the Button base's `aria-invalid:` variants.
+    expect(trigger$()?.getAttribute("class")).not.toContain("text-destructive");
   });
 
-  it("does not re-arm another chat's acknowledged failures", () => {
-    renderInChatTile(
-      <DndContext>
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId="chat-2"
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-      </DndContext>,
-    );
-    act(() => {
-      setCommands([exited({ id: "a-failed", monitoring: false })], CHAT_ID);
-      setCommands(
-        [exited({ id: "b-failed", monitoring: false, chatId: "chat-2" })],
-        "chat-2",
-      );
-    });
-
-    const [menuA, menuB] = screen.getAllByTestId(
-      "managed-command-chat-menu-trigger",
-    );
-    fireEvent.click(menuA);
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(menuB);
-
-    // Acknowledgement is one map across every chat, and each menu only ever
-    // knows its own commands - so opening chat B must MERGE rather than
-    // rebuild, or chat A's already-seen failure lights up again.
-    const attention = screen.queryAllByTestId(
-      "managed-command-chat-menu-attention",
-    );
-    expect(attention).toHaveLength(0);
-  });
-
-  it("treats an ending that arrives while the menu is open as seen", () => {
+  it("tells the outcome in the row it belongs to, not on the chip", () => {
     renderMenu();
     act(() => {
-      setCommands([command({ id: "flaky", monitoring: false })], CHAT_ID);
+      setCommands([exited({ id: "failed", monitoring: false })], CHAT_ID);
     });
-    openMenu();
 
-    // The rows are on screen when the exit lands, so the user watched it
-    // happen - the badge has nothing left to report, open or closed.
-    act(() => {
-      setCommands(
-        [
-          exited({
-            id: "flaky",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 2,
-              signal: null,
-              exitedAtMs: 99,
-            },
-            updatedAtMs: 99,
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
+    // Nothing running, so the chip carries no count at all - the failure is
+    // read where it can be read in context.
     expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
+      screen.queryByTestId("managed-command-chat-menu-running"),
     ).toBeNull();
+    expect(trigger$()?.getAttribute("aria-label")).toBe("Shells");
 
-    openMenu(); // toggles closed
-    expect(
-      screen
-        .getByTestId("managed-command-chat-menu-trigger")
-        .getAttribute("data-attention"),
-    ).toBe("false");
-  });
-
-  it("re-arms when an acknowledged command fails again after the menu closes", () => {
-    renderMenu();
-    act(() => {
-      setCommands([exited({ id: "flaky", monitoring: false })], CHAT_ID);
-    });
     openMenu();
     expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
-    openMenu(); // toggles closed
-
-    // A failure nobody had on screen is new news.
-    act(() => {
-      setCommands(
-        [
-          exited({
-            id: "flaky",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 2,
-              signal: null,
-              exitedAtMs: 99,
-            },
-            updatedAtMs: 99,
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
-
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
+      screen.getByTestId("managed-command-menu-row-failed").textContent,
+    ).toContain("Exited · code 1");
   });
 
   it("stays put with an empty state when its last command is deleted while open", () => {

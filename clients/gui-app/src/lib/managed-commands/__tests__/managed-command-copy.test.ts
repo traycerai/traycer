@@ -15,6 +15,18 @@ describe("managed command naming", () => {
     ).toBe("Shell · db migration");
   });
 
+  it("drops the separator when a shell carries no description", () => {
+    // The " · " promises a name after it. One guard, here, so no surface has
+    // to remember to write its own - which is how the resource monitor ended
+    // up with a second spelling of this title.
+    expect(managedCommandTitle({ description: "", monitoring: true })).toBe(
+      "Monitor",
+    );
+    expect(managedCommandTitle({ description: "", monitoring: false })).toBe(
+      MANAGED_COMMAND_NOUN,
+    );
+  });
+
   it("keeps the umbrella noun for copy that names no particular shell", () => {
     // The container ("Shells"), the resource monitor's kind column and the
     // output window's own name all speak about shells in general, where there

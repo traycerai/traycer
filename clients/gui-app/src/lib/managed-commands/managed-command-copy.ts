@@ -34,11 +34,21 @@ export function managedCommandNoun(monitoring: boolean): string {
   return monitoring ? "Monitor" : MANAGED_COMMAND_NOUN;
 }
 
-/** The list row / tab title: "Monitor · deploy watcher", "Shell · db migration". */
+/**
+ * The list row / tab title: "Monitor · deploy watcher", "Shell · db migration".
+ *
+ * A shell with no description is the noun alone rather than a dangling
+ * "Shell · ": the separator promises a name after it. The guard lives here so
+ * every surface inherits it - it used to be a resource-monitor-only rule, which
+ * is exactly how a second spelling of the same title gets written.
+ */
 export function managedCommandTitle(
   command: Pick<ManagedCommand, "description" | "monitoring">,
 ): string {
-  return `${managedCommandNoun(command.monitoring)} · ${command.description}`;
+  const noun = managedCommandNoun(command.monitoring);
+  return command.description.length === 0
+    ? noun
+    : `${noun} · ${command.description}`;
 }
 
 /**
@@ -68,26 +78,6 @@ export function managedCommandStatusLabel(
     case "interrupted":
       return "Interrupted";
   }
-}
-
-/**
- * Whether this shell's ending is news - the one thing that turns the chat's
- * badge from quiet to attention.
- *
- * A failure and nothing else, whether or not the shell was monitoring. A stop is
- * something a human or an agent asked for, so it is never news no matter how it
- * reads afterwards; a clean exit is a shell doing what it was made to do, and a
- * watcher that means to keep running says so through its own output rather than
- * through a badge on the chat. `interrupted` is the host dying underneath the
- * shell rather than the shell doing anything, so it stays quiet too.
- */
-export function managedCommandNeedsAttention(
-  command: Pick<ManagedCommand, "status">,
-): boolean {
-  const status = command.status;
-  if (status.state !== "exited") return false;
-  if (status.signal !== null) return true;
-  return status.exitCode !== 0;
 }
 
 export type ManagedCommandStatusTone = "running" | "failed" | "idle";

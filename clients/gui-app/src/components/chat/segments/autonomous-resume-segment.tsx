@@ -2,7 +2,7 @@ import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
+import { ManagedCommandOpenInTabButton } from "@/components/managed-commands/managed-command-open-in-tab-button";
 import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -155,19 +155,12 @@ function ResumeManagedCommandDoor(props: {
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className="h-6 shrink-0 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-      data-testid={`resume-managed-command-door-${props.trigger.blockId}`}
-      onClick={(event) => {
-        event.stopPropagation();
+    <ManagedCommandOpenInTabButton
+      testId={`resume-managed-command-door-${props.trigger.blockId}`}
+      onOpen={() => {
         openOutput(managedCommand.commandId);
       }}
-    >
-      View output
-    </Button>
+    />
   );
 }
 

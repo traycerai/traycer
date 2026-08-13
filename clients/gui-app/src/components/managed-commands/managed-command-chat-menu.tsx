@@ -44,10 +44,6 @@ import {
 import { useOpenManagedCommandOutput } from "@/lib/managed-commands/use-open-managed-command-output";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import {
-  unacknowledgedAttentionCommands,
-  useManagedCommandAttentionStore,
-} from "@/stores/managed-commands/managed-command-attention-store";
-import {
   useManagedCommandsConnectionStatus,
   useManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
@@ -80,17 +76,6 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
   );
   const [open, setOpen] = useState(false);
   const [rowDragging, setRowDragging] = useState(false);
-  const acknowledge = useManagedCommandAttentionStore(
-    (state) => state.acknowledge,
-  );
-  const acknowledgedEndingById = useManagedCommandAttentionStore(
-    (state) => state.acknowledgedEndingById,
-  );
-  const attentionCount = useMemo(
-    () =>
-      unacknowledgedAttentionCommands(commands, acknowledgedEndingById).length,
-    [commands, acknowledgedEndingById],
-  );
   const runningCount = commands.filter(
     (command) => command.status.state === "running",
   ).length;
@@ -103,15 +88,6 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
     setRowDragging(dragging);
     if (!dragging) setOpen(false);
   }, []);
-
-  // Seeing IS the acknowledgement: while the menu is open every outcome is
-  // spelled out in the rows, so anything rendered - an ending that arrives
-  // mid-look included - stops being badge news. Keyed on the commands, not
-  // just the open transition, so the badge cannot go stale behind an open
-  // menu and then nag about outcomes the user watched happen.
-  useEffect(() => {
-    if (open) acknowledge(commands);
-  }, [open, commands, acknowledge]);
 
   // Deleting the last command while the menu is open would otherwise yank the
   // button - and the popover anchored to it - out from under the pointer that
@@ -131,26 +107,17 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
             type="button"
             variant="ghost"
             size="sm"
-            // The badge renders bare numbers, so the accessible name says
+            // The badge renders a bare number, so the accessible name says
             // what the number counts.
-            aria-label={menuAccessibleName(attentionCount, runningCount)}
+            aria-label={menuAccessibleName(runningCount)}
             data-testid="managed-command-chat-menu-trigger"
-            data-attention={attentionCount > 0 ? "true" : "false"}
-            className={cn(
-              // The workspace chips' grammar: no plate or border of its own,
-              // dimmed until hovered.
-              "h-7 shrink-0 gap-1.5 px-1.5 text-ui-sm transition-[background-color,opacity] hover:bg-accent/50 focus-visible:opacity-100",
-              attentionCount > 0
-                ? // Attention is the one state that should not be dimmed.
-                  "text-destructive hover:text-destructive"
-                : "text-muted-foreground opacity-70 hover:opacity-100",
-            )}
+            // The workspace chips' grammar: no plate or border of its own,
+            // dimmed until hovered. No state escapes it any more - a shell's
+            // outcome is told by its row, never by tinting the chip.
+            className="h-7 shrink-0 gap-1.5 px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100"
           >
             <Radar aria-hidden className="size-3.5" />
-            <ManagedCommandMenuBadge
-              attentionCount={attentionCount}
-              runningCount={runningCount}
-            />
+            <ManagedCommandMenuBadge runningCount={runningCount} />
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
@@ -192,49 +159,33 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
   );
 }
 
-function menuAccessibleName(
-  attentionCount: number,
-  runningCount: number,
-): string {
-  if (attentionCount > 0) {
-    return `Shells, ${attentionCount} need attention`;
-  }
-  if (runningCount > 0) {
-    return `Shells, ${runningCount} running`;
-  }
+function menuAccessibleName(runningCount: number): string {
+  if (runningCount > 0) return `Shells, ${runningCount} running`;
   return "Shells";
 }
 
 /**
- * Attention beats running: a shell that died is the thing to say even while
- * three others are healthy. With neither, the glyph carries no count at all -
- * "some exist, none of them need you" is best said by saying nothing.
+ * How many shells are live, and nothing else. A shell that exited non-zero is
+ * routine - the agent that started it is the one who has to care - so the count
+ * that used to turn this chip red now lives only where it can be read in
+ * context: the per-row status dot inside the menu.
+ *
+ * With nothing running the glyph carries no count at all: "some exist, none of
+ * them are doing anything" is best said by saying nothing.
  */
-function ManagedCommandMenuBadge(props: {
-  readonly attentionCount: number;
-  readonly runningCount: number;
-}) {
-  if (props.attentionCount > 0) {
-    return (
-      <span aria-hidden data-testid="managed-command-chat-menu-attention">
-        {props.attentionCount}
+function ManagedCommandMenuBadge(props: { readonly runningCount: number }) {
+  if (props.runningCount === 0) return null;
+  return (
+    <>
+      <span
+        aria-hidden
+        className="inline-block size-1.5 shrink-0 rounded-full bg-success"
+      />
+      <span aria-hidden data-testid="managed-command-chat-menu-running">
+        {props.runningCount}
       </span>
-    );
-  }
-  if (props.runningCount > 0) {
-    return (
-      <>
-        <span
-          aria-hidden
-          className="inline-block size-1.5 shrink-0 rounded-full bg-success"
-        />
-        <span aria-hidden data-testid="managed-command-chat-menu-running">
-          {props.runningCount}
-        </span>
-      </>
-    );
-  }
-  return null;
+    </>
+  );
 }
 
 function ManagedCommandMenuRows(props: {

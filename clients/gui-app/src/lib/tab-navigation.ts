@@ -970,7 +970,9 @@ export class TabNavigationController {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
     if (preparation.kind === "open-tile") {
-      return canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+      return preparation.preview
+        ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
+        : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
     }
     return canvas.prepareSetActiveTileTabFocusTarget(
       tabId,
