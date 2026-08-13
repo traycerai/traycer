@@ -19,9 +19,7 @@ const SHARING_REFRESH_TIMEOUT_MS = 10_000;
 
 export function SharingPanel(props: { readonly epicId: string }) {
   const controller = useEpicSharingPanelController(props.epicId);
-  return (
-    <SharingPanelContent epicId={props.epicId} controller={controller} />
-  );
+  return <SharingPanelContent epicId={props.epicId} controller={controller} />;
 }
 
 function SharingPanelContent(props: {

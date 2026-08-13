@@ -17,7 +17,9 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/hooks/chats/use-cloud-chat-queries")>();
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
   return {
     ...actual,
     useCloudChatViewerId: () => "viewer-1",
@@ -60,9 +62,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
-import {
-  indexOwnCloudChatsByLocalId,
-} from "@/lib/chats/unified-chat-list";
+import { indexOwnCloudChatsByLocalId } from "@/lib/chats/unified-chat-list";
 import {
   CHAT_SHARING_IN_FLIGHT_MESSAGE,
   isChatSharingInFlight,

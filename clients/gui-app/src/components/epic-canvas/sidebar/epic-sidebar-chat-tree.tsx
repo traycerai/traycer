@@ -1078,19 +1078,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <SidebarArchiveSupportedContext.Provider value={canArchive}>
         <SidebarChatSharingContext.Provider value={chatSharingValue}>
-        <SidebarViewerContext.Provider value={isViewer}>
-          <SidebarSortContext.Provider value={comparator}>
-            <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-              <SidebarContent className="gap-0">
-                <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                  <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
-                    {panelContent}
-                  </SidebarGroupContent>
-                </SidebarGroup>
-              </SidebarContent>
-            </SidebarFilterVisibilityContext.Provider>
-          </SidebarSortContext.Provider>
-        </SidebarViewerContext.Provider>
+          <SidebarViewerContext.Provider value={isViewer}>
+            <SidebarSortContext.Provider value={comparator}>
+              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                <SidebarContent className="gap-0">
+                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                    <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+                      {panelContent}
+                    </SidebarGroupContent>
+                  </SidebarGroup>
+                </SidebarContent>
+              </SidebarFilterVisibilityContext.Provider>
+            </SidebarSortContext.Provider>
+          </SidebarViewerContext.Provider>
         </SidebarChatSharingContext.Provider>
       </SidebarArchiveSupportedContext.Provider>
     </NotificationIndicatorsProvider>

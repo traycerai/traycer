@@ -491,7 +491,9 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
  */
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/hooks/chats/use-cloud-chat-queries")>();
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
   return {
     ...actual,
     useCloudChatList: () => ({

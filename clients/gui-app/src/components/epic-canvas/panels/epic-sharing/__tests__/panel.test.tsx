@@ -130,7 +130,9 @@ vi.mock("@/hooks/epic/use-epic-chat-visibility-mutations", () => ({
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/hooks/chats/use-cloud-chat-queries")>();
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
   return {
     ...actual,
     useCloudChatList: () => ({
@@ -542,9 +544,9 @@ describe("<SharingPanel /> My agents", () => {
     expect(screen.queryByTestId("invite-card")).toBeNull();
     expect(screen.getByTestId("epic-sharing-my-agents-section")).toBeTruthy();
     expect(
-      screen.getByTestId("epic-sharing-my-agents-switch").getAttribute(
-        "data-state",
-      ),
+      screen
+        .getByTestId("epic-sharing-my-agents-switch")
+        .getAttribute("data-state"),
     ).toBe("checked");
   });
 
@@ -563,7 +565,9 @@ describe("<SharingPanel /> My agents", () => {
       screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
     ).toContain("2 of your agent chats");
 
-    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-confirm-action"));
+    fireEvent.click(
+      screen.getByTestId("epic-sharing-my-agents-confirm-action"),
+    );
     expect(testState.setSharingDefault.mutate).toHaveBeenCalledTimes(1);
     expect(testState.setSharingDefault.mutate.mock.calls[0]?.[0]).toEqual({
       taskId: "epic-1",
@@ -593,14 +597,16 @@ describe("<SharingPanel /> My agents", () => {
   it("disables the master toggle while any sharing write is in flight", () => {
     testState.sharingDefaultSupported = true;
     testState.sharingInFlight = true;
-    testState.ownCloudChats = [{ visibility: "private", isOwnedByViewer: true }];
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
 
     renderSharingPanel();
 
     expect(
-      screen.getByTestId("epic-sharing-my-agents-switch").hasAttribute(
-        "disabled",
-      ),
+      screen
+        .getByTestId("epic-sharing-my-agents-switch")
+        .hasAttribute("disabled"),
     ).toBe(true);
     fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
     expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
