@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { AssetStreamServerFrame } from "@traycer/protocol/host/asset-stream-schemas";
 import type {
@@ -32,6 +32,18 @@ const wsStreamClientRef = vi.hoisted(() => ({
   value: null as WsStreamClient<HostStreamRpcRegistry> | null,
 }));
 
+type TestStreamBinding = {
+  readonly client: WsStreamClient<HostStreamRpcRegistry>;
+  readonly transportKey: string;
+  readonly pin: () => void;
+  readonly unpin: () => void;
+  readonly onUnmount?: () => void;
+};
+
+const perHookBindingFactoryRef = vi.hoisted(() => ({
+  value: null as (() => TestStreamBinding) | null,
+}));
+
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => tabHostIdRef.value,
 }));
@@ -46,8 +58,58 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+const defaultStreamBindingRef = vi.hoisted(() => ({
+  // Memoized per `wsStreamClientRef.value` (not rebuilt on every call) - the
+  // real `useHostStreamClientBindingFor` returns a REFERENCE-STABLE binding
+  // across renders via React state, and `useImageAsset`'s effect now
+  // depends on this binding directly. A mock returning a fresh object every
+  // call would make that dependency change on EVERY render, re-running the
+  // effect forever (caught as an OOM crash, not a normal test failure).
+  client: null as WsStreamClient<HostStreamRpcRegistry> | null,
+  binding: null as {
+    readonly client: WsStreamClient<HostStreamRpcRegistry>;
+    readonly transportKey: string;
+    readonly pin: () => void;
+    readonly unpin: () => void;
+  } | null,
+}));
+
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => wsStreamClientRef.value,
+  // `useImageAsset` now takes the full binding (Codex re-review, transport
+  // pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single
+  // shared `wsStreamClientRef.value` never actually tears down regardless;
+  // tests exercising the pin/unpin CONTRACT itself construct their own
+  // per-hook bindings instead of relying on this default.
+  useHostStreamClientBindingFor: () => {
+    // The early-returns this replaced used to skip the `useEffect` call
+    // below on some renders (rules-of-hooks violation: a hook can't be
+    // called conditionally) - resolving the binding into a local instead,
+    // falling through to an UNCONDITIONAL `useEffect` call every render.
+    const bindingRef = useRef<TestStreamBinding | null>(null);
+    if (bindingRef.current === null) {
+      const factory = perHookBindingFactoryRef.value;
+      if (factory !== null) {
+        bindingRef.current = factory();
+      } else if (wsStreamClientRef.value !== null) {
+        if (defaultStreamBindingRef.client !== wsStreamClientRef.value) {
+          defaultStreamBindingRef.client = wsStreamClientRef.value;
+          defaultStreamBindingRef.binding = {
+            client: wsStreamClientRef.value,
+            transportKey: "test-transport",
+            pin: () => {},
+            unpin: () => {},
+          };
+        }
+        bindingRef.current = defaultStreamBindingRef.binding;
+      }
+    }
+    useEffect(() => {
+      const binding = bindingRef.current;
+      return () => binding?.onUnmount?.();
+    }, []);
+    return bindingRef.current;
+  },
 }));
 
 class MockStreamSession implements IStreamSession {
@@ -101,6 +163,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly sessions: MockStreamSession[] = [];
   readonly requests: { readonly method: string; readonly params: unknown }[] =
     [];
+  closeCalls: number = 0;
 
   constructor() {
     super({
@@ -132,6 +195,54 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     this.requests.push({ method, params });
     return session;
   }
+
+  override close(reason: string): void {
+    this.closeCalls += 1;
+    super.close(reason);
+  }
+}
+
+interface PerHookTransport {
+  readonly client: MockWsStreamClient;
+  pinCalls: number;
+  unpinCalls: number;
+}
+
+function enablePerHookTransports(): PerHookTransport[] {
+  const transports: PerHookTransport[] = [];
+  perHookBindingFactoryRef.value = () => {
+    const transport: PerHookTransport = {
+      client: new MockWsStreamClient(),
+      pinCalls: 0,
+      unpinCalls: 0,
+    };
+    transports.push(transport);
+    let pinCount = 0;
+    let unmountedWhilePinned = false;
+    return {
+      client: transport.client,
+      transportKey: `per-hook-${transports.length}`,
+      pin: () => {
+        transport.pinCalls += 1;
+        pinCount += 1;
+      },
+      unpin: () => {
+        transport.unpinCalls += 1;
+        pinCount = Math.max(0, pinCount - 1);
+        if (pinCount === 0 && unmountedWhilePinned) {
+          transport.client.close("test-pinned-transport-teardown");
+        }
+      },
+      onUnmount: () => {
+        if (pinCount === 0) {
+          transport.client.close("test-transport-teardown");
+        } else {
+          unmountedWhilePinned = true;
+        }
+      },
+    };
+  };
+  return transports;
 }
 
 const WORKSPACE_REQUEST: ImageAssetRequest = {
@@ -370,6 +481,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
+  perHookBindingFactoryRef.value = null;
   await act(async () => {
     await vi.advanceTimersByTimeAsync(10_000);
   });
@@ -1188,5 +1300,89 @@ describe("useImageAsset", () => {
 
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     unmount();
+  });
+
+  it("keeps an owner's per-hook transport alive for a joined transfer", async () => {
+    const transports = enablePerHookTransports();
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+
+    expect(transports).toHaveLength(2);
+    expect(transports[0].client.sessions).toHaveLength(1);
+    expect(transports[1].client.sessions).toHaveLength(0);
+    expect(transports[0].pinCalls).toBe(1);
+
+    const session = transports[0].client.sessions[0];
+    act(() => {
+      emitHeader(session, "joined-transport", 3);
+    });
+    first.unmount();
+
+    expect(transports[0].client.closeCalls).toBe(0);
+    expect(transports[0].unpinCalls).toBe(0);
+
+    act(() => {
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(second.result.current.status).toBe("ready");
+    expect(transports[0].unpinCalls).toBe(1);
+    expect(transports[0].client.closeCalls).toBe(1);
+
+    second.unmount();
+    expect(transports[0].client.closeCalls).toBe(1);
+    expect(transports[1].client.closeCalls).toBe(1);
+  });
+
+  it("closes an unshared transport after its settled hook unmounts", async () => {
+    const transports = enablePerHookTransports();
+    const { result, unmount } = renderHook(() =>
+      useImageAsset(WORKSPACE_REQUEST),
+    );
+
+    expect(transports).toHaveLength(1);
+    const transport = transports[0];
+    const session = transport.client.sessions[0];
+    act(() => {
+      emitHeader(session, "unshared-transport", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("ready");
+    expect(transport.pinCalls).toBe(1);
+    expect(transport.unpinCalls).toBe(1);
+    expect(transport.client.closeCalls).toBe(0);
+
+    unmount();
+    expect(transport.client.closeCalls).toBe(1);
+  });
+
+  it("defers the creator transport close until its pin is released", async () => {
+    const transports = enablePerHookTransports();
+    const { unmount } = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+
+    const transport = transports[0];
+    const session = transport.client.sessions[0];
+    act(() => {
+      emitHeader(session, "deferred-close", 3);
+    });
+    unmount();
+
+    expect(transport.pinCalls).toBe(1);
+    expect(transport.unpinCalls).toBe(0);
+    expect(transport.client.closeCalls).toBe(0);
+
+    act(() => {
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(transport.unpinCalls).toBe(1);
+    expect(transport.client.closeCalls).toBe(1);
+    second.unmount();
+    expect(transport.client.closeCalls).toBe(1);
   });
 });

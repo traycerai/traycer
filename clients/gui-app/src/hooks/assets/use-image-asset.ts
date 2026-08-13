@@ -12,7 +12,7 @@ import type { AssetMediaType } from "@traycer/protocol/host/asset-stream-schemas
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   imageBlobCache,
@@ -289,6 +289,18 @@ interface SharedAssetSubscription {
     (header: AssetStreamHeader, bytes: Uint8Array) => void
   >;
   readonly failureListeners: Set<(failure: AssetStreamFailure) => void>;
+  /**
+   * The CREATOR's `HostStreamClientBinding.unpin` (Codex re-review) - `client`
+   * above was opened through the creator's own transient transport, which
+   * that transport's owning hook instance would otherwise close the moment
+   * IT unmounts, regardless of whether a sibling that joined this entry is
+   * still reading the stream through it. Captured once, at creation, and
+   * called exactly once on whichever exit path actually fires first (settle,
+   * in `onReady`/`onFailure`, or a zero-refcount `release()`) - never the
+   * joiner's own unpin, which is irrelevant here since the underlying
+   * session never used the joiner's transport at all.
+   */
+  readonly unpin: () => void;
 }
 
 /**
@@ -346,17 +358,29 @@ const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
  */
 let nextFocusRefreshGeneration = 1;
 
+// eslint-disable-next-line max-params -- All six are semantically distinct and required for the shared-subscription identity + transport-pin contract (mirrors git-query-keys.ts's fileDiff).
 function acquireSharedAssetSubscription(
   sharedKey: string,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   request: ImageAssetRequest,
   callbacks: AssetStreamCallbacks,
+  // Only consulted when THIS call creates a NEW entry (this caller becomes
+  // the creator) - a joiner's own pin/unpin are irrelevant, since the
+  // underlying session never uses the joiner's transport (Codex re-review,
+  // see `SharedAssetSubscription.unpin`'s doc comment for the full "why").
+  pin: () => void,
+  unpin: () => void,
 ): {
   readonly release: () => void;
   readonly retainedHeader: AssetStreamHeader | null;
 } {
   let entry = sharedAssetSubscriptions.get(sharedKey);
   if (entry === undefined) {
+    // The underlying AssetStreamClient about to open is opened THROUGH
+    // `wsStreamClient` - pin its owning hook's transport now, since this
+    // entry (and any future joiner) may need it to outlive THIS hook
+    // instance's own unmount.
+    pin();
     const headerBox: { current: AssetStreamHeader | null } = {
       current: null,
     };
@@ -372,10 +396,12 @@ function acquireSharedAssetSubscription(
       },
       onReady: (header, bytes) => {
         sharedAssetSubscriptions.delete(sharedKey);
+        unpin();
         for (const listener of readyListeners) listener(header, bytes);
       },
       onFailure: (failure) => {
         sharedAssetSubscriptions.delete(sharedKey);
+        unpin();
         for (const listener of failureListeners) listener(failure);
       },
     });
@@ -386,6 +412,7 @@ function acquireSharedAssetSubscription(
       headerListeners,
       readyListeners,
       failureListeners,
+      unpin,
     };
     sharedAssetSubscriptions.set(sharedKey, entry);
   }
@@ -410,6 +437,7 @@ function acquireSharedAssetSubscription(
       ) {
         sharedAssetSubscriptions.delete(sharedKey);
         capturedEntry.client.close();
+        capturedEntry.unpin();
       }
     },
     retainedHeader: capturedEntry.headerBox.current,
@@ -423,8 +451,11 @@ function acquireSharedAssetSubscription(
  * blob URL through the content-addressed `imageBlobCache`.
  *
  * Resolves the host transport from the CURRENT TAB (`useTabHostId` ->
- * `useHostStreamClientFor`), never the renderer-default host - mirrors
- * `usePrDetailSubscription`'s tab-scoped stream pattern.
+ * `useHostStreamClientBindingFor`), never the renderer-default host - mirrors
+ * `usePrDetailSubscription`'s tab-scoped stream pattern. Takes the full
+ * binding, not just its `.client` - `pin`/`unpin` let the shared-subscription
+ * coalescing layer keep a transport alive past ITS OWN unmount for as long
+ * as a sibling still needs it (Codex re-review).
  *
  * The caller passes a fresh `request` literal every render, so the fetch
  * effect below depends on `requestKeyFor(request)` (a string, stable across
@@ -449,7 +480,10 @@ export function useImageAsset(
   const hostId = useTabHostId();
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
-  const wsStreamClient = useHostStreamClientFor(target, auth);
+  // The full binding, not just its `.client` (Codex re-review) - the shared
+  // subscription coalescing layer needs `pin`/`unpin` too, see
+  // `acquireSharedAssetSubscription`'s call site below.
+  const streamBinding = useHostStreamClientBindingFor(target, auth);
   const paneFocused = usePaneFocused();
 
   const requestKey = request === null ? null : requestKeyFor(request);
@@ -560,7 +594,7 @@ export function useImageAsset(
 
   useEffect(() => {
     const normalizedRequest = latestRequestRef.current;
-    if (normalizedRequest === null || wsStreamClient === null) {
+    if (normalizedRequest === null || streamBinding === null) {
       isMountedRef.current = false;
       cacheKeyRef.current = null;
       requestKeyRef.current = null;
@@ -737,9 +771,11 @@ export function useImageAsset(
         normalizedRequest,
         focusRefreshGeneration,
       ),
-      wsStreamClient,
+      streamBinding.client,
       normalizedRequest,
       callbacks,
+      streamBinding.pin,
+      streamBinding.unpin,
     );
     sharedSubscription = acquired;
     // A late joiner (the shared entry already has a header, e.g. a second
@@ -771,7 +807,7 @@ export function useImageAsset(
       if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
-  }, [requestKey, wsStreamClient, hostId, focusRefreshGeneration]);
+  }, [requestKey, streamBinding, hostId, focusRefreshGeneration]);
 
   const state =
     resolved !== null && resolved.key === requestKey

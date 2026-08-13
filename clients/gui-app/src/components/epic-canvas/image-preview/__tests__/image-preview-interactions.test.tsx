@@ -707,6 +707,80 @@ describe("image preview interactions", () => {
     expect(refreshedReport.state.positionY).toBeCloseTo(116);
     expect(refreshedReport.minScale).toBeCloseTo(0.184, 3);
   });
+
+  it("resets transform sync when a ready preview remounts at the same URL", () => {
+    const { rerender } = render(
+      <ImagePreview
+        status="ready"
+        url="blob:same-image"
+        meta={META}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={null}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    const fitButton = screen.getByRole("button", { name: "Fit to screen" });
+    expect(fitButton.getAttribute("aria-pressed")).toBe("true");
+    const initialFitScale = state.instances[0]?.currentTransform.scale;
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(fitButton.getAttribute("aria-pressed")).toBe("false");
+
+    rerender(
+      <ImagePreview
+        status="header"
+        url="blob:same-image"
+        meta={META}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={null}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+    rerender(
+      <ImagePreview
+        status="ready"
+        url="blob:same-image"
+        meta={META}
+        servedFromCache={false}
+        fileName="photo.png"
+        compact={false}
+        gesturesEnabled
+        animationMs={0}
+        transformRef={null}
+        onTransformChange={null}
+        doubleClickOverride={null}
+        onDecodeError={null}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Fit to screen" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: "Actual size" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(state.instances).toHaveLength(2);
+    expect(state.instances[1]?.currentTransform.scale).toBeCloseTo(
+      initialFitScale,
+    );
+  });
 });
 
 describe("linked image diff transforms", () => {

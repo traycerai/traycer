@@ -149,6 +149,32 @@ function panCursor(gesturesEnabled: boolean, isPanning: boolean): string {
   return isPanning ? "grabbing" : "grab";
 }
 
+// `TransformWrapper` only renders in the `status === "ready"` branch (see
+// `renderStage` below), so it fully unmounts and remounts on every
+// `ready -> header -> ready` cycle - INCLUDING a refocus re-stat that
+// resolves back to the SAME cached `url` (unchanged content identity, the
+// common refocus path), which a `url`-keyed reset alone does not see (Codex
+// re-review: same bug family as the URL-change case, new trigger). The fresh
+// `TransformWrapper` instance fits from scratch regardless, so without this,
+// the DOM/library-level transform and the caller's OWN transform state
+// (pressed states, zoom-bound disables) would disagree the moment the cycle
+// completes. Extracted to its own function (rather than inlined in
+// `ImagePreview`) purely to keep that component's branch count under the
+// repo's ESLint `complexity` ceiling - a call site adds no complexity to its
+// caller, only branches/loops do.
+function useResetTransformSyncOnRemount(
+  isReady: boolean,
+  resetTransformSynced: () => void,
+): void {
+  const [wasReady, setWasReady] = useState(isReady);
+  if (isReady !== wasReady) {
+    setWasReady(isReady);
+    if (isReady) {
+      resetTransformSynced();
+    }
+  }
+}
+
 export function ImagePreview(props: ImagePreviewProps) {
   // Destructured (not `props.x` inline in JSX below) so the ref-safety
   // linter can see these are plain values, not a live ref read during
@@ -220,6 +246,9 @@ export function ImagePreview(props: ImagePreviewProps) {
     // sync flag here re-arms the seed-from-`liveFit` adjustment for it.
     setTransformSynced(false);
   }
+  useResetTransformSyncOnRemount(props.status === "ready", () => {
+    setTransformSynced(false);
+  });
   const handleNaturalSize = useCallback((size: ContainerSize): void => {
     setDecodedSize(size);
   }, []);
