@@ -1119,6 +1119,50 @@ describe("useImageAsset", () => {
     second.unmount();
   });
 
+  it("does not collide when two panes refocus at different times", async () => {
+    const firstPaneState: PaneTestState = { focused: true, visible: true };
+    const secondPaneState: PaneTestState = { focused: true, visible: true };
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+      wrapper: makePaneWrapper(firstPaneState),
+    });
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+      wrapper: makePaneWrapper(secondPaneState),
+    });
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const initialSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(initialSession, "stale-before-refocus", 3);
+    });
+    expect(first.result.current.status).toBe("header");
+    expect(second.result.current.status).toBe("header");
+
+    firstPaneState.focused = false;
+    first.rerender();
+    firstPaneState.focused = true;
+    first.rerender();
+    await flushPromises();
+
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const firstRefreshSession = mockWsStreamClient.sessions[1];
+    expect(initialSession.closed).toBe(false);
+    expect(second.result.current.status).toBe("header");
+
+    secondPaneState.focused = false;
+    second.rerender();
+    secondPaneState.focused = true;
+    second.rerender();
+    await flushPromises();
+
+    expect(mockWsStreamClient.sessions).toHaveLength(3);
+    const secondRefreshSession = mockWsStreamClient.sessions[2];
+    expect(secondRefreshSession).not.toBe(firstRefreshSession);
+    expect(firstRefreshSession.closed).toBe(false);
+
+    first.unmount();
+    second.unmount();
+  });
+
   it("does not reopen an immutable git-object request on refocus", async () => {
     const paneState: PaneTestState = { focused: true, visible: true };
     const wrapper = makePaneWrapper(paneState);
