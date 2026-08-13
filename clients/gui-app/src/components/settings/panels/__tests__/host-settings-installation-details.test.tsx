@@ -23,6 +23,11 @@ function installRecord(
 ): InstallationDetailsRecord {
   return {
     version: "1.5.0",
+    // Set explicitly rather than left to the spread: an OMITTED field would be
+    // `undefined`, not `null`, and the panel's `runtimeVersion === null` guard
+    // reads those differently — a fixture that skipped it would exercise the
+    // wrong branch while looking like the default one.
+    runtimeVersion: null,
     installedAt: "2026-08-01T00:00:00Z",
     source: { kind: "registry", value: "1.5.0" },
     archiveSha256: "a".repeat(64),

@@ -17,7 +17,24 @@ import type { HostInstallSourceTag } from "@traycer-clients/shared/platform/runn
  * own installation, and the bridge is what answers when the host cannot.
  */
 export interface InstallationDetailsRecord {
+  /**
+   * The install's own id — for a CLI-staged dev tree that is a timestamp stamp
+   * (`local-runtime-2026-…`), not a Traycer version.
+   *
+   * Shown as `Build`, and only when it differs from the version above it.
+   * Rendering it AS the version is what put two different numbers for "what is
+   * this host running" on one page: the identity card reads the host's live
+   * `hostVersion` (`0.0.0-dev`), this panel read the stamp, and neither was
+   * wrong — they are different facts that were both labelled "Version".
+   */
   readonly version: string;
+  /**
+   * What the record says the host actually RUNS, which is the same fact the
+   * identity card shows. `null` on the CLI-bridge path: `HostInstalledRecord`
+   * has no such field, so the bridge cannot answer for it and the display falls
+   * back to `version` there — the pre-existing behaviour, unchanged.
+   */
+  readonly runtimeVersion: string | null;
   readonly installedAt: string;
   readonly source: HostInstallSourceTag;
   readonly archiveSha256: string | null;
@@ -68,10 +85,19 @@ export function InstallationDetailsDisclosure(
         <dl className="flex flex-col gap-3 text-ui-sm">
           <DetailField
             label="Version"
-            value={`v${record.version}`}
+            value={`v${record.runtimeVersion ?? record.version}`}
             valueClassName={undefined}
-            testId={undefined}
+            testId="settings-host-install-version"
           />
+          {record.runtimeVersion === null ||
+          record.runtimeVersion === record.version ? null : (
+            <DetailField
+              label="Build"
+              value={record.version}
+              valueClassName={undefined}
+              testId="settings-host-install-build"
+            />
+          )}
           <DetailField
             label="Source"
             value={formatSource(record.source)}

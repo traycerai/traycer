@@ -4,6 +4,12 @@ import {
   hostDoctorResponseSchema,
   hostGetInstallationInfoRequestSchema,
   hostGetInstallationInfoResponseSchema,
+  hostServiceDeregisterRequestSchema,
+  hostServiceDeregisterResponseSchema,
+  hostServiceRegisterRequestSchema,
+  hostServiceRegisterResponseSchema,
+  hostServiceStatusRequestSchema,
+  hostServiceStatusResponseSchema,
   hostUpdateCheckRequestSchema,
   hostUpdateCheckResponseSchema,
   hostUpdateInstallRequestSchema,
@@ -40,4 +46,28 @@ export const hostGetInstallationInfoV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostGetInstallationInfoRequestSchema,
   responseSchema: hostGetInstallationInfoResponseSchema,
+});
+
+/** Reads the OS service registration + run state for this host's environment. */
+export const hostServiceStatusV10 = defineRpcContract({
+  method: "host.service.status",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostServiceStatusRequestSchema,
+  responseSchema: hostServiceStatusResponseSchema,
+});
+
+/** Registers (or re-registers) the OS service that supervises this host. */
+export const hostServiceRegisterV10 = defineRpcContract({
+  method: "host.service.register",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostServiceRegisterRequestSchema,
+  responseSchema: hostServiceRegisterResponseSchema,
+});
+
+/** Deregisters that service — which stops this host and does not restart it. */
+export const hostServiceDeregisterV10 = defineRpcContract({
+  method: "host.service.deregister",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostServiceDeregisterRequestSchema,
+  responseSchema: hostServiceDeregisterResponseSchema,
 });

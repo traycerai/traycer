@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -42,6 +43,57 @@ export interface OverviewHostFixture {
   readonly restartTransitionIds: () => readonly string[];
   /** How many times `host.status` was answered — the released-floor method. */
   readonly hostStatusCalls: () => number;
+}
+
+/**
+ * Open the Overview card's `⋯` menu and wait for its items to mount.
+ *
+ * Restart, Run doctor, Reset name and Copy host ID moved off a footer verb bar
+ * into this menu, so none of those test ids exists in the tree until it is
+ * open. Two ways to get this wrong, both of which fail as "element not found"
+ * and read like the control was DELETED rather than merely not yet mounted:
+ *
+ *  - Radix's trigger opens on POINTERDOWN, not click. `fireEvent.click` on it
+ *    silently does nothing.
+ *  - The menu portals asynchronously, so the item lookup has to be awaited.
+ *
+ * Awaiting `host-overview-restart` here is what makes a caller's subsequent
+ * `getByTestId` safe.
+ */
+export async function openHostOverviewMenu(): Promise<void> {
+  fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+    button: 0,
+  });
+  await screen.findByTestId("host-overview-restart");
+}
+
+/**
+ * Open the Updates card's **Advanced** disclosure and wait for its body.
+ *
+ * The auto-update switch, the OS service controls and the whole version picker
+ * live behind it, and Radix does not MOUNT `CollapsibleContent` while closed —
+ * so before this runs, none of them is in the DOM at all. The failure mode is
+ * the same trap as the `⋯` menu above: `queryByRole("switch")` returns null and
+ * reads as "the control was deleted" rather than "the drawer is shut".
+ *
+ * Awaited on the heading rather than a control, because which controls are
+ * present is exactly what the callers vary — a host with no registry row has no
+ * policy switch, and one that cannot answer `host.service.status` has no service
+ * buttons. The heading is the one thing every open Advanced section has.
+ */
+export async function openHostOverviewAdvanced(): Promise<void> {
+  const trigger = await screen.findByRole("button", { name: "Advanced" });
+  fireEvent.click(trigger);
+  // Settled on the TRIGGER's own `data-state`, not on any control inside.
+  // Which controls the drawer holds is exactly what callers vary — an
+  // unreachable host has no version picker, a host with no registry row has no
+  // policy switch, an old host has no service buttons — so waiting on one of
+  // them would make this helper quietly wrong for the cases that matter most.
+  await waitFor(() => {
+    if (trigger.getAttribute("data-state") !== "open") {
+      throw new Error("Advanced disclosure did not open");
+    }
+  });
 }
 
 export function buildOverviewHostFixture(options: {
@@ -115,6 +167,18 @@ export function buildOverviewHostFixture(options: {
       },
     }),
     "host.update.install": () => ({ outcome: "accepted" as const }),
+    // Answered by default so the Advanced disclosure's OS service section
+    // renders its normal shape. Left unanswered, the query rejects and every
+    // suite that opens Advanced would read the "couldn't be read" copy — a
+    // fixture gap that would look like a product state.
+    "host.service.status": () => ({
+      outcome: "ok" as const,
+      state: "running" as const,
+      label: "ai.traycer.host",
+      manifestPath: "/tmp/ai.traycer.host.plist",
+    }),
+    "host.service.register": () => ({ outcome: "ok" as const }),
+    "host.service.deregister": () => ({ outcome: "accepted" as const }),
     "diagnostics.logs.tail": () => ({
       status: "available" as const,
       target: "host" as const,

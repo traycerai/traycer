@@ -84,7 +84,19 @@ interface OverviewSemanticSnapshot {
   /** Every section/group heading's text, sorted. */
   readonly headingTexts: readonly string[];
   readonly displayedName: string;
-  readonly thisComputerTagPresent: boolean;
+  /**
+   * The kind tag's TEXT — "Local" or "Remote" — rather than whether a tag is
+   * there at all.
+   *
+   * The predecessor was `thisComputerTagPresent`, a boolean, because only a
+   * local host got a tag ("This computer") and a remote one got nothing. Both
+   * kinds are labelled now, in the picker's own vocabulary, so the structural
+   * difference is gone and what is left is one string. That makes this
+   * comparison STRICTER than the boolean it replaces: a missing tag on either
+   * side, or a tag on the wrong side, now fails rather than being the expected
+   * asymmetry.
+   */
+  readonly kindTagLabel: string | null;
   readonly recoveryConsolePresent: boolean;
   /**
    * The danger-zone removal controls the surface comparison filters out.
@@ -149,8 +161,9 @@ const SHARED_ROW_NAME = "stale-registry-label";
  * every one of them explicitly instead of just excluding it.
  */
 const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
-  // Only `host.isLocalMachine` gets the "This computer" tag next to its name.
-  "thisComputerTagPresent",
+  // The kind tag beside the name reads "Local" on one and "Remote" on the
+  // other. One tag, one slot, one word different — asserted verbatim below.
+  "kindTagLabel",
   // The danger zone's removal row sits on a third capability plane the page was
   // never meant to unify: "Remove Traycer" uninstalls components from THIS
   // computer over the CLI bridge, "Remove from account" ends registry
@@ -367,7 +380,7 @@ async function renderOverviewSnapshot(options: {
     buttonNames,
     headingTexts,
     displayedName,
-    thisComputerTagPresent: screen.queryByText("This computer") !== null,
+    kindTagLabel: readKindTagLabel(view.container),
     recoveryConsolePresent:
       screen.queryByTestId("settings-host-identity") !== null,
     removalTestIds,
@@ -406,7 +419,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(remote.displayedName).toBe("Studio Mac");
   });
 
-  it("differs ONLY on the 'This computer' tag — named and asserted", async () => {
+  it("differs ONLY on the kind tag's word — Local vs Remote, named and asserted", async () => {
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -435,8 +448,13 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       "via relay",
     );
 
-    expect(local.thisComputerTagPresent).toBe(true);
-    expect(remote.thisComputerTagPresent).toBe(false);
+    // One tag each, in the SAME slot, differing only in the word — the picker's
+    // own vocabulary, which is what the two surfaces used to disagree about
+    // ("This computer" here, "Local" there, and nothing at all for a remote
+    // host). Asserted per variant rather than merely "they differ", so a tag
+    // that vanished, or two that swapped, fails here.
+    expect(local.kindTagLabel).toBe("Local");
+    expect(remote.kindTagLabel).toBe("Remote");
 
     // The recovery console is absent in both — not a local/remote difference
     // at all, so it stays inside the main equality check too; asserted here
@@ -504,43 +522,26 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
 function localOnlyNodes(root: HTMLElement): readonly Element[] {
   const nodes: Element[] = [];
 
-  // The "This computer" tag, located by WHERE IT LIVES — not by its text.
+  // The kind tag, located by WHERE IT LIVES — not by its text.
   //
-  // Matching every leaf span in the panel with that exact text removed a
-  // genuine local-only fork rendering `<span>This computer</span>` elsewhere
-  // along with the settled tag — the exclusion swallowing the class of
-  // difference it exists to expose.
+  // Matching every leaf span in the panel by text would remove a genuine
+  // local-only fork rendering the same word elsewhere along with the settled
+  // tag — the exclusion swallowing the very class of difference it exists to
+  // expose. Scoping to the identity card's heading row, where the settled tag
+  // sits beside the host name, is what keeps a stray same-text span anywhere
+  // else inside the compared prose, where it breaks equality on its own.
   //
-  // That was never observable while the broad matcher shipped, and the reason
-  // is worth recording precisely, because it is not a reason anyone should rely
-  // on: `thisComputerTagPresent` below reads `screen.queryByText(...)`, and
-  // Testing Library's SINGULAR query throws on multiple matches, so a second
-  // same-text node blew the test up before any exclusion mattered. The safety
-  // was incidental to another field's failure mode, one refactor deep — swap
-  // that presence check to the natural `queryAllByText(...).length > 0` and the
-  // broad matcher lets a real on-screen fork pass green. (Verified both ways:
-  // broad + that refactor passes 3/3 with the fork rendering; scoped + the same
-  // refactor fails.)
-  //
-  // So: look only inside the identity card's heading row, where the settled tag
-  // sits beside the host name, and require EXACTLY ONE. A duplicate there fails
-  // loudly; a same-text span anywhere else stays in the compared prose and
-  // breaks equality on its own — neither outcome borrowed from another field.
-  const identityHeadingRow =
-    root.querySelector('[data-testid="host-identity-card"] h2')
-      ?.parentElement ?? null;
-  const settledTags =
-    identityHeadingRow === null
-      ? []
-      : Array.from(identityHeadingRow.children).filter(
-          (child) =>
-            child.tagName === "SPAN" &&
-            child.children.length === 0 &&
-            child.textContent.trim() === "This computer",
-        );
+  // EXACTLY ONE is required, and that requirement now carries its own weight.
+  // It used to be redundant with `thisComputerTagPresent`'s
+  // `screen.queryByText(...)`, whose singular query threw on a duplicate before
+  // any exclusion mattered — a safety borrowed from another field's failure
+  // mode, one refactor away from evaporating. `readKindTagLabel` reads this
+  // same row, so the check below is the only thing standing between a
+  // duplicated tag and a green run.
+  const settledTags = kindTagNodes(root);
   if (settledTags.length > 1) {
     throw new Error(
-      `expected at most one "This computer" tag in the identity card, found ${settledTags.length}`,
+      `expected exactly one kind tag in the identity card, found ${settledTags.length}`,
     );
   }
   nodes.push(...settledTags);
@@ -563,4 +564,32 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
     }
   }
   return nodes;
+}
+
+/**
+ * The identity card's kind tag text, or `null` when there is none.
+ *
+ * Reads the same scoped row `localOnlyNodes` deletes, deliberately: the field
+ * and the exclusion must agree on WHICH node is the settled difference, or the
+ * snapshot would compare prose that still contains the tag it claims to have
+ * set aside.
+ */
+function readKindTagLabel(root: HTMLElement): string | null {
+  const tags = kindTagNodes(root);
+  return tags.length === 1 ? tags[0].textContent.trim() : null;
+}
+
+/** The leaf spans in the identity card's heading row that are kind tags. */
+function kindTagNodes(root: HTMLElement): readonly Element[] {
+  const headingRow =
+    root.querySelector('[data-testid="host-identity-card"] h2')
+      ?.parentElement ?? null;
+  if (headingRow === null) return [];
+  return Array.from(headingRow.children).filter(
+    (child) =>
+      child.tagName === "SPAN" &&
+      child.children.length === 0 &&
+      (child.textContent.trim() === "Local" ||
+        child.textContent.trim() === "Remote"),
+  );
 }

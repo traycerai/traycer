@@ -36,6 +36,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -124,7 +125,7 @@ function renderPanel(): void {
 }
 
 describe("<HostSettingsPanel /> Overview identity card — rename affordance and the deleted endpoint row", () => {
-  it("Edit name is reachable by its accessible name and opens the rename editor", async () => {
+  it("Edit name is reachable by its accessible name and swaps the heading for an inline input", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -142,9 +143,21 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
     await screen.findByText("Studio Mac");
     fireEvent.click(screen.getByRole("button", { name: "Edit name" }));
 
+    // IN PLACE, not a new row: the input replaces the `<h2>` rather than
+    // opening an editor band beneath it (`useInlineRename`, the same hook the
+    // tab strips use). Both halves are asserted, because the old editor also
+    // put an input on screen — what makes this the fixed behaviour is that the
+    // heading is GONE while it is up, so the card does not grow and shove
+    // everything below it down as you reach for it.
+    const input = await screen.findByTestId<HTMLInputElement>(
+      "host-overview-name-input",
+    );
+    expect(input.value).toBe("Studio Mac");
     expect(
-      await screen.findByRole("textbox", { name: "Display Name" }),
-    ).toBeTruthy();
+      within(screen.getByTestId("host-identity-card")).queryByRole("heading", {
+        name: "Studio Mac",
+      }),
+    ).toBeNull();
   });
 
   it("the deleted `via relay… / ws://… pid N` endpoint row never renders", async () => {
@@ -227,7 +240,7 @@ describe("<HostSettingsPanel /> Overview identity card — active-sessions chip"
 });
 
 describe("<HostSettingsPanel /> Overview identity card — window binding", () => {
-  it("host.isActive: false renders 'Use in this window' in the action bar and calls scope.makeActive with the scoped host id", async () => {
+  it("host.isActive: false renders 'Activate' in the header cluster and calls scope.makeActive with the scoped host id", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -253,12 +266,16 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     renderPanel();
 
     const button = await screen.findByTestId("host-make-active");
-    expect(button.textContent).toBe("Use in this window");
+    // "Activate", paired with the "Active" state it produces. The old label
+    // was "Use in this window" beside an "Active" badge — two vocabularies for
+    // one boolean, which is what made the badge and the button read as
+    // unrelated controls.
+    expect(button.textContent).toBe("Activate");
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
   });
 
-  it("host.isActive: true renders no 'Use in this window' button", async () => {
+  it("host.isActive: true renders no Activate button", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,

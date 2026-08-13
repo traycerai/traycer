@@ -53,6 +53,8 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
+  openHostOverviewAdvanced,
+  openHostOverviewMenu,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -157,7 +159,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     );
     const view = render(makeUi());
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -231,9 +234,12 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     // be a no-op.
     await screen.findByText("Original Name");
     fireEvent.click(await waitForButton("Edit name"));
-    const input = await screen.findByRole("textbox", { name: "Display Name" });
+    // The name edits IN PLACE now (`useInlineRename`, same hook the tab strips
+    // use), so there is no separate editor row and no Save button — the write
+    // is what Enter commits.
+    const input = await screen.findByTestId("host-overview-name-input");
     fireEvent.change(input, { target: { value: "New Name" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.keyDown(input, { key: "Enter" });
 
     hostBindingMock.current = { hostClient: fixtureB.client };
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
@@ -302,7 +308,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -353,14 +360,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
     await waitFor(() => expect(transitionIds).toHaveLength(1));
 
     // The user tries again after the failure toast.
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -403,7 +412,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -457,6 +467,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     );
 
     fireEvent.click(await waitForButton("Check now"));
+    await openHostOverviewAdvanced();
     fireEvent.click(await waitForButton("Install"));
 
     // The whole REGION retires, not just the install button. This test used to
@@ -501,7 +512,8 @@ describe("<HostSettingsPanel /> Overview doctor structured failure", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Run doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     const message = await screen.findByTestId("host-doctor-message");
     expect(message.textContent).toContain("no Traycer CLI installed");
     expect(toast.error).not.toHaveBeenCalled();
@@ -535,15 +547,20 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       </QueryClientProvider>,
     );
 
-    const restart = await waitForButton("Restart");
+    await openHostOverviewMenu();
+    const restart = await screen.findByTestId("host-overview-restart");
     await waitFor(() => {
       expect(restart.getAttribute("data-degraded")).toBe("unsupported");
     });
-    expect(restart.hasAttribute("disabled")).toBe(true);
+    // `aria-disabled`, not the `disabled` ATTRIBUTE. These are Radix
+    // `DropdownMenuItem`s — divs with `role="menuitem"` — so `hasAttribute
+    // ("disabled")` is false for every one of them, enabled or not, and the
+    // assertion it replaces could never have failed.
+    expect(restart.getAttribute("aria-disabled")).toBe("true");
 
-    const doctor = screen.getByRole("button", { name: "Run doctor" });
+    const doctor = screen.getByTestId("host-overview-run-doctor");
     expect(doctor.getAttribute("data-degraded")).toBeNull();
-    expect(doctor.hasAttribute("disabled")).toBe(false);
+    expect(doctor.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   it("does NOT degrade any button when NO manifest has been recorded yet (null tri-state)", async () => {
@@ -569,11 +586,12 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       </QueryClientProvider>,
     );
 
-    const restart = await waitForButton("Restart");
-    const doctor = screen.getByRole("button", { name: "Run doctor" });
+    await openHostOverviewMenu();
+    const restart = await screen.findByTestId("host-overview-restart");
+    const doctor = screen.getByTestId("host-overview-run-doctor");
     expect(restart.getAttribute("data-degraded")).toBeNull();
-    expect(restart.hasAttribute("disabled")).toBe(false);
+    expect(restart.getAttribute("aria-disabled")).not.toBe("true");
     expect(doctor.getAttribute("data-degraded")).toBeNull();
-    expect(doctor.hasAttribute("disabled")).toBe(false);
+    expect(doctor.getAttribute("aria-disabled")).not.toBe("true");
   });
 });

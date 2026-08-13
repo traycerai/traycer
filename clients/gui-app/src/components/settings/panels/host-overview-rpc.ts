@@ -1,10 +1,15 @@
-import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostDoctorResponse,
   HostGetInstallationInfoResponse,
-  HostUpdateCheckResponse,
+  HostServiceDeregisterResponse,
+  HostServiceRegisterResponse,
   HostUpdateInstallResponse,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
@@ -212,28 +217,150 @@ export function useHostIdentitySet(
 /**
  * `host.update.check` — the host shells `host available --json`.
  *
- * A mutation for the same reason `host.doctor` is: it spawns a process and
- * reaches the registry, so "Check now" means someone clicked Check now.
+ * A QUERY, and it did not start as one. This was a mutation for the same reason
+ * `host.doctor` is: it spawns a process on someone else's machine and reaches
+ * the release registry over the network, so it should happen when a person asks
+ * rather than because a settings pane mounted.
+ *
+ * What overrode that is the surface it feeds. "Pick a different version" sat
+ * empty under a heading that promised a list, next to a release-candidate
+ * checkbox that also did nothing, inside a disclosure you had already opened in
+ * order to see versions — and the only thing that would fill it was a button in
+ * a different region of the page. A control that needs a second, unrelated
+ * action before it can show anything reads as broken, not as deferred.
+ *
+ * The cost is bounded rather than accepted wholesale. `staleTime` means
+ * reopening the page inside the window reuses the answer instead of re-spawning
+ * the CLI; refetch-on-focus is off, so alt-tabbing never triggers one; and the
+ * poll table already schedules this method `latest`, so a burst collapses to the
+ * newest question rather than queueing.
+ *
+ * `includePreReleases` rides in `params`, which puts it in the QUERY KEY: the
+ * two filters are two cache entries, so toggling the checkbox asks a genuinely
+ * different question and can never show one filter's list under the other's
+ * label. A host too old to know the field ignores it and answers with the stable
+ * list — see the request schema for why that degrades to a filter that appears
+ * not to work rather than to an error.
  */
-export function useHostUpdateCheck(
+export function useHostUpdateCheckQuery(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly enabled: boolean;
+  readonly includePreReleases: boolean;
+}) {
+  return useHostQuery<HostRpcRegistry, "host.update.check">({
+    cacheKeyIdentity: undefined,
+    client: input.client,
+    method: "host.update.check",
+    params: { includePreReleases: input.includePreReleases },
+    options: {
+      enabled: input.enabled,
+      // Long, deliberately. This is the one read on the page that costs a
+      // process on the host, and what it returns — which versions the registry
+      // publishes — changes on a release cadence, not a browsing one.
+      staleTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      // Keeps the PREVIOUS filter's list on screen while the new one loads.
+      // Without it, ticking "Include release candidates" changes the query key,
+      // which empties `data` and collapses the list back to its "nothing here
+      // yet" copy for the duration of the round trip — the checkbox would read
+      // as having cleared the list rather than re-asked for it.
+      placeholderData: keepPreviousData,
+    },
+  });
+}
+
+/**
+ * `host.service.status` — the OS service registration, read from the host.
+ *
+ * A QUERY, unlike the two writes beside it: `host service status` only inspects
+ * launchd/systemd/schtasks state, so it is safe to run whenever the section is
+ * open and safe to refetch after a write. That asymmetry is the reason the three
+ * are separate methods at all.
+ */
+export function useHostServiceStatusQuery(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly enabled: boolean;
+}) {
+  return useHostQuery<HostRpcRegistry, "host.service.status">({
+    cacheKeyIdentity: undefined,
+    client: input.client,
+    method: "host.service.status",
+    params: EMPTY_PARAMS,
+    options: { enabled: input.enabled, staleTime: 30_000 },
+  });
+}
+
+/**
+ * `host.service.register` — re-register the OS service supervising this host.
+ *
+ * Invalidates the status read AND `host.status` for the arm-time host, because
+ * on macOS this is a bootout/bootstrap cycle: the host that answers afterwards
+ * is a new process. Both invalidations are hook-level for the reason
+ * `useHostUpdateInstall` documents — the cycle easily outlives a Settings scope
+ * change, and TanStack drops per-`mutate` callbacks once the observer is gone.
+ */
+export function useHostServiceRegister(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<
-  HostUpdateCheckResponse,
+  HostServiceRegisterResponse,
+  HostRpcError,
+  void,
+  HostOverviewMutationContext
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.service.register",
+    HostOverviewMutationContext,
+    void
+  >({
+    client,
+    method: "host.service.register",
+    mapVariables: () => EMPTY_PARAMS,
+    options: {
+      mutationKey: hostMaintenanceMutationKeys.serviceRegister(),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (response, _variables, context) => {
+        if (response.outcome !== "ok") return;
+        if (context.hostId === null) return;
+        for (const method of ["host.service.status", "host.status"] as const) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(context.hostId, method),
+          });
+        }
+      },
+    },
+  });
+}
+
+/**
+ * `host.service.deregister` — stop supervising this host, and stop the host.
+ *
+ * No invalidation on success, deliberately. `accepted` means the CLI was
+ * dispatched detached; the host then dies, so there is nothing left to refetch
+ * from and a refetch would only produce a connection error the user did not
+ * cause. What comes next is the scope going unreachable, which the page already
+ * describes on its own.
+ */
+export function useHostServiceDeregister(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  HostServiceDeregisterResponse,
   HostRpcError,
   void,
   HostOverviewMutationContext
 > {
   return useHostMutation<
     HostRpcRegistry,
-    "host.update.check",
+    "host.service.deregister",
     HostOverviewMutationContext,
     void
   >({
     client,
-    method: "host.update.check",
+    method: "host.service.deregister",
     mapVariables: () => EMPTY_PARAMS,
     options: {
-      mutationKey: hostMaintenanceMutationKeys.updateCheck(),
+      mutationKey: hostMaintenanceMutationKeys.serviceDeregister(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
     },
   });

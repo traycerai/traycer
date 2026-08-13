@@ -325,6 +325,21 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
+  "host.service.status": { ...LATEST_SCHEDULING, poll: null },
+  // FIFO, like `host.update.install` and for the same reason: these mutate the
+  // host's own lifecycle, so two in flight must never collapse to "the latest".
+  // Unpolled — a service registration changes only when someone changes it, and
+  // the status read above is what refreshes after a write.
+  "host.service.register": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.service.deregister": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,

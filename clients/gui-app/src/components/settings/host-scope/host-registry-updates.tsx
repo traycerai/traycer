@@ -1,79 +1,58 @@
 import { useState, type ReactNode } from "react";
-import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type {
-  HostVersionPolicyResult,
-  UpdateHostVersionPolicyInput,
-} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
+import { cn } from "@/lib/utils";
+import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import {
   deriveUpdateAffordance,
   deriveUpdatePill,
 } from "@/components/settings/panels/my-hosts-model";
 
-type UpdateHostVersionPolicyMutation = UseMutationResult<
-  HostVersionPolicyResult,
-  Error,
-  UpdateHostVersionPolicyInput
->;
-
 /**
- * The registry-backed half of a host's update story: the auto-update policy
- * and — only while the host is genuinely gated on open sessions — the
- * drain-gate force.
+ * The auto-update policy switch.
  *
- * The third control, a free-text target-version pin, is gone. Picking a version
- * now means picking one the HOST says it can install, from the list
- * `HostOverviewUpdatesRegion` renders off `host.update.check`, and installing it
- * over `host.update.install`. What that gives up is the pin's one real
- * advantage — it needed no route, because the host applied it on its own next
- * check-in — and what it buys is that nobody types a version into a box that
- * cannot tell them whether it exists.
- *
- * These used to live on a separate "My Hosts" list, one row per host.
- * That list was the reason host management had two homes, because a row that
- * can change a host's update policy is a lifecycle surface no matter what it
- * is called. They now render inside the Updates region of the ONE page about
- * that host, beside the local controller's own check-now/apply controls.
- *
- * Works without a live session on purpose: the policy is stored in the
- * account's host registry and the host reads it on its next check-in, which is
- * what keeps an offline host's Overview useful instead of blank.
- *
- * All controls share one mutation instance so concurrent writes to the same
- * host serialize rather than race.
+ * Now inside the Advanced disclosure, apart from the drain gate below, and the
+ * split is about urgency rather than topic. This is a preference someone sets
+ * once and forgets, so it belongs with the other settings a person opens
+ * Advanced to find; "Apply now — ends N sessions" appears only while an update is
+ * genuinely blocked on open sessions, and hiding THAT behind a collapsed
+ * disclosure would bury the one control here with a deadline on it.
  */
-export function HostRegistryUpdates(props: {
+export function HostAutoUpdateRow(props: {
   readonly item: HostListItem;
+  readonly mutation: UpdateHostVersionPolicyMutation;
+  /** Row chrome is the caller's, since the two rows now sit in different boxes. */
+  readonly className: string;
 }): ReactNode {
-  const { item } = props;
-  const mutation = useUpdateHostVersionPolicy(item.hostId);
-  const affordance = deriveUpdateAffordance(item.status);
+  const { item, mutation } = props;
   const pill = deriveUpdatePill(item.status.updateState);
   const isAuto = item.updatePolicy === "auto";
 
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/40 px-5 py-3">
-        <Switch
-          checked={isAuto}
-          disabled={mutation.isPending}
-          onCheckedChange={(checked) => {
-            mutation.mutate({
-              updatePolicy: checked ? "auto" : "manual",
-              desiredVersion: undefined,
-              force: undefined,
-            });
-          }}
-          aria-label={isAuto ? "Turn off auto-update" : "Turn on auto-update"}
-          data-testid={`host-auto-update-${item.hostId}`}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-ui-sm text-foreground">Auto-update</p>
-          {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-2",
+        props.className,
+      )}
+    >
+      <Switch
+        checked={isAuto}
+        disabled={mutation.isPending}
+        onCheckedChange={(checked) => {
+          mutation.mutate({
+            updatePolicy: checked ? "auto" : "manual",
+            desiredVersion: undefined,
+            force: undefined,
+          });
+        }}
+        aria-label={isAuto ? "Turn off auto-update" : "Turn on auto-update"}
+        data-testid={`host-auto-update-${item.hostId}`}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-ui-sm text-foreground">Auto-update</p>
+        {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
               saying "Installs new versions when no sessions are running."
               locally — which was fiction. The pin is applied by the HOST's own
               update reconciler, on its own independent ~20s poll, reading the
@@ -85,34 +64,50 @@ export function HostRegistryUpdates(props: {
               latency that does, and — because the two variants render the same
               component — made the Overview visibly differ for local and remote
               hosts on a page whose whole premise is that it does not. */}
-          <p className="text-ui-xs text-muted-foreground">
-            Applied on this host&apos;s next check-in (~20s), when no sessions
-            are running.
-          </p>
-        </div>
-        {pill === null ? null : (
-          <span
-            className="shrink-0 rounded-sm bg-muted/70 px-1.5 py-px text-ui-xs text-muted-foreground"
-            data-testid={`host-update-pill-${item.hostId}`}
-          >
-            {pill.label}
-          </span>
-        )}
+        <p className="text-ui-xs text-muted-foreground">
+          Applied on this host&apos;s next check-in (~20s), when no sessions are
+          running.
+        </p>
       </div>
-      {affordance.applyNowLabel === null ? null : (
-        <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
-          <p className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
-            {affordance.waitingForSessionsLabel ??
-              "Waiting for open sessions before applying."}
-          </p>
-          <ApplyNowControl
-            hostId={item.hostId}
-            label={affordance.applyNowLabel}
-            mutation={mutation}
-          />
-        </div>
+      {pill === null ? null : (
+        <span
+          className="shrink-0 rounded-sm bg-muted/70 px-1.5 py-px text-ui-xs text-muted-foreground"
+          data-testid={`host-update-pill-${item.hostId}`}
+        >
+          {pill.label}
+        </span>
       )}
-    </>
+    </div>
+  );
+}
+
+/**
+ * "Apply now — ends N sessions", and NOTHING when no update is waiting on
+ * sessions.
+ *
+ * Rendering nothing is the common case by a wide margin, which is exactly why
+ * this is a separate component: a row that is usually absent should not decide
+ * the layout of the row that is always present.
+ */
+export function HostUpdateDrainGateRow(props: {
+  readonly item: HostListItem;
+  readonly mutation: UpdateHostVersionPolicyMutation;
+}): ReactNode {
+  const { item, mutation } = props;
+  const affordance = deriveUpdateAffordance(item.status);
+  if (affordance.applyNowLabel === null) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
+      <p className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
+        {affordance.waitingForSessionsLabel ??
+          "Waiting for open sessions before applying."}
+      </p>
+      <ApplyNowControl
+        hostId={item.hostId}
+        label={affordance.applyNowLabel}
+        mutation={mutation}
+      />
+    </div>
   );
 }
 

@@ -53,6 +53,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
+  openHostOverviewMenu,
   buildOverviewHostFixture,
   buildOverviewManagement,
   makeInstalledRecord,
@@ -185,7 +186,8 @@ describe("Overview doctor — the three local-only repairs", () => {
       doctorFails: false,
     });
 
-    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     fireEvent.click(await screen.findByTestId("host-doctor-fix-PORT_CONFLICT"));
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
@@ -218,7 +220,8 @@ describe("Overview doctor — the three local-only repairs", () => {
       doctorFails: false,
     });
 
-    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     expect(
       await screen.findByTestId("host-doctor-copy-command-PORT_CONFLICT"),
     ).toBeTruthy();
@@ -239,7 +242,8 @@ describe("Overview doctor — the three local-only repairs", () => {
       doctorFails: false,
     });
 
-    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     expect(
       await screen.findByTestId("host-doctor-copy-command-PORT_CONFLICT"),
     ).toBeTruthy();
@@ -257,7 +261,8 @@ describe("Overview doctor — the three local-only repairs", () => {
       doctorFails: true,
     });
 
-    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
 
     expect(await screen.findByTestId("host-doctor-run-failed")).toBeTruthy();
     expect(screen.queryByText("Running Doctor…")).toBeNull();

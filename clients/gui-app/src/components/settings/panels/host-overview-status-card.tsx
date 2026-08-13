@@ -1,7 +1,24 @@
 import type { ReactNode, RefObject } from "react";
-import { AlertTriangle, Info, Pencil } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Info,
+  MoreHorizontal,
+  Pencil,
+  RotateCcw,
+  Stethoscope,
+  Undo2,
+} from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   describeOverviewDegrade,
@@ -271,21 +288,96 @@ export function HostOverviewNotice(props: {
 }
 
 /**
- * The status card's verb bar: Restart, Run doctor, and — only when this window
- * is pointed somewhere else — Use in this window.
+ * One maintenance verb, as a menu item that can say why it is unavailable.
  *
- * One component so the cluster's per-button degrade discipline lives in one
- * place — each control asks its OWN method, and none of them is disabled by
- * another's absence. That is the difference this page was restructured for: a
- * host too old for `host.restart` still gets a working doctor and rename.
- *
- * The window binding joined this bar from the "Active for this window" row it
- * used to own. It is not a host RPC and has no degrade reason — it is an
- * account-side selection this shell makes — so it sits apart from the two
- * capability-gated verbs and carries its own reachability gate.
+ * The footer verb bar these came from could hang a tooltip off a disabled
+ * button. A menu item cannot reliably do that — a disabled item takes no
+ * pointer events and the menu owns the focus scope — but it has something
+ * better: room for a second line. So the degrade reason is RENDERED under the
+ * label rather than hidden behind a hover, which is strictly more legible than
+ * what it replaces. The per-item discipline is unchanged: each asks its OWN
+ * method, and none is disabled by another's absence.
  */
-export function HostOverviewActions(props: {
+function HostOverviewMenuAction(props: {
+  readonly label: string;
   readonly hostName: string;
+  readonly icon: ReactNode;
+  readonly degrade: OverviewDegradeReason | null;
+  readonly pending: boolean;
+  /** Another Overview mutation holds the page. */
+  readonly busy: boolean;
+  readonly onSelect: () => void;
+  readonly testId: string;
+}): ReactNode {
+  const { degrade, hostName } = props;
+  return (
+    <DropdownMenuItem
+      disabled={degrade !== null || props.busy || props.pending}
+      onSelect={props.onSelect}
+      data-testid={props.testId}
+      data-degraded={degrade ?? undefined}
+      className="flex-col items-start gap-0.5 py-1.5"
+    >
+      <span className="flex items-center gap-2">
+        {/* The spinner takes the icon's place rather than sitting beside it, so
+            a pending item keeps the label on the same x-position as its idle
+            neighbours instead of shunting right while it runs. */}
+        {props.pending ? (
+          <AgentSpinningDots
+            className="size-3.5"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          props.icon
+        )}
+        {props.label}
+      </span>
+      {degrade === null ? null : (
+        // Indented past the icon: a reason that starts under the glyph reads as
+        // a separate row rather than as this item's own subtitle.
+        <span className="max-w-[36ch] pl-5.5 text-ui-xs text-muted-foreground">
+          {describeOverviewDegrade(degrade, hostName)}
+        </span>
+      )}
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * The card header's right-hand cluster: the window binding, and everything
+ * else behind a `⋯`.
+ *
+ * This replaces a full-width footer strip. That strip existed because an
+ * earlier pass put three WORDED buttons opposite the name and they wrapped into
+ * a ragged two-column block at narrow settings widths — so the fix here is not
+ * to move the same cluster back, it is to make it narrow enough to belong
+ * there: one control plus an icon trigger.
+ *
+ * The window binding is the one thing that stays inline, and it occupies a
+ * SINGLE slot in both states: `Make active in this window` becomes `Active in
+ * this window`. Two things make that legible, and both were missing before.
+ * The slot — previously the state was a tag beside the name and the verb was a
+ * button in the footer, so nothing connected them. And the WORD: the verb used
+ * to be "Use in this window" while the state said "Active", which named one
+ * binding twice and left it to the reader to guess they were the same thing.
+ * One root word, one place. It is also not a host RPC and has no degrade
+ * reason — it is an
+ * account-side selection this shell makes — which is why it sits apart from
+ * the capability-gated verbs in the menu and carries only a reachability gate.
+ */
+export function HostOverviewHeaderActions(props: {
+  readonly hostName: string;
+  /**
+   * A caller-owned control rendered BEFORE the window binding, or `null`.
+   *
+   * The one action the two callers do not share. The recovery console can be
+   * looking at a machine with no host installed at all, where the only useful
+   * verb is Install — a state the Overview cannot reach, since it only renders
+   * for a host that answered an RPC. Rather than teach this cluster about
+   * installation, the console hands in the button it already owns.
+   */
+  readonly primaryAction: ReactNode | null;
   readonly restartDegrade: OverviewDegradeReason | null;
   readonly doctorDegrade: OverviewDegradeReason | null;
   readonly restartPending: boolean;
@@ -295,36 +387,32 @@ export function HostOverviewActions(props: {
   readonly isActive: boolean;
   /** A host with no dialable route cannot become this window's host. */
   readonly connectable: boolean;
+  /**
+   * Clearing a custom name is the same write as saving one, with `null`. It
+   * lives here rather than beside the inline editor because the editor is now
+   * the name itself — there is no chrome around it to hang a third verb on.
+   * `null` when the host carries no custom name, so there is nothing to clear.
+   */
+  readonly onResetName: (() => void) | null;
+  readonly resetNameDegrade: OverviewDegradeReason | null;
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
   readonly onMakeActive: () => void;
+  readonly onCopyHostId: () => void;
 }): ReactNode {
   const { hostName } = props;
   return (
-    <>
-      <HostOverviewActionButton
-        label="Restart"
-        hostName={hostName}
-        variant="secondary"
-        degrade={props.restartDegrade}
-        pending={props.restartPending}
-        busy={props.anyPending}
-        testId="host-overview-restart"
-        buttonRef={undefined}
-        onClick={props.onRestart}
-      />
-      <HostOverviewActionButton
-        label="Run doctor"
-        hostName={hostName}
-        variant="secondary"
-        degrade={props.doctorDegrade}
-        pending={false}
-        busy={false}
-        testId="host-overview-run-doctor"
-        buttonRef={undefined}
-        onClick={props.onOpenDoctor}
-      />
-      {props.isActive ? null : (
+    <div className="flex shrink-0 items-center gap-1.5">
+      {props.primaryAction}
+      {props.isActive ? (
+        <span
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 font-medium text-ui-xs text-primary"
+          data-testid="host-active-in-window"
+        >
+          <Check className="size-3.5" aria-hidden />
+          Active
+        </span>
+      ) : (
         // The asymmetry has to be said out loud somewhere, and the row that
         // used to say it is gone. A person who expects this to move their work
         // would otherwise watch nothing happen and conclude it is broken — so
@@ -345,11 +433,72 @@ export function HostOverviewActions(props: {
               onClick={props.onMakeActive}
               data-testid="host-make-active"
             >
-              Use in this window
+              Activate
             </Button>
           </span>
         </TooltipWrapper>
       )}
-    </>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+            aria-label={`More actions for ${hostName}`}
+            data-testid="host-overview-menu"
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-56">
+          <HostOverviewMenuAction
+            label="Restart"
+            hostName={hostName}
+            icon={<RotateCcw className="size-3.5" aria-hidden />}
+            degrade={props.restartDegrade}
+            pending={props.restartPending}
+            busy={props.anyPending}
+            testId="host-overview-restart"
+            onSelect={props.onRestart}
+          />
+          <HostOverviewMenuAction
+            label="Run doctor"
+            hostName={hostName}
+            icon={<Stethoscope className="size-3.5" aria-hidden />}
+            degrade={props.doctorDegrade}
+            pending={false}
+            busy={false}
+            testId="host-overview-run-doctor"
+            onSelect={props.onOpenDoctor}
+          />
+          {props.onResetName === null ? null : (
+            <HostOverviewMenuAction
+              label="Reset name to default"
+              hostName={hostName}
+              icon={<Undo2 className="size-3.5" aria-hidden />}
+              degrade={props.resetNameDegrade}
+              pending={false}
+              busy={props.anyPending}
+              testId="host-overview-reset-name"
+              onSelect={props.onResetName}
+            />
+          )}
+          <DropdownMenuSeparator />
+          {/* The host id earned a full-width footer row it did not deserve:
+              one opaque uuid nobody reads, permanently occupying a band on a
+              card whose other bands are all actionable. It is genuinely useful
+              in exactly one situation — pasting it into a support report — so
+              it lives where you go looking when you already know you want it. */}
+          <DropdownMenuItem
+            onSelect={props.onCopyHostId}
+            data-testid="host-overview-copy-host-id"
+          >
+            <Copy className="size-3.5" aria-hidden />
+            Copy host ID
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

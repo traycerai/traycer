@@ -54,6 +54,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
 import {
   buildOverviewHostFixture,
+  openHostOverviewAdvanced,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -179,6 +180,107 @@ function rowFor(rows: readonly HTMLElement[], version: string): HTMLElement {
 }
 
 describe("<HostSettingsPanel /> Overview updates — version picker", () => {
+  it("populates the version list and the summary WITHOUT anyone pressing Check now", async () => {
+    // The check used to be a mutation, so both surfaces started empty: the
+    // summary read "Ask this host which versions it can install." and the picker
+    // read "Check for updates to see which versions this host can install." —
+    // inside a disclosure you had already opened in order to see versions. This
+    // pins that opening the page IS the ask.
+    //
+    // Asserting the ROWS, not just the request: a check that fired but whose
+    // answer never reached the picker would satisfy a call-count assertion and
+    // still leave the empty state on screen, which is the exact complaint.
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          return Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(["1.7.0", "1.6.0"]),
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The summary answers on its own — no longer an invitation to go ask.
+    await screen.findByText("v1.7.0 is available.");
+    expect(screen.queryByText(/Ask this host which versions/)).toBeNull();
+
+    await openHostOverviewAdvanced();
+    await waitFor(() => {
+      const rows = within(screen.getByTestId("host-version-rows"));
+      expect(rows.getByText("v1.7.0")).toBeTruthy();
+      expect(rows.getByText("v1.6.0")).toBeTruthy();
+    });
+    expect(
+      screen.queryByText(/didn't return a list of installable versions/),
+    ).toBeNull();
+    // ONE request served both surfaces. Two would mean the summary and the
+    // picker had each gone asking, which is what sharing the hook prevents.
+    expect(checkCalls).toBe(1);
+  });
+
+  it("the release-candidate checkbox RE-ASKS the host with includePreReleases, rather than filtering a list already in hand", async () => {
+    // Re-pins, on the RPC path, the one invariant the deleted bridge suite
+    // owned ("passes the include prereleases filter when the Advanced version
+    // picker checkbox is selected"). It has to be a fresh REQUEST: `host
+    // available` decides what counts as a pre-release, and a client-side
+    // predicate would disagree with the CLI the first time a build id stopped
+    // being semver.
+    const requests: boolean[] = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": (req) => {
+          requests.push(req.includePreReleases);
+          return Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(
+              req.includePreReleases ? ["1.8.0-rc.1", "1.7.0"] : ["1.7.0"],
+            ),
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // NO "Check now" click, and its removal is load-bearing rather than tidying.
+    // The check fires on mount now, so a click here would race its own setup:
+    // whether it produces a SECOND `false` request or silently joins the
+    // in-flight one is a matter of timing, and `toEqual([false])` passes on only
+    // one of those. That the list arrives at all without a click is the
+    // behaviour this line now also pins.
+    await openHostOverviewAdvanced();
+    await waitFor(() => expect(requests).toEqual([false]));
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Include release candidates" }),
+    );
+
+    // A SECOND request, carrying the flag — not the same answer re-filtered.
+    await waitFor(() => expect(requests).toEqual([false, true]));
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("host-version-rows")).getByText(
+          "v1.8.0-rc.1",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
   it("Check now renders one row per manifest version, Install on a non-latest row sends host.update.install with THAT row's version, and freezes every other row's Install button while it is in flight", async () => {
     // Pins the replacement for the single "Update to v<latest>" button: the
     // manifest can name several installable versions, and a person must be
@@ -213,6 +315,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
+    // The list moved into the Advanced disclosure, which Radix does not mount
+    // while closed — so this is the difference between "no rows" and "no drawer".
+    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
@@ -279,6 +384,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
+    // The list moved into the Advanced disclosure, which Radix does not mount
+    // while closed — so this is the difference between "no rows" and "no drawer".
+    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
 
@@ -326,6 +434,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
+    // The list moved into the Advanced disclosure, which Radix does not mount
+    // while closed — so this is the difference between "no rows" and "no drawer".
+    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     expect(within(picker).getAllByRole("listitem")).toHaveLength(
       VERSION_LIST_PREVIEW,

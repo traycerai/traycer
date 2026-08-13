@@ -3,26 +3,26 @@ import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
-import { HostNameEditForm } from "@/components/settings/panels/host-settings-name-edit";
 import {
   InstallationDetailsDisclosure,
   type InstallationDetailsRecord,
 } from "@/components/settings/panels/host-settings-installation-details";
-import {
-  HostIdentityCard,
-  HostIdRow,
-} from "@/components/settings/host-scope/host-identity-card";
+import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
-import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
+import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
+import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import {
-  HostOverviewActions,
+  HostOverviewHeaderActions,
   HostOverviewNameAction,
   HostOverviewNotice,
   HostOverviewUpdateProgress,
   HostRestartBusyNotice,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
+import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
+import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
+import { HostOverviewAdvancedDisclosure } from "@/components/settings/panels/host-overview-advanced";
 import {
   customNameFromIdentityDraft,
   describeOverviewDegrade,
@@ -37,9 +37,11 @@ import {
   useHostInstallationInfoQuery,
   useHostOverviewStatusQuery,
   useHostRestart,
+  useHostServiceStatusQuery,
 } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -49,8 +51,6 @@ import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-s
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
 
@@ -66,8 +66,17 @@ import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/ind
  *
  * What USED to be here was the local CLI bridge as primary source, which is why
  * a remote host got a thinner page describing it in a different dialect. The
- * bridge now serves exactly one surface, the recovery console, for the states
- * where no host process exists to answer.
+ * bridge is gone from this page entirely — it can only ever speak for the local
+ * machine, so no surface built on it can be part of a page that promises to
+ * describe any host.
+ *
+ * TWO regions, not three. The identity card carries what this host IS, and that
+ * includes the update ANSWER — is there a newer version, install it — because
+ * that is a fact about the host in the same register as its version and its
+ * session count. Everything that is a decision rather than an answer sits in
+ * Installation, behind Advanced: the auto-update policy, the OS service, the
+ * full version list. Updates used to own a titled section between the two, which
+ * put a section header on a single sentence and read as a second subject.
  *
  * Every button degrades on its OWN capability. An old host can support
  * `host.status` and not `host.restart`; a current host on a box with no Traycer
@@ -75,7 +84,7 @@ import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/ind
  * one page-level gate is how a capability downgrade during a fleet update turns
  * into "this page is broken".
  */
-// The status card, the two cards under it and the two dialogs are each their
+// The identity card, the Installation group and the two dialogs are each their
 // own component; what is left here is the page's own state and the handful of
 // conditions that decide which of its regions apply. That residue is
 // irreducible branching over surfaced concerns rather than nesting, and the same
@@ -102,10 +111,6 @@ export function HostOverviewPanel(props: {
   const usable = isHostScopeUsable(scope.status) && client !== null;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraftOverride, setNameDraftOverride] = useState<string | null>(
-    null,
-  );
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [restartBusyCount, setRestartBusyCount] = useState<number | null>(null);
   // The id of a restart whose DISPATCH OUTCOME IS UNKNOWN - the transport threw
@@ -129,6 +134,9 @@ export function HostOverviewPanel(props: {
     installInfo: installInfoDegrade,
     updateCheck: updateCheckDegrade,
     updateInstall: updateInstallDegrade,
+    serviceStatus: serviceStatusDegrade,
+    serviceRegister: serviceRegisterDegrade,
+    serviceDeregister: serviceDeregisterDegrade,
   } = useOverviewCapabilities(scope.hostId);
 
   const statusQuery = useHostOverviewStatusQuery({ client, enabled: usable });
@@ -151,20 +159,6 @@ export function HostOverviewPanel(props: {
     status: statusQuery.data ?? null,
   });
   const { identity, displayName } = view;
-  const nameDraft = nameDraftOverride ?? view.persistedNameDraft;
-
-  // Focus restoration: "Edit name" unmounts while editing and comes back on
-  // close, so the trigger is refocused on that true->false transition only —
-  // never on mount, where it would steal focus from the page. Same pattern (and
-  // the same `wasEditingRef`) the summary card uses for the same reason.
-  const editNameRef = useRef<HTMLButtonElement>(null);
-  const wasEditingRef = useRef(editingName);
-  useEffect(() => {
-    if (wasEditingRef.current && !editingName) {
-      editNameRef.current?.focus();
-    }
-    wasEditingRef.current = editingName;
-  }, [editingName]);
 
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
@@ -177,17 +171,11 @@ export function HostOverviewPanel(props: {
     // another way, because the write is not harmless: storing the current
     // effective name as an explicit `customName` FREEZES a registration label
     // that would otherwise keep tracking the host.
-    if (customName === (identity?.customName ?? null)) {
-      setNameDraftOverride(null);
-      setEditingName(false);
-      return;
-    }
+    if (customName === (identity?.customName ?? null)) return;
     mutateIdentity(
       { customName },
       {
         onSuccess: (next) => {
-          setNameDraftOverride(null);
-          setEditingName(false);
           toast.success(`Renamed to ${next.effectiveName}`);
         },
         onError: (error) =>
@@ -196,9 +184,75 @@ export function HostOverviewPanel(props: {
     );
   };
 
-  if (host === null) return null;
+  // The name edits in place, exactly as a tab title does — same hook, so Enter
+  // commits, Escape reverts, blur settles once, and the input can never commit
+  // an empty string. That last rule is why "Reset name to default" is a menu
+  // item rather than a third button under the input: clearing the override is a
+  // DIFFERENT write (`null`), not an empty save, and the editor deliberately has
+  // no way to express it.
+  const renameDegrade = identitySetDegrade ?? identityDegrade;
+  const rename = useInlineRename({
+    value: view.persistedNameDraft,
+    canEdit: usable && renameDegrade === null && identity !== null,
+    onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
+  });
+
+  // Focus restoration: the pencil unmounts while the input is up and comes back
+  // on close, so the trigger is refocused on that true->false transition only —
+  // never on mount, where it would steal focus from the page. Same pattern (and
+  // the same `wasEditingRef`) the summary card uses for the same reason.
+  const editNameRef = useRef<HTMLButtonElement>(null);
+  const wasEditingRef = useRef(rename.isEditing);
+  useEffect(() => {
+    if (wasEditingRef.current && !rename.isEditing) {
+      editNameRef.current?.focus();
+    }
+    wasEditingRef.current = rename.isEditing;
+  }, [rename.isEditing]);
 
   const anyPending = restart.isPending || identitySet.isPending;
+
+  // The update story lives at PAGE level because its two halves now render in
+  // two different containers: the answer — is there an update, install it — as a
+  // band on the identity card, and the decisions behind Advanced down in
+  // Installation. One instance of each hook, so the two halves cannot disagree
+  // about what the last check returned or which write is in flight.
+  //
+  // This is also the single `useHostRegistryUpdateMutation`, which BOTH the
+  // drain gate and the auto-update switch write through. Two instances would
+  // each track their own `isPending`, so one control would stay live while the
+  // other's write was still going.
+  const updates = useHostOverviewUpdates({
+    client,
+    hostName: displayName,
+    installedVersion: view.hostVersion,
+    platformKey: host?.platform ?? null,
+    // The check reads on its own now, so this gate is load-bearing rather than
+    // cosmetic: without it the page would spawn a CLI process on the host from
+    // a scope that has not resolved, and cache the answer under this page's key.
+    enabled: usable,
+    checkDegrade: updateCheckDegrade,
+    installDegrade: updateInstallDegrade,
+    busy: anyPending,
+  });
+  const serviceStatusQuery = useHostServiceStatusQuery({
+    client,
+    enabled: usable && serviceStatusDegrade === null,
+  });
+  const service = useOverviewOsService({
+    client,
+    hostName: displayName,
+    status: serviceStatusQuery.data,
+    loading: serviceStatusQuery.isPending,
+    statusDegrade: serviceStatusDegrade,
+    registerDegrade: serviceRegisterDegrade,
+    deregisterDegrade: serviceDeregisterDegrade,
+    busy: anyPending,
+  });
+  const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
+
+  if (host === null) return null;
+
   const registryItem = host.item;
 
   return (
@@ -213,22 +267,32 @@ export function HostOverviewPanel(props: {
         // whether Restart is safe to press. `null` until it answers.
         sessionCount={view.busySessionCount}
         nameAction={
-          !usable || editingName ? null : (
+          !usable ? null : (
             <HostOverviewNameAction
               hostName={displayName}
               // The WRITE capability gates the rename affordance, not the read.
               // The pencil and "Retry name" both lead to `host.identity.set`,
               // so a host that can be read but not written must degrade them -
               // otherwise Save calls a method the handshake already declined.
-              degrade={identitySetDegrade ?? identityDegrade}
+              degrade={renameDegrade}
               loaded={identity !== null}
               failed={identity === null && identityQuery.isError}
               retrying={identityQuery.isFetching}
               onRetry={() => {
                 void identityQuery.refetch();
               }}
-              onEdit={() => setEditingName(true)}
+              onEdit={rename.startEditing}
               buttonRef={editNameRef}
+            />
+          )
+        }
+        nameInput={
+          !rename.isEditing ? null : (
+            <input
+              {...rename.inputProps}
+              className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-semibold text-foreground text-title-sm outline-hidden focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-label="Host name"
+              data-testid="host-overview-name-input"
             />
           )
         }
@@ -240,21 +304,34 @@ export function HostOverviewPanel(props: {
           // wrongly imply a capability verdict rather than a connectivity one.
           // What survives an outage is the account-backed half below: the
           // update policy, which needs no route at all.
-          !usable || editingName ? null : (
-            <HostOverviewActions
+          !usable ? null : (
+            <HostOverviewHeaderActions
               hostName={displayName}
+              // Nothing extra: this page only renders for a host that has
+              // already answered, so there is never an Install to offer.
+              primaryAction={null}
               restartDegrade={restartDegrade}
               doctorDegrade={doctorDegrade}
               restartPending={restart.isPending}
               anyPending={anyPending}
               isActive={host.isActive}
               connectable={host.connectable}
+              // Only offered when there is an override to clear. A host running
+              // under its own default name has nothing to reset, and the write
+              // would be the no-op `submitRename` already guards.
+              onResetName={
+                (identity?.customName ?? null) === null
+                  ? null
+                  : () => submitRename(null)
+              }
+              resetNameDegrade={renameDegrade}
               onRestart={() => {
                 setRestartBusyCount(null);
                 setRestartConfirmOpen(true);
               }}
               onOpenDoctor={() => setDoctorOpen(true)}
               onMakeActive={() => scope.makeActive(host.hostId)}
+              onCopyHostId={() => hostIdCopy.copy(host.hostId)}
             />
           )
         }
@@ -276,44 +353,29 @@ export function HostOverviewPanel(props: {
             onDismiss={() => setRestartBusyCount(null)}
           />
         )}
-        {editingName ? (
-          <div className="border-t border-border/40 px-5 py-3">
-            <HostNameEditForm
-              settings={identity ?? undefined}
-              pending={identityQuery.isPending}
-              draftName={nameDraft}
-              persistedDraft={view.persistedNameDraft}
-              savePending={identitySet.isPending}
-              toCustomName={customNameFromIdentityDraft}
-              onDraftNameChange={setNameDraftOverride}
-              onSave={() =>
-                submitRename(customNameFromIdentityDraft(nameDraft))
-              }
-              onReset={() => submitRename(null)}
-              onCancel={() => {
-                setEditingName(false);
-                setNameDraftOverride(null);
-              }}
-            />
-          </div>
-        ) : null}
-        <HostIdRow
-          hostId={host.hostId}
-          onCopy={(value) => hostIdCopy.copy(value)}
-        />
+        {/* The update ANSWER, on the card that describes the host — not under a
+            section header of its own. "Is there an update, and install it" is a
+            fact about this host in the same register as its version and its
+            session count, and giving it a titled section of its own implied a
+            second subject where there is only one. Everything that is a decision
+            rather than an answer is down in Advanced. */}
+        {!usable ? null : (
+          <HostOverviewUpdatesRegion
+            summary={updates.summary}
+            degrade={updates.degrade}
+          />
+        )}
+        {/* Stays OUT of Advanced, deliberately. This is the only control on the
+            page with a deadline — it renders solely while an update is blocked
+            on open sessions — and a collapsed disclosure is where a deadline
+            goes to be missed. */}
+        {registryItem === null ? null : (
+          <HostUpdateDrainGateRow
+            item={registryItem}
+            mutation={policyMutation}
+          />
+        )}
       </HostIdentityCard>
-
-      <HostOverviewUpdatesCard
-        client={client}
-        hostName={displayName}
-        installedVersion={view.hostVersion}
-        platformKey={host.platform}
-        checkDegrade={updateCheckDegrade}
-        installDegrade={updateInstallDegrade}
-        busy={anyPending}
-        usable={usable}
-        registryItem={registryItem}
-      />
 
       <HostOverviewInstallationCard
         usable={usable}
@@ -324,6 +386,22 @@ export function HostOverviewPanel(props: {
         }
         loading={installationQuery.isPending}
         readFailed={installationQuery.isError}
+        advanced={
+          <HostOverviewAdvancedDisclosure
+            hostName={displayName}
+            registryItem={registryItem}
+            policyMutation={policyMutation}
+            service={usable ? service : null}
+            // Gated on the ROUTE as well as the capability. Picking a version
+            // means asking the host which ones exist, so an unreachable host
+            // gets no picker at all rather than a checkbox and an invitation to
+            // press a Check now that is not on screen.
+            versions={
+              usable && updates.degrade === null ? updates.picker : null
+            }
+            busy={anyPending}
+          />
+        }
       />
 
       {/* No list of the OTHER hosts, and no "Add host": a page about one host
@@ -413,6 +491,16 @@ interface OverviewCapabilities {
   readonly updateInstall: OverviewDegradeReason | null;
   /** `host.identity.set` support, negotiated apart from the read. */
   readonly identitySet: OverviewDegradeReason | null;
+  /**
+   * The three OS-service methods, asked separately for the same reason as the
+   * rest: they landed together, but a host can be new enough to read its
+   * registration and too old to change it, and the read is the one worth having
+   * on its own — knowing a service is unregistered is useful even where nothing
+   * here can fix it.
+   */
+  readonly serviceStatus: OverviewDegradeReason | null;
+  readonly serviceRegister: OverviewDegradeReason | null;
+  readonly serviceDeregister: OverviewDegradeReason | null;
 }
 
 function useOverviewCapabilities(hostId: string | null): OverviewCapabilities {
@@ -440,6 +528,15 @@ function useOverviewCapabilities(hostId: string | null): OverviewCapabilities {
     ),
     updateInstall: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.update.install"),
+    ),
+    serviceStatus: overviewMethodDegrade(
+      useHostMethodSupport(hostId, "host.service.status"),
+    ),
+    serviceRegister: overviewMethodDegrade(
+      useHostMethodSupport(hostId, "host.service.register"),
+    ),
+    serviceDeregister: overviewMethodDegrade(
+      useHostMethodSupport(hostId, "host.service.deregister"),
     ),
   };
 }
@@ -492,68 +589,27 @@ function useOverviewDisplay(input: {
 }
 
 /**
- * ONE Updates card, both halves of a host's update story.
+ * How this host is installed and everything about it a person opens a
+ * disclosure to find: the install record, and Advanced.
  *
- * The host's own check and version list need a route and go away without one;
- * the account registry's auto-update policy does not, and keeping it is the
- * whole reason this card is not gated as a unit — an unreachable host is a
- * common moment to want exactly that. They are genuinely two mechanisms, but a
- * person has one update question, so the copy distinguishes them rather than the
- * layout.
- */
-function HostOverviewUpdatesCard(props: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostName: string;
-  readonly installedVersion: string | null;
-  /** The registry's `<platform>-<arch>` string, e.g. `linux-x64`. */
-  readonly platformKey: string | null;
-  readonly checkDegrade: OverviewDegradeReason | null;
-  readonly installDegrade: OverviewDegradeReason | null;
-  readonly busy: boolean;
-  readonly usable: boolean;
-  readonly registryItem: HostListItem | null;
-}): ReactNode {
-  const { registryItem } = props;
-  return (
-    <SettingsGroup
-      title="Updates"
-      tone="default"
-      dataTestId="host-updates"
-      fill={false}
-    >
-      <div className="[&>*:first-child]:border-t-0">
-        {props.usable ? (
-          <HostOverviewUpdatesRegion
-            client={props.client}
-            hostName={props.hostName}
-            installedVersion={props.installedVersion}
-            platformKey={props.platformKey}
-            checkDegrade={props.checkDegrade}
-            installDegrade={props.installDegrade}
-            busy={props.busy}
-          />
-        ) : null}
-        {registryItem === null ? null : (
-          // Keyed by host: the state inside — an open drain-gate confirmation
-          // — belongs to ONE host, so a scope change must destroy it rather
-          // than re-point it.
-          <HostRegistryUpdates key={registryItem.hostId} item={registryItem} />
-        )}
-      </div>
-    </SettingsGroup>
-  );
-}
-
-/**
- * Installation, as the HOST reads its own records.
+ * The two are one section because they answer one question — how this host is
+ * set up — and neither is urgent enough to sit on the card above. Updates used
+ * to own a titled section of its own next to this one, which read as two
+ * subjects on a page that has exactly one.
  *
- * Pure host RPC and nothing else, so with no route it renders NOTHING rather
- * than a gate notice. That is deliberate and was a bug once: this page already
- * states an unreachable host exactly once — the identity card's health line
- * says so, and the danger zone's gate explains which rows it costs. A second
- * gate here printed the same "can't reach this host" notice twice on one page.
- * An absent section under a card that already says why is quieter and truer
- * than repeating the reason.
+ * The install record is pure host RPC, so with no route that row renders
+ * NOTHING rather than a gate notice. That is deliberate and was a bug once:
+ * this page already states an unreachable host exactly once — the identity
+ * card's health line says so, and the danger zone's gate explains which rows it
+ * costs. A second gate here printed the same "can't reach this host" notice
+ * twice on one page. An absent row under a card that already says why is
+ * quieter and truer than repeating the reason.
+ *
+ * Advanced is NOT gated the same way, which is why `usable` reaches the row
+ * rather than this whole component: the auto-update policy inside it is an
+ * account write that needs no route, and an unreachable host is a common moment
+ * to want exactly that. Returning `null` for the section as a unit is how that
+ * control would go missing in the state it is most wanted.
  *
  * `unmanaged` IS a real state rather than an error: a host run from a checkout
  * has no install record, and reporting that as "nothing is installed" put a
@@ -567,22 +623,26 @@ function HostOverviewInstallationCard(props: {
   readonly loading: boolean;
   /** The read itself failed - which is NOT the same as "no record". */
   readonly readFailed: boolean;
+  /** Advanced, built by the page so its state is shared with the card above. */
+  readonly advanced: ReactNode;
 }): ReactNode {
-  if (!props.usable) return null;
   return (
     <SettingsGroup
       title="Installation"
       tone="default"
-      dataTestId={undefined}
+      dataTestId="host-installation"
       fill={false}
     >
-      <HostOverviewInstallationBody
-        hostName={props.hostName}
-        degrade={props.degrade}
-        record={props.record}
-        loading={props.loading}
-        readFailed={props.readFailed}
-      />
+      {!props.usable ? null : (
+        <HostOverviewInstallationBody
+          hostName={props.hostName}
+          degrade={props.degrade}
+          record={props.record}
+          loading={props.loading}
+          readFailed={props.readFailed}
+        />
+      )}
+      {props.advanced}
     </SettingsGroup>
   );
 }

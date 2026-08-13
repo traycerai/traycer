@@ -1,7 +1,4 @@
 import type { ReactNode } from "react";
-import { Check, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -12,7 +9,6 @@ import {
   formatPlatform,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,17 +60,33 @@ export function HostIdentityCard(props: {
    */
   readonly nameAction: ReactNode;
   /**
+   * The in-place editor, or `null` when not renaming.
+   *
+   * Non-null REPLACES the heading rather than rendering under it. The editor
+   * used to be a band of its own between the header and the host id — opening
+   * it pushed the card taller and moved everything below, so the one thing you
+   * were looking at jumped as you reached for it. Swapping the name for an
+   * input of the same size leaves the card exactly the height it already was,
+   * which is what the tab strips have always done (`useInlineRename`).
+   */
+  readonly nameInput: ReactNode | null;
+  /**
    * How many sessions the HOST says are open (`host.status`), or `null` when it
    * has not answered — which is not the same as zero and must not render as it.
    */
   readonly sessionCount: number | null;
   /**
-   * The card's verb bar (Restart / Run doctor / Use in this window), or `null`
-   * for a surface with nothing to offer. Rendered as a footer strip under the
-   * identity rather than opposite it: the header carries a name, a pencil, a
-   * status line and up to two tags, and a right-aligned cluster competing for
-   * that same row wrapped into a ragged two-column block at every settings
-   * width below full screen.
+   * The card's action cluster, or `null` for a surface with nothing to offer.
+   *
+   * Opposite the name, NOT a footer strip. An earlier pass tried exactly this
+   * and reverted it: three worded buttons competing for the name's row wrapped
+   * into a ragged two-column block at every settings width below full screen.
+   * The strip that replaced them then cost a full band for three controls.
+   *
+   * What makes the header work now is width, not placement — the cluster is one
+   * control plus a `⋯` trigger, so it fits beside a truncating name instead of
+   * fighting it. That is why this must stay narrow: put worded buttons back in
+   * here and the wrap returns.
    */
   readonly actions: ReactNode;
   readonly children: ReactNode;
@@ -101,20 +113,34 @@ export function HostIdentityCard(props: {
           <HostGlyph host={host} className="size-4.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <h2 className="min-w-0 truncate font-semibold text-foreground text-title-sm">
-              {props.displayName}
-            </h2>
-            {props.nameAction}
-            {host.isLocalMachine ? (
-              <HostTag label="This computer" tone={undefined} />
-            ) : null}
-            {/* The "Active for this window" ROW is gone — this tag is what
-                replaced it. A full-width bar with its own background said one
-                boolean about the window, permanently, on the page about the
-                host; the fact belongs beside the name, and the consequence it
-                used to spell out now rides the button that changes it. */}
-            {host.isActive ? <HostTag label="Active" tone="accent" /> : null}
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+              {props.nameInput === null ? (
+                <>
+                  <h2 className="min-w-0 truncate font-semibold text-foreground text-title-sm">
+                    {props.displayName}
+                  </h2>
+                  {props.nameAction}
+                </>
+              ) : (
+                props.nameInput
+              )}
+              {/* One vocabulary for one fact. The picker has always called
+                  these Local and Remote; this card said "This computer" for
+                  the same host and said nothing at all for the other kind, so
+                  the two surfaces described one fleet in two languages. A
+                  remote host now gets a tag too — the absence of one was never
+                  a deliberate signal, just the local-only branch showing. */}
+              <HostTag
+                label={host.isLocalMachine ? "Local" : "Remote"}
+                tone={undefined}
+              />
+            </div>
+            {/* The window binding used to be an `Active` tag here and a verb in
+                the footer, with nothing tying them together. Both are now one
+                slot inside `actions`, so the state and the control that reaches
+                it occupy the same place. */}
+            {props.actions}
           </div>
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             <span className="flex items-center gap-1.5 text-ui-sm">
@@ -135,11 +161,11 @@ export function HostIdentityCard(props: {
                 {host.health.label}
               </span>
             </span>
-            {host.health.detail === null ? null : (
-              <span className="min-w-0 truncate text-ui-sm text-muted-foreground">
-                {host.health.detail}
-              </span>
-            )}
+            {/* `health.detail` is deliberately NOT rendered here. On a local
+                host it reads "Running on this computer." — which the `Local`
+                tag one line above already says, in two words instead of four.
+                The status line's job is the facts nothing else on the card
+                carries; anything it repeats is what made it read as clumsy. */}
             {facts.length === 0 ? null : (
               // Folded up from its own line. The card gained a footer verb bar,
               // and three stacked lines of identity above it pushed Host ID and
@@ -156,14 +182,6 @@ export function HostIdentityCard(props: {
           </div>
         </div>
       </div>
-      {props.actions === null ? null : (
-        <div
-          className="flex flex-wrap items-center gap-2 border-t border-border/40 bg-muted/10 px-5 py-3"
-          data-testid="host-identity-actions"
-        >
-          {props.actions}
-        </div>
-      )}
       {props.children}
     </section>
   );
@@ -207,132 +225,6 @@ function ActiveSessionsChip(props: {
         ? `${count} active session${count === 1 ? "" : "s"}`
         : "No active sessions"}
     </span>
-  );
-}
-
-/**
- * "Which host does this window use?" — answered where the consequence is,
- * and changed only by a verb that states it.
- *
- * The old app had exactly one control for this: a modal radiogroup that looked
- * like the four viewing dropdowns and silently rebound the window's bell, rate
- * limits and default landing target. Making the swap a labelled button whose
- * copy names what moves — and what deliberately does not — is the whole
- * separation between a lens and a binding.
- *
- * The Overview no longer renders this: a full-width row asserting one boolean
- * about the WINDOW, on the page about a HOST, cost more vertical space than the
- * fact was worth. There the binding is an `Active` tag beside the name and a
- * verb in the card's action bar. This survives for the RECOVERY console, whose
- * subject is a local host with no process to ask — it has no such action bar,
- * and its own summary card owns the identity line.
- */
-function ThisWindowCard(props: {
-  readonly scope: HostScope;
-  readonly host: HostScopeOption;
-}): ReactNode {
-  const { scope, host } = props;
-  if (host.isActive) {
-    return (
-      <div
-        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 bg-primary/5 px-5 py-3"
-        data-testid="host-this-window-active"
-      >
-        <span className="flex items-center gap-2 font-medium text-ui-sm text-primary">
-          <Check className="size-4" aria-hidden />
-          Active for this window
-        </span>
-        <span className="min-w-0 text-ui-xs text-muted-foreground">
-          Notifications, rate limits and newly started work come from here.
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div
-      className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-5 py-3"
-      data-testid="host-this-window-inactive"
-    >
-      <div className="min-w-0">
-        <p className="text-ui-sm text-foreground">
-          This window uses{" "}
-          <span className="font-medium">
-            {scope.activeHost?.name ?? "another host"}
-          </span>
-          .
-        </p>
-        <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          {/* The asymmetry has to be said out loud. Tabs bind to their host for
-              life, so a person who expects "switch" to move their work would
-              otherwise watch nothing happen and conclude the button is broken. */}
-          Switching changes where new work starts. Tabs you already have open
-          stay on the host they started on.
-        </p>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!host.connectable}
-        onClick={() => scope.makeActive(host.hostId)}
-        data-testid="host-make-active"
-      >
-        Use this host in this window
-      </Button>
-    </div>
-  );
-}
-
-/**
- * `ThisWindowCard` for the host on this computer, whose console is the
- * pre-existing summary card rather than `HostIdentityCard`. Same content, same
- * copy — it just brings its own border because it is not nested in a card.
- */
-export function ThisWindowCardStandalone(props: {
-  readonly scope: HostScope;
-  readonly host: HostScopeOption;
-}): ReactNode {
-  return (
-    <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-      <ThisWindowCard scope={props.scope} host={props.host} />
-    </div>
-  );
-}
-
-/**
- * The host id, copyable, in the one place it is genuinely useful (a support
- * report) rather than leading an identity line as it used to.
- */
-export function HostIdRow(props: {
-  readonly hostId: string;
-  readonly onCopy: (value: string) => void;
-}): ReactNode {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border/40 px-5 py-2.5">
-      <span className="text-ui-xs text-muted-foreground">Host ID</span>
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate font-mono text-code-xs text-muted-foreground">
-          {props.hostId}
-        </span>
-        <TooltipWrapper
-          label="Copy host ID"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="size-7 p-0"
-            onClick={() => props.onCopy(props.hostId)}
-            aria-label="Copy host ID"
-          >
-            <Copy className="size-3.5" />
-          </Button>
-        </TooltipWrapper>
-      </span>
-    </div>
   );
 }
 
