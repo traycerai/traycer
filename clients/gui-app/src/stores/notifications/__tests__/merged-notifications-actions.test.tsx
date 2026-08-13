@@ -9,6 +9,15 @@ import type {
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
+  createNotificationRoomEntryMap,
+  NOTIFICATIONS_ARRAY_KEY,
+  type NotificationRoomEntryMap,
+} from "@traycer/protocol/notifications/notification-room";
+import {
+  type NotificationEntry,
+  NOTIFICATION_EVENT_TYPES,
+} from "@traycer/protocol/notifications/notification-entry";
+import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
@@ -25,7 +34,10 @@ import {
   useMergedNotificationRow,
   useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
-import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
+import {
+  __resetNotificationsStoreForTests,
+  useNotificationsStore,
+} from "@/stores/notifications/notifications-store";
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
@@ -199,6 +211,18 @@ function cloudDone(
     },
     presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
   };
+}
+
+function seedGlobal(entries: ReadonlyArray<NotificationEntry>): void {
+  const document = useNotificationsStore.getState().doc;
+  const notifications = document.getArray<NotificationRoomEntryMap>(
+    NOTIFICATIONS_ARRAY_KEY,
+  );
+  document.transact(() => {
+    for (const entry of entries) {
+      notifications.push([createNotificationRoomEntryMap(entry)]);
+    }
+  });
 }
 
 function applyHostSnapshot(
@@ -1135,6 +1159,45 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     expect(
       useAppLocalNotificationsStore.getState().byId["terminal-crash"].readAt,
     ).toBeTypeOf("number");
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+  });
+
+  it("marks Notifications-room collaboration rows read alongside the cloud feed", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    seedGlobal([
+      {
+        id: "epic-invite",
+        createdAt: 2,
+        readAt: null,
+        event: {
+          kind: NOTIFICATION_EVENT_TYPES.INVITED,
+          epicId: "epic-1",
+          actorName: "Alice",
+        },
+      },
+    ]);
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(useNotificationsStore.getState().entries[0]?.readAt).toBeTypeOf(
+      "number",
+    );
     await waitFor(() => {
       expect(hostRequestMock).toHaveBeenCalledWith(
         "host.notifications.cloudFeed.markAllRead",
