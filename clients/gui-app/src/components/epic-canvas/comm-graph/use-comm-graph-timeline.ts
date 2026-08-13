@@ -29,6 +29,7 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import {
   commGraphAgentIdsAsOfCursor,
+  commGraphCreationCursorByAgentId,
   commGraphCursorMatchesEvent,
   commGraphEventKey,
   commGraphEventsAsOfCursor,
@@ -48,7 +49,11 @@ const LIVE_PULSE_MS = 1_400;
 export interface CommGraphTimelineProjection {
   /** The full merged array up to the cursor - what the canvas projects. */
   readonly asOfEvents: ReadonlyArray<CommGraphEvent>;
-  /** Agents that exist as of the cursor (they appear at `createdAt`). */
+  /**
+   * Agents that exist as of the cursor. When their `agent_created` event is
+   * available, they appear at that ordered cursor; historical agents without
+   * one fall back to `createdAt`.
+   */
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly pulse: CommGraphPulse | null;
 }
@@ -70,9 +75,13 @@ export function useCommGraphTimelineProjection(
     () => commGraphEventsAsOfCursor(events, cursor),
     [cursor, events],
   );
+  const creationCursorByAgentId = useMemo(
+    () => commGraphCreationCursorByAgentId(events),
+    [events],
+  );
   const visibleAgentIds = useMemo(
-    () => commGraphAgentIdsAsOfCursor(agents, cursor),
-    [agents, cursor],
+    () => commGraphAgentIdsAsOfCursor(agents, cursor, creationCursorByAgentId),
+    [agents, creationCursorByAgentId, cursor],
   );
 
   // WHAT arrived is decided by the subscription layer (it owns the per-host
