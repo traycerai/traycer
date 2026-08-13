@@ -57,6 +57,7 @@ afterEach(() => {
     );
   }
   copyImageBlobToClipboard.mockClear();
+  vi.restoreAllMocks();
 });
 
 describe("copyImageToClipboard", () => {
