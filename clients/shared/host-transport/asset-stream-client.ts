@@ -35,12 +35,15 @@ export interface AssetStreamHeader {
  *   mirror compatibility check rejected the subscribe before anything was
  *   sent. Old-host behaviour: falls back to today's placeholder.
  * - `"fatal"` - any other fatal close, or a wire-protocol violation: an
- *   unparseable frame, a second `assetHeader`, a chunk arriving before the
- *   header/out of sequence/duplicated, a chunk's payload length not matching
- *   its declared `byteLength`, cumulative bytes exceeding the header's
- *   declared size or `MAX_ASSET_BYTES`, a chunk without its paired binary
- *   payload, or `assetComplete` before `assetHeader`. Any invalid frame ends
- *   the fetch immediately - a strict state machine, not best-effort parsing.
+ *   unparseable frame, a second `assetHeader` reporting a DIFFERENT identity
+ *   than the one already retained (a same-identity second `assetHeader` is a
+ *   reconnect resumption instead - see the `reconnecting` handling below), a
+ *   chunk arriving before the header/out of sequence/duplicated, a chunk's
+ *   payload length not matching its declared `byteLength`, cumulative bytes
+ *   exceeding the header's declared size or `MAX_ASSET_BYTES`, a chunk
+ *   without its paired binary payload, or `assetComplete` before
+ *   `assetHeader`. Any invalid frame ends the fetch immediately - a strict
+ *   state machine, not best-effort parsing.
  * - `"interrupted"` - the session closed (caller or transport drop) before
  *   `assetComplete`, with no fatal detail to explain why.
  * - `"length-mismatch"` - every chunk arrived but the assembled byte count
@@ -111,6 +114,8 @@ export class AssetStreamClient<
   private header: AssetStreamHeader | null;
   private chunks: Uint8Array[];
   private receivedBytes: number;
+  /** Set for exactly the ONE `assetHeader` expected right after a `reconnecting` reset, so it (and only it) can be treated as a resumption instead of the ordinary duplicate-header protocol violation. Cleared the instant that header is processed, whichever way. */
+  private awaitingReconnectHeader: boolean;
 
   constructor(options: AssetStreamClientOptions<Method>) {
     this.callbacks = options.callbacks;
@@ -120,6 +125,7 @@ export class AssetStreamClient<
     this.header = null;
     this.chunks = [];
     this.receivedBytes = 0;
+    this.awaitingReconnectHeader = false;
 
     this.session = options.wsStreamClient.subscribe(
       options.method,
@@ -130,9 +136,22 @@ export class AssetStreamClient<
     });
     this.session.onStatusChange((status, reason) => {
       if (status === "reconnecting") {
-        this.header = null;
+        // Only the PARTIAL payload is attempt-scoped - `chunks`/
+        // `receivedBytes` reset so the retry's budget/sequence checks
+        // start clean. `header` is deliberately RETAINED (not nulled) as
+        // the attempt's contract: the retry's own `assetHeader` is checked
+        // against it below rather than treated as a fresh one, since
+        // `onHeader` must still fire at most once per subscription
+        // (sol re-review, ticket 09 reconnect follow-up) - re-emitting it
+        // on every reconnect would double-acquire the consumer's single
+        // blob-cache lease and, for a hook mounting mid-drop, replay a
+        // header a shared subscription can no longer stand behind.
         this.chunks = [];
         this.receivedBytes = 0;
+        // Only meaningful if a header had already arrived before the drop -
+        // an attempt that never got that far has nothing to resume, so its
+        // eventual `assetHeader` is the ordinary first one, not a retry.
+        this.awaitingReconnectHeader = this.header !== null;
         return;
       }
       if (status === "closed") {
@@ -166,6 +185,31 @@ export class AssetStreamClient<
     switch (frame.kind) {
       case "assetHeader": {
         if (this.header !== null) {
+          // `awaitingReconnectHeader` is true for exactly the ONE header
+          // expected right after a `reconnecting` reset (above) - any OTHER
+          // second `assetHeader` is the ordinary wire-protocol violation
+          // Fix 1 already guards against and stays fatal unconditionally.
+          const isReconnectRetry = this.awaitingReconnectHeader;
+          this.awaitingReconnectHeader = false;
+          if (isReconnectRetry) {
+            // A retry that reports the IDENTICAL identity is a resumption -
+            // swallow it (assembly already reset to empty) rather than
+            // firing `onHeader` a second time. A DIFFERENT identity (the
+            // underlying file changed during the drop) can't be reconciled
+            // with a consumer already mid-fetch on the old one - fail
+            // through the normal path below, same as any other mid-stream
+            // error; the consumer's usual fallback/re-stat recovers it.
+            const retained = this.header;
+            const isSameIdentity =
+              retained.contentIdentity === frame.contentIdentity &&
+              retained.sizeBytes === frame.sizeBytes &&
+              retained.mediaType === frame.mediaType &&
+              retained.width === frame.width &&
+              retained.height === frame.height;
+            if (isSameIdentity) {
+              return;
+            }
+          }
           this.fail({
             reason: "fatal",
             message: "assetHeader arrived more than once",
