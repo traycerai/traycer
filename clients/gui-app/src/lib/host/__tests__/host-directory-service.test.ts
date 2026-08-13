@@ -3270,6 +3270,62 @@ describe("HostDirectoryService", () => {
         expect(directory.getSelected()?.hostId).toBe(a.hostId);
       });
 
+      it("hands back to a failover origin proven live by a READY session while the registry still says offline", async () => {
+        // Tabs stay bound to their origin host across an app-wide failover,
+        // so a bound tab's fuse-recovery dial can succeed - producing a ready
+        // session - while the registry spends the whole credential-plane
+        // incident saying `offline`. That session is firsthand positive
+        // evidence (the same evidence that outranks the cloud in
+        // `isConfirmedTransportRefusal` / `isConfirmedHostDeath`), so the
+        // hand-back must not wait for the cloud verdict to catch up.
+        const a = realRemoteEntryWithLastSeen(
+          "session-back-a",
+          "Session Back A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "session-back-b",
+          "Session Back B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        // A dies genuinely (past the fuse window); failover parks on B.
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        const offlineA = realRemoteEntryWithLastSeen(
+          "session-back-a",
+          "Session Back A",
+          "offline",
+          oldLastSeen,
+        );
+        remotes = [offlineA, b];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        // A bound tab's dial to A succeeds; the registry row never changes.
+        readySessionHosts.value.add("session-back-a");
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+      });
+
       it("does NOT hand back over a newer notification-driven selection (P2): A -> failover B -> notification C -> A recovers => stays C", async () => {
         // The auto/transient seam the cold review named: the hand-back marker
         // remembers A, the user then follows a notification to C

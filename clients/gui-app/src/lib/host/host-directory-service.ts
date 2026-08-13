@@ -1739,11 +1739,26 @@ function nextStreakCount(
  * be adopted as a failover target or trigger the hand-back). Death itself is
  * still judged by `isConfirmedHostDeath` below, so a degraded `unknown` read
  * remains non-evidence exactly as before.
+ *
+ * A READY remote session is the OTHER positive answer, and it is stronger
+ * than the projection: a client holding an open E2E session has firsthand
+ * proof the host is up (the same evidence that outranks the cloud in
+ * `isConfirmedTransportRefusal` and `isConfirmedHostDeath`). Tabs stay bound
+ * to their origin host across an app-wide failover, so exactly this arises: a
+ * bound tab's fuse-recovery dial succeeds while the registry still says
+ * `offline` - the origin is proven live and must be eligible for the
+ * hand-back (and a proven-live candidate selectable) without waiting for the
+ * cloud verdict to catch up. This is evidence, not permission: a fuse-window
+ * `offline` with NO session still answers `false` here.
  */
 function isEntryDialable(entry: HostDirectoryEntry): boolean {
-  return (
-    entry.websocketUrl !== null && entry.transportDialability === "dialable"
-  );
+  if (entry.websocketUrl === null) {
+    return false;
+  }
+  if (entry.transportDialability === "dialable") {
+    return true;
+  }
+  return hasReadyRemoteSession(entry.hostId);
 }
 
 /**
