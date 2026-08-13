@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
@@ -26,15 +27,21 @@ import {
   epicArtifactMentionToken,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  EMPTY_GITHUB_SECTION_CONTEXT,
+  githubMentionCategoryAvailable,
+  isArtifactMentionStep,
   mentionProviderRegistry,
+  parseGithubReferenceQuery,
   ROOT_MENTION_STEP,
   type ComposerMentionProviderContext,
   type MentionEpicRequest,
   type MentionFlowStep,
+  type MentionStepChrome,
   type MentionStepEntries,
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
 import { shouldCloseMentionForNoMatches } from "@/lib/composer/mentions/mention-dismissal";
+import { useGithubMentionSections } from "./use-github-mention-sections";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
@@ -58,6 +65,9 @@ import type {
 
 const MENTION_RESULT_LIMIT = 25;
 const MENTION_QUERY_DEBOUNCE_MS = 250;
+// Artifacts answer from local epic state behind a cloud list; a refetch that
+// has not settled in ten seconds is not going to.
+const ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 const EMPTY_WORKSPACE_ENTRIES: ReadonlyArray<WorkspaceEntry> = [];
@@ -221,6 +231,35 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, cachedEpicTasks, debouncedQuery],
   );
 
+  // PR/issue rows for whichever step is open, plus that step's chrome. Both
+  // sections are read cache-only at root so root search has warm rows without
+  // a GitHub call per keystroke; only an opened section fetches.
+  const github = useGithubMentionSections({
+    client: hostClient,
+    active,
+    step,
+    currentEpicId,
+    mentionRoots,
+    query,
+    debouncedQuery,
+    limit: MENTION_RESULT_LIMIT,
+  });
+
+  // Request-shaping contexts carry no rows; the GitHub arm is only read by
+  // `stepEntries`/`rootSearchEntries`, which run off `resolvedContext` below.
+  // The request contexts drive host lookups, never the rendered rows, so this
+  // stub reports `supported: false` - it is not an answer about the host, and
+  // nothing should read a category's availability off it.
+  const emptyGithubContext = useMemo(
+    () => ({
+      pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+      issues: EMPTY_GITHUB_SECTION_CONTEXT,
+      supported: false,
+      now: 0,
+    }),
+    [],
+  );
+
   // Live `query` drives the picker shell + workspace requests so file/folder
   // results feel immediate; cloud-backed artifact requests use the debounced
   // query so each keystroke doesn't fan out an `epic.mention*` RPC per provider.
@@ -235,8 +274,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
+      github: emptyGithubContext,
     }),
-    [currentEpicId, epicAttachedRoots, mentionRoots, query],
+    [currentEpicId, emptyGithubContext, epicAttachedRoots, mentionRoots, query],
   );
 
   const debouncedRequestContext = useMemo<ComposerMentionProviderContext>(
@@ -250,8 +290,15 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
+      github: emptyGithubContext,
     }),
-    [currentEpicId, debouncedQuery, epicAttachedRoots, mentionRoots],
+    [
+      currentEpicId,
+      debouncedQuery,
+      emptyGithubContext,
+      epicAttachedRoots,
+      mentionRoots,
+    ],
   );
 
   const workspaceRequests = useMemo<ReadonlyArray<MentionWorkspaceRequest>>(
@@ -281,6 +328,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     isLoading: epicLoading,
     isFetching: epicFetching,
     error: epicError,
+    refetch: refetchEpicMentions,
   } = useEpicMentionEntries({
     requests: epicRequests,
   });
@@ -349,6 +397,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: epicAgentEntries,
       terminalEntries: epicTerminalEntries,
       epicAttachedRoots,
+      github: github.context,
     }),
     [
       currentEpicId,
@@ -357,6 +406,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicAttachedRoots,
       epicEntries,
       epicRequests.length,
+      github.context,
       mentionRoots,
       query,
       workspaceEntries,
@@ -383,15 +433,50 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [entries],
   );
 
+  // A source counts only when it was actually asked for rows: an idle query's
+  // flags say nothing about a step that never requested it.
   const loading =
     active &&
-    ((workspaceRequests.length > 0 && workspaceLoading) ||
-      (epicRequests.length > 0 && epicLoading));
+    anySourcePending({
+      workspaceRequested: workspaceRequests.length > 0,
+      workspacePending: workspaceLoading,
+      epicRequested: epicRequests.length > 0,
+      epicPending: epicLoading,
+      githubPending: github.loading,
+    });
 
   const fetching =
     active &&
-    ((workspaceRequests.length > 0 && workspaceFetching) ||
-      (epicRequests.length > 0 && epicFetching));
+    anySourcePending({
+      workspaceRequested: workspaceRequests.length > 0,
+      workspacePending: workspaceFetching,
+      epicRequested: epicRequests.length > 0,
+      epicPending: epicFetching,
+      // Core flows asks for the header spinner AND the `Checking…` stamp during
+      // a background refetch, explicitly "same as Artifacts" - so the GitHub
+      // sections drive it too. They sit in the same menu as the section that
+      // does; reporting in-flight work differently there would read as one of
+      // them being broken.
+      githubPending: github.checking,
+    });
+
+  const readiness = useReactiveHostReadiness(hostClient);
+  const stepChrome = useMentionStepChrome({
+    active,
+    step,
+    githubChrome: github.chrome,
+    artifactRefetch: refetchEpicMentions,
+    artifactFetching: epicFetching,
+    hostId: readiness.hostId,
+    epicId: epicIdOrEmpty,
+  });
+
+  useEffect(() => {
+    if (!active || sessionId === null) return;
+    pickerStore
+      .getState()
+      .setStepChrome({ sessionId, step, chrome: stepChrome });
+  }, [active, pickerStore, sessionId, step, stepChrome]);
 
   useEffect(() => {
     if (!active || sessionId === null) return;
@@ -442,6 +527,20 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     terminalLoading: terminalListQuery.isLoading,
     terminalFetching: terminalListQuery.isFetching,
     terminalError: terminalListQuery.error,
+    githubErrored: github.errored,
+    // Only a reference the GitHub sections could actually resolve earns the
+    // exemption. The exemption exists because those sections offer a
+    // `Resolve in ...` row for a reference the cache does not hold - but when
+    // the category is unavailable, neither section contributes any row at
+    // all. Exempting `@#123` there suppresses the ordinary zero-match close
+    // over a picker that is genuinely empty and can never fill, and it stays
+    // open indefinitely. Availability is the provider's OWN predicate, not a
+    // restated copy of it, so a new availability term cannot strand this gate.
+    referenceQuery:
+      githubMentionCategoryAvailable(
+        github.context.supported,
+        mentionRoots.length,
+      ) && parseGithubReferenceQuery(query) !== null,
   });
 
   useEffect(() => {
@@ -463,6 +562,118 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [dismissForNoMatches, pickerStore, sessionId]);
 }
 
+interface SourcePendingInput {
+  readonly workspaceRequested: boolean;
+  readonly workspacePending: boolean;
+  readonly epicRequested: boolean;
+  readonly epicPending: boolean;
+  readonly githubPending: boolean;
+}
+
+function anySourcePending(input: SourcePendingInput): boolean {
+  return (
+    (input.workspaceRequested && input.workspacePending) ||
+    (input.epicRequested && input.epicPending) ||
+    input.githubPending
+  );
+}
+
+interface MentionStepChromeInput {
+  readonly active: boolean;
+  readonly step: MentionFlowStep;
+  readonly githubChrome: MentionStepChrome | null;
+  readonly artifactRefetch: () => Promise<void>;
+  readonly artifactFetching: boolean;
+  /**
+   * The bound host, part of the refresh button's target identity beside the
+   * epic. The landing composer's `epicId` is empty on EVERY host, so without
+   * the host in the key an app-wide host swap mid-refresh keeps the same
+   * control mounted - its component-local spinner then holds the NEW host's
+   * Refresh disabled until the DEPARTED host's promise settles or times out.
+   */
+  readonly hostId: string | null;
+  /** Artifacts are per-epic, so the epic is this refresh button's target. */
+  readonly epicId: string;
+}
+
+/**
+ * The chrome the CURRENT step publishes.
+ *
+ * The GitHub sections bring their own; Artifacts contributes only a refresh,
+ * and this is where the long-standing no-op is fixed. The button used to call
+ * `setStep` with the step it was already on, which the picker store
+ * early-returns from - so it spun for its 350ms minimum and refetched nothing.
+ * It now calls the `epic.mention*` queries' real `refetch`, which was exposed
+ * all along and never called.
+ */
+function useMentionStepChrome(
+  input: MentionStepChromeInput,
+): MentionStepChrome | null {
+  const {
+    active,
+    step,
+    githubChrome,
+    artifactRefetch,
+    artifactFetching,
+    hostId,
+    epicId,
+  } = input;
+  // `refetch` is rebuilt every render (it closes over the current query array),
+  // so publishing it directly would change the chrome's identity on every pass
+  // and republish forever. The ref holds ONE stable closure over the latest.
+  const artifactRefetchRef = useRef(artifactRefetch);
+  useEffect(() => {
+    artifactRefetchRef.current = artifactRefetch;
+  }, [artifactRefetch]);
+  const refreshArtifacts = useCallback(() => artifactRefetchRef.current(), []);
+
+  return useMemo<MentionStepChrome | null>(() => {
+    if (!active) return null;
+    if (githubChrome !== null) return githubChrome;
+    if (!isArtifactMentionStep(step)) return null;
+    return {
+      refresh: {
+        onRefresh: refreshArtifacts,
+        refreshing: artifactFetching,
+        label: "Refresh artifacts",
+        timeoutMs: ARTIFACT_REFRESH_TIMEOUT_MS,
+        // Answered BY the bound host FOR the current epic, so both name the
+        // target - same identity rule as the GitHub sections' key, whose
+        // `scopeKey` already carries the host. See `hostId` above for the
+        // landing-composer swap this remounts across.
+        targetKey: artifactsRefreshTargetKey(hostId, epicId),
+      },
+      freshness: null,
+      notice: null,
+      filter: null,
+      banner: null,
+      appendedStatus: null,
+      emptyLabel: null,
+    };
+  }, [
+    active,
+    artifactFetching,
+    epicId,
+    githubChrome,
+    hostId,
+    refreshArtifacts,
+    step,
+  ]);
+}
+
+/**
+ * The artifact refresh button's remount identity: host AND epic. The two
+ * landing composers of two hosts share the empty epic, so an epic-only key
+ * survives an app-wide host swap and strands the new host's control behind
+ * the departed host's in-flight spinner.
+ */
+export function artifactsRefreshTargetKey(
+  hostId: string | null,
+  epicId: string,
+): string {
+  return `artifacts\x1f${hostId ?? ""}\x1f${epicId}`;
+}
+
 interface MentionNoMatchVerdictInput {
   readonly active: boolean;
   readonly stepKind: "root" | "provider";
@@ -479,6 +690,13 @@ interface MentionNoMatchVerdictInput {
   readonly terminalLoading: boolean;
   readonly terminalFetching: boolean;
   readonly terminalError: Error | null;
+  /**
+   * Already requested-gated at the source: each catalog reports an error only
+   * while its own read is enabled, so there is no separate request count to
+   * pair it with here.
+   */
+  readonly githubErrored: boolean;
+  readonly referenceQuery: boolean;
 }
 
 /**
@@ -496,7 +714,8 @@ export function mentionNoMatchDismissVerdict(
   const sourcesErrored =
     (input.workspaceRequestCount > 0 && input.workspaceError !== null) ||
     (input.epicRequestCount > 0 && input.epicError !== null) ||
-    (input.terminalRequested && input.terminalError !== null);
+    (input.terminalRequested && input.terminalError !== null) ||
+    input.githubErrored;
   const terminalPending =
     input.terminalRequested &&
     (input.terminalLoading || input.terminalFetching);
@@ -510,6 +729,7 @@ export function mentionNoMatchDismissVerdict(
       loading: input.loading || terminalPending,
       fetching: input.fetching,
       sourcesErrored,
+      referenceQuery: input.referenceQuery,
     })
   );
 }

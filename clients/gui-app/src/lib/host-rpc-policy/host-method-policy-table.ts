@@ -894,6 +894,15 @@ export const HOST_METHOD_POLL_TABLE = {
   // No poll: the PR detail stream is what notices a new push, and a re-render
   // off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The composer's PR/issue mention sections. Both are latest-wins with no
+  // poll: the menu is open for seconds at a time and drives every fetch
+  // explicitly (open, refresh click, filter change), so there is no cadence
+  // to keep - and a superseded read has nothing worth waiting for.
+  "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
+  // Latest-wins is load-bearing here rather than incidental: the section
+  // searches as the user types, and a queued query that has already been
+  // retyped past must not be the one that lands.
+  "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.

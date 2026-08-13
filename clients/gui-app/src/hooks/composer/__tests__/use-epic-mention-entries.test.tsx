@@ -85,4 +85,63 @@ describe("useEpicMentionEntries", () => {
 
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("exposes a refetch that re-issues every epic.mention* query and returns a Promise", async () => {
+    // Regression for the Artifacts refresh no-op: the top-bar button used to
+    // call setStep(current), which the picker store early-returns from. The
+    // button now awaits this refetch, so it must actually hit the host again.
+    request.mockResolvedValue({
+      entries: [
+        {
+          kind: "epic",
+          id: "epic:epic-1",
+          token: "epic:epic-1",
+          epicId: "epic-1",
+          label: "Login flow",
+          description: "1 spec",
+          status: "active",
+          updatedAt: 123,
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useEpicMentionEntries({
+          requests: [
+            {
+              method: "epic.mentionEpics",
+              params: { query: "login", limit: 8 },
+            },
+            {
+              method: "epic.mentionSpecs",
+              params: { query: "login", limit: 8 },
+            },
+          ],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data.length).toBeGreaterThan(0));
+    const callsAfterMount = request.mock.calls.length;
+    expect(callsAfterMount).toBeGreaterThanOrEqual(2);
+
+    const pending = result.current.refetch();
+    expect(pending).toBeInstanceOf(Promise);
+    await pending;
+
+    await waitFor(() =>
+      expect(request.mock.calls.length).toBeGreaterThan(callsAfterMount),
+    );
+    // Both underlying queries must be re-issued.
+    const methodsAfterRefetch = request.mock.calls.map(
+      (call: ReadonlyArray<unknown>) => call[0],
+    );
+    expect(
+      methodsAfterRefetch.filter((m) => m === "epic.mentionEpics").length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      methodsAfterRefetch.filter((m) => m === "epic.mentionSpecs").length,
+    ).toBeGreaterThanOrEqual(2);
+  });
 });

@@ -23,6 +23,7 @@ import {
   prReviewDecisionTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
+import { REVIEW_DECISION_LABEL } from "@/lib/pr/pr-review-decision-label";
 import { usePresentPrOwners } from "@/hooks/pr/use-present-pr-owners";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -67,12 +68,6 @@ const REVIEWER_STATE: Record<
     label: "Review pending",
   },
 };
-
-const REVIEW_DECISION_LABEL = {
-  approved: "Approved",
-  changes_requested: "Changes req.",
-  review_required: "Review required",
-} as const;
 
 export interface PrDetailCardProps {
   readonly core: PrDetailCore;
