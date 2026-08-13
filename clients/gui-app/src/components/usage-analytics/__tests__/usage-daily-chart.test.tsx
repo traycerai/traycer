@@ -1,15 +1,50 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { LineSeriesOption } from "echarts/charts";
+import {
+  clearEChartsMockInstances,
+  getEChartsMockInstances,
+} from "../../../../__tests__/test-browser-apis";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import {
   buildUsageChartColumns,
   type UsageBucket,
 } from "@/lib/usage-analytics/usage-chart-data";
+import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
 import { buildUsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
+
+beforeEach(() => {
+  clearEChartsMockInstances();
+});
 
 afterEach(() => {
   cleanup();
 });
+
+/** The option the mocked chart instance most recently received. */
+function latestChartOption(): UsageChartOption {
+  const instance = getEChartsMockInstances().at(-1);
+  const option = instance?.options.at(-1);
+  if (option === undefined) throw new Error("no ECharts option captured");
+  return option as UsageChartOption;
+}
+
+function seriesByName(
+  option: UsageChartOption,
+  name: string,
+): LineSeriesOption {
+  const raw = option.series ?? [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const found = list.find((entry) => entry.name === name);
+  if (found === undefined) throw new Error(`series ${name} not in option`);
+  return found;
+}
 
 function bucket(overrides: Partial<UsageBucket>): UsageBucket {
   return {
@@ -61,6 +96,12 @@ describe("<UsageDailyChart /> legend filter", () => {
         .getByRole("button", { name: "claude" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
+    // The chip updating is not enough - the chart must actually receive an
+    // option with the hidden series zeroed (still PRESENT, so the slot and
+    // color never shift) and the other series untouched.
+    const option = latestChartOption();
+    expect(seriesByName(option, "codex").data).toEqual([0]);
+    expect(seriesByName(option, "claude").data).toEqual([3]);
   });
 
   it("keeps the legend reachable when a refetch narrows the window to the hidden series", () => {
@@ -97,6 +138,36 @@ describe("<UsageDailyChart /> legend filter", () => {
     // Nothing is filtered any more, so the single-series suppression applies
     // again - the legend going away IS the proof the series came back.
     expect(screen.queryByTestId("usage-daily-chart-legend")).toBeNull();
+  });
+
+  it("exposes every plotted value without a pointer, via a screen-reader table", () => {
+    // The bar version made each day a focusable button; ECharts draws one
+    // opaque graphic whose values live only in a pointer-triggered tooltip.
+    // In the epic dialog the companion table is grouped by CHAT, so this is
+    // the only non-pointer path to the per-day numbers there.
+    render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
+    const table = screen.getByTestId("usage-daily-chart-data-table");
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((header) => header.textContent),
+    ).toEqual(["Day", "claude", "codex"]);
+    const row = within(table).getByRole("row", { name: /Aug 1/ });
+    expect(row.textContent).toContain("$3.00");
+    expect(row.textContent).toContain("$5.00");
+  });
+
+  it("drops a filtered series from the accessible table too", () => {
+    render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
+    fireEvent.click(screen.getByRole("button", { name: "codex" }));
+    const table = screen.getByTestId("usage-daily-chart-data-table");
+    // The table is the same view by another means - it must not contradict
+    // what the chart draws.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((header) => header.textContent),
+    ).toEqual(["Day", "claude"]);
   });
 
   it("hides the legend for a single series that is not filtered out", () => {

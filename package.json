@@ -102,6 +102,7 @@
     "date-fns": "^4.4.0",
     "diff": "^9.0.0",
     "dompurify": "^3.4.12",
+    "echarts": "^6.1.0",
     "electron": "^42.8.1",
     "electron-builder": "^26.15.3",
     "electron-log": "^5.4.4",
