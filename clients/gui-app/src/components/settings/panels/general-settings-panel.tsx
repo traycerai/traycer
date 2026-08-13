@@ -30,7 +30,10 @@ import {
 import { startMigrationRun } from "@/components/migration/migration-run-handle";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { isProductIntroDisabled } from "@/lib/thanos-flags";
+import {
+  isProductIntroDisabled,
+  isThanosSingleUserChrome,
+} from "@/lib/thanos-flags";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { modLabel } from "@/lib/keybindings/platform";
 import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
@@ -282,34 +285,36 @@ export function GeneralSettingsPanel() {
               }
             />
           )}
-          <SettingsRow
-            label="Data migration"
-            description={
-              migrationProgressLabel ??
-              "Retry moving local SQLite tasks and epics to cloud."
-            }
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={migrationIsRunning}
-                data-testid="settings-reattempt-migration"
-                onClick={() => {
-                  startMigrationRun();
-                }}
-              >
-                {migrationIsRunning ? (
-                  <AgentSpinningDots
-                    className="text-muted-foreground"
-                    testId="settings-reattempt-migration-spinner"
-                    variant={undefined}
-                  />
-                ) : null}
-                Re-attempt migration
-              </Button>
-            }
-          />
+          {isThanosSingleUserChrome() ? null : (
+            <SettingsRow
+              label="Data migration"
+              description={
+                migrationProgressLabel ??
+                "Retry moving local SQLite tasks and epics to cloud."
+              }
+              control={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={migrationIsRunning}
+                  data-testid="settings-reattempt-migration"
+                  onClick={() => {
+                    startMigrationRun();
+                  }}
+                >
+                  {migrationIsRunning ? (
+                    <AgentSpinningDots
+                      className="text-muted-foreground"
+                      testId="settings-reattempt-migration-spinner"
+                      variant={undefined}
+                    />
+                  ) : null}
+                  Re-attempt migration
+                </Button>
+              }
+            />
+          )}
         </SettingsGroup>
 
         <DangerZoneSection />

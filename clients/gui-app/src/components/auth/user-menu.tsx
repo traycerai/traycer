@@ -17,6 +17,7 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { ExternalLink, LogOut, Settings } from "lucide-react";
 import { useState } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 export interface UserMenuProps {
   readonly userName: string;
@@ -105,22 +106,28 @@ export function UserMenu(props: UserMenuProps) {
             App settings
           </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem
-          data-testid="user-menu-manage-subscription"
-          onSelect={() => {
-            setOpen(false);
-            void runnerHost.openExternalLink(manageSubscriptionUrl).then(() => {
-              Analytics.getInstance().track(
-                AnalyticsEvent.SubscriptionManagementOpened,
-                { source: "direct_ui" },
-              );
-            });
-          }}
-        >
-          <ExternalLink className="size-3.5" />
-          Manage subscription
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
+        {isThanosSingleUserChrome() ? null : (
+          <DropdownMenuItem
+            data-testid="user-menu-manage-subscription"
+            onSelect={() => {
+              setOpen(false);
+              void runnerHost
+                .openExternalLink(manageSubscriptionUrl)
+                .then(() => {
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.SubscriptionManagementOpened,
+                    { source: "direct_ui" },
+                  );
+                });
+            }}
+          >
+            <ExternalLink className="size-3.5" />
+            Manage subscription
+          </DropdownMenuItem>
+        )}
+        {props.showAppSettings || !isThanosSingleUserChrome() ? (
+          <DropdownMenuSeparator />
+        ) : null}
         <DropdownMenuItem
           data-testid="user-menu-sign-out"
           variant="destructive"

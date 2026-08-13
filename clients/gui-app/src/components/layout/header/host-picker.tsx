@@ -24,6 +24,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { uiQueryKeys } from "@/lib/query-keys";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 /**
  * Generic shell-agnostic host picker.
@@ -199,7 +200,9 @@ function HostPickerList(props: HostPickerListProps) {
   }
 
   const showUpsell =
-    remoteRestricted && entries.some((entry) => entry.kind === "remote");
+    !isThanosSingleUserChrome() &&
+    remoteRestricted &&
+    entries.some((entry) => entry.kind === "remote");
 
   return (
     <div className="flex flex-col gap-2">

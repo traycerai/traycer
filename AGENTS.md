@@ -109,10 +109,26 @@ pre-commit run --all-files      # explicit full-repo static validation
 
 make dev-desktop                # signed host from Releases + HMR desktop
 make dev-desktop VERSION=1.2.3  # pin host release
+
+# Packaged dogfood install → /Applications (unsigned + ad-hoc codesign)
+make install-local-desktop                    # CLI + app
+make install-local-desktop ARGS="--skip-cli"  # GUI-only, faster
 ```
 
 `make dev-desktop` talks to the **production** cloud — no local backends. Details:
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+`make install-local-desktop` wraps `scripts/install-local-desktop.sh`: stamps
+production config, packages, ad-hoc codesigns, installs to `/Applications`, and
+syncs `~/.traycer/cli/bin/traycer`. Keep
+`~/.traycer/desktop-local-storage-key` stable across rebuilds (encrypted
+localStorage).
+
+**Thanos single-user chrome:** `isThanosSingleUserChrome()` in
+`clients/gui-app/src/lib/thanos-flags.ts` hides billing/sharing/account
+settings. False in unit tests. Login is still required (cloud history).
+Plans: `docs/superpowers/plans/2026-08-12-thanos-hide-account-chrome.md`
+and `docs/superpowers/plans/2026-08-12-thanos-no-login-offline.md`.
 
 **Commits:** do **not** manually run `compile` / `build` / `lint` / `format`
 before committing. `pre-commit` already runs the affected workspace checks

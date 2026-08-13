@@ -37,6 +37,7 @@ import {
   resolveAccountContext,
   useAccountContextStore,
 } from "@/stores/auth/account-context-store";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 export function TraycerSubscriptionSection() {
   const query = useAuthUser();
@@ -54,6 +55,8 @@ export function TraycerSubscriptionSection() {
   const subscription = selectSubscription(user, resolved, teams);
 
   const manageUrl = resolveManageSubscriptionUrl(runnerHost.authnBaseUrl);
+
+  if (isThanosSingleUserChrome()) return null;
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">

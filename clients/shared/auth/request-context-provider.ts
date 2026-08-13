@@ -37,6 +37,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
+  identityFromClaims,
   type RequestContext,
   type RequestContextOrigin,
 } from "@traycer/protocol/auth/request-context";
@@ -122,6 +123,17 @@ export interface RotateCurrentBearerOptions {
   readonly bearerToken: string;
 }
 
+/**
+ * Optimistic cached-session install: a stored bearer plus locally-cached
+ * identity, with no full `AuthenticatedUser` in hand (authn unreachable).
+ * Uses `identityFromClaims` so we never stub a fake user graph.
+ */
+export interface SetCachedSessionOptions {
+  readonly userId: string;
+  readonly username: string;
+  readonly bearerToken: string;
+}
+
 export interface DefaultRequestContextProviderOptions {
   /**
    * Origin tag attached to every minted context. Renderer/extension
@@ -193,6 +205,46 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       connectionId: undefined,
       operationId: options.operationId,
       externalAbortSignal: options.externalAbortSignal,
+    });
+    this.currentContext = next;
+    if (previous !== null) {
+      const reason =
+        previous.identity.userId === next.identity.userId
+          ? "auth-resigned-in"
+          : "auth-identity-changed";
+      previous.abort(reason);
+    }
+    this.emit(next);
+    return next;
+  }
+
+  /**
+   * Install a pre-minted context from a cached identity + stored bearer
+   * without a full `AuthenticatedUser`. Renderer-origin. Aborts any
+   * previous context the same way `setSignedIn` does.
+   */
+  setCachedSession(options: SetCachedSessionOptions): RequestContext {
+    this.assertNotDisposed();
+    const previous = this.currentContext;
+    const claimsIdentity = identityFromClaims({
+      userId: options.userId,
+      providerHandle: null,
+    });
+    const identity =
+      options.username.length === 0
+        ? claimsIdentity
+        : Object.freeze({
+            userId: claimsIdentity.userId,
+            username: options.username,
+            providerHandle: claimsIdentity.providerHandle,
+          });
+    const next = createRequestContext({
+      identity,
+      bearerToken: options.bearerToken,
+      origin: this.origin,
+      connectionId: undefined,
+      operationId: undefined,
+      externalAbortSignal: undefined,
     });
     this.currentContext = next;
     if (previous !== null) {

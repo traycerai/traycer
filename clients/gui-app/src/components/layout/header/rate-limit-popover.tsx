@@ -105,6 +105,7 @@ import {
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import { cn } from "@/lib/utils";
+import { isThanosSingleUserChrome } from "@/lib/thanos-flags";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -668,16 +669,19 @@ function RateLimitPopoverBody({
   // disappears live as either changes - not snapshotted at popover-open time.
   const traycerSubscription = useTraycerSubscription();
 
+  const includeTraycer =
+    traycerSubscription.eligible && !isThanosSingleUserChrome();
+
   const railTabs = useMemo(
-    () => orderRailTabs(providers, traycerSubscription.eligible),
-    [providers, traycerSubscription.eligible],
+    () => orderRailTabs(providers, includeTraycer),
+    [providers, includeTraycer],
   );
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
-  if (providers.length === 0 && !traycerSubscription.eligible) {
+  if (providers.length === 0 && !includeTraycer) {
     return (
       <RateLimitPopoverResizeSurface variant="empty">
         <RateLimitZeroState onClose={onClose} />

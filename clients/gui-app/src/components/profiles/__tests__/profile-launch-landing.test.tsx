@@ -6,6 +6,7 @@ import { activateTabIntent } from "@/lib/tab-navigation";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   __resetProfileLaunchLandingForTesting,
@@ -73,7 +74,13 @@ function resetStores(): void {
   useProjectProfilesStore.getState().resetForTests();
   useActiveProjectProfileStore.getState().resetForTests();
   useHistoryMembershipCacheStore.getState().resetForTests();
-  useTabsStore.setState({ stripOrder: [] });
+  useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
 }
 
 function expectDraftIntent(times = 1): void {
@@ -242,10 +249,40 @@ describe("ProfileLaunchLanding", () => {
       expect(useTabsStore.getState().stripOrder.length).toBe(1);
     });
     expect(mockNavigate).not.toHaveBeenCalled();
+    // No active profile — never activate over All projects home.
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
     expect(
       view.queryByTestId("profile-launch-landing-spinner"),
     ).toBeNull();
+  });
+
+  it("activates the restored Start Page when a profile strip is stuck on /", async () => {
+    // Regression: profile swap restores a draft chip then navigateHome leaves
+    // AppShell hiding TopLevelTabHost on `/` — tab visible, content black.
+    const profile = useProjectProfilesStore.getState().profiles[0];
+    useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
+    useHistoryMembershipCacheStore.getState().setMembershipItems([]);
+    const draftRef = { kind: "draft" as const, id: "start-page-1" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      stripOrder: [draftRef],
+      systemTabs: { history: null, settings: null },
+    });
+
+    renderLanding();
+
+    await waitFor(() => {
+      expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    });
+    expect(vi.mocked(activateTabIntent).mock.calls[0][1]).toMatchObject({
+      kind: "draft",
+      draftId: "start-page-1",
+    });
+    expect(vi.mocked(activateTabIntent).mock.calls[0][2]).toEqual({
+      replace: true,
+    });
   });
 
   it("re-fires the draft fallback when the strip empties AFTER mount (profile-switch race)", async () => {
@@ -268,7 +305,7 @@ describe("ProfileLaunchLanding", () => {
 
     renderLanding();
 
-    // First pass: outgoing strip still owns the surface — no redirect.
+    // First pass: unresolved outgoing epic — wait, do not mint over the chip.
     await waitFor(() => {
       expect(useTabsStore.getState().stripOrder.length).toBe(1);
     });

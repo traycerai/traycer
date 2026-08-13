@@ -40,6 +40,20 @@ host-clean:
 	@$(CLI) host uninstall --all
 
 # ---------------------------------------------------------------------------
+# Local dogfood install (Thanos fork)
+#
+# Rebuilds an unsigned Thanos Traycer.app, ad-hoc codesigns it, and installs
+# to /Applications. Uses a stable key from ~/.traycer/desktop-local-storage-key
+# so encrypted localStorage survives rebuilds.
+#
+#   make install-local-desktop                 # full CLI + app rebuild
+#   make install-local-desktop ARGS="--skip-cli"  # GUI-only (faster)
+# ---------------------------------------------------------------------------
+
+install-local-desktop:
+	@./scripts/install-local-desktop.sh $(ARGS)
+
+# ---------------------------------------------------------------------------
 # Quality gates
 # ---------------------------------------------------------------------------
 
@@ -78,6 +92,6 @@ compile:
 all: pre-commit-checks
 	@echo "Done"
 
-.PHONY: dev-desktop host-stop host-clean \
+.PHONY: dev-desktop host-stop host-clean install-local-desktop \
 	install lint format test test-affected test-project workspace-checks \
 	pre-commit-checks build compile all

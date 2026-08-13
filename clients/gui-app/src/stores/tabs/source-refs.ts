@@ -4,7 +4,8 @@ import type { TabRef } from "@/stores/tabs/types";
 
 /**
  * The canonical set of refs a strip layout may reference: every open Epic tab
- * in canvas order, then every landing draft.
+ * in canvas order, then every landing draft (including drafts parked off the
+ * current profile strip — restore still needs them as live sources).
  *
  * Defined once on purpose. Reconciliation (the command coordinator) and
  * hydration/sanitize (desktop persistence) have to agree on exactly what counts
