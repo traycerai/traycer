@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@thanos/host/*": ["./src/*"],
+      "@traycer-clients/shared/*": ["../shared/*"],
+      "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
+      "@traycer/protocol/*": ["../../protocol/src/*"]
+    }
+  },
+  "include": ["src", "../shared", "../../protocol"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../shared/**/__tests__/**",
+    "../shared/**/*.test.ts",
+    "../../protocol/**/__tests__/**",
+    "../../protocol/**/*.test.ts"
+  ]
+}
