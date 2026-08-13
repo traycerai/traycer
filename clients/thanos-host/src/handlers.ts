@@ -9,6 +9,7 @@ import {
   hostStatusV10,
   hostStatusV11,
 } from "@traycer/protocol/host/status/contracts";
+import { z } from "zod";
 import type { EpicCatalog } from "./catalog";
 
 export type RpcDispatchError = {
@@ -33,10 +34,11 @@ export function dispatchRpc(
   try {
     return dispatchImplementedMethod(method, schemaVersion, params, catalog);
   } catch (cause) {
+    const invalid = cause instanceof z.ZodError;
     return {
       result: null,
       error: {
-        code: "E_INVALID_ARGUMENT",
+        code: invalid ? "E_INVALID_ARGUMENT" : "RPC_ERROR",
         message: errorMessage(cause),
       },
     };

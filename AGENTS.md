@@ -74,6 +74,7 @@ re-cria roles seed, preserva roles do usuário).
 - `clients/traycer-cli/src/commands/orchestration.ts` — command builders
 - `clients/gui-app/src/components/settings/panels/orchestrations-settings-panel.tsx` — UI
 - `clients/gui-app/src/lib/orchestration/` — inject prelude + effective binding
+- `clients/thanos-host/` — loopback host package
 
 ---
 
@@ -95,6 +96,7 @@ O conteúdo completo de arquitetura, comandos e convenções do projeto está em
 | `clients/shared/` | `@traycer-clients/shared` | Transport / auth / formatting |
 | `clients/gui-app/` | `@traycer-clients/gui-app` | GUI renderer |
 | `clients/desktop/` | `@traycer-clients/desktop` | Electron shell |
+| `clients/thanos-host/` | `@thanos/host` | Loopback host (local /rpc, no JWKS) |
 
 ## Commands
 
