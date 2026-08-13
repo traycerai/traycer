@@ -282,6 +282,7 @@ describe("HostClient", () => {
       version: "0.0.0-mock",
       transportDialability,
       publicKey: "pubkey-a",
+      relayFuseGrace: false,
       remoteStatus: {
         connectivity: "unknown",
         viewerReachability: "ok",
@@ -350,6 +351,7 @@ describe("HostClient", () => {
       version: "0.0.0-mock",
       transportDialability: "dialable",
       publicKey,
+      relayFuseGrace: false,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "ok",

@@ -736,18 +736,21 @@ function sameHostId(
 }
 
 /**
- * Status is compared through `isHostReachable`, not by value: `available` and
- * `busy` are the SAME transport (the process is alive, the `websocketUrl` is
- * unchanged, and every per-request dial to it keeps completing - `busy` only
- * says one probe went unanswered). Comparing the raw status made an
- * available<->busy flap - which a wedged host emits repeatedly, and which the
- * degraded/hysteresis ladder is designed to keep emitting - cancel and abort
- * every in-flight request on the bound host, sweep its whole query scope with
+ * Transport identity is compared by its CONNECTION fields (hostId, kind,
+ * `websocketUrl`, version, public key) plus whether the directory positively
+ * REFUSES the route (`isConfirmedTransportRefusal`) - never by the raw liveness
+ * verdict. Liveness is now a relay-attachment lease the cloud pushes into the
+ * one `connectivity` word (the 20s host beat, and the `busy`/`busySessionCount`
+ * it carried, are deleted), and that verdict flaps for reasons that do not move
+ * the transport: a degraded read surfaces as `unknown`, and a lease lapse the
+ * relay fuse is still riding out surfaces as `offline` with `relayFuseGrace`.
+ * Keying the comparison on the raw verdict would cancel and abort every
+ * in-flight request on the bound host, sweep its whole query scope with
  * `refetchActive`, and announce `host-updated` to every subscriber, for a host
- * that never stopped being dialable. Only crossing INTO or OUT OF
- * `unavailable` changes what a caller can do with this entry. This is the
- * third member of the family that decision belongs to, alongside the GUI's
- * transport key and the authority registry's snapshot.
+ * that never stopped being dialable. Only crossing INTO or OUT OF a confirmed
+ * refusal changes what a caller can do with this entry. This is the third
+ * member of the family that decision belongs to, alongside the GUI's transport
+ * key and the authority registry's snapshot.
  *
  * `publicKey` is compared separately from the base fields (R-1): a remote
  * host's static Noise key can rotate (re-enrollment / corruption recovery -

@@ -25,7 +25,6 @@ import {
   type AnalyticsSource,
 } from "@/lib/analytics";
 import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import {
   hostSwitchLabel,
   toastHostSwitched,
@@ -280,14 +279,31 @@ export class HostDirectoryService implements IHostDirectoryService {
    * The host an auto-failover moved the app OFF, so the window can move back
    * when it returns (D7.3).
    *
-   * Armed ONLY when the user's explicit pick named that host: the failover is
-   * deliberately transient (`explicitSelection` is never rewritten), and the
-   * promise it makes is that the user's own choice survives the outage. A
-   * selection that was itself auto-promoted or transient has no such claim -
-   * the post-failover default is exactly as valid - so dragging the app back
-   * to it would be a second unrequested move, not a restoration.
+   * Armed for EVERY failover origin (F7): the hand-back covers
+   * auto/default/transient selections as well as an explicit pick, because a
+   * transient false-`offline` - a lease lapse the relay fuse is still holding -
+   * must not permanently move the app-wide selection off a host that is still
+   * working. The failover stays transient (`explicitSelection` is never
+   * rewritten). Two rails keep the claim honest: an explicit pick ALWAYS
+   * reclaims this marker for itself, and a non-explicit origin is recorded only
+   * when nothing already holds it, so the user's own choice still outranks an
+   * auto one across a second outage (explicit A dies -> B, then B dies: the
+   * marker stays A).
    */
   private failoverOriginHostId: string | null = null;
+  /**
+   * WHERE the failover machinery parked the app - the failover target, kept in
+   * step with `failoverOriginHostId` (cold review P2). The hand-back promise
+   * is "undo the move the failover made", so it is only redeemable while the
+   * app is still parked where that move left it. Every move the failover
+   * machinery itself makes (the initial failover, a chained second failover,
+   * the both-ends-vanished continuation) updates this; any OTHER route the
+   * selection travels - an explicit pick, a notification's transient
+   * activation - retires the whole marker instead, because handing back over
+   * a newer intent would steal the selection from a host the user just chose
+   * to look at.
+   */
+  private failoverTargetHostId: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   private readonly selectionListeners = new Set<
     (entry: HostDirectoryEntry | null) => void
@@ -571,6 +587,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.nonDialableSelectionStreak = null;
     this.dialableOriginStreak = null;
     this.failoverOriginHostId = null;
+    this.failoverTargetHostId = null;
     this.explicitSelection = { hostId };
     if (hostId === null) {
       // An explicit clear erases the remembered host entirely rather than
@@ -622,6 +639,22 @@ export class HostDirectoryService implements IHostDirectoryService {
     });
     if (entry === null) {
       return;
+    }
+    if (source !== "host_failover") {
+      // A transient activation from anywhere OUTSIDE the failover machinery
+      // (today: a notification's destination) is newer intent about where the
+      // app should be. The hand-back marker's promise is "undo the failover's
+      // own move"; once the selection travels by another route that promise
+      // is stale, and redeeming it later would yank the user off the host
+      // they just navigated to (cold review P2: A dies -> failover B ->
+      // notification C -> A recovers must stay on C). The streaks retire with
+      // it - their evidence was counted for a parking spot that no longer
+      // exists. The failover's own moves pass `host_failover` and keep the
+      // marker, which is what lets a chained failover still hand back.
+      this.nonDialableSelectionStreak = null;
+      this.dialableOriginStreak = null;
+      this.failoverOriginHostId = null;
+      this.failoverTargetHostId = null;
     }
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source,
@@ -1229,6 +1262,11 @@ export class HostDirectoryService implements IHostDirectoryService {
             continuationHostId: continuation.hostId,
           },
         );
+        // The continuation is the failover machinery's own move, so the
+        // hand-back marker stays redeemable: the target follows the app to
+        // its new parking spot (cold review P2 - only a NON-failover route
+        // moving the selection retires the marker).
+        this.failoverTargetHostId = continuation.hostId;
         this.setSelected(continuation);
         return;
       }
@@ -1251,9 +1289,9 @@ export class HostDirectoryService implements IHostDirectoryService {
    *
    *  1. Re-adopt the host a previous failover moved off, once it has been
    *     dialable for {@link CONSECUTIVE_DIALABILITY_READS} consecutive reads.
-   *     The failover never rewrote `explicitSelection`, so this hands the
-   *     window back to the user's own pick rather than making a new decision
-   *     for them.
+   *     The failover never rewrote `explicitSelection`, so this restores the
+   *     remembered origin - an explicit pick, or (since F7) an auto/default/
+   *     transient selection - rather than making a new decision for them.
    *  2. Fail over off a listed-but-non-dialable selection, after the same
    *     {@link CONSECUTIVE_DIALABILITY_READS} consecutive reads say so.
    *
@@ -1329,6 +1367,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       originHostId: this.failoverOriginHostId,
     });
     this.failoverOriginHostId = null;
+    this.failoverTargetHostId = null;
     this.nonDialableSelectionStreak = null;
     this.dialableOriginStreak = null;
   }
@@ -1342,6 +1381,32 @@ export class HostDirectoryService implements IHostDirectoryService {
       // Already back on it by some other route (a restore, a re-enrollment
       // migration): the marker has nothing left to do.
       this.failoverOriginHostId = null;
+      this.failoverTargetHostId = null;
+      this.dialableOriginStreak = null;
+      return false;
+    }
+    if (
+      this.selected === null ||
+      this.failoverTargetHostId === null ||
+      this.selected.hostId !== this.failoverTargetHostId
+    ) {
+      // The app is no longer parked where the failover left it: some route
+      // that does not manage this marker moved (or cleared) the selection.
+      // The hand-back promise - "undo the failover's own move" - has nothing
+      // left to undo, and redeeming it anyway is exactly the P2 selection
+      // steal (it would override whatever moved the app since). Defensive
+      // belt to `selectTransientById`'s retirement: any route we did not
+      // foresee still cannot redeem a stale marker.
+      appLogger.debug(
+        "[host-directory] failover marker stale - selection moved off the failover target",
+        {
+          originHostId: hostId,
+          failoverTargetHostId: this.failoverTargetHostId,
+          selectedHostId: this.selected === null ? null : this.selected.hostId,
+        },
+      );
+      this.failoverOriginHostId = null;
+      this.failoverTargetHostId = null;
       this.dialableOriginStreak = null;
       return false;
     }
@@ -1364,6 +1429,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return false;
     }
     this.failoverOriginHostId = null;
+    this.failoverTargetHostId = null;
     this.dialableOriginStreak = null;
     this.nonDialableSelectionStreak = null;
     appLogger.debug("[host-directory] failover origin is dialable again", {
@@ -1451,22 +1517,38 @@ export class HostDirectoryService implements IHostDirectoryService {
     // listeners synchronously, and the marker is what those listeners' world
     // needs to be able to hand the app back later.
     //
-    // A host we are failing away from that is NOT the explicit pick keeps
-    // whatever marker is already armed rather than clearing it. That is the
-    // second-outage case - explicit A dies, we move to B, B dies too - where
-    // overwriting with `null` would quietly retire the user's claim on A while
-    // A is still the host they chose.
+    // F7: every failover origin is remembered so the hand-back covers
+    // auto/default/transient selections too, not only an explicit pick - a
+    // transient false-`offline` must not permanently move the app-wide
+    // selection off a host that is still working. Two guard rails keep that
+    // safe:
+    //   - the user's explicit pick ALWAYS (re)claims the marker for itself, so
+    //     it outranks any auto/transient origin;
+    //   - otherwise the marker is armed only when nothing already holds it, so
+    //     a non-explicit failover never overwrites an existing claim. That is
+    //     the second-outage case - explicit A dies, we move to B, B dies too -
+    //     where clobbering with B would quietly retire the user's claim on A
+    //     while A is still the host they chose.
     if (
-      this.explicitSelection !== null &&
-      this.explicitSelection.hostId === fresh.hostId
+      (this.explicitSelection !== null &&
+        this.explicitSelection.hostId === fresh.hostId) ||
+      this.failoverOriginHostId === null
     ) {
       this.failoverOriginHostId = fresh.hostId;
     }
+    // The target ALWAYS tracks the newest failover move, even when the origin
+    // marker above kept an older claim (explicit A dies -> B, B dies -> C:
+    // origin stays A, target becomes C). The hand-back is redeemable only
+    // while the selection still sits on this target (cold review P2).
+    this.failoverTargetHostId = next.hostId;
     this.nonDialableSelectionStreak = null;
     appLogger.debug("[host-directory] failing over from a dead host", {
       from: fresh.hostId,
       to: next.hostId,
-      restorable: this.failoverOriginHostId !== null,
+      // Always restorable since F7 (every failover arms or keeps an origin
+      // claim, and the target above tracks this newest move), so the useful
+      // datum is WHICH origin the hand-back would restore.
+      originHostId: this.failoverOriginHostId,
     });
     this.selectTransientById(next.hostId, "host_failover");
     toastHostSwitched(next, `${hostSwitchLabel(fresh)} stopped responding.`);
@@ -1571,14 +1653,28 @@ function nextStreakCount(
 }
 
 /**
- * Whether a socket can be opened against this entry RIGHT NOW, through the
- * repository's canonical rule (`dialableHostEndpoint`: a websocket URL plus an
- * `available` status) rather than a second copy of it. The app-wide transport,
- * the per-tab streams and the readiness controller all gate on that same rule,
- * so a selection this says yes to is a selection those can actually use.
+ * Whether the directory POSITIVELY says this entry can be dialed right now: a
+ * websocket URL plus the projection's `dialable` bit (for a remote row that is
+ * `connectivity === "connectable"` - the relay holds a live attachment; for a
+ * local row, the shell publishing a live snapshot).
+ *
+ * Deliberately NOT `dialableHostEndpoint(entry) !== null` any more (cold
+ * review P1). That helper answers dial PERMISSION - "may a socket be
+ * attempted" - which correctly stays open for `indeterminate` and for a
+ * fuse-window `offline` (the recovery-dial affordance,
+ * `isRelayFuseRecoveryCandidate`). The failover machinery here asks three
+ * POSITIVE questions with it - is the selection still usable, is a candidate
+ * worth failing over TO, has the origin actually returned - and answering
+ * those from the permission gate let the fuse window's recency suppress
+ * failover through a second door (and would let a mere dial-permitted corpse
+ * be adopted as a failover target or trigger the hand-back). Death itself is
+ * still judged by `isConfirmedHostDeath` below, so a degraded `unknown` read
+ * remains non-evidence exactly as before.
  */
 function isEntryDialable(entry: HostDirectoryEntry): boolean {
-  return dialableHostEndpoint(entry) !== null;
+  return (
+    entry.websocketUrl !== null && entry.transportDialability === "dialable"
+  );
 }
 
 /**

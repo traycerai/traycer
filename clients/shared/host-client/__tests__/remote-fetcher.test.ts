@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   HostListItem,
   HostListResponse,
+  HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
 import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
   fetchRegisteredHostsViaHttp,
   hostListItemToDirectoryEntry,
+  hostUnavailability,
+  isConfirmedHostDeath,
+  isConfirmedTransportRefusal,
+  isWithinRelayFuseGrace,
+  RELAY_FUSE_MAX_ATTACH_MS,
   type HostListFetchResult,
 } from "../remote-fetcher";
 
@@ -229,5 +235,200 @@ describe("createRemoteHostFetcher", () => {
       relayBaseUrl: RELAY_BASE_URL,
     });
     expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "failed" });
+  });
+});
+
+// F7 fuse-vs-lease reconciliation, corrected by the cold review's P1: a recent
+// `lastSeenAt` on an `offline` verdict is NOT evidence the relay leg is still
+// attached - a host that cleanly detached or crashed one minute ago has exactly
+// the same recent timestamp. Recency therefore buys exactly one thing, the
+// recovery DIAL (`isConfirmedTransportRefusal` stays false inside the fuse
+// window), while the death semantic (`hostUnavailability` /
+// `isConfirmedHostDeath`) stays authoritative `offline` unless the dial
+// actually succeeds (a ready live session).
+const NOW = Date.parse("2026-01-01T00:00:00.000Z");
+
+function offlineStatus(lastSeenAt: string | null): HostStatusDTO {
+  return {
+    connectivity: "offline",
+    viewerReachability: "unknown",
+    clientCloud: "ok",
+    updateState: "current",
+    appVersion: null,
+    lastSeenAt,
+  };
+}
+
+function isoBefore(ms: number): string {
+  return new Date(NOW - ms).toISOString();
+}
+
+describe("isWithinRelayFuseGrace", () => {
+  it("is true for offline + lastSeenAt 1 minute before now", () => {
+    expect(isWithinRelayFuseGrace(offlineStatus(isoBefore(60_000)), NOW)).toBe(
+      true,
+    );
+  });
+
+  it("is true for offline + lastSeenAt just under the 4h fuse cap", () => {
+    expect(
+      isWithinRelayFuseGrace(
+        offlineStatus(isoBefore(RELAY_FUSE_MAX_ATTACH_MS - 1)),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for offline + lastSeenAt just over the 4h fuse cap", () => {
+    expect(
+      isWithinRelayFuseGrace(
+        offlineStatus(isoBefore(RELAY_FUSE_MAX_ATTACH_MS + 1)),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when lastSeenAt is null (nothing anchors the window)", () => {
+    expect(isWithinRelayFuseGrace(offlineStatus(null), NOW)).toBe(false);
+  });
+
+  it("is false when lastSeenAt is unparseable", () => {
+    expect(isWithinRelayFuseGrace(offlineStatus("not-a-date"), NOW)).toBe(
+      false,
+    );
+  });
+
+  it("is false for any non-offline connectivity, regardless of lastSeenAt", () => {
+    for (const connectivity of [
+      "unknown",
+      "connectable",
+      "local-only",
+    ] as const) {
+      const status: HostStatusDTO = {
+        ...offlineStatus(isoBefore(60_000)),
+        connectivity,
+      };
+      expect(isWithinRelayFuseGrace(status, NOW)).toBe(false);
+    }
+  });
+});
+
+// The rest of this block builds entries through the real
+// `hostListItemToDirectoryEntry` constructor (matching the "real mapped
+// connectivity" style above), controlling grace via `lastSeenAt` relative to
+// the real clock rather than a fixed `NOW` (the projection reads `Date.now()`
+// internally).
+const FUSE_GRACE_LAST_SEEN = new Date(Date.now() - 60_000).toISOString();
+const GENUINE_OFFLINE_LAST_SEEN = new Date(
+  Date.now() - 5 * 60 * 60 * 1000,
+).toISOString();
+
+function offlineItem(lastSeenAt: string): HostListItem {
+  return {
+    ...onlineItem(),
+    status: { ...onlineItem().status, connectivity: "offline", lastSeenAt },
+  };
+}
+
+describe("hostListItemToDirectoryEntry - relayFuseGrace (F7)", () => {
+  it("is true for an offline host seen recently (within the fuse cap)", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(entry.relayFuseGrace).toBe(true);
+  });
+
+  it("is false for an offline host last seen past the fuse cap", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(GENUINE_OFFLINE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(entry.relayFuseGrace).toBe(false);
+  });
+
+  it("is false for a connectable host", () => {
+    const entry = hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL);
+    expect(entry.relayFuseGrace).toBe(false);
+  });
+});
+
+describe("hostUnavailability - offline stays authoritative under fuse grace (P1)", () => {
+  it("reports offline for an offline entry even inside the fuse window - recency is not attachment", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(hostUnavailability(entry)).toBe("offline");
+  });
+
+  it("reports offline for a genuinely offline entry past the fuse cap", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(GENUINE_OFFLINE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(hostUnavailability(entry)).toBe("offline");
+  });
+});
+
+describe("isConfirmedHostDeath - fuse grace never exempts; only dial success does (P1)", () => {
+  it("PAIRED (a): same recent lastSeenAt, recovery dial SUCCEEDED (ready live session) - not death", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedHostDeath(entry, true)).toBe(false);
+  });
+
+  it("PAIRED (b): same recent lastSeenAt, no leg / dial not succeeded - confirmed death", () => {
+    // A host that cleanly detached or crashed one minute ago is
+    // observationally identical to a lease lapse at this layer. With no
+    // session evidence the death gate must fire, or failover, the dead
+    // surface, and the notification-action refusal are all suppressed for up
+    // to four hours on a genuinely dead host.
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedHostDeath(entry, false)).toBe(true);
+  });
+
+  it("is true for a genuine offline entry past the fuse cap with no session", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(GENUINE_OFFLINE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedHostDeath(entry, false)).toBe(true);
+  });
+});
+
+describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse grace)", () => {
+  it("is false for a fuse-grace offline entry - the ONE thing recency buys is the dial attempt", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(false);
+  });
+
+  it("is true for a genuine offline entry", () => {
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(GENUINE_OFFLINE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+  });
+
+  it("dial permission and death verdict DIVERGE for the same fuse-grace entry: dial attempted, death confirmed", () => {
+    // The split the P1 fix rests on: the same entry, with no session
+    // evidence, may be dialed (cheap, recoverable) while every destructive
+    // consumer still reads it as dead (honest). Recency must never leak from
+    // the first question into the second.
+    const entry = hostListItemToDirectoryEntry(
+      offlineItem(FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+    );
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(false);
+    expect(isConfirmedHostDeath(entry, false)).toBe(true);
   });
 });

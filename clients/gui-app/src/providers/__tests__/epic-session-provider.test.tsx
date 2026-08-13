@@ -304,6 +304,7 @@ function ownerIdentityRemoteTarget(
     version: "1.0.0",
     transportDialability: "dialable",
     publicKey,
+    relayFuseGrace: false,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

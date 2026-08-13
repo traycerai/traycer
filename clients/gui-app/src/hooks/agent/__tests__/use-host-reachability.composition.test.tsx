@@ -58,6 +58,7 @@ const RELAY_BASE_URL = "wss://relay.example.test/attach";
 function listItem(
   hostId: string,
   connectivity: HostConnectivity,
+  lastSeenAt: string,
 ): HostListItem {
   return {
     hostId,
@@ -72,19 +73,27 @@ function listItem(
       clientCloud: "ok",
       updateState: "current",
       appVersion: "1.4.2",
-      lastSeenAt: "2026-07-03T11:59:50.000Z",
+      lastSeenAt,
     },
     updatePolicy: "manual",
   };
 }
 
+/**
+ * A `lastSeenAt` far enough in the past that an `offline` verdict is past the
+ * relay-fuse recovery-dial window - the default for these tests, so the
+ * fuse-window pair below has to opt IN to recency explicitly.
+ */
+const STALE_LAST_SEEN = "2026-07-03T11:59:50.000Z";
+
 /** Mirrors the directory service's own projection — a REAL mapped entry. */
 function directoryEntry(
   hostId: string,
   connectivity: HostConnectivity,
+  lastSeenAt: string,
 ): HostDirectoryEntry {
   return hostListItemToDirectoryEntry(
-    listItem(hostId, connectivity),
+    listItem(hostId, connectivity, lastSeenAt),
     RELAY_BASE_URL,
   );
 }
@@ -124,7 +133,7 @@ afterEach(() => {
 
 describe("useHostReachability — composed against real hostListItemToDirectoryEntry output", () => {
   it("does NOT report unreachable for a degraded ('unknown') liveness read", async () => {
-    const entry = directoryEntry("host-unknown", "unknown");
+    const entry = directoryEntry("host-unknown", "unknown", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 
@@ -143,7 +152,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("reports unreachable with unavailability: 'offline' for a genuinely offline host", async () => {
-    const entry = directoryEntry("host-offline", "offline");
+    const entry = directoryEntry("host-offline", "offline", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 
@@ -158,7 +167,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("reports unreachable with unavailability: 'plan-restricted' for a local-only (free-tier) host", async () => {
-    const entry = directoryEntry("host-local-only", "local-only");
+    const entry = directoryEntry("host-local-only", "local-only", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 
@@ -177,7 +186,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("a live E2E session outranks an 'offline' cloud verdict — reachable, not unreachable", async () => {
-    const entry = directoryEntry("host-offline-but-live", "offline");
+    const entry = directoryEntry("host-offline-but-live", "offline", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     readySessionHosts.value = new Set(["host-offline-but-live"]);
     const queryClient = makeQueryClient();
@@ -201,7 +210,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     // The counterpart to the override above: absent live-session evidence,
     // `offline` still gates the tile. Guards against a broad mock making
     // every host look alive.
-    const entry = directoryEntry("host-offline-no-session", "offline");
+    const entry = directoryEntry("host-offline-no-session", "offline", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 
@@ -216,8 +225,61 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     expect(result.current.unavailability).toBe("offline");
   });
 
+  // P1 paired tests (cold review): the same recent `lastSeenAt`, distinguished
+  // ONLY by the recovery dial's outcome. Recency alone (the relay-fuse window)
+  // must never upgrade `offline` for the dead surface - a host that cleanly
+  // detached or crashed a minute ago carries the same recent timestamp as a
+  // lease lapse the fuse is riding out.
+  it("PAIRED (a): fuse-window offline + recovery dial succeeded (ready session) - reachable", async () => {
+    const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+    const entry = directoryEntry(
+      "host-fuse-window-live",
+      "offline",
+      recentLastSeen,
+    );
+    directoryRef.value = makeDirectory([entry]).directory;
+    readySessionHosts.value = new Set(["host-fuse-window-live"]);
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-fuse-window-live"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).not.toBe("checking");
+    });
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.unavailability).toBeNull();
+  });
+
+  it("PAIRED (b): fuse-window offline, dial not succeeded (no session) - the dead surface still fires", async () => {
+    // Before the P1 correction the fuse window rewrote this `offline` to
+    // `indeterminate` from recency alone, suppressing the dead surface, the
+    // Clone offer, and the terminal-closed behavior for up to four hours on a
+    // genuinely dead host.
+    const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+    const entry = directoryEntry(
+      "host-fuse-window-dead",
+      "offline",
+      recentLastSeen,
+    );
+    directoryRef.value = makeDirectory([entry]).directory;
+    const queryClient = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useHostReachability("host-fuse-window-dead"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
+    expect(result.current.unavailability).toBe("offline");
+  });
+
   it("reports reachable for a connectable host, with no unavailability reason", async () => {
-    const entry = directoryEntry("host-online", "connectable");
+    const entry = directoryEntry("host-online", "connectable", STALE_LAST_SEEN);
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 

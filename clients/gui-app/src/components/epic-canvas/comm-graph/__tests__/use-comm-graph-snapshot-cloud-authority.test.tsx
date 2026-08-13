@@ -482,6 +482,7 @@ function directoryEntry(
     transportDialability: "dialable",
     version: null,
     publicKey: "public-key-a",
+    relayFuseGrace: false,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

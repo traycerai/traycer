@@ -112,6 +112,7 @@ describe("useHostDirectoryEntry", () => {
       version: "1.2.3",
       transportDialability: "dialable",
       publicKey: "pubkey-a",
+      relayFuseGrace: false,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "ok",

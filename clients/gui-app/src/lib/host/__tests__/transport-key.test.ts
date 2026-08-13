@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 
 // `hostTransportKey`/`dialableHostEndpoint` ask this for live-session
 // evidence. Stubbed at the module boundary - the single rule under test is
@@ -56,6 +60,7 @@ function remoteEntry(
     version: "1.2.3",
     transportDialability: "dialable",
     publicKey: "pubkey-a",
+    relayFuseGrace: false,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -243,5 +248,55 @@ describe("remoteAwareOwnerIdentityKey", () => {
     expect(remoteAwareOwnerIdentityKey(target, "user-1")).not.toBe(
       remoteAwareOwnerIdentityKey(remoteEntry({ hostId: "host-b" }), "user-1"),
     );
+  });
+});
+
+// F7 fuse-vs-lease reconciliation: a recovery dial must still be ATTEMPTED for
+// an `offline` entry the relay's host-leg fuse is still plausibly holding
+// (recent `lastSeenAt`), and refused only once the fuse cap has passed.
+// Built through the real `hostListItemToDirectoryEntry` constructor rather
+// than a synthetic literal, matching the "real mapped connectivity" style
+// elsewhere in this suite (see `host-directory-service.test.ts`).
+function offlineHostListItem(lastSeenAt: string): HostListItem {
+  return {
+    hostId: "fuse-host",
+    displayName: "Fuse Host",
+    platform: "Ubuntu",
+    kind: "personal",
+    publicKey: "pk-fuse-host",
+    createdAt: "2026-07-01T12:00:00.000Z",
+    status: {
+      connectivity: "offline",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt,
+    },
+    updatePolicy: "manual",
+  };
+}
+
+describe("F7 relay fuse grace - recovery dial on a lease-lapse offline entry", () => {
+  it("attempts the dial (non-null key and endpoint) for an offline entry still within the relay fuse grace", () => {
+    const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+    const fuseGraceEntry = hostListItemToDirectoryEntry(
+      offlineHostListItem(recentLastSeen),
+      "wss://relay.example.test/attach",
+    );
+    expect(hostTransportKey(fuseGraceEntry)).not.toBeNull();
+    expect(dialableHostEndpoint(fuseGraceEntry)).not.toBeNull();
+  });
+
+  it("refuses the dial (null key and endpoint) for a genuinely offline entry past the fuse cap", () => {
+    const oldLastSeen = new Date(
+      Date.now() - 5 * 60 * 60 * 1000,
+    ).toISOString();
+    const genuineOfflineEntry = hostListItemToDirectoryEntry(
+      offlineHostListItem(oldLastSeen),
+      "wss://relay.example.test/attach",
+    );
+    expect(hostTransportKey(genuineOfflineEntry)).toBeNull();
+    expect(dialableHostEndpoint(genuineOfflineEntry)).toBeNull();
   });
 });

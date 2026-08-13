@@ -32,10 +32,11 @@ const emptyRequestSchema = z.object({});
  * ordinary machine the label IS `os.hostname()` and the two are identical; on a
  * provisioned host started with `TRAYCER_HOST_LABEL` they differ, and the label
  * is the name the cloud registry already shows. Since the registry's
- * `displayName` follows this exact value over the presence heartbeat, a client
- * that reads a reachable host over RPC and one that falls back to the registry
- * for an unreachable host always name the same host identically — which is the
- * whole point of moving the name onto the host.
+ * `displayName` follows this exact value each time the host republishes it on
+ * its periodic credential refresh (not the deleted presence heartbeat), a
+ * client that reads a reachable host over RPC and one that falls back to the
+ * registry for an unreachable host always name the same host identically -
+ * which is the whole point of moving the name onto the host.
  */
 export const hostIdentitySchema = z.object({
   systemName: z.string().min(1),

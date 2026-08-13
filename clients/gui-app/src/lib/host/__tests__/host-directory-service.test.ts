@@ -36,6 +36,36 @@ vi.mock("sonner", () => ({
   },
 }));
 
+/**
+ * Controllable ready-session evidence, mirroring the seam
+ * `use-host-reachability.composition.test.tsx` already uses. The service's
+ * death gate (`isConfirmedHostDeath`) honours a ready live session as
+ * firsthand proof of life; after the cold review's P1 correction that dial
+ * outcome - never `lastSeenAt` recency - is the ONLY thing that suppresses
+ * failover for an `offline` selection inside the relay-fuse window. Partial
+ * (spread-actual) so every other export stays real.
+ */
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
+afterEach(() => {
+  readySessionHosts.value.clear();
+});
+
 // Matches the production constant of the same name in `host-directory-service.ts`
 // — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
 // 60s to actually match the Settings observer's poll (see that file's comment).
@@ -2916,6 +2946,329 @@ describe("HostDirectoryService", () => {
           description: `${rememberedRemoteHostEntry.label} is available again.`,
         },
       );
+    });
+
+    /**
+     * F7: the fuse-vs-lease reconciliation. An `offline` verdict the relay's
+     * host-leg fuse is still plausibly holding (recent `lastSeenAt`) reads as
+     * `indeterminate`, not confirmed death - so it must not drive the D7
+     * auto-failover, and a non-explicit (auto/default/transient) selection
+     * must still be handed back once its origin recovers.
+     */
+    describe("F7 relay fuse grace vs. D7 auto-failover", () => {
+      const CONNECTABLE_LAST_SEEN = "2026-07-03T11:59:50.000Z";
+
+      function realRemoteEntryWithLastSeen(
+        hostId: string,
+        displayName: string,
+        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+        lastSeenAt: string,
+      ): HostDirectoryEntry {
+        return hostListItemToDirectoryEntry(
+          {
+            hostId,
+            displayName,
+            platform: "Ubuntu",
+            kind: "personal",
+            publicKey: `pk-${hostId}`,
+            createdAt: "2026-07-01T12:00:00.000Z",
+            status: {
+              connectivity,
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt,
+            },
+            updatePolicy: "manual",
+          },
+          "wss://relay.example.test/attach",
+        );
+      }
+
+      it("PAIRED (a): lease-lapse offline whose recovery dial SUCCEEDED (ready session) is not re-homed", async () => {
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-first",
+          "Fuse First",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-second",
+          "Fuse Second",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+
+        // The lease has lapsed (cloud reports `offline`) with a recent
+        // `lastSeenAt`, and the relay leg really is still attached: the
+        // recovery dial the fuse window keeps open has succeeded, so a ready
+        // live session exists. That session - firsthand, present-tense
+        // evidence, not the timestamp - is what suppresses the failover.
+        readySessionHosts.value.add("fuse-first");
+        const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-first",
+            "Fuse First",
+            "offline",
+            recentLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+      });
+
+      it("PAIRED (b): the same recent lastSeenAt with NO session (detach/crash) DOES re-home after two reads", async () => {
+        // Observationally this host is identical to the lease-lapse case
+        // above except for the dial outcome: it cleanly detached or crashed a
+        // minute ago, so its `lastSeenAt` is just as recent, but no relay leg
+        // answers. Before the P1 correction the fuse window rewrote this
+        // `offline` to `indeterminate` from recency alone and the selection
+        // stayed parked on a dead host for up to four hours.
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-dead-first",
+          "Fuse Dead First",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-dead-second",
+          "Fuse Dead Second",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+
+        const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-dead-first",
+            "Fuse Dead First",
+            "offline",
+            recentLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        // First read: the debounce holds.
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+        await directory.refresh();
+        // Second consecutive genuine read confirms death - failover fires.
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("contrast: DOES re-home once the same host is genuinely offline, past the fuse cap", async () => {
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-first-genuine",
+          "Fuse First Genuine",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-second-genuine",
+          "Fuse Second Genuine",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-first-genuine",
+            "Fuse First Genuine",
+            "offline",
+            oldLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("hands back an auto/default/transient selection after its origin recovers", async () => {
+        const a = realRemoteEntryWithLastSeen(
+          "hand-back-a",
+          "Hand Back A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "hand-back-b",
+          "Hand Back B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        // Selected through the TRANSIENT seam - `explicitSelection` is
+        // deliberately NOT set here, which is the point of this test: before
+        // F7, `failOverFromDeadSelection` only armed the hand-back marker for
+        // an explicit pick, so a notification-driven transient selection like
+        // this one would never have been handed back after its origin
+        // recovered.
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "hand-back-a",
+            "Hand Back A",
+            "offline",
+            oldLastSeen,
+          ),
+          b,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "hand-back-a",
+            "Hand Back A",
+            "connectable",
+            CONNECTABLE_LAST_SEEN,
+          ),
+          b,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+      });
+
+      it("does NOT hand back over a newer notification-driven selection (P2): A -> failover B -> notification C -> A recovers => stays C", async () => {
+        // The auto/transient seam the cold review named: the hand-back marker
+        // remembers A, the user then follows a notification to C
+        // (`selectTransientById`), and A's recovery must not steal the
+        // selection from C - the notification bridge promises a switched
+        // selection stays put. The marker is retired by the later
+        // non-failover transient selection.
+        const a = realRemoteEntryWithLastSeen(
+          "steal-a",
+          "Steal A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "steal-b",
+          "Steal B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const c = realRemoteEntryWithLastSeen(
+          "steal-c",
+          "Steal C",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b, c];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        // A dies (genuinely - past the fuse window); failover parks on B
+        // (first dialable candidate) and the hand-back marker remembers A.
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "steal-a",
+            "Steal A",
+            "offline",
+            oldLastSeen,
+          ),
+          b,
+          c,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        // The user follows a notification to C before A recovers.
+        directory.selectTransientById(c.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(c.hostId);
+
+        // A recovers and stays dialable for the full two-read damping - and
+        // the selection must remain C across further polls.
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "steal-a",
+            "Steal A",
+            "connectable",
+            CONNECTABLE_LAST_SEEN,
+          ),
+          b,
+          c,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(c.hostId);
+      });
     });
   });
 

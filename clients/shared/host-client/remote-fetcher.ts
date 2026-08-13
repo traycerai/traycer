@@ -112,6 +112,22 @@ export async function fetchRegisteredHostsViaHttp(
 export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
   readonly remoteStatus: HostStatusDTO;
   readonly publicKey: string;
+  /**
+   * The fuse-vs-lease RECOVERY-DIAL window (F7, narrowed by the cold review's
+   * P1): `true` when the cloud says `offline` but the host was seen recently
+   * enough that the relay's host-leg fuse COULD still be holding its socket.
+   * Recency is NOT attachment evidence - a host that cleanly detached or
+   * crashed a minute ago carries exactly the same recent `lastSeenAt` as a
+   * lease lapse the fuse is riding out - so this flag never upgrades the
+   * `offline` verdict itself. Its ONLY consumer is
+   * {@link isConfirmedTransportRefusal}, which lets a recovery dial be
+   * attempted inside the window; whether the host is actually alive is settled
+   * by that dial's outcome (a ready live session), never by this flag.
+   * Computed once at projection time from `remoteStatus.lastSeenAt`
+   * (see {@link isWithinRelayFuseGrace}) so the render-time gates stay pure.
+   * Always `false` for any connectivity other than `offline`.
+   */
+  readonly relayFuseGrace: boolean;
 };
 
 /**
@@ -139,6 +155,11 @@ export function isRemoteHostDirectoryEntry(
  *  - `offline`         — the host is positively not attached. Saying so is
  *                        honest, and this is the only one that may render as
  *                        "offline" or count as evidence a host is dead.
+ *                        (Inside the relay-fuse window a recovery DIAL is
+ *                        still attempted - see `isConfirmedTransportRefusal` -
+ *                        but the verdict stays `offline`: recency cannot
+ *                        distinguish a lease lapse from a clean detach or a
+ *                        crash, so it never upgrades the death semantic.)
  *  - `plan-restricted` — the account's plan has no remote hosts, so this host
  *                        never attaches by design. The remedy is an upgrade,
  *                        not a retry, and calling it "offline" sends a person
@@ -157,6 +178,58 @@ export function isRemoteHostDirectoryEntry(
  */
 export type HostUnavailability =
   "offline" | "plan-restricted" | "indeterminate";
+
+/**
+ * The relay DO's hard cap on how long a host leg may stay attached without a
+ * fresh re-auth: the base host-leg interval (15 min) times the emergency fuse
+ * multiplier, clamped to 4h (workers/relay-do `MAX_REAUTH_INTERVAL_MS`). During
+ * a credential-plane incident an operator raises that multiplier, so the relay
+ * keeps holding a host's socket for up to this long while authn's 15-min
+ * presence lease has already lapsed - the false-`offline` window this bound
+ * reconciles. Mirrored here because the OSS client cannot import the worker's
+ * config (exactly as `host-transport/remote/config.ts` already mirrors the
+ * relay's re-auth cadences); it MUST track that worker constant.
+ */
+export const RELAY_FUSE_MAX_ATTACH_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Whether an `offline` verdict is recent enough that the relay's host-leg fuse
+ * COULD still be holding the leg (F7), i.e. whether a recovery dial is worth
+ * attempting.
+ *
+ * authn's presence lease expires ~15 min after a host stops re-asserting, but
+ * during a credential-plane incident the relay keeps an attached leg up to
+ * {@link RELAY_FUSE_MAX_ATTACH_MS}. In that window the cloud reports `offline`
+ * for a host the relay may still hold. Crucially, recency is NOT attachment
+ * evidence: a host that cleanly detached, crashed, or lost power a minute ago
+ * stops advancing `lastSeenAt` in exactly the same way, so inside the window
+ * the two cases are observationally identical from this DTO. This predicate
+ * therefore bounds only WHERE A RECOVERY DIAL IS WORTH ATTEMPTING
+ * (`isConfirmedTransportRefusal`); it must never stand in for liveness - the
+ * dial's own outcome (a ready session, or a failure) is what settles that.
+ * Past the cap the fuse has certainly blown and even the dial is refused.
+ * Never grace for a null/unparseable `lastSeenAt` (nothing anchors the
+ * window) or a non-`offline` verdict.
+ *
+ * `nowMs` is passed in rather than read here so every caller stays pure; the
+ * projection reads the clock once at fetch time.
+ */
+export function isWithinRelayFuseGrace(
+  status: HostStatusDTO,
+  nowMs: number,
+): boolean {
+  if (status.connectivity !== "offline") {
+    return false;
+  }
+  if (status.lastSeenAt === null) {
+    return false;
+  }
+  const lastSeenMs = Date.parse(status.lastSeenAt);
+  if (Number.isNaN(lastSeenMs)) {
+    return false;
+  }
+  return nowMs - lastSeenMs < RELAY_FUSE_MAX_ATTACH_MS;
+}
 
 /**
  * The reason an entry is not dialable, or `null` when it is.
@@ -183,6 +256,15 @@ export function hostUnavailability(
     case "unknown":
       return "indeterminate";
     case "offline":
+      // `offline` is authoritative, fuse window or not (cold review P1). An
+      // earlier F7 shape rewrote a fuse-window `offline` to `indeterminate`
+      // here, which let a recent `lastSeenAt` - equally consistent with a
+      // clean detach or a crash one minute ago - suppress failover, the dead
+      // surface, and notification-action refusal for up to four hours on a
+      // genuinely dead host. Recency buys exactly one thing, the recovery
+      // dial (`isConfirmedTransportRefusal`); death is only ever overridden
+      // by that dial actually succeeding (the live-session evidence every
+      // destructive gate already honours).
       return "offline";
     case "connectable":
       // Unreachable in practice (`connectable` is exactly what makes an entry
@@ -245,7 +327,34 @@ export function isConfirmedTransportRefusal(
     return false;
   }
   const unavailability = hostUnavailability(entry);
+  if (unavailability === "offline" && isRelayFuseRecoveryCandidate(entry)) {
+    // F7's recovery affordance, and the ONLY thing the fuse window buys: an
+    // `offline` recent enough that the relay fuse could still hold the leg is
+    // dialed rather than refused. The asymmetry is the same one
+    // `indeterminate` rides: a dial that fails is cheap and recoverable,
+    // while refusing the dial during the exact credential-plane incident the
+    // fuse exists to ride out abandons a working host. The dial's OUTCOME -
+    // not this window - is what feeds every death gate (a success becomes the
+    // ready-session evidence above).
+    return false;
+  }
   return unavailability === "offline" || unavailability === "plan-restricted";
+}
+
+/**
+ * Whether a recovery dial is worth attempting at an `offline` entry: the entry
+ * is remote and its `offline` verdict is recent enough that the relay's
+ * host-leg fuse could still be holding the leg (see
+ * {@link isWithinRelayFuseGrace} - recency bounds the dial window, it is NOT
+ * attachment or liveness evidence). Consumed by
+ * {@link isConfirmedTransportRefusal} only; the death gates
+ * ({@link isConfirmedHostDeath}, and every surface reading
+ * {@link hostUnavailability}) deliberately never read it.
+ */
+export function isRelayFuseRecoveryCandidate(
+  entry: HostDirectoryEntry,
+): boolean {
+  return isRemoteHostDirectoryEntry(entry) && entry.relayFuseGrace;
 }
 
 /**
@@ -261,6 +370,16 @@ export function isConfirmedTransportRefusal(
  * `hasLiveSession` outranks everything: a client holding an open E2E session
  * has firsthand proof the host is up, which beats any verdict the cloud
  * reaches about it minutes later and through a different leg.
+ *
+ * A fuse-window `offline` (F7) does NOT fail this gate (cold review P1): a
+ * recent `lastSeenAt` is equally consistent with a lease lapse the fuse is
+ * riding out and with a clean detach or crash a minute ago, so recency is not
+ * evidence about the host. What protects the credential-lapse case is the
+ * recovery dial the fuse window keeps open (`isConfirmedTransportRefusal`):
+ * when the leg really is still attached, that dial succeeds within seconds and
+ * its ready session flips `hasLiveSession` here - firsthand evidence - before
+ * the two-read failover streak can complete. When the dial fails, the host is
+ * dead and this gate firing is exactly right.
  */
 export function isConfirmedHostDeath(
   entry: HostDirectoryEntry,
@@ -311,6 +430,9 @@ export function hostListItemToDirectoryEntry(
       item.status.connectivity === "connectable" ? "dialable" : "not-dialable",
     remoteStatus: item.status,
     publicKey: item.publicKey,
+    // Reconciled once here (fetch time, not render) so the render-time
+    // dialability/death gates stay pure - see isWithinRelayFuseGrace.
+    relayFuseGrace: isWithinRelayFuseGrace(item.status, Date.now()),
   };
 }
 

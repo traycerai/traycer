@@ -368,6 +368,8 @@ export function useHostStreamClientBindingFor(
             transportDialability: "dialable",
             publicKey: endpointPublicKey,
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
+            // Fabricated endpoint, not a directory verdict: never in fuse grace.
+            relayFuseGrace: false,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
