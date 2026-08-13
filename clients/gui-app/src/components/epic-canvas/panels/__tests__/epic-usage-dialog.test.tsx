@@ -19,6 +19,23 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
+import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
+import { getEChartsMockInstances } from "../../../../../__tests__/test-browser-apis";
+
+/**
+ * How many per-day points the mounted trend chart was actually given -
+ * read from the option the mocked ECharts instance received, the area
+ * chart's equivalent of counting the old per-day bar columns.
+ */
+function chartDayCount(): number {
+  const option = getEChartsMockInstances().at(-1)?.options.at(-1);
+  if (option === undefined) throw new Error("no ECharts option captured");
+  const { xAxis } = option as UsageChartOption;
+  const axis = Array.isArray(xAxis) ? xAxis[0] : xAxis;
+  const data = axis !== undefined && "data" in axis ? axis.data : undefined;
+  if (!Array.isArray(data)) throw new Error("x-axis carries no day labels");
+  return data.length;
+}
 
 type UsageSummaryRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -233,7 +250,7 @@ describe("<EpicUsageDialog />", () => {
   it("bounds the trend for a long-lived epic, and says so rather than capping silently", async () => {
     // `window: "epic"` resolves `windowDays` from the epic's own fact span,
     // so a near-epoch `occurredAt` (a valid non-negative integer on the
-    // wire) asks for ~20k columns - each a tooltip-wrapped button.
+    // wire) asks for ~20k per-day points.
     renderDialog(() => {
       const response = usageSummaryResponse();
       return {
@@ -249,7 +266,7 @@ describe("<EpicUsageDialog />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
     });
-    expect(screen.getAllByTestId("usage-daily-chart-column")).toHaveLength(90);
+    expect(chartDayCount()).toBe(90);
     expect(
       screen.getByTestId("epic-usage-trend-capped-note").textContent,
     ).toContain("Trend shows the last 90 days");
@@ -261,7 +278,7 @@ describe("<EpicUsageDialog />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
     });
-    expect(screen.getAllByTestId("usage-daily-chart-column")).toHaveLength(30);
+    expect(chartDayCount()).toBe(30);
     expect(screen.queryByTestId("epic-usage-trend-capped-note")).toBeNull();
   });
 

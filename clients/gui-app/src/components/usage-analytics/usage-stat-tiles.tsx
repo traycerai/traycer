@@ -75,9 +75,9 @@ export function UsageStatTiles(props: UsageStatTilesProps): ReactNode {
         label="Cache savings"
         value={formatUsd(tiles.cacheSavings.knownCacheSavingsUsd)}
         detail={
-          tiles.cacheSavings.multipleOfRawCost === null
-            ? null
-            : `${tiles.cacheSavings.multipleOfRawCost.toFixed(1)}x raw cost`
+          tiles.cacheSavings.knownCacheSavingsUsd > 0
+            ? "estimated at published rates"
+            : null
         }
       />
     </div>

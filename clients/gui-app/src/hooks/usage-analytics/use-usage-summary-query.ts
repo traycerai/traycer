@@ -9,7 +9,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { getViewerTimeZone } from "@/lib/usage-analytics/viewer-timezone";
 
-export type UsageSummaryWindowDays = 7 | 30 | 90;
+/**
+ * The window picker offers 7/30/90; 365 is the activity heatmap's fixed
+ * year window (ticket 15), never a picker option. The wire itself accepts
+ * any positive integer (`windowDays: z.number().int().positive()`), so this
+ * union is a GUI discipline, not a protocol bound.
+ */
+export type UsageSummaryWindowDays = 7 | 30 | 90 | 365;
 
 export type UsageSummaryRequest = RequestOfMethod<
   HostRpcRegistry,
