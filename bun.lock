@@ -265,6 +265,9 @@
   "trustedDependencies": [
     "electron",
   ],
+  "patchedDependencies": {
+    "@legendapp/list@3.2.0": "patches/@legendapp%2Flist@3.2.0.patch",
+  },
   "overrides": {
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.1",
