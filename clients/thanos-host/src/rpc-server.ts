@@ -4,9 +4,10 @@ import {
   type ClientFrame,
   type HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { EpicCatalog } from "./catalog";
+import { dispatchRpc } from "./handlers";
 import { acceptBearer } from "./identity";
 import { thanosHostManifest } from "./manifest";
-import { dispatchRpc } from "./handlers";
 
 export type StartRpcServerOptions = {
   readonly hostname: string;
@@ -67,6 +68,7 @@ export function startRpcServer(
   }
 
   const bun = readBunRuntime();
+  const catalog = new EpicCatalog();
   const server = bun.serve({
     hostname: LOOPBACK_HOST,
     port: options.port,
@@ -85,7 +87,7 @@ export function startRpcServer(
     },
     websocket: {
       message: (ws, message) => {
-        handleRpcMessage(ws, message);
+        handleRpcMessage(ws, message, catalog);
       },
     },
   });
@@ -102,6 +104,7 @@ export function startRpcServer(
 function handleRpcMessage(
   ws: RpcWebSocket,
   message: string | ArrayBuffer | Uint8Array,
+  catalog: EpicCatalog,
 ): void {
   let frame: ClientFrame;
   try {
@@ -121,7 +124,7 @@ function handleRpcMessage(
     return;
   }
 
-  handleRequest(ws, frame);
+  handleRequest(ws, frame, catalog);
 }
 
 function handleOpen(ws: RpcWebSocket, token: string): void {
@@ -146,6 +149,7 @@ function handleOpen(ws: RpcWebSocket, token: string): void {
 function handleRequest(
   ws: RpcWebSocket,
   frame: Extract<ClientFrame, { kind: "request" }>,
+  catalog: EpicCatalog,
 ): void {
   if (!ws.data.opened) {
     sendFatalAndClose(ws, "RPC_ERROR", "expected open frame");
@@ -155,6 +159,7 @@ function handleRequest(
     frame.method,
     frame.schemaVersion,
     frame.params,
+    catalog,
   );
   sendHostFrame(ws, {
     kind: "response",

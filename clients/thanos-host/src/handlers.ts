@@ -1,5 +1,6 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
+  epicCreateV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -8,6 +9,7 @@ import {
   hostStatusV10,
   hostStatusV11,
 } from "@traycer/protocol/host/status/contracts";
+import type { EpicCatalog } from "./catalog";
 
 export type RpcDispatchError = {
   readonly code: string;
@@ -21,15 +23,15 @@ export type RpcDispatchResult = {
 
 const HOST_VERSION = "0.0.0-thanos";
 const PROTOCOL_VERSION = { major: 1, minor: 1 } as const;
-const EMPTY_LIST_TASKS = { tasks: [], hasMore: false } as const;
 
 export function dispatchRpc(
   method: string,
   schemaVersion: SchemaVersion,
   params: unknown,
+  catalog: EpicCatalog,
 ): RpcDispatchResult {
   try {
-    return dispatchImplementedMethod(method, schemaVersion, params);
+    return dispatchImplementedMethod(method, schemaVersion, params, catalog);
   } catch (cause) {
     return {
       result: null,
@@ -45,6 +47,7 @@ function dispatchImplementedMethod(
   method: string,
   schemaVersion: SchemaVersion,
   params: unknown,
+  catalog: EpicCatalog,
 ): RpcDispatchResult {
   if (method === "host.status") {
     return {
@@ -53,7 +56,10 @@ function dispatchImplementedMethod(
     };
   }
   if (method === "epic.listTasks") {
-    return handleEpicListTasks(schemaVersion, params);
+    return handleEpicListTasks(schemaVersion, params, catalog);
+  }
+  if (method === "epic.create") {
+    return handleEpicCreate(schemaVersion, params, catalog);
   }
   return {
     result: null,
@@ -87,6 +93,7 @@ function handleHostStatus(
 function handleEpicListTasks(
   schemaVersion: SchemaVersion,
   params: unknown,
+  catalog: EpicCatalog,
 ): RpcDispatchResult {
   const contract = epicListTasksContract(schemaVersion);
   if (contract === null) {
@@ -97,7 +104,33 @@ function handleEpicListTasks(
   }
   contract.requestSchema.parse(params);
   return {
-    result: contract.responseSchema.parse(EMPTY_LIST_TASKS),
+    result: contract.responseSchema.parse({
+      tasks: catalog.list(),
+      hasMore: false,
+    }),
+    error: null,
+  };
+}
+
+function handleEpicCreate(
+  schemaVersion: SchemaVersion,
+  params: unknown,
+  catalog: EpicCatalog,
+): RpcDispatchResult {
+  if (schemaVersion.major !== 1 || schemaVersion.minor !== 0) {
+    return {
+      result: null,
+      error: { code: "E_HOST_UNSUPPORTED", message: "epic.create" },
+    };
+  }
+  const request = epicCreateV10.requestSchema.parse(params);
+  const task = catalog.insert(request.epic);
+  return {
+    result: epicCreateV10.responseSchema.parse({
+      roomInfo: null,
+      task,
+      initialTurnStarted: false,
+    }),
     error: null,
   };
 }
