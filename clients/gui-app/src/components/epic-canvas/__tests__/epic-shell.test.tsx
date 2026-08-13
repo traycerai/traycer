@@ -59,12 +59,12 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   }),
 }));
 
-vi.mock("@/components/epic-canvas/panels/epic-connection-pill", () => ({
-  EpicConnectionPill: () => <div data-testid="epic-connection-pill" />,
-}));
-
 vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
   EpicConnectionToasts: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/panels/epic-sweep-action", () => ({
+  EpicSweepAction: () => <div data-testid="epic-sweep-action" />,
 }));
 
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
@@ -221,10 +221,11 @@ describe("<EpicShell />", () => {
       );
 
     await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+      expect(screen.getByTestId("epic-sweep-action")).not.toBeNull();
     });
     expect(screen.queryByTestId("epic-shell-title")).toBeNull();
     expect(screen.queryByText("Live Epic")).toBeNull();
+    expect(screen.queryByTestId("epic-connection-pill")).toBeNull();
 
     queryClient.clear();
   });
@@ -272,9 +273,10 @@ describe("<EpicShell />", () => {
       );
 
     await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+      expect(screen.getByTestId("epic-sweep-action")).not.toBeNull();
     });
     expect(screen.queryByTestId("epic-open-button")).toBeNull();
+    expect(screen.queryByTestId("epic-connection-pill")).toBeNull();
 
     queryClient.clear();
   });
@@ -301,7 +303,7 @@ describe("<EpicShell />", () => {
         buildSnapshot("Hidden Epic"),
       );
     await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+      expect(screen.getByTestId("epic-sweep-action")).not.toBeNull();
     });
 
     controlled.streams()[0].callbacks.onPermissionChanged(null);
@@ -310,10 +312,11 @@ describe("<EpicShell />", () => {
     // EpicAccessCoordinator (mounted app-level, not in this isolated test)
     // force-closes the tab instead. The body keeps rendering until then.
     await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+      expect(screen.getByTestId("epic-sweep-action")).not.toBeNull();
     });
     expect(screen.queryByTestId("epic-access-lost")).toBeNull();
     expect(screen.queryByTestId("epic-access-lost-pill")).toBeNull();
+    expect(screen.queryByTestId("epic-connection-pill")).toBeNull();
 
     queryClient.clear();
   });

@@ -196,12 +196,12 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   }),
 }));
 
-vi.mock("@/components/epic-canvas/panels/epic-connection-pill", () => ({
-  EpicConnectionPill: () => <div data-testid="epic-connection-pill" />,
-}));
-
 vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
   EpicConnectionToasts: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/panels/epic-sweep-action", () => ({
+  EpicSweepAction: () => <div data-testid="epic-sweep-action" />,
 }));
 
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
@@ -360,10 +360,11 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
       );
 
     await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
+      expect(screen.getByTestId("epic-sweep-action")).not.toBeNull();
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId("epic-usage-entry-point")).toBeNull();
+    expect(screen.queryByTestId("epic-connection-pill")).toBeNull();
 
     queryClient.clear();
   });

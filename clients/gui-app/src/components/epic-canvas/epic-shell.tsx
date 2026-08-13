@@ -8,7 +8,6 @@
 import { useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
-import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
@@ -107,11 +106,13 @@ interface EpicShellStatusRowProps {
 }
 
 /**
- * Top-right status row: the sync pill plus the Task-level Sweep affordance.
- * Both are gated on `snapshotLoaded` - it implies a live Epic session, and the
- * Sweep action is host-backed, so a merely-retained pane must never mount it
- * (an ungated host hook there throws out of the pane and the route error
- * boundary swallows the whole canvas).
+ * Top-right status row: usage entry + Task-level Sweep.
+ * Thanos fork: cloud sync pill omitted — single-user dogfood does not need
+ * the host↔cloud durability indicator in the chrome.
+ * Gated on `snapshotLoaded` - it implies a live Epic session, and the Sweep
+ * action is host-backed, so a merely-retained pane must never mount it (an
+ * ungated host hook there throws out of the pane and the route error boundary
+ * swallows the whole canvas).
  */
 function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
@@ -122,7 +123,6 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
       {props.snapshotLoaded ? (
         <>
           <EpicUsageEntryPoint epicId={props.epicId} />
-          <EpicConnectionPill />
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>
       ) : null}
