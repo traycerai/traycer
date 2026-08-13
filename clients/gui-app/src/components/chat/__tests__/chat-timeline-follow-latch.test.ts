@@ -174,6 +174,21 @@ function fireNativeScroll(node: HTMLDivElement): void {
   node.dispatchEvent(new Event("scroll", { bubbles: false }));
 }
 
+function fireTouch(
+  node: HTMLDivElement,
+  type: "touchstart" | "touchmove",
+  clientY: number,
+): void {
+  const event = new Event(type, { bubbles: false });
+  Object.defineProperty(event, "touches", {
+    configurable: true,
+    value: {
+      item: (index: number) => (index === 0 ? { clientY } : null),
+    },
+  });
+  node.dispatchEvent(event);
+}
+
 /** Throws if ever actually invoked - only `getScrollableNode`/`scrollToEnd`
  *  are exercised by the latch under test; every other member of the (large)
  *  `LegendListRef` interface is stubbed just to keep this a real, uncast
@@ -450,6 +465,223 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
   });
 
+  it("blocks a maintain correction between wheel intent and native scroll", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("preserves a movable wheel arm through a strict-bottom maintain pass", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    // A maintain callback can see the old strict-bottom geometry before the
+    // browser delivers the wheel's native scroll event.
+    result.current.followEndIfPermitted();
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("releases a movable wheel arm after a sub-epsilon strict-bottom scroll", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+    // Native delivery confirms that the gesture completed without departing:
+    // the fractional movement remains inside the strict-bottom epsilon.
+    shim.setGeometry(node, { scrollTop: 999.5 });
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a maintain correction between touch intent and native scroll", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    fireTouch(node, "touchmove", 140);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not block follow for an upward wheel that cannot move from the top edge", () => {
+    const node = shim.makeNode({
+      scrollTop: 0,
+      scrollHeight: 500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    shim.setGeometry(node, { scrollHeight: 700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears an immovable gesture arm when a strict-bottom observation proves no departure", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+    result.current.followEndIfPermitted();
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a settled no-op owned free navigation", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    result.current.beginOwnedFreeNavigation();
+    // The target is already at the strict end, so the programmatic navigation
+    // emits no scroll event. Its settle callback must release the arm.
+    result.current.completeOwnedFreeNavigation();
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a publishing pointer preflight when pointer completion produces no scroll", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    node.dispatchEvent(new PointerEvent("pointerup"));
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("converges a toward-end reader landing when content grows before scroll delivery", () => {
     const node = shim.makeNode({
       scrollTop: 700,
@@ -503,6 +735,38 @@ describe("useChatTimelineFollowLatch", () => {
     fireNativeScroll(node);
     result.current.completeOwnedEndNavigation(result.current.isAtStrictEnd());
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("lets owned end navigation supersede a gesture arm", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    result.current.beginOwnedEndNavigation();
+    shim.setGeometry(node, { scrollTop: 700 });
+    fireNativeScroll(node);
+
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+    result.current.completeOwnedEndNavigation(true);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
   it("yields an owned go-live operation to recognized reader input", () => {
@@ -969,6 +1233,12 @@ describe("useChatTimelineFollowLatch", () => {
     // First animated frame: still inside the 1px strict-bottom epsilon.
     shim.setGeometry(node, { scrollTop: 999.5 });
     fireNativeScroll(node);
+
+    // Streaming/layout maintenance in the gap must not create a competing
+    // bottom correction before the navigation genuinely leaves the edge.
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
 
     // Subsequent frames genuinely leave the bottom.
     shim.setGeometry(node, { scrollTop: 900 });

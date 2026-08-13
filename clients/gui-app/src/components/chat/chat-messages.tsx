@@ -1775,10 +1775,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         },
         onSettledValid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedFreeNavigation();
           restorePersistencePendingRef.current = false;
         },
         onSettledInvalid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
+          followLatchRef.current?.completeOwnedFreeNavigation();
           acceptExhaustedPersistedRestoreFallback(
             restorePersistencePendingRef,
             pendingMeasuredFreeRestoreRef,
