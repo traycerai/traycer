@@ -190,39 +190,50 @@ function requestKeyFor(request: ImageAssetRequest): string {
 /**
  * The pre-header shared-subscription coalescing map's key (sol re-review) -
  * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
- * for a workspace request, which has no revision concept) + this hook's own
- * `focusRefreshNonce`. Deliberately WIDER than `requestKeyFor` alone: two
- * requests that are otherwise identical but at different git revisions, or
- * different local freshness generations, must never coalesce onto the same
- * in-flight stream, even though `requestKeyFor` treats them as the SAME
+ * for a workspace request, which has no revision concept) + this hook's
+ * current `focusRefreshGeneration`. Deliberately WIDER than `requestKeyFor`
+ * alone: two requests that are otherwise identical but at different git
+ * revisions, or different refresh generations, must never coalesce onto the
+ * same in-flight stream, even though `requestKeyFor` treats them as the SAME
  * request (by design - neither is part of what decides whether a single
  * mount's own effect needs to re-run).
  *
- * The nonce specifically closes a worktree-file gap (Codex re-review): it is
- * only ever an effect DEPENDENCY (triggers a worktree-backed request's own
- * refetch on refocus, decision #11), never part of the shared key before
+ * The generation specifically closes a worktree-file gap (Codex re-review):
+ * it is only ever an effect DEPENDENCY (triggers a worktree-backed request's
+ * own refetch on refocus, decision #11), never part of the shared key before
  * this - so a second, still-focused pane's refocus-triggered "refresh" could
  * silently JOIN a first pane's older in-flight transfer instead of forcing a
- * fresh one, defeating the exact staleness signal the nonce exists to send
- * (and, since the nonce only bumps on a focus EVENT, the second pane would
- * have no further trigger to recover while it stayed focused). Folding it
- * in here is deliberately NOT the same as folding a global generation
- * counter: it is each hook's own LOCAL refresh count, so two panes mounting
- * a file CONCURRENTLY still coalesce (both start at nonce 0 - the original
- * P1 fix's target scenario is untouched) and only diverge once either one
- * has genuinely asked for a refresh, which is exactly when they should stop
- * sharing.
+ * fresh one, defeating the exact staleness signal it exists to send.
+ *
+ * MUST be `nextFocusRefreshGeneration`'s module-global value, never a
+ * per-hook local counter (sol final-delta re-review): two DIFFERENT hooks'
+ * local counters traverse the identical value sequence independently, so
+ * pane A's first refocus and pane B's OWN first refocus - happening LATER,
+ * while A's refreshed stream is still in flight - would both land on the
+ * SAME local value and collide, letting B join A's already-refreshing (and
+ * possibly stale-again) stream instead of forcing its own. A global
+ * generation makes every refresh event's value unique across every hook,
+ * for the life of the module, so two refresh events can never collide by
+ * value regardless of which hook or when they fired.
+ *
+ * Canonicalized to `0` for a non-worktree-backed request (a git
+ * session-retained side) REGARDLESS of what `focusRefreshGeneration`
+ * currently holds - a hook whose `request` prop transitions from a
+ * worktree-backed variant to a git one must not carry a stale, no-longer-
+ * meaningful generation value into a request type that never refreshes at
+ * all; only ever comparing `0` there also preserves the original
+ * concurrent-first-mount coalescing for every non-worktree request.
  */
 function sharedSubscriptionKeyFor(
   hostId: string,
   request: ImageAssetRequest,
-  focusRefreshNonce: number,
+  focusRefreshGeneration: number,
 ): string {
   return JSON.stringify([
     hostId,
     requestKeyFor(request),
     request.method === "git" ? request.coalesceRevision : null,
-    focusRefreshNonce,
+    isWorktreeBackedRequest(request) ? focusRefreshGeneration : 0,
   ]);
 }
 
@@ -316,6 +327,24 @@ interface SharedAssetSubscription {
  * to call `release()` on).
  */
 const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
+
+/**
+ * The NEXT value a refocus-triggered refresh will claim (sol final-delta
+ * re-review) - module-global, not per-hook. A per-hook local counter looked
+ * sufficient (two panes mounting concurrently both start at 0 and still
+ * coalesce) but is actually WRONG: two DIFFERENT hooks' local counters
+ * traverse the identical value sequence independently, so pane A's first
+ * refocus (0->1) and pane B's OWN first refocus, happening later while A's
+ * refreshed stream is still in flight, both land on "1" - a coincidental
+ * value collision, not a shared generation. B would then join A's
+ * (possibly already-stale-again) stream instead of forcing its own fresh
+ * one. A global counter makes every refresh event's generation UNIQUE
+ * across every hook, everywhere, for the life of the module - so two
+ * refresh events can never collide by value regardless of which hook or
+ * when they fired. Starts at 1 so an unrefreshed mount's `0` baseline is
+ * never claimable by an actual refresh.
+ */
+let nextFocusRefreshGeneration = 1;
 
 function acquireSharedAssetSubscription(
   sharedKey: string,
@@ -434,14 +463,18 @@ export function useImageAsset(
   // this on the pane's blurred->focused transition, so a still-mounted tile
   // reopens the stream and picks up an externally edited file. An immutable
   // git-object request never bumps it - refetching would only re-confirm the
-  // same OID.
+  // same OID. Claims the NEXT MODULE-GLOBAL value (sol final-delta
+  // re-review), never a per-hook local increment - see
+  // `nextFocusRefreshGeneration`'s own comment for why a local counter is
+  // wrong here: two different hooks' independent refresh events must never
+  // land on the same generation by coincidence.
   const wasFocusedRef = useRef(paneFocused);
-  const [focusRefreshNonce, setFocusRefreshNonce] = useState(0);
+  const [focusRefreshGeneration, setFocusRefreshGeneration] = useState(0);
   useEffect(() => {
     const wasFocused = wasFocusedRef.current;
     wasFocusedRef.current = paneFocused;
     if (paneFocused && !wasFocused && isWorktreeBacked) {
-      setFocusRefreshNonce((nonce) => nonce + 1);
+      setFocusRefreshGeneration(nextFocusRefreshGeneration++);
     }
   }, [paneFocused, isWorktreeBacked]);
 
@@ -699,7 +732,11 @@ export function useImageAsset(
     };
 
     const acquired = acquireSharedAssetSubscription(
-      sharedSubscriptionKeyFor(hostId, normalizedRequest, focusRefreshNonce),
+      sharedSubscriptionKeyFor(
+        hostId,
+        normalizedRequest,
+        focusRefreshGeneration,
+      ),
       wsStreamClient,
       normalizedRequest,
       callbacks,
@@ -734,7 +771,7 @@ export function useImageAsset(
       if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
-  }, [requestKey, wsStreamClient, hostId, focusRefreshNonce]);
+  }, [requestKey, wsStreamClient, hostId, focusRefreshGeneration]);
 
   const state =
     resolved !== null && resolved.key === requestKey
