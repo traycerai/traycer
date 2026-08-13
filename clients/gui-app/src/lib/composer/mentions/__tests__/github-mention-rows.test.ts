@@ -467,6 +467,21 @@ describe("parseGithubReferenceQuery", () => {
     });
   });
 
+  // A bare digit query is exact-number intent exactly like its `#`-prefixed
+  // twin - `numberMatchScore` already treated bare digits that way, and the
+  // parser must agree, or a bare `4917` scores as a number match but earns
+  // neither a `Resolve in ...` row nor the zero-match dismissal exemption.
+  it("recognizes a bare digit query as a number reference, matching the #-prefixed form", () => {
+    expect(parseGithubReferenceQuery("4917")).toEqual({
+      kind: "number",
+      number: 4917,
+    });
+    expect(parseGithubReferenceQuery("#4917")).toEqual({
+      kind: "number",
+      number: 4917,
+    });
+  });
+
   it("recognizes org/repo#number", () => {
     expect(parseGithubReferenceQuery("org/repo#123")).toEqual({
       kind: "repository",
@@ -530,12 +545,25 @@ describe("parseGithubReferenceQuery", () => {
     expect(parseGithubReferenceQuery("   ")).toBeNull();
   });
 
+  // A bare digit query is number-intent ONLY when the whole query is digits.
+  // Anything else - trailing letters, a leading letter, a digit sitting
+  // inside a sentence - stays prose, exactly as it did before bare digits
+  // were recognized at all.
+  it("keeps a query with digits AND other characters as prose, not a reference", () => {
+    expect(parseGithubReferenceQuery("4917x")).toBeNull();
+    expect(parseGithubReferenceQuery("v123")).toBeNull();
+    expect(parseGithubReferenceQuery("2024 was fun")).toBeNull();
+  });
+
   it("rejects a zero-valued number in every reference shape", () => {
     // `\d{1,7}` matches these, but the wire row schema requires a positive
     // number - so classifying them as references suppresses root's zero-match
     // auto-close and offers a Resolve row for an item that cannot exist.
     expect(parseGithubReferenceQuery("#0")).toBeNull();
     expect(parseGithubReferenceQuery("#000")).toBeNull();
+    // Same positivity rule on the bare (no `#`) form the parser now accepts.
+    expect(parseGithubReferenceQuery("0")).toBeNull();
+    expect(parseGithubReferenceQuery("000")).toBeNull();
     expect(parseGithubReferenceQuery("org/repo#0")).toBeNull();
     expect(
       parseGithubReferenceQuery("https://github.com/org/repo/pull/0"),

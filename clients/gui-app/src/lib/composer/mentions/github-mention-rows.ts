@@ -505,7 +505,11 @@ function involvementBucket(
 
 /**
  * A query the user clearly meant as a REFERENCE rather than as prose: a bare
- * `#123`, an `org/repo#123`, or a pasted GitHub PR/issue URL.
+ * number (`123` or `#123`), an `org/repo#123`, or a pasted GitHub PR/issue
+ * URL. The hash is optional on the bare form because `numberMatchScore`
+ * already treats bare digits as exact-number intent - one answer to "is this
+ * query a number naming a row?", not a ranker that says yes while the
+ * exemption and the `Resolve in ...` rows say no.
  *
  * Two rules read this. Ranking puts an exact number match on top, and the root
  * step's zero-match auto-close is suppressed for these - a reference that the
@@ -538,7 +542,7 @@ export type GithubReferenceQuery =
       readonly section: GithubMentionSection;
     };
 
-const BARE_NUMBER_REFERENCE = /^#(\d{1,7})$/;
+const BARE_NUMBER_REFERENCE = /^#?(\d{1,7})$/;
 const REPOSITORY_REFERENCE = /^([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d{1,7})$/;
 const HOST_REPOSITORY_REFERENCE =
   /^([\w.-]+)\/([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d{1,7})$/;
