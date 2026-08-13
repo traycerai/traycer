@@ -53,6 +53,17 @@ function layoutWithEpic(tabId: string): PersistedTabStripLayout {
   };
 }
 
+function layoutWithDraft(draftId: string): PersistedTabStripLayout {
+  const ref = { kind: "draft" as const, id: draftId };
+  return {
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    systemTabs: { history: null, settings: null },
+    activationHistory: [ref],
+  };
+}
+
 function seedCanvasEpic(tabId: string, epicId: string, name: string): void {
   useEpicCanvasStore.getState().openEpicTabWithId(tabId, epicId, name);
 }
@@ -447,5 +458,56 @@ describe("profile switch releases foreign active routes", () => {
       useActiveProjectProfileStore.getState().setActiveProfile("profile-b");
     });
     expect(navigateHome).not.toHaveBeenCalled();
+  });
+});
+
+describe("parked drafts across profile strips", () => {
+  beforeEach(() => {
+    resetAll();
+  });
+
+  afterEach(() => {
+    resetAll();
+  });
+
+  it("minting a Start Page after a profile restore does not re-place parked drafts", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    tabCommandCoordinator.restoreHydratedLayout(layoutWithDraft("draft-a"));
+    expect(flattenLayoutRefs(readTabStripLayout())).toEqual([
+      { kind: "draft", id: "draft-a" },
+    ]);
+
+    // Switch to an empty profile bucket: draft-a stays in the store (so it
+    // can come back with its bucket) but must leave the live strip.
+    tabCommandCoordinator.restoreHydratedLayout(emptyTabStripLayout());
+    expect(flattenLayoutRefs(readTabStripLayout())).toEqual([]);
+    expect(
+      useLandingDraftStore.getState().drafts.map((draft) => draft.id),
+    ).toEqual(["draft-a"]);
+
+    // Empty-profile mint: the same path as openNewEpicIntent after a swap.
+    const draftB = useLandingDraftStore.getState().createDraft(null);
+    tabCommandCoordinator.reconcileFromSourceStores();
+
+    expect(flattenLayoutRefs(readTabStripLayout())).toEqual([
+      { kind: "draft", id: draftB },
+    ]);
+    expect(
+      useLandingDraftStore.getState().drafts.map((draft) => draft.id),
+    ).toEqual(["draft-a", draftB]);
+  });
+
+  it("restoring a profile layout brings its parked Start Page back", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    tabCommandCoordinator.restoreHydratedLayout(layoutWithDraft("draft-a"));
+    tabCommandCoordinator.restoreHydratedLayout(emptyTabStripLayout());
+    useLandingDraftStore.getState().createDraftWithId("draft-b", null);
+    tabCommandCoordinator.reconcileFromSourceStores();
+
+    tabCommandCoordinator.restoreHydratedLayout(layoutWithDraft("draft-a"));
+
+    expect(flattenLayoutRefs(readTabStripLayout())).toEqual([
+      { kind: "draft", id: "draft-a" },
+    ]);
   });
 });

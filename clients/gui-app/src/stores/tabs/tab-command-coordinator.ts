@@ -476,6 +476,12 @@ export class TabCommandCoordinator {
   private ready = true;
   private ledger = EMPTY_LEDGER;
   private diagnostics = EMPTY_DIAGNOSTICS;
+  /**
+   * Drafts that exist in landing-draft-store but were omitted from the last
+   * restored strip (another project profile's Start Pages). Reconciliation
+   * must not auto-place them; restoring their bucket unparks them.
+   */
+  private parkedDraftIds = new Set<string>();
   private readonly listeners = new Set<CoordinatorListener>();
 
   getLedger(): TabCommandLedger {
@@ -506,6 +512,7 @@ export class TabCommandCoordinator {
     this.ready = true;
     this.ledger = EMPTY_LEDGER;
     this.diagnostics = EMPTY_DIAGNOSTICS;
+    this.parkedDraftIds = new Set();
     this.notify();
   }
 
@@ -1411,6 +1418,7 @@ export class TabCommandCoordinator {
    * before the normal transaction finalizer projects compatibility state.
    */
   restoreHydratedLayout(layout: PersistedTabStripLayout): void {
+    this.parkDraftsAbsentFromLayout(layout);
     const sourceKeys = new Set(tabSourceRefs().map(tabRefKey));
     const current = currentLayout();
     const missing = flattenLayoutRefs(layout).filter(
@@ -1476,7 +1484,8 @@ export class TabCommandCoordinator {
     const newlyReserved = currentSources.filter(
       (ref) =>
         !placed.has(tabRefKey(ref)) &&
-        !this.ledger.pendingRemovals.has(tabRefKey(ref)),
+        !this.ledger.pendingRemovals.has(tabRefKey(ref)) &&
+        !(ref.kind === "draft" && this.parkedDraftIds.has(ref.id)),
     );
     const unexpectedAdditions = newlyReserved.some(
       (ref) => !this.ledger.reservedAdditions.has(tabRefKey(ref)),
@@ -1717,14 +1726,33 @@ export class TabCommandCoordinator {
         !knownKeys.has(tabRefKey(ref)),
     );
     const withoutMissing = removals.reduce(layoutWithRemovedRef, layout);
-    const additions = knownSources.filter(
-      (ref) => findStripItemForRef(withoutMissing, ref) === null,
-    );
+    const additions = knownSources.filter((ref) => {
+      if (findStripItemForRef(withoutMissing, ref) !== null) return false;
+      // Parked Start Pages belong to another profile's saved strip. Creating
+      // a draft still auto-places: the new id is not in parkedDraftIds.
+      if (ref.kind === "draft" && this.parkedDraftIds.has(ref.id)) return false;
+      return true;
+    });
     return {
       next: additions.reduce(createLayoutItem, withoutMissing),
       additions,
       removals,
     };
+  }
+
+  private parkDraftsAbsentFromLayout(layout: PersistedTabStripLayout): void {
+    const placedDraftIds = new Set(
+      flattenLayoutRefs(layout).flatMap((ref) =>
+        ref.kind === "draft" ? [ref.id] : [],
+      ),
+    );
+    this.parkedDraftIds = new Set(
+      useLandingDraftStore
+        .getState()
+        .drafts.flatMap((draft) =>
+          placedDraftIds.has(draft.id) ? [] : [draft.id],
+        ),
+    );
   }
 
   private consumePlacedReservations(layout: PersistedTabStripLayout): void {
