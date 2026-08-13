@@ -195,6 +195,28 @@ function message(
   };
 }
 
+function created(
+  overrides: Partial<EpicCommunicationGraphEvent> & {
+    readonly id: number;
+    readonly timestamp: number;
+  },
+): EpicCommunicationGraphEvent {
+  return {
+    kind: "agent_created",
+    senderAgentId: CHAT_ID,
+    receiverAgentId: LATE_CHAT_ID,
+    responseId: null,
+    inReplyTo: null,
+    expectReply: null,
+    messageText: null,
+    noticeReason: null,
+    originKind: null,
+    originChatId: null,
+    originRefId: null,
+    ...overrides,
+  };
+}
+
 async function renderTile(): Promise<void> {
   await renderSurfaces(
     <CommGraphTile node={makeCommGraphTileRef(EPIC_ID)} viewTabId={EPIC_ID} />,
@@ -379,6 +401,36 @@ describe("CommGraphTile projection", () => {
     });
     // The agent that already existed is untouched.
     expect(screen.getByTestId(`comm-graph-node-${CHAT_ID}`)).toBeDefined();
+  });
+
+  it("waits for the ordered creation row when another event shares its timestamp", async () => {
+    await renderTile();
+    deliverSnapshot([
+      message({ id: 1, timestamp: LATE_CREATED_AT }),
+      created({ id: 2, timestamp: LATE_CREATED_AT }),
+    ]);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeDefined();
+    });
+
+    await seekToIndex(0);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeNull();
+    });
+
+    await seekToIndex(1);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeDefined();
+    });
   });
 
   it("pulses a row that ARRIVES while live, without flashing the initial snapshot", async () => {
