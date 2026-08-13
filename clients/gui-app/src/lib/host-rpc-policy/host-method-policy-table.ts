@@ -707,6 +707,22 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "epic.prepareArtifactImage": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -29,6 +29,12 @@ import { z } from "zod";
  * it. Once shipped readers interpret a field, removing it from the core is a
  * major change no matter where the bytes end up.
  *
+ * Visibility: once a chat is `task`-visible, this section (inline or
+ * graduated shard) is collaborator-readable - any task collaborator can
+ * fetch the bytes. They are not rendered, but they are fetchable.
+ * Credentials, tokens, or anything security-sensitive must never enter
+ * `data`.
+ *
  * The SAME schema instance backs the head's inline section and the graduated
  * `host-private` shard - which is why the section can move between them
  * without a re-parse, and why there is exactly one `hostPrivate` captured
