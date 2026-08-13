@@ -77,6 +77,20 @@ export type ImageAssetRequest =
       readonly previousPath: string | null;
       readonly side: "old" | "new";
       readonly stage: "staged" | "unstaged";
+      /**
+       * Scopes pre-header subscription COALESCING ONLY (sol re-review) -
+       * never `requestKeyFor` (a change here always accompanies a full
+       * caller-side remount already, so no request ever needs to detect it
+       * changing while staying mounted) or `buildImageAssetCacheKey` (whose
+       * `contentIdentity` comes from the header itself and is already
+       * revision-correct by construction). Without this, two independently
+       * mounted requests for the identical (path, stage) at DIFFERENT
+       * revisions - one remounting to a new revision while a separate,
+       * still-mounted consumer keeps the old revision's pre-header
+       * subscription alive - would coalesce onto each other and replay a
+       * stale header across a genuine content change.
+       */
+      readonly coalesceRevision: string;
     };
 
 const LOADING_STATE: ImageAssetState = {
@@ -171,6 +185,27 @@ function requestKeyFor(request: ImageAssetRequest): string {
         request.side,
         request.stage,
       ]);
+}
+
+/**
+ * The pre-header shared-subscription coalescing map's key (sol re-review) -
+ * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
+ * for a workspace request, which has no revision concept). Deliberately
+ * WIDER than `requestKeyFor` alone: two requests that are otherwise
+ * identical but at different git revisions must never coalesce onto the
+ * same in-flight stream, even though `requestKeyFor` treats them as the
+ * SAME request (by design - `coalesceRevision` isn't part of what decides
+ * whether a single mount's own effect needs to re-run).
+ */
+function sharedSubscriptionKeyFor(
+  hostId: string,
+  request: ImageAssetRequest,
+): string {
+  return JSON.stringify([
+    hostId,
+    requestKeyFor(request),
+    request.method === "git" ? request.coalesceRevision : null,
+  ]);
 }
 
 /**
@@ -646,7 +681,7 @@ export function useImageAsset(
     };
 
     const acquired = acquireSharedAssetSubscription(
-      JSON.stringify([hostId, requestKey]),
+      sharedSubscriptionKeyFor(hostId, normalizedRequest),
       wsStreamClient,
       normalizedRequest,
       callbacks,

@@ -548,11 +548,13 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 
   if (showImageDiff) {
     const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
     return (
       <>
         {svgToggle}
         <ImageDiffView
-          key={gitImageDiffRevisionKey(props.file, props.headSha)}
+          key={revisionKey}
+          revisionKey={revisionKey}
           runningDir={props.node.diff.runningDir}
           filePath={props.file.path}
           previousPath={props.file.previousPath}

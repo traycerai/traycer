@@ -87,6 +87,7 @@ const DEFAULT_PROPS: ImageDiffViewProps = {
   compact: false,
   onOpenExternally: vi.fn(),
   openExternallyOpening: false,
+  revisionKey: "revision-1",
 };
 
 function renderDiff(overrides: Partial<ImageDiffViewProps>): void {
@@ -141,6 +142,7 @@ describe("<ImageDiffView />", () => {
         previousPath: "images/old-name.png",
         side: "old",
         stage: "staged",
+        coalesceRevision: "revision-1",
       },
       {
         method: "git",
@@ -149,6 +151,7 @@ describe("<ImageDiffView />", () => {
         previousPath: "images/old-name.png",
         side: "new",
         stage: "unstaged",
+        coalesceRevision: "revision-1",
       },
     ]);
   });

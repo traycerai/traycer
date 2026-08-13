@@ -147,6 +147,7 @@ const GIT_REQUEST: ImageAssetRequest = {
   previousPath: "images/old-logo.png",
   side: "old",
   stage: "staged",
+  coalesceRevision: "git-revision-1",
 };
 
 interface PaneTestState {

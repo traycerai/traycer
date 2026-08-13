@@ -117,6 +117,20 @@ export interface ImageDiffViewProps {
   readonly runningDir: string;
   readonly filePath: string;
   readonly previousPath: string | null;
+  /**
+   * `gitImageDiffRevisionKey(file, headSha)` - the SAME value the caller
+   * already uses as this component's own `key=` (remount-on-revision-change,
+   * PR review P1). Threaded into each side's git request too, as
+   * `coalesceRevision`, because the `key=` remount alone doesn't close the
+   * gap when a SEPARATE, still-mounted consumer of the identical (path,
+   * stage) at the OLD revision keeps that revision's shared pre-header
+   * subscription alive (e.g. the same file open in two panes, one remounts
+   * before the other's git-status catches up) - without this, the
+   * remounted side's fresh `useImageAsset` call would still coalesce onto
+   * that surviving old-revision subscription and replay its stale header
+   * (sol re-review).
+   */
+  readonly revisionKey: string;
   /** Stage to request the OLD (pre-change) side at; `null` = no old side (Added empty state). */
   readonly oldStage: "staged" | "unstaged" | null;
   /** Stage to request the NEW (post-change) side at; `null` = no new side (Deleted empty state). */
@@ -205,6 +219,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       previousPath: props.previousPath,
       side: "old",
       stage: props.oldStage,
+      coalesceRevision: props.revisionKey,
     };
   }, [
     props.oldStage,
@@ -212,6 +227,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.runningDir,
     props.filePath,
     props.previousPath,
+    props.revisionKey,
   ]);
 
   const newRequest = useMemo<ImageAssetRequest | null>(() => {
@@ -223,6 +239,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       previousPath: props.previousPath,
       side: "new",
       stage: props.newStage,
+      coalesceRevision: props.revisionKey,
     };
   }, [
     props.newStage,
@@ -230,6 +247,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.runningDir,
     props.filePath,
     props.previousPath,
+    props.revisionKey,
   ]);
 
   const oldAsset = useImageAsset(oldRequest);

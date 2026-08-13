@@ -381,6 +381,7 @@ const DIFF_PROPS: ImageDiffViewProps = {
   compact: false,
   onOpenExternally: null,
   openExternallyOpening: false,
+  revisionKey: "revision-1",
 };
 
 function readyAsset(url: string): UseImageAssetResult {

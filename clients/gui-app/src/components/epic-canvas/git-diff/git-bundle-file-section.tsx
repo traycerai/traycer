@@ -170,9 +170,11 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
 
   if (routeToImageDiff) {
     const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
     return (
       <ImageDiffView
-        key={gitImageDiffRevisionKey(props.file, props.headSha)}
+        key={revisionKey}
+        revisionKey={revisionKey}
         runningDir={props.node.diff.runningDir}
         filePath={props.file.path}
         previousPath={props.file.previousPath}
