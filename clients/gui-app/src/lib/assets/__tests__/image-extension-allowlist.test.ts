@@ -15,6 +15,7 @@ describe("image extension allowlist", () => {
   it("rejects paths without an allowed image extension", () => {
     expect(isImageAssetPath("README.md")).toBe(false);
     expect(isImageAssetPath("no-extension")).toBe(false);
+    expect(isImageAssetPath("images/scan.bmp")).toBe(false);
   });
 
   it("recognizes SVG paths case-insensitively without treating other images as SVG", () => {
