@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -78,10 +79,11 @@ export function HostOverviewUpdatesRegion(props: {
   // `discoveredDegrade` is STICKY: `cli-unavailable` and `externally-managed`
   // are facts about how this host is set up, not about this attempt, and
   // neither is knowable before we try. Once either is seen the whole region
-  // retires for this mounting and the cloud pin becomes the only update
-  // control — which is what "degrade to the cloud-pin-only UI" has to mean.
-  // Leaving Check-now behind would keep offering the one action we have just
-  // been told can never lead anywhere.
+  // retires for this mounting and says so, because for an externally-managed
+  // host there is no fallback control left to point at: it skips the update
+  // reconciler outright, so neither this list nor the auto-update switch
+  // reaches it. Leaving Check-now behind would keep offering the one action we
+  // have just been told can never lead anywhere.
   const [discoveredDegrade, setDiscoveredDegrade] =
     useState<OverviewDegradeReason | null>(null);
   // `transientFailure` is NOT sticky: `cli-failed` and `invalid-output` say
@@ -246,15 +248,46 @@ function visibleVersionRows(input: {
     : manifest.versions.slice(0, VERSION_LIST_PREVIEW);
   return entries.map((entry) => {
     const asset = platformAssetFor(entry.platforms, input.platformKey);
+    const isInstalled = entry.version === input.installedVersion;
     return {
       version: entry.version,
       releasedAt: entry.releasedAt,
       yanked: entry.yanked,
       isLatest: entry.version === manifest.latest,
-      isInstalled: entry.version === input.installedVersion,
-      unavailableReason: assetUnavailableReason(asset),
+      isInstalled,
+      unavailableReason:
+        assetUnavailableReason(asset) ??
+        (isInstalled
+          ? null
+          : supersededReason(input.installedVersion, entry.version)),
     };
   });
+}
+
+/**
+ * Why a row below the installed version cannot be installed.
+ *
+ * This mirrors the CLI's own short-circuit rather than inventing a policy:
+ * `download-stage.ts` computes `installedAtOrAboveTarget` and returns
+ * `installed-up-to-date` for a target at OR BELOW what is installed, then skips
+ * the apply and writes no progress marker. The RPC has already answered
+ * `accepted` by then, so an enabled button here would toast "Updating…" for a
+ * host that will do nothing and report nothing — the list would be lying about
+ * an action it cannot perform.
+ *
+ * Incomparable pairs are deliberately left installable. `compareHostVersions`
+ * refuses anything non-semver, a staging build id is not semver, and the CLI
+ * applies the same refusal — an incomparable target does NOT short-circuit
+ * there, so it must not be blocked here.
+ */
+function supersededReason(
+  installedVersion: string | null,
+  rowVersion: string,
+): string | null {
+  if (installedVersion === null) return null;
+  const comparison = compareHostVersions(installedVersion, rowVersion);
+  if (!comparison.comparable || comparison.ordering === "less") return null;
+  return `Already on v${installedVersion}`;
 }
 
 /**

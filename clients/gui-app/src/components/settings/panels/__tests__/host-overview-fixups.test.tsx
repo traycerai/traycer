@@ -124,7 +124,7 @@ function renderPanel(): void {
 }
 
 // ---------------------------------------------------------------------------
-// B. Sticky cloud-pin-only updates degrade — the whole region retires
+// B. Sticky updates degrade — the whole region retires
 // ---------------------------------------------------------------------------
 
 describe("<HostSettingsPanel /> Overview updates region — sticky vs transient degrade", () => {

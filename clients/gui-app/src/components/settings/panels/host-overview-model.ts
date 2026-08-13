@@ -75,7 +75,11 @@ export function describeOverviewDegrade(
     case "cli-unavailable":
       return `${hostName} has no Traycer CLI installed to run this, so it can't be done over the connection.`;
     case "externally-managed":
-      return `${hostName}'s updates are managed outside Traycer. Use the version pin below to say what it should run.`;
+      // Deliberately offers no alternative inside Traycer, because there is
+      // none: this host skips the update reconciler entirely, so neither the
+      // version list nor the auto-update switch below reaches it. An earlier
+      // wording sent people to a version pin that this page no longer has.
+      return `${hostName}'s updates are managed outside Traycer. Whatever deploys it decides its version — nothing here will change it.`;
   }
 }
 

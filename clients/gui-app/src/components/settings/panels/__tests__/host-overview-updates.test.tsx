@@ -247,6 +247,62 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     });
   });
 
+  it("a row BELOW the installed version is not installable, because the CLI would short-circuit it and report nothing back", async () => {
+    // The picker's premise is that a row means what it says. The CLI computes
+    // `installedAtOrAboveTarget` and returns `installed-up-to-date` for a
+    // target at OR BELOW what is installed (`download-stage.ts`), then skips
+    // the apply and writes no progress marker — while `host.update.install`
+    // has already answered `accepted`, because it returns at spawn. So an
+    // enabled Install on an older row toasts "Updating…" for a host that will
+    // do nothing and then say nothing. Every up-to-date host hits this the
+    // moment "Show all" exposes its history.
+    const attempted: string[] = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.6.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
+          }),
+        "host.update.install": (req) => {
+          attempted.push(req.version);
+          return Promise.resolve({ outcome: "accepted" as const });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(await waitForButton("Check now"));
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+
+    // Newer than installed — the one row that can actually do something.
+    expect(
+      within(rowFor(rows, "1.7.0"))
+        .getByRole("button", { name: "Install" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    // Older than installed — dead, and says why rather than leaving a person
+    // to discover it by clicking and watching nothing happen.
+    expect(
+      within(rowFor(rows, "1.5.0"))
+        .getByRole("button", { name: "Install" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(rowFor(rows, "1.5.0").textContent).toContain("Already on v1.6.0");
+
+    fireEvent.click(
+      within(rowFor(rows, "1.5.0")).getByRole("button", { name: "Install" }),
+    );
+    expect(attempted).toEqual([]);
+  });
+
   it(`more than VERSION_LIST_PREVIEW (${VERSION_LIST_PREVIEW}) versions shows only the preview slice plus a toggle; clicking it reveals the rest and relabels to "Show recent"`, async () => {
     const versions = Array.from(
       { length: VERSION_LIST_PREVIEW + 2 },

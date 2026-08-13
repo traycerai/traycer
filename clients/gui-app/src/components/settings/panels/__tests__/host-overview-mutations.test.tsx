@@ -424,7 +424,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
 });
 
 describe("<HostSettingsPanel /> Overview update-install degrade", () => {
-  it("an externally-managed install outcome degrades to the cloud-pin-only UI", async () => {
+  it("an externally-managed install outcome retires the whole update region", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
