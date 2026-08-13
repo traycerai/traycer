@@ -1,8 +1,8 @@
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
-  isHostReachable,
-  type HostDirectoryEntry,
-} from "@traycer-clients/shared/host-client/host-directory";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+  hostUnavailability,
+  isRemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
@@ -21,10 +21,26 @@ const SEPARATOR = String.fromCharCode(0);
  * across benign directory churn, instead of tearing the socket down and
  * rebuilding it.
  *
- * Returns `null` when the host cannot be dialed (no `websocketUrl`) or is
- * `unavailable`; callers treat `null` as "no client". A `busy` host is dialable
- * - same process, same URL - so it keeps its client instead of having the
- * socket torn down for the duration of someone else's slow epic open.
+ * Returns `null` when the host cannot be dialed (no `websocketUrl`, or a
+ * CONFIRMED refusal); callers treat `null` as "no client" and the session
+ * registries release the handle they hold.
+ *
+ * That release is why this cannot gate on the coarse bit. It used to refuse
+ * anything not `available`, which folded in `indeterminate` — a failed liveness
+ * read — and so a single degraded read on the cloud side tore down a live E2E
+ * session and left the tile loading forever. The reachability hook had already
+ * been taught that a live session outranks the cloud; this layer was still
+ * quietly overruling it one call below.
+ *
+ * `indeterminate` therefore DIALS. That is the same asymmetry the hook uses and
+ * it holds in both directions: with a session open, keeping the key keeps the
+ * session; with no session, attempting the dial is the "recoverable failure"
+ * the hook's rationale assumes — a null here would have silently prevented the
+ * attempt it promised.
+ *
+ * The verdict is deliberately NOT part of the key. It is a gate, not an
+ * identity: including it meant a `dialable` → `indeterminate` flip changed the
+ * key and churned a transport whose address never moved.
  *
  * Shared by the app-wide `HostStreamProvider` (via
  * `readHostTransportKey(client.getActiveHost())`) and the per-tab
@@ -35,12 +51,7 @@ export function hostTransportKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (!isHostReachable(entry.status)) return null;
-  // `status` is deliberately NOT a key component. The gate above already
-  // collapses it to reachable/not, and folding the raw value in would make an
-  // available <-> busy flicker - which is a transient probe result, not a
-  // transport change - rebuild the client and tear down a live socket. That is
-  // churn at exactly the moment the host is least able to absorb it.
+  if (isConfirmedTransportRefusal(entry)) return null;
   return [
     entry.hostId,
     entry.kind,
@@ -50,9 +61,29 @@ export function hostTransportKey(
 }
 
 /**
+ * Whether the directory is POSITIVELY refusing this route, as opposed to
+ * failing to answer.
+ *
+ * Two refusals are real and permanent-until-something-changes: the host is
+ * confirmed detached (`offline`), or the account's plan has no remote route to
+ * it (`plan-restricted` — correct to refuse, since no relay attach exists to
+ * dial; the UI's job is to say "Local only" rather than "offline", which is
+ * `useHostReachability`'s reason field, not this).
+ *
+ * `indeterminate` is not a refusal — it is the absence of an answer, and the
+ * transport's response to an absent answer is to try.
+ */
+function isConfirmedTransportRefusal(entry: HostDirectoryEntry): boolean {
+  const unavailability = hostUnavailability(entry);
+  return unavailability === "offline" || unavailability === "plan-restricted";
+}
+
+/**
  * The dialable `{ hostId, websocketUrl }` endpoint for a directory entry, or
- * `null` when the host cannot currently be dialed (no `websocketUrl`, or
- * `unavailable`). Same dialability rule as `hostTransportKey`.
+ * `null` when the host cannot currently be dialed (no `websocketUrl`, or a
+ * CONFIRMED refusal). Same dialability rule as `hostTransportKey`, including
+ * that a failed liveness read (`indeterminate`) still dials — these two must
+ * agree or a live session keeps a key while its re-dials are refused.
  *
  * Read LIVE on every (re)dial by the session-owned durable streams (chat /
  * terminal) so a host that respawns on a new `websocketUrl` while the session
@@ -64,7 +95,7 @@ export function dialableHostEndpoint(
   entry: HostDirectoryEntry | null,
 ): HostTransportEndpoint | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (!isHostReachable(entry.status)) return null;
+  if (isConfirmedTransportRefusal(entry)) return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
 }
 

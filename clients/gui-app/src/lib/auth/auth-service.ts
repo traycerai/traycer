@@ -313,11 +313,14 @@ export class AuthService {
    */
   private currentBearer: string | null = null;
   /**
-   * The `GET /api/v3/hosts` request currently in flight, shared by every
-   * caller that arrives while it is running. See `fetchRegisteredHosts`.
+   * The `GET /api/v3/hosts` request currently in flight, together with the
+   * bearer it was ISSUED UNDER. Both halves are load-bearing — see
+   * `fetchRegisteredHosts`.
    */
-  private registeredHostsInFlight: Promise<HostListResponse | null> | null =
-    null;
+  private registeredHostsInFlight: {
+    readonly bearer: string;
+    readonly request: Promise<HostListResponse | null>;
+  } | null = null;
   private currentProfile: AuthProfile | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
@@ -1505,18 +1508,35 @@ export class AuthService {
     // rate too, but `directory.refresh()` on picker-open is a correctness
     // path — it exists to be current at that instant — and handing it a
     // seconds-old answer to save a request is the wrong trade.
+    // KEYED BY BEARER, and that is the whole safety property. An unkeyed memo
+    // hands whoever arrives next the answer to somebody else's question: sign
+    // out of A and into B while A's request is in flight, and B is served A's
+    // host list — another account's machine names, ids and platforms rendered
+    // as B's own. The same slot would also let B await a request whose bearer
+    // is already invalid and inherit its 401.
+    //
+    // Losing the coalescing across a token rotation is an acceptable cost (one
+    // extra request); serving one identity's data to another is not, so the
+    // comparison is on the exact bearer rather than on user id — a rotated
+    // token for the SAME user is still a different request than the one in
+    // flight, and cheap to just re-issue.
+    const bearer = this.currentBearer;
     const inFlight = this.registeredHostsInFlight;
-    if (inFlight !== null) {
-      return inFlight;
+    if (inFlight !== null && inFlight.bearer === bearer) {
+      return inFlight.request;
     }
-    const request = this.performFetchRegisteredHosts(this.currentBearer);
-    this.registeredHostsInFlight = request;
+    const request = this.performFetchRegisteredHosts(bearer);
+    this.registeredHostsInFlight = { bearer, request };
     try {
       return await request;
     } finally {
       // Cleared whether it resolved or threw: a failed read must not pin a
-      // rejected promise that every later caller re-awaits.
-      this.registeredHostsInFlight = null;
+      // rejected promise that every later caller re-awaits. Guarded so a
+      // request superseded by an identity change does not clear the NEWER
+      // slot when it finally settles.
+      if (this.registeredHostsInFlight?.request === request) {
+        this.registeredHostsInFlight = null;
+      }
     }
   }
 

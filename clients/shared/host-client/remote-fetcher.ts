@@ -167,7 +167,7 @@ export type HostUnavailability = "offline" | "plan-restricted" | "indeterminate"
 export function hostUnavailability(
   entry: HostDirectoryEntry,
 ): HostUnavailability | null {
-  if (entry.status === "available") {
+  if (entry.transportDialability === "dialable") {
     return null;
   }
   if (!isRemoteHostDirectoryEntry(entry)) {
@@ -247,8 +247,8 @@ export function hostListItemToDirectoryEntry(
     kind: "remote",
     websocketUrl: relayBaseUrl,
     version: item.status.appVersion,
-    status:
-      item.status.connectivity === "connectable" ? "available" : "unavailable",
+    transportDialability:
+      item.status.connectivity === "connectable" ? "dialable" : "not-dialable",
     remoteStatus: item.status,
     publicKey: item.publicKey,
   };
