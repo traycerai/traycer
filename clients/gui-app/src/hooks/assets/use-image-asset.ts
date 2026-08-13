@@ -431,21 +431,36 @@ export function useImageAsset(
   // whatever `resolved` WAS when the render that handed this exact closure
   // to that `<img>` ran. If `resolvedRef.current` no longer points at that
   // SAME object by the time the (possibly late/async) decode-error event
-  // fires, a NEWER request has since resolved - discarding `cacheKeyRef`'s
-  // CURRENT entry or overwriting `resolved` with `fallback` would clobber
-  // that newer, perfectly valid ready state instead of the stale one that
-  // actually failed to decode.
+  // fires, a NEWER resolution of the SAME request has since landed -
+  // discarding `cacheKeyRef`'s CURRENT entry or overwriting `resolved` with
+  // `fallback` would clobber that newer, perfectly valid ready state
+  // instead of the stale one that actually failed to decode.
+  //
+  // Object identity alone isn't enough (sol re-review): switching from
+  // request A to request B does NOT reset `resolved` - it stays A's stale
+  // object (render-time key comparison only hides it behind
+  // `LOADING_STATE`) until B's own callbacks eventually call `setResolved`.
+  // A's captured `resolved` therefore still equals `resolvedRef.current` in
+  // that window, even though `requestKeyRef.current` has ALREADY moved to
+  // B (set synchronously at the start of B's fetch effect). Requiring
+  // `resolved.key === requestKeyRef.current` too closes that gap: a late A
+  // decode error now correctly bails out while B is still loading, instead
+  // of writing `fallback` under B's key or discarding B's cache entry.
   const reportDecodeFailure = useCallback((): void => {
-    if (resolved === null || resolvedRef.current !== resolved) return;
+    if (
+      resolved === null ||
+      resolvedRef.current !== resolved ||
+      resolved.key !== requestKeyRef.current
+    ) {
+      return;
+    }
     const cacheKey = cacheKeyRef.current;
     if (cacheKey !== null) {
       imageBlobCache.discard(cacheKey);
     }
     if (!isMountedRef.current) return;
-    const requestKey = requestKeyRef.current;
-    if (requestKey === null) return;
     setResolved({
-      key: requestKey,
+      key: resolved.key,
       state: {
         status: "fallback",
         url: null,

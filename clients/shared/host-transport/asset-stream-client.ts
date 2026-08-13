@@ -227,6 +227,21 @@ export class AssetStreamClient<
         return;
       }
       case "assetChunk": {
+        // `header` being non-null during `awaitingReconnectHeader` is the
+        // RETAINED prior attempt's header, not proof this retry resumed it
+        // - only the retry's OWN `assetHeader` (swallowed on a match, above)
+        // clears the flag. A chunk arriving before that would otherwise be
+        // accepted against the stale header, letting a malformed/hostile
+        // retry stream a full new payload under the OLD identity and skip
+        // the changed-identity check entirely (sol re-review).
+        if (this.awaitingReconnectHeader) {
+          this.fail({
+            reason: "fatal",
+            message:
+              "assetChunk arrived before the reconnect retry's assetHeader",
+          });
+          return;
+        }
         const header = this.header;
         if (header === null) {
           this.fail({
@@ -269,6 +284,15 @@ export class AssetStreamClient<
         return;
       }
       case "assetComplete": {
+        // Same reconnect-resumption guard as `assetChunk` above.
+        if (this.awaitingReconnectHeader) {
+          this.fail({
+            reason: "fatal",
+            message:
+              "assetComplete arrived before the reconnect retry's assetHeader",
+          });
+          return;
+        }
         const header = this.header;
         if (header === null) {
           this.fail({
