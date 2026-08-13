@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/core";
 import type { PluginKey } from "@tiptap/pm/state";
 import type { SuggestionProps } from "@tiptap/suggestion";
 import { isDismissedMentionQuery } from "@/lib/composer/mentions/mention-dismissal";
+import { githubMentionSectionForStep } from "@/lib/composer/mentions/providers";
 import { activePickerItemDisabledReason } from "./composer-picker-store";
 import type {
   ComposerPickerItem,
@@ -39,6 +40,25 @@ interface SuggestionRender<TItem extends ComposerPickerItem> {
   onKeyDown(props: { event: KeyboardEvent }): boolean;
 }
 
+/**
+ * Moves focus into the open step's chrome (the Filter/Refresh bar), or
+ * reports that there is nothing to move to. A global query is sound here:
+ * one picker menu exists at a time, and `data-mention-step-chrome` is only
+ * rendered on a header whose step actually published chrome. Returning
+ * whether focus actually moved lets the caller fall through to the browser
+ * default when it did not.
+ */
+function focusMentionStepChrome(): boolean {
+  const chrome = document.querySelector("[data-mention-step-chrome]");
+  if (chrome === null) return false;
+  const control = chrome.querySelector<HTMLButtonElement>(
+    "button:not(:disabled)",
+  );
+  if (control === null) return false;
+  control.focus();
+  return document.activeElement === control;
+}
+
 export function createComposerSuggestionRender<
   TItem extends ComposerPickerItem,
 >(args: ComposerSuggestionRenderArgs): () => SuggestionRender<TItem> {
@@ -71,6 +91,17 @@ export function createComposerSuggestionRender<
     // before a microtask drains (setContent + setTextSelection).
     let exitEpoch = 0;
 
+    // The prose heuristics are step-dependent, and the step lives in the
+    // store - `,` and `:` are prose everywhere except inside the PR/Issue
+    // sections, where they are ordinary title punctuation. Read at decision
+    // time rather than captured: the user can drill into a section without the
+    // suggestion session restarting.
+    const inGithubMentionSection = (): boolean => {
+      const state = args.pickerStore.getState();
+      if (state.kind !== "mention") return false;
+      return githubMentionSectionForStep(state.step) !== null;
+    };
+
     // Ends the tiptap suggestion session itself (see `suggestionPluginKey`).
     // Deferred: dismissals fire inside the plugin's own update cycle, and
     // dispatching a transaction synchronously would re-enter it.
@@ -98,8 +129,51 @@ export function createComposerSuggestionRender<
       exitPluginSession(editor);
     };
 
+    // Returning to ROOT re-arms root's prose rules on a query the section
+    // exempted, which nothing else re-evaluates.
+    //
+    // This is the mirror of the note on `inGithubMentionSection`: the step
+    // lives in the store and moves without the editor moving, so no `onUpdate`
+    // follows a Back. Only the drill-IN direction was covered. A real title the
+    // section legitimately allowed - `fix(relay): stop the busy-loop, again` -
+    // therefore survived the return to root, where the comma is prose, leaving
+    // the root menu open on it and its workspace and epic providers fetching
+    // for a query root would never have opened for.
+    //
+    // Store-subscribed rather than hooked into the Back row, because Back is
+    // one of several ways the step returns to root (click, keyboard commit)
+    // and the rule belongs to the STEP, not to the control that changed it.
+    let unwatchStep: (() => void) | null = null;
+
+    const stopWatchingStep = (): void => {
+      if (unwatchStep === null) return;
+      unwatchStep();
+      unwatchStep = null;
+    };
+
+    const watchStepForProse = (): void => {
+      stopWatchingStep();
+      if (args.kind !== "mention") return;
+      unwatchStep = args.pickerStore.subscribe(() => {
+        const props = latestProps;
+        // `dismissed` also breaks the re-entry `dismissOccurrence` would cause
+        // by writing to the very store this listens to.
+        if (props === null || dismissed) return;
+        const state = args.pickerStore.getState();
+        if (!state.open || state.sessionId !== sessionId) return;
+        if (state.kind !== "mention") return;
+        if (githubMentionSectionForStep(state.step) !== null) return;
+        // The store's own query, which is what the picker is actually showing
+        // rows for - and `false` because this branch has already established
+        // the step is not a section.
+        if (!isDismissedMentionQuery(state.query, false)) return;
+        dismissOccurrence(props.editor);
+      });
+    };
+
     const startSession = (props: SuggestionProps<unknown, TItem>): void => {
       dismissed = false;
+      watchStepForProse();
       // Cancel any exit still queued for a previous occurrence - it must not
       // fire into the session that starts here.
       exitEpoch += 1;
@@ -123,6 +197,22 @@ export function createComposerSuggestionRender<
           if (latestProps === null) return;
           dismissOccurrence(latestProps.editor);
         },
+        // The editor handle only exists here, so the one place that has to
+        // hand focus back to the composer (the filter popover's close) reaches
+        // it through the store, exactly like `commit` and `dismiss`.
+        //
+        // `resumeText` is the character that closed the popover. It is
+        // inserted in the SAME chain as the focus so the caret is already back
+        // in the composer when it lands - the key event itself went to the
+        // radio group and can never reach the editor on its own.
+        focusEditor: (resumeText) => {
+          if (latestProps === null) return;
+          if (resumeText === null) {
+            latestProps.editor.commands.focus();
+            return;
+          }
+          latestProps.editor.chain().focus().insertContent(resumeText).run();
+        },
         clientRect: props.clientRect ?? null,
       });
     };
@@ -132,7 +222,17 @@ export function createComposerSuggestionRender<
         latestProps = props;
         // A pasted "@ ..." or "@x, y" is already prose; never open for it,
         // and end the plugin session so a later `@` elsewhere can start over.
-        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+        //
+        // `false`, not `inGithubMentionSection()`: a new occurrence always
+        // begins at the root step, but the store is not there yet. Tiptap
+        // fires this before the departing session's `onExit`, so the store can
+        // still hold that session's drilled PR/Issue step - and judging a
+        // fresh `@` by the section's punctuation rules would let `@x, y` open
+        // the menu instead of reading as prose.
+        if (
+          args.kind === "mention" &&
+          isDismissedMentionQuery(props.query, false)
+        ) {
           dismissed = true;
           exitPluginSession(props.editor);
           return;
@@ -146,7 +246,10 @@ export function createComposerSuggestionRender<
         // space): close the menu now and end the plugin session. The plugin
         // records the dismissed range, so this `@` occurrence stays dismissed
         // while a new `@` elsewhere opens fresh.
-        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+        if (
+          args.kind === "mention" &&
+          isDismissedMentionQuery(props.query, inGithubMentionSection())
+        ) {
           dismissOccurrence(props.editor);
           return;
         }
@@ -170,6 +273,7 @@ export function createComposerSuggestionRender<
       },
 
       onExit() {
+        stopWatchingStep();
         latestProps = null;
         dismissed = false;
         // The plugin session is over; a queued exit has nothing left to end,
@@ -203,6 +307,18 @@ export function createComposerSuggestionRender<
           return true;
         }
         if (event.key === "Tab") {
+          // Shift+Tab is FOCUS, not commit: it is the keyboard route to the
+          // picker's own chrome. The Filter and Refresh buttons render
+          // through a portal into `document.body` AFTER the editor, so no
+          // native traversal direction can reach them from the composer -
+          // backward traversal lands on an earlier composer control, and
+          // plain Tab commits the highlighted row. The move is therefore
+          // explicit; with no chrome on this step the browser default stands.
+          // (Under jsdom this handler was once measured as never receiving
+          // Shift+Tab, but jsdom cannot be trusted for ProseMirror key
+          // handling - the behaviour is implemented for the event actually
+          // arriving and tested by invoking the handler directly.)
+          if (event.shiftKey) return focusMentionStepChrome();
           if (state.items.length === 0) return false;
           if (activePickerItemDisabledReason(state) !== null) return true;
           return state.commitActiveItem();

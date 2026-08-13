@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { PrSourceNotice } from "@traycer/protocol/host/pr-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
-import { prSourceNoticeMessage } from "@/lib/pr/pr-source-notice-message";
+import { prSourceNoticeMessageFor } from "@/lib/pr/pr-source-notice-message";
 
 afterEach(() => {
   cleanup();
@@ -12,18 +12,19 @@ afterEach(() => {
 function renderHint(notice: PrSourceNotice): void {
   render(
     <TooltipProvider>
-      <PrSourceNoticeHint notice={notice} />
+      <PrSourceNoticeHint notice={notice} subject="pull-requests" />
     </TooltipProvider>,
   );
 }
 
-describe("prSourceNoticeMessage", () => {
+describe("prSourceNoticeMessageFor", () => {
   it("names the rate limit rather than reporting a failure", () => {
     // The rows on screen are real - the host simply stopped refreshing them.
     // Copy that said "error" would send the user hunting for a broken thing.
-    const message = prSourceNoticeMessage(
+    const message = prSourceNoticeMessageFor(
       { kind: "rate-limited", retryAt: 1_000 },
       "12m",
+      "pull-requests",
     );
     expect(message).toContain("rate limit");
     expect(message).toContain("12m");
@@ -35,18 +36,20 @@ describe("prSourceNoticeMessage", () => {
     // `retryAt: null` is precisely the case where the host is holding back
     // BECAUSE it does not know when GitHub's window resets. Naming a time
     // there would present a guess as a fact.
-    const message = prSourceNoticeMessage(
+    const message = prSourceNoticeMessageFor(
       { kind: "rate-limited", retryAt: null },
       null,
+      "pull-requests",
     );
     expect(message).toContain("automatically");
     expect(message).not.toMatch(/\d/u);
   });
 
   it("distinguishes an unreachable GitHub from a rate limit", () => {
-    const backingOff = prSourceNoticeMessage(
+    const backingOff = prSourceNoticeMessageFor(
       { kind: "backing-off", retryAt: 1_000 },
       "30s",
+      "pull-requests",
     );
     expect(backingOff).toContain("reach GitHub");
     expect(backingOff).not.toContain("rate limit");
@@ -66,7 +69,11 @@ describe("prSourceNoticeMessage", () => {
       { kind: "backing-off", retryAt: 1_000 },
     ] satisfies PrSourceNotice[]) {
       for (const countdown of [null, "5m"]) {
-        const message = prSourceNoticeMessage(notice, countdown);
+        const message = prSourceNoticeMessageFor(
+          notice,
+          countdown,
+          "pull-requests",
+        );
         expect(message).not.toMatch(/last data|showing|cached/iu);
         // Still says the two things it IS entitled to say: refreshing has
         // stopped, and it comes back.
@@ -88,9 +95,10 @@ describe("PrSourceNoticeHint", () => {
     // `aria-label` on an otherwise-empty region leaves nothing to announce, so
     // the pause would appear on screen and say nothing at all.
     renderHint({ kind: "rate-limited", retryAt: null });
-    const expected = prSourceNoticeMessage(
+    const expected = prSourceNoticeMessageFor(
       { kind: "rate-limited", retryAt: null },
       null,
+      "pull-requests",
     );
     // Selected by ROLE, which is the accessible contract itself rather than a
     // proxy for it: if the live region stops being a `status`, this query
@@ -125,7 +133,11 @@ describe("PrSourceNoticeHint", () => {
     const trigger = screen.getByTestId("pr-source-notice-trigger");
     expect(trigger.tagName).toBe("BUTTON");
     expect(trigger.getAttribute("aria-label")).toBe(
-      prSourceNoticeMessage({ kind: "rate-limited", retryAt: null }, null),
+      prSourceNoticeMessageFor(
+        { kind: "rate-limited", retryAt: null },
+        null,
+        "pull-requests",
+      ),
     );
   });
 });
