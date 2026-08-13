@@ -11,8 +11,19 @@ import type { MentionPathTree } from "@/lib/path";
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
   "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
+/**
+ * Wire spelling, not a local one: these strings ARE `ContextType` members in
+ * `@traycer/protocol`'s json-content serializer, which reads the mention
+ * node's `contextType` attribute straight off the submitted document. Renaming
+ * them here would silently stop the serializer recognizing the chip.
+ */
+export type GithubMentionContextType = "github_pull_request" | "github_issue";
 export type MentionContextType =
-  PathKind | "git" | "worktree" | EntityMentionContextType;
+  | PathKind
+  | "git"
+  | "worktree"
+  | EntityMentionContextType
+  | GithubMentionContextType;
 
 export type ComposerPromptSegment =
   { type: "text"; text: string } | { type: "mention"; path: string };
@@ -191,11 +202,43 @@ export type EntityMentionAttachment = {
   status: string | number | null;
 };
 
+/**
+ * A GitHub pull request or issue the composer references.
+ *
+ * What travels is a STABLE REFERENCE, never inlined content: provider, kind,
+ * `org/repo#number`, and the URL. The agent resolves detail with its own tools
+ * at read time, exactly as a file mention hands over a path rather than the
+ * file's bytes - so the reference cannot go stale between insert and send, and
+ * the URL keeps it resolvable where `gh` is not signed in.
+ *
+ * The field names are the serializer's (`organizationLogin`, `repositoryName`,
+ * `issueNumber`, `githubHost`, `url`), because these become the mention node's
+ * attributes verbatim and `formatMentionForLLMQuery` reads them by name.
+ */
+export type GithubMentionAttachment = {
+  kind: "mention";
+  contextType: GithubMentionContextType;
+  /** The entity token: `github-pr:org/repo#123` / `github-issue:org/repo#123`. */
+  path: string;
+  pathKind: null;
+  relPath: null;
+  absolutePath: null;
+  workspacePath: null;
+  label: string;
+  description: string;
+  githubHost: string;
+  organizationLogin: string;
+  repositoryName: string;
+  issueNumber: number;
+  url: string;
+};
+
 export type MentionAttachment =
   | FileMentionAttachment
   | WorktreeMentionAttachment
   | GitMentionAttachment
-  | EntityMentionAttachment;
+  | EntityMentionAttachment
+  | GithubMentionAttachment;
 export type Attachment = ImageAttachment | MentionAttachment;
 
 /**
@@ -224,7 +267,25 @@ export type MentionPreview =
       readonly primary: string;
       readonly secondary: string | null;
       readonly mono: boolean;
+    }
+  | {
+      /**
+       * A labelled fact card, for rows whose useful preview is several small
+       * values rather than one string - the PR/issue rows, whose panel shows
+       * the reference, state, author and last update together. `facts` renders
+       * in order and is expected to be short; a fact with nothing to say is
+       * omitted at the source rather than rendered blank.
+       */
+      readonly kind: "card";
+      readonly title: string;
+      readonly subtitle: string;
+      readonly facts: ReadonlyArray<MentionPreviewFact>;
     };
+
+export interface MentionPreviewFact {
+  readonly label: string;
+  readonly value: string;
+}
 
 export type ProviderSlashCommand = GuiAgentCommandOption & {
   source: "provider";

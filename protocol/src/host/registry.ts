@@ -351,6 +351,8 @@ import {
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
+import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
+import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
@@ -450,6 +452,10 @@ import {
   prSubscribeDetailV10,
   prGetLocalDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
+import {
+  mentionGithubCatalogV10,
+  mentionGithubSearchV10,
+} from "@traycer/protocol/host/mention-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -6653,6 +6659,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Additive post-v1.0 unary methods. An older host lacks the GitHub mention
+  // picker surface entirely, so callers feature-detect and degrade per call.
+  "mention.githubCatalog": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: mentionGithubCatalogV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "mention.githubSearch": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: mentionGithubSearchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 } as const;
 
 /**
@@ -7618,6 +7652,28 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: workspaceSubscribeFileListV10,
+        },
+      },
+    },
+  },
+  // Image preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc.
+  "workspace.streamAsset": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceStreamAssetV10,
+        },
+      },
+    },
+  },
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new image sides - same no-degrade rationale.
+  "git.streamFileAsset": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: gitStreamFileAssetV10,
         },
       },
     },

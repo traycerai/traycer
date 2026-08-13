@@ -50,6 +50,7 @@ import {
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useLiveChatIdsForEpics } from "@/lib/registries/epic-session-registry";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -83,12 +84,13 @@ function TabStripBody() {
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
   );
+  const indicatorChatIds = useLiveChatIdsForEpics(indicatorEpicIds);
   const notificationIndicators = useNotificationIndicators({
     // Epic ids only, so the app-wide active host is the right one to ask: an
     // Epic is a shared cloud entity, not a host-owned record.
     hostId: null,
     epicIds: indicatorEpicIds,
-    chatIds: [],
+    chatIds: indicatorChatIds,
     enabled: indicatorEpicIds.length > 0,
   });
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);

@@ -11,6 +11,7 @@ import type { SlashCommand } from "@/lib/composer/types";
 import {
   activePickerItemDisabledReason,
   createComposerPickerStore,
+  pickerItemDisabledReason,
   type ComposerPickerCommit,
   type ComposerPickerItem,
   type ComposerPickerStore,
@@ -30,9 +31,12 @@ const FILES_PROVIDER_STEP: MentionFlowStep = {
 function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
   return {
     id,
+    labelPrefix: null,
     label,
     detail: "",
     description: "",
+    searchText: null,
+    disabledReason: null,
     icon: FAKE_ICON,
     action: { kind: "back" },
     updatedAt: null,
@@ -86,6 +90,7 @@ function open(
     query,
     commit,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }
@@ -103,6 +108,7 @@ function openSlash(
     query: "",
     commit,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }
@@ -124,6 +130,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().openPicker({
@@ -135,6 +142,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
 
@@ -167,6 +175,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
 
@@ -258,6 +267,7 @@ describe("composer picker store", () => {
       query: "src",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -436,6 +446,7 @@ describe("composer picker store", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -568,6 +579,7 @@ describe("composer picker store", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -612,6 +624,37 @@ describe("composer picker store", () => {
       clientRect: null,
     });
     expect(store.getState()).toBe(before);
+  });
+});
+
+// A held GitHub row (see `GithubMentionSectionContext.rowsHeld` and
+// `GITHUB_MENTION_HELD_ROWS_DISABLED_REASON` in providers.tsx) carries its
+// disabled reason on the ENTRY, not on the wrapping picker item the way a
+// disabled slash command does. `pickerItemDisabledReason` used to hard-return
+// null for every mention item, which let a held row's chip commit anyway;
+// this pins that it now defers to the entry.
+describe("pickerItemDisabledReason", () => {
+  it("returns a mention item's own disabledReason instead of hard-returning null", () => {
+    const heldEntry: MentionMenuEntry = {
+      ...fakeMentionEntry("held", "Held row"),
+      disabledReason: "x",
+    };
+    const liveEntry: MentionMenuEntry = fakeMentionEntry("live", "Live row");
+
+    expect(
+      pickerItemDisabledReason({
+        id: "held",
+        kind: "mention",
+        entry: heldEntry,
+      }),
+    ).toBe("x");
+    expect(
+      pickerItemDisabledReason({
+        id: "live",
+        kind: "mention",
+        entry: liveEntry,
+      }),
+    ).toBeNull();
   });
 });
 

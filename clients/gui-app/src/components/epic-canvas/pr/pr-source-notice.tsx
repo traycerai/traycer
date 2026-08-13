@@ -3,7 +3,10 @@ import { Info } from "lucide-react";
 import type { PrSourceNotice } from "@traycer/protocol/host/pr-schemas";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useResetCountdown } from "@/lib/relative-time";
-import { prSourceNoticeMessage } from "@/lib/pr/pr-source-notice-message";
+import {
+  prSourceNoticeMessageFor,
+  type PrSourceNoticeSubject,
+} from "@/lib/pr/pr-source-notice-message";
 
 /**
  * The ⓘ that explains why rows have stopped refreshing.
@@ -15,9 +18,19 @@ import { prSourceNoticeMessage } from "@/lib/pr/pr-source-notice-message";
  */
 export function PrSourceNoticeHint(props: {
   readonly notice: PrSourceNotice;
+  /**
+   * What is not refreshing. The composer's mention sections reuse this exact
+   * ⓘ for their own top bar, and an Issues section that said "Pull requests
+   * are not refreshing" would be describing a different surface.
+   */
+  readonly subject: PrSourceNoticeSubject;
 }): ReactNode {
   const countdown = useResetCountdown(props.notice.retryAt);
-  const message = prSourceNoticeMessage(props.notice, countdown);
+  const message = prSourceNoticeMessageFor(
+    props.notice,
+    countdown,
+    props.subject,
+  );
   return (
     // Two elements, two jobs. The live region announces the pause when it
     // appears, without anyone having to go looking for it; the button is what

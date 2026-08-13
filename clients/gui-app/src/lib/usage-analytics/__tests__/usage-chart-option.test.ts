@@ -113,9 +113,15 @@ describe("buildUsageChartOption", () => {
       metric: "cost",
       hiddenSeries: new Set(),
     });
-    expect(seriesList(single).every((entry) => entry.showSymbol === true)).toBe(
-      true,
-    );
+    // Only series with something to mark: a zero-valued series draws
+    // nothing at all (see the all-zero suppression), symbol included.
+    const singleSeries = seriesList(single);
+    expect(
+      singleSeries.find((entry) => entry.name === "claude")?.showSymbol,
+    ).toBe(true);
+    expect(
+      singleSeries.find((entry) => entry.name === "codex")?.showSymbol,
+    ).toBe(false);
   });
 
   it("keeps a hidden series present as zeros so slots and colors never shift", () => {
@@ -151,6 +157,32 @@ describe("buildUsageChartOption", () => {
     );
     expect(claude?.lineStyle?.width).toBe(2);
     expect(claude?.areaStyle?.opacity).toBe(0.3);
+  });
+});
+
+describe("buildUsageChartOption — all-zero visible series", () => {
+  it("draws no stroke for a series whose every value is zero", () => {
+    // Ticket 19 (live staging): an unpriced grok turn contributed $0, yet
+    // its stacked boundary line traced the top of claude's mass in grok's
+    // color - a $0 harness read as owning the whole total. All-zero
+    // series render nothing; the legend chip and tooltip stay.
+    const zeroScale = buildUsageSeriesScale(["claude", "grok"]);
+    const option = buildUsageChartOption({
+      columns: buildUsageChartColumns(
+        [...days],
+        [bucket({ day: "2026-08-01", harnessId: "claude", knownCostUsd: 9 })],
+        zeroScale,
+        "cost",
+      ),
+      scale: zeroScale,
+      metric: "cost",
+      hiddenSeries: new Set(),
+    });
+    const grok = seriesList(option).find((entry) => entry.name === "grok");
+    expect(grok?.lineStyle?.width).toBe(0);
+    expect(grok?.areaStyle?.opacity).toBe(0);
+    const claude = seriesList(option).find((entry) => entry.name === "claude");
+    expect(claude?.lineStyle?.width).toBe(2);
   });
 });
 

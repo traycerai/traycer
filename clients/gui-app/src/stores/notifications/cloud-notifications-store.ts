@@ -104,9 +104,9 @@ export interface CloudEntityReadRetry {
  * The entries a visit to `entity` should mark read, mirroring the host's
  * `hostNotificationsMarkEntityRead` SQL exactly:
  *
- * - `severity IN ('done','failure')` - `needs_action` is EXCLUDED on purpose.
- *   Looking at a chat must never silently dismiss a pending approval or
- *   interview; only answering or explicitly dismissing one may do that.
+ * - `severity IN ('needs_action','done','failure')` - looking at a chat
+ *   acknowledges its notification rows without resolving the underlying
+ *   approval or interview workflow.
  * - `read_at IS NULL` - set-once markers never re-fire.
  * - entity clause: a chat visit matches `chat_id = ?`; an epic visit matches
  *   `epic_id = ? AND chat_id IS NULL`, i.e. epic-level rows ONLY. This is
@@ -129,7 +129,12 @@ export function selectCloudEntityReadTargets(
   for (const row of Object.values(state.rows)) {
     if (row === undefined) continue;
     const { entry } = row;
-    if (entry.severity !== "done" && entry.severity !== "failure") continue;
+    if (
+      entry.severity !== "needs_action" &&
+      entry.severity !== "done" &&
+      entry.severity !== "failure"
+    )
+      continue;
     if (entry.readAt !== null) continue;
     // A focused tile supplies its bound host and must only acknowledge that
     // exact lineage. An epic-only surface has no host binding, so it retains
@@ -183,35 +188,12 @@ function rowKey(row: Pick<HostNotificationsCloudFeedRow, "entryId">): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
-function isUnreadFailure(row: HostNotificationsCloudFeedRow): boolean {
-  return row.entry.severity === "failure" && row.entry.readAt === null;
-}
-
-function loadedBlockingAttentionCount(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
-): number {
-  let count = 0;
-  for (const row of Object.values(rows)) {
-    if (
-      row !== undefined &&
-      row.entry.severity === "needs_action" &&
-      "resolvedAt" in row.entry &&
-      row.entry.resolvedAt === null
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function loadedUnreadFailureCount(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
-): number {
-  let count = 0;
-  for (const row of Object.values(rows)) {
-    if (row !== undefined && isUnreadFailure(row)) count += 1;
-  }
-  return count;
+function isUnreadAttention(row: HostNotificationsCloudFeedRow): boolean {
+  return (
+    (row.entry.severity === "needs_action" ||
+      row.entry.severity === "failure") &&
+    row.entry.readAt === null
+  );
 }
 
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
@@ -255,7 +237,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const key = cloudNotificationFeedId(entryId);
         const row = state.rows[key];
         if (row === undefined || row.entry.readAt !== null) return state;
-        const attentionDelta = isUnreadFailure(row) ? 1 : 0;
+        const attentionDelta = isUnreadAttention(row) ? 1 : 0;
         return {
           rows: {
             ...state.rows,
@@ -276,7 +258,6 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       }),
     markAllReadLocally: (readAt) =>
       set((state) => {
-        const unreadFailureCount = loadedUnreadFailureCount(state.rows);
         const rows = { ...state.rows };
         for (const [key, row] of Object.entries(rows)) {
           if (row === undefined || row.entry.readAt !== null) continue;
@@ -290,15 +271,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: 0,
-                  // Summary counts include visible cloud rows this relay could
-                  // not render. Their attention may be an unresolved prompt,
-                  // which mark-all must never hide, so only subtract failures
-                  // this client can prove it marked read. The next snapshot
-                  // removes any residual summary-only failure contribution.
-                  attentionCount: Math.max(
-                    loadedBlockingAttentionCount(rows),
-                    state.summary.attentionCount - unreadFailureCount,
-                  ),
+                  attentionCount: 0,
                 },
         };
       }),
@@ -316,7 +289,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           const key = cloudNotificationFeedId(entryId);
           const row = rows[key];
           if (row === undefined || row.entry.readAt !== null) continue;
-          if (isUnreadFailure(row)) attentionFlipped += 1;
+          if (isUnreadAttention(row)) attentionFlipped += 1;
           rows[key] = { ...row, entry: { ...row.entry, readAt } };
           flipped += 1;
         }

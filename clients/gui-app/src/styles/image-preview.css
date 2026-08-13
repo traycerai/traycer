@@ -1,0 +1,44 @@
+/**
+ * Low-contrast checkerboard behind transparent image regions
+ * (image-preview decision log, decision #16). Built from `--canvas` /
+ * `--muted` - the app's own theme tokens already redefine both together for
+ * every preset (`:root`, `.dark`, and each named `[data-theme]` override), so
+ * this never needs a per-theme override of its own and never inverts an
+ * image in dark mode: the checker just rides whatever those two tokens are.
+ * `--muted` is blended down via `color-mix` (rather than used at full
+ * opacity) and the tiles are larger (24px, was 16px) - both reduce
+ * prominence in large empty margins (ticket 07, UI polish) without
+ * introducing a third color or breaking the theme-token contract.
+ */
+.image-preview-checkerboard {
+  --image-preview-checker: color-mix(in oklab, var(--muted) 45%, transparent);
+  background-color: var(--canvas);
+
+  background-image:
+    linear-gradient(45deg, var(--image-preview-checker) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--image-preview-checker) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--image-preview-checker) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--image-preview-checker) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+}
+
+/**
+ * 1px depth outline on every rendered preview image (ticket 07, UI polish
+ * requirement #1) - pure black/white at low opacity, NEVER a tinted neutral
+ * (a slate/zinc border reads as dirt on the image edge). `outline` (not
+ * `border`) so it never perturbs the transform stage's layout math; negative
+ * `outline-offset` keeps it drawn just inside the image edge.
+ */
+.image-preview-outline {
+  outline: 1px solid oklch(0 0 0 / 0.1);
+  outline-offset: -1px;
+}
+
+.dark .image-preview-outline {
+  outline-color: oklch(1 0 0 / 0.1);
+}

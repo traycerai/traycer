@@ -15,10 +15,28 @@ import type { PrSourceNotice } from "@traycer/protocol/host/pr-schemas";
  * precisely BECAUSE it does not know when GitHub's window resets, and
  * inventing a time there would be a guess presented as a fact.
  */
-export function prSourceNoticeMessage(
+/**
+ * What has stopped refreshing, as the sentence names it.
+ *
+ * The pause is a property of the host's GitHub access, so the same two notice
+ * kinds now describe three surfaces. The subject is a parameter rather than
+ * three copies of the sentences: the voice must not drift between the PR panel
+ * and the composer's mention sections, and a new surface should be a new
+ * subject, not a new paragraph.
+ */
+export type PrSourceNoticeSubject = "pull-requests" | "issues";
+
+const NOTICE_SUBJECT_LABEL: Readonly<Record<PrSourceNoticeSubject, string>> = {
+  "pull-requests": "Pull requests",
+  issues: "Issues",
+};
+
+export function prSourceNoticeMessageFor(
   notice: PrSourceNotice,
   countdown: string | null,
+  subject: PrSourceNoticeSubject,
 ): string {
+  const what = NOTICE_SUBJECT_LABEL[subject];
   // Switch rather than an `if` with a trailing default: a new notice kind on
   // the wire must be a COMPILE error here, not silently inherit whichever
   // sentence happened to be last. The two kinds mean different things to a
@@ -27,12 +45,12 @@ export function prSourceNoticeMessage(
   switch (notice.kind) {
     case "rate-limited":
       return countdown === null
-        ? "GitHub's rate limit was reached. Pull requests are not refreshing; this resumes automatically once GitHub allows it."
-        : `GitHub's rate limit was reached. Pull requests are not refreshing; this resumes in about ${countdown}.`;
+        ? `GitHub's rate limit was reached. ${what} are not refreshing; this resumes automatically once GitHub allows it.`
+        : `GitHub's rate limit was reached. ${what} are not refreshing; this resumes in about ${countdown}.`;
     case "backing-off":
       return countdown === null
-        ? "Could not reach GitHub. Pull requests are not refreshing; Traycer keeps retrying in the background."
-        : `Could not reach GitHub. Pull requests are not refreshing; retrying in about ${countdown}.`;
+        ? `Could not reach GitHub. ${what} are not refreshing; Traycer keeps retrying in the background.`
+        : `Could not reach GitHub. ${what} are not refreshing; retrying in about ${countdown}.`;
     default: {
       const unhandled: never = notice.kind;
       throw new Error(`Unhandled PR source notice kind: ${String(unhandled)}`);
