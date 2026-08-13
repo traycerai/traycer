@@ -171,6 +171,61 @@ function queuedFetcher(outcomes: readonly RemoteHostFetchOutcome[]): {
   return { fetcher, callCount: () => calls };
 }
 
+/**
+ * A `RemoteHostFetcher` where each call returns a promise the test resolves
+ * explicitly, by call index - for pinning identity-scoping ordering (a caller
+ * mid-flight, an identity switch, a late resolution) that `queuedFetcher`'s
+ * synchronous resolution can't express.
+ */
+function deferredFetcher(): {
+  readonly fetcher: RemoteHostFetcher;
+  readonly callCount: () => number;
+  readonly resolve: (
+    callIndex: number,
+    outcome: RemoteHostFetchOutcome,
+  ) => void;
+} {
+  const resolvers = new Map<
+    number,
+    (outcome: RemoteHostFetchOutcome) => void
+  >();
+  let calls = 0;
+  const fetcher: RemoteHostFetcher = () =>
+    new Promise<RemoteHostFetchOutcome>((resolve) => {
+      resolvers.set(calls, resolve);
+      calls += 1;
+    });
+  return {
+    fetcher,
+    callCount: () => calls,
+    resolve: (callIndex, outcome) => {
+      const resolver = resolvers.get(callIndex);
+      if (resolver === undefined) {
+        throw new Error(`deferredFetcher: no call at index ${callIndex} yet`);
+      }
+      resolver(outcome);
+    },
+  };
+}
+
+const accountAHostEntry: HostDirectoryEntry = {
+  hostId: "account-a-host",
+  label: "Account A Host",
+  kind: "remote",
+  websocketUrl: "wss://account-a.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
+const accountBHostEntry: HostDirectoryEntry = {
+  hostId: "account-b-host",
+  label: "Account B Host",
+  kind: "remote",
+  websocketUrl: "wss://account-b.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
 describe("HostDirectoryService", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -179,6 +234,7 @@ describe("HostDirectoryService", () => {
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -201,6 +257,7 @@ describe("HostDirectoryService", () => {
     };
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -215,6 +272,7 @@ describe("HostDirectoryService", () => {
     const remoteFetcher: RemoteHostFetcher = () =>
       Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] });
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher,
@@ -241,6 +299,7 @@ describe("HostDirectoryService", () => {
         entries: [registeredLocalHostEntry, mockRemoteHostEntry],
       });
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher,
@@ -259,6 +318,7 @@ describe("HostDirectoryService", () => {
   it("defaults to the shared stubbed remote fetcher when none is supplied", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -271,6 +331,7 @@ describe("HostDirectoryService", () => {
   it("prefers the local entry as the default when one exists", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -286,6 +347,7 @@ describe("HostDirectoryService", () => {
   it("falls back to the single remote entry when no local host exists and the directory has exactly one entry", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -313,6 +375,7 @@ describe("HostDirectoryService", () => {
       transportDialability: "dialable",
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -331,6 +394,7 @@ describe("HostDirectoryService", () => {
   it("reports cardinality 'zero' when the directory has no local or remote entries", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -344,6 +408,7 @@ describe("HostDirectoryService", () => {
   it("emits onSelectionChange after selectById()", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -367,6 +432,7 @@ describe("HostDirectoryService", () => {
   it("persists explicit host selection gestures including clear", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -389,6 +455,7 @@ describe("HostDirectoryService", () => {
     rememberHostSelection(rememberedRemoteHostEntry.hostId);
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -417,6 +484,7 @@ describe("HostDirectoryService", () => {
         pending.resolve = resolve;
       });
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -444,6 +512,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -474,6 +543,7 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -512,6 +582,7 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -538,6 +609,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -567,6 +639,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -607,6 +680,7 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -640,6 +714,7 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -659,6 +734,7 @@ describe("HostDirectoryService", () => {
   it("clears stale selection when the selected host is no longer in the directory", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -675,6 +751,7 @@ describe("HostDirectoryService", () => {
   it("refreshes the local entry when the runner emits an update", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -698,6 +775,7 @@ describe("HostDirectoryService", () => {
   it("emits a fresh selected local entry when the same host id changes endpoint", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -735,6 +813,7 @@ describe("HostDirectoryService", () => {
     host.setLocalHost(localSnapshot);
 
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -757,6 +836,7 @@ describe("HostDirectoryService", () => {
     // fire `onSelectionChange(...)` so the runtime rebinds without a remount.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -781,6 +861,7 @@ describe("HostDirectoryService", () => {
   it("preserves an explicit non-null selection when the local host appears later", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -807,6 +888,7 @@ describe("HostDirectoryService", () => {
     // auto-bind only runs when the user has made no explicit selection yet.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -834,6 +916,7 @@ describe("HostDirectoryService", () => {
   it("does not fall back to another host while an explicit selected host is offline", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -868,6 +951,7 @@ describe("HostDirectoryService", () => {
   it("restores an explicitly selected host when the same id returns after going offline", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -897,6 +981,7 @@ describe("HostDirectoryService", () => {
   it("resolves entries by id across local and remote", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -919,6 +1004,7 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: remoteEntries });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -946,6 +1032,7 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: remoteEntries });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -978,6 +1065,7 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: [] });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1013,6 +1101,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [{ ...mockRemoteHostEntry }] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1049,6 +1138,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1082,6 +1172,7 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1116,6 +1207,7 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1142,6 +1234,7 @@ describe("HostDirectoryService", () => {
       { kind: "failed" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1168,6 +1261,7 @@ describe("HostDirectoryService", () => {
       { kind: "signed-out" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1195,6 +1289,7 @@ describe("HostDirectoryService", () => {
       { kind: "failed" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1227,6 +1322,7 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1262,6 +1358,7 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1292,6 +1389,7 @@ describe("HostDirectoryService", () => {
     it("binds through the same selection listener as an explicit pick", async () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1319,6 +1417,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1352,6 +1451,7 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1369,6 +1469,7 @@ describe("HostDirectoryService", () => {
     it("is a no-op for an id the directory does not hold, never an unbind", async () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: null,
@@ -1391,6 +1492,7 @@ describe("HostDirectoryService", () => {
       const track = vi.spyOn(Analytics.getInstance(), "track");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1443,6 +1545,7 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1480,6 +1583,7 @@ describe("HostDirectoryService", () => {
       rememberHostSelection(localSnapshot.hostId);
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1509,6 +1613,7 @@ describe("HostDirectoryService", () => {
       rememberHostSelection(localSnapshot.hostId);
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1538,6 +1643,7 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1561,6 +1667,7 @@ describe("HostDirectoryService", () => {
       const firstLaunchHost = makeHost(localSnapshot);
       const firstLaunch = makeDirectory({
         runnerHost: firstLaunchHost,
+        authContextId: null,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
       });
@@ -1574,6 +1681,7 @@ describe("HostDirectoryService", () => {
       const secondLaunchHost = makeHost(null);
       const secondLaunch = makeDirectory({
         runnerHost: secondLaunchHost,
+        authContextId: null,
         localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
@@ -1607,6 +1715,7 @@ describe("HostDirectoryService", () => {
         traycerCli: undefined,
       });
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1653,6 +1762,7 @@ describe("HostDirectoryService", () => {
       });
       const onLocalHostChange = vi.spyOn(host, "onLocalHostChange");
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1682,6 +1792,7 @@ describe("HostDirectoryService", () => {
         hostId: "re-enrolled-host-id",
       };
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         remoteFetcher: () =>
@@ -1721,6 +1832,7 @@ describe("HostDirectoryService", () => {
         hostId: "re-enrolled-host-id",
       };
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         // The registry still lists BOTH rows until deregistration propagates -
@@ -1762,6 +1874,7 @@ describe("HostDirectoryService", () => {
       };
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1796,6 +1909,7 @@ describe("HostDirectoryService", () => {
         .setScopedHostId(localSnapshot.hostId);
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1823,6 +1937,7 @@ describe("HostDirectoryService", () => {
         .setScopedHostId("some-other-remote-host");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1848,6 +1963,7 @@ describe("HostDirectoryService", () => {
       );
       rememberHostSelection(rememberedRemoteHostEntry.hostId);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         remoteFetcher: () =>
@@ -1873,6 +1989,7 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1917,6 +2034,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1960,6 +2078,7 @@ describe("HostDirectoryService", () => {
         nonDialableOther,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2002,6 +2121,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2037,6 +2157,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2113,6 +2234,7 @@ describe("HostDirectoryService", () => {
       // user stranded - readiness owns that surface instead.
       let remotes: readonly HostDirectoryEntry[] = [rememberedRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2152,6 +2274,7 @@ describe("HostDirectoryService", () => {
         transportDialability: "dialable",
       };
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2180,6 +2303,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2239,6 +2363,7 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2322,6 +2447,7 @@ describe("HostDirectoryService", () => {
         );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
+          authContextId: null,
           runnerHost: makeHost(null),
           localHostIdSeeder: null,
           remoteFetcher: () =>
@@ -2361,6 +2487,7 @@ describe("HostDirectoryService", () => {
         );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
+          authContextId: null,
           runnerHost: makeHost(null),
           localHostIdSeeder: null,
           remoteFetcher: () =>
@@ -2393,6 +2520,7 @@ describe("HostDirectoryService", () => {
         );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
+          authContextId: null,
           runnerHost: makeHost(null),
           localHostIdSeeder: null,
           remoteFetcher: () =>
@@ -2419,6 +2547,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2471,6 +2600,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2555,6 +2685,7 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2626,6 +2757,7 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2661,6 +2793,7 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2703,6 +2836,129 @@ describe("HostDirectoryService", () => {
           description: `${rememberedRemoteHostEntry.label} is available again.`,
         },
       );
+    });
+  });
+
+  describe("identity-scoped refresh (auth context switch mid-flight)", () => {
+    it("does not join a new identity's mandatory refresh to a stale identity's in-flight promise (the reviewer's P0 probe)", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Account A's poll goes in flight and does not resolve yet.
+      const aRefresh = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // A second caller still under A, while A's flight is pending, DOES join
+      // - same identity, same memo slot. No new fetcher call.
+      const aRefreshJoined = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // The account switch. B's refresh must NOT join A's still-pending
+      // flight just because one is in flight - the memo is keyed by identity,
+      // not by "is anything in flight".
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      expect(callCount()).toBe(2);
+
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A third caller under B, after B's own flight has settled and cleared
+      // its slot, gets a fresh fetch - proving the slot was cleared by B's OWN
+      // settle, not left dangling or falsely reused.
+      const bRefreshAgain = directory.refresh();
+      expect(callCount()).toBe(3);
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefreshAgain;
+
+      // Let A's stale flight resolve too, late, so nothing is left dangling.
+      // Its outcome must never have reached the directory - covered precisely
+      // by the next test, asserted lightly here for completeness.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+      await aRefreshJoined;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
+    it("discards a refresh that resolves after the identity has moved on, even though it started legally", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // A's refresh starts legally - A is current when it is issued.
+      const aRefresh = directory.refresh();
+
+      // The switch happens while A's fetch is still in flight.
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+
+      // B's refresh resolves and commits FIRST.
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A's fetch NOW resolves - after the switch, carrying A's hosts. A
+      // keyed memo alone would not stop this: `performRefresh` must re-check
+      // the identity at commit time and discard the write, because the read
+      // was issued for an identity that is no longer current.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
+    it("does not let an old-bearer 401 clear the directory under a new identity", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // A's fetch is in flight when the switch happens.
+      const aRefresh = directory.refresh();
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+
+      // B's refresh legitimately loads B's hosts.
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A's expired bearer earns a 401 - `signed-out` - and resolves late,
+      // after the switch. Without the commit guard this clears the directory
+      // exactly as a successful empty `hosts` result would, erasing the list
+      // B had just legitimately loaded.
+      resolve(0, { kind: "signed-out" });
+      await aRefresh;
+
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
     });
   });
 });

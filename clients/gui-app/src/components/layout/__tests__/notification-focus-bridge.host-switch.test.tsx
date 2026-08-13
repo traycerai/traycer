@@ -185,6 +185,7 @@ async function mountBridge(options: {
   let remoteHosts = options.remoteHosts;
   const directory = new HostDirectoryService({
     runnerHost,
+    authContextId: null,
     remoteFetcher: () =>
       Promise.resolve({ kind: "hosts" as const, entries: remoteHosts }),
     localHostIdSeeder: null,

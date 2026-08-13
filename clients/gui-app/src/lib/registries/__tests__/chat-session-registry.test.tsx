@@ -40,6 +40,28 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => hostEntryRef.value,
 }));
 
+// `hostTransportKey` (reached through `authenticatedHostStreamKey`, exercised
+// for real below) asks this for live-session evidence. Unmocked, no test in
+// this file ever registers a real remote session, so it would always answer
+// `false` - fine for the "no ready session" direction, but unable to prove
+// the "a ready session survives a confirmed refusal" direction the single
+// transport-survival rule also requires.
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
 const globalClientRef = vi.hoisted(
   (): { value: HostClient<HostRpcRegistry> | null } => ({ value: null }),
 );
@@ -204,6 +226,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
@@ -279,6 +302,7 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
@@ -338,9 +362,11 @@ describe("a live chat session survives a degraded liveness read", () => {
     expect(tracked.records()[0].closeCount).toBe(0);
   });
 
-  it("still releases the handle when the cloud CONFIRMS the host is offline", async () => {
+  it("still releases the handle when the cloud CONFIRMS the host is offline, and no ready session is open", async () => {
     // The other direction, so the test above cannot pass by the registry
-    // having simply stopped reacting to the directory at all.
+    // having simply stopped reacting to the directory at all. `readySessionHosts`
+    // is empty (default) here - see the counterpart below for the same
+    // transition WITH a ready session open, which must survive instead.
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -372,5 +398,44 @@ describe("a live chat session survives a degraded liveness read", () => {
     await waitFor(() => {
       expect(result.current).toBeNull();
     });
+  });
+
+  it("keeps the handle when the cloud CONFIRMS the host is offline but a ready session is open", async () => {
+    // The single transport-survival rule, from the registry's side: a ready
+    // live session keeps the transport alive under ANY verdict, including a
+    // confirmed `offline` refusal - confirmed refusals gate NEW dials only.
+    // Without this the registry released the very handle the session was
+    // still using (`use-host-reachability.test.tsx` pins the hook's side of
+    // the same rule).
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+    readySessionHosts.value = new Set([REMOTE_HOST_ID]);
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-offline-live-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
   });
 });

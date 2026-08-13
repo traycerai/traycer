@@ -1,11 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+
+// `hostTransportKey`/`dialableHostEndpoint` ask this for live-session
+// evidence. Stubbed at the module boundary - the single rule under test is
+// "a ready live session keeps the transport alive under ANY verdict", and
+// only a real module swap can prove the gate actually consults it, rather
+// than merely having a `hostId` that happens to answer false.
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
 import {
   hostTransportKey,
   dialableHostEndpoint,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
+
+afterEach(() => {
+  readySessionHosts.value = new Set();
+});
 
 function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   return {
@@ -141,6 +167,29 @@ describe("the transport's refusal gate", () => {
     expect(dialableHostEndpoint(remoteWithConnectivity("unknown"))).toEqual(
       dialableHostEndpoint(remoteWithConnectivity("connectable")),
     );
+  });
+
+  it("a ready live session outranks a confirmed-offline verdict — key and endpoint stay non-null", () => {
+    const dead = remoteWithConnectivity("offline");
+    readySessionHosts.value = new Set([dead.hostId]);
+    expect(hostTransportKey(dead)).not.toBeNull();
+    expect(dialableHostEndpoint(dead)).not.toBeNull();
+  });
+
+  it("a ready live session outranks plan-restricted too — same rule, deliberately no exception for the downgrade", () => {
+    const localOnly = remoteWithConnectivity("local-only");
+    readySessionHosts.value = new Set([localOnly.hostId]);
+    expect(hostTransportKey(localOnly)).not.toBeNull();
+    expect(dialableHostEndpoint(localOnly)).not.toBeNull();
+  });
+
+  it("without a ready session, both confirmed verdicts still refuse — key and endpoint stay null", () => {
+    const dead = remoteWithConnectivity("offline");
+    const localOnly = remoteWithConnectivity("local-only");
+    expect(hostTransportKey(dead)).toBeNull();
+    expect(dialableHostEndpoint(dead)).toBeNull();
+    expect(hostTransportKey(localOnly)).toBeNull();
+    expect(dialableHostEndpoint(localOnly)).toBeNull();
   });
 });
 
