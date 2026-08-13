@@ -57,10 +57,55 @@ class RecordingInvalidator implements IHostQueryInvalidator {
   }
 }
 
+const accountAHostEntry: HostDirectoryEntry = {
+  hostId: "account-a-host",
+  label: "Account A Host",
+  kind: "remote",
+  websocketUrl: "wss://account-a.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
+const accountBHostEntry: HostDirectoryEntry = {
+  hostId: "account-b-host",
+  label: "Account B Host",
+  kind: "remote",
+  websocketUrl: "wss://account-b.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
 class FakeDirectoryService implements IHostDirectoryService {
   entries: HostDirectoryEntry[] = [];
   selected: HostDirectoryEntry | null = null;
+  /** Every call that triggers a fetch, through EITHER `refresh()` or
+   * `refreshForIdentity(...)` - the two are one cadence from a caller's
+   * point of view, just keyed differently. */
   readonly refreshCalls = { count: 0 };
+  /** Every identity `refreshForIdentity(...)` was actually called WITH, in
+   * order - what the probes below assert on. */
+  readonly refreshForIdentityCalls: Array<string | null> = [];
+  readonly invalidateInFlightRefreshCalls = { count: 0 };
+  /**
+   * Per-identity host sets a "fetch" resolves to, keyed by auth context id
+   * (`null` for signed-out). Lets `refreshForIdentity`/`refresh` model a REAL
+   * commit instead of a no-op counter: a call stamped with the wrong identity
+   * is then observable as the wrong hosts landing in `entries`, not just as a
+   * count. Identities with no entry here leave `entries` untouched, so tests
+   * that only care about call counts do not need to populate this.
+   */
+  readonly hostsByIdentity = new Map<string | null, HostDirectoryEntry[]>();
+  /**
+   * Models the profile store `HostDirectoryService.authContextId` reads in
+   * production (`AuthService.currentProfile`), which updates AFTER
+   * `RequestContextProvider.onChange` has already fired - see
+   * `host-directory-service.ts`'s `refreshForIdentity` doc. Only the PRE-FIX
+   * `refresh()` path below reads this; `HostRuntime`'s context-change handler
+   * must call `refreshForIdentity` with the identity `onChange` itself
+   * carried, never this. A test that leaves this stale while emitting a new
+   * identity is what makes the emit-order lag real instead of assumed.
+   */
+  laggedIdentity: string | null = null;
   private readonly handlers = new Set<
     (entry: HostDirectoryEntry | null) => void
   >();
@@ -73,8 +118,36 @@ class FakeDirectoryService implements IHostDirectoryService {
     return this.entries.find((e) => e.hostId === hostId) ?? null;
   }
 
+  /**
+   * The PRE-FIX path, kept only so a regression back to calling this from
+   * `HostRuntime`'s context-change handler is detectable: it commits under
+   * `laggedIdentity`, not under whatever identity the emission actually
+   * named.
+   */
   async refresh(): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
+    return this.commitForIdentity(this.laggedIdentity);
+  }
+
+  async refreshForIdentity(
+    authContextId: string | null,
+  ): Promise<readonly HostDirectoryEntry[]> {
+    this.refreshCalls.count += 1;
+    this.refreshForIdentityCalls.push(authContextId);
+    return this.commitForIdentity(authContextId);
+  }
+
+  invalidateInFlightRefresh(): void {
+    this.invalidateInFlightRefreshCalls.count += 1;
+  }
+
+  private commitForIdentity(
+    authContextId: string | null,
+  ): readonly HostDirectoryEntry[] {
+    const hosts = this.hostsByIdentity.get(authContextId);
+    if (hosts !== undefined) {
+      this.entries = [...hosts];
+    }
     return this.entries;
   }
 
@@ -262,13 +335,15 @@ describe("HostRuntime lifecycle", () => {
   });
 
   it("preserves the host-scoped cache across same-user credential rotation (silent on the provider)", () => {
-    const { runtime, provider, invalidator } = buildRuntime({
+    const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
       initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
     invalidator.calls.length = 0;
+    const invalidateInFlightBaseline =
+      directory.invalidateInFlightRefreshCalls.count;
 
     const ctxBefore = runtime.hostClient.getRequestContext();
     expect(ctxBefore).not.toBeNull();
@@ -281,6 +356,12 @@ describe("HostRuntime lifecycle", () => {
     // Same-user rotation does NOT emit through the provider, so the
     // host-scoped cache is preserved across token refreshes.
     expect(invalidator.calls).toEqual([]);
+    // The in-flight memo IS dropped, though: a promise the old bearer
+    // started must not be joined by a caller under the new one (see
+    // `HostDirectoryService.invalidateInFlightRefresh`).
+    expect(directory.invalidateInFlightRefreshCalls.count).toBe(
+      invalidateInFlightBaseline + 1,
+    );
   });
 
   it("aborts the previous context and invalidates on cross-user transition", () => {
@@ -391,5 +472,67 @@ describe("HostRuntime lifecycle", () => {
     runtime.dispose();
 
     expect(() => runtime.start()).toThrow(/cannot be started after dispose/i);
+  });
+});
+
+describe("HostRuntime context-change refresh is stamped with the identity the emission is FOR", () => {
+  // Both probes model the real defect: `setSignedIn()`/`signOut()` emit the
+  // new `RequestContext` through `onChange` BEFORE the profile store behind
+  // `authContextId()` updates. `directory.laggedIdentity` stands in for that
+  // store and is deliberately left stale across the emission in both tests -
+  // a test that updated it atomically with the emission would prove nothing,
+  // because it could never observe the ordering bug. The runtime must call
+  // `refreshForIdentity` with the identity `onChange` itself carried, not
+  // read this lagged accessor.
+
+  it("switching identity mid-session must not let B's directory retain A's hosts, even while the lagged profile accessor still reads A", () => {
+    const { runtime, provider, directory } = buildRuntime({
+      initialSignedIn: { userId: "account-a", bearer: "tok-a" },
+      initialSelected: null,
+    });
+    directory.hostsByIdentity.set("account-a", [accountAHostEntry]);
+    directory.hostsByIdentity.set("account-b", [accountBHostEntry]);
+    directory.laggedIdentity = "account-a";
+
+    runtime.start();
+    // Represents "A's hosts are already loaded", the state a prior mandatory
+    // refresh under A would have produced. (`start()` itself already fired
+    // one `refresh()` off the local-host subscription - that is the OTHER,
+    // unrelated cadence this fix leaves untouched; baseline past it below.)
+    directory.entries = [accountAHostEntry];
+    const refreshBaseline = directory.refreshCalls.count;
+
+    signInProvider(provider, "account-b", "tok-b");
+
+    // The runtime must have called `refreshForIdentity("account-b")` - the
+    // identity `onChange` itself carried - not `refresh()`, which would have
+    // read the still-stale `laggedIdentity` ("account-a") and re-committed
+    // A's hosts into B's directory.
+    expect(directory.refreshForIdentityCalls).toEqual(["account-b"]);
+    expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
+    expect(directory.entries.map((entry) => entry.hostId)).toEqual([
+      accountBHostEntry.hostId,
+    ]);
+  });
+
+  it("signing out must clear the directory, not leave A resident, even while the lagged profile accessor still reads A", () => {
+    const { runtime, provider, directory } = buildRuntime({
+      initialSignedIn: { userId: "account-a", bearer: "tok-a" },
+      initialSelected: null,
+    });
+    directory.hostsByIdentity.set("account-a", [accountAHostEntry]);
+    directory.hostsByIdentity.set(null, []);
+    directory.laggedIdentity = "account-a";
+
+    runtime.start();
+    directory.entries = [accountAHostEntry];
+
+    provider.signOut();
+
+    // `null` IS the incoming identity on sign-out - stamping the refresh
+    // with it (rather than the lagged "account-a") is what lets the clearing
+    // commit land instead of being discarded by its own identity guard.
+    expect(directory.refreshForIdentityCalls).toEqual([null]);
+    expect(directory.entries).toEqual([]);
   });
 });
