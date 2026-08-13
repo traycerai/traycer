@@ -28,10 +28,18 @@ describe("resolveAutoOpenTarget", () => {
     expect(target?.type).toBe("terminal-agent");
   });
 
-  it("falls back to the first openable node when the focus id is unknown", () => {
+  it("does not substitute another chat when an explicit focus target is gone", () => {
     const records = [record({ id: "chat-1", name: "Chat One", type: "chat" })];
 
     const target = resolveAutoOpenTarget(records, "missing", null);
+
+    expect(target).toBeNull();
+  });
+
+  it("still selects the first openable node when no focus was requested", () => {
+    const records = [record({ id: "chat-1", name: "Chat One", type: "chat" })];
+
+    const target = resolveAutoOpenTarget(records, null, null);
 
     expect(target?.id).toBe("chat-1");
   });
