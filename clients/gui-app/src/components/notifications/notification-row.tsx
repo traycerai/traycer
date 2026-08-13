@@ -23,7 +23,7 @@ import {
   isConfirmedTransportRefusal,
   type HostUnavailability,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
@@ -81,10 +81,19 @@ interface NotificationRowProps {
  * and refused the fuse-window recovery dial the transport would have
  * attempted. `hostUnavailability` now supplies only the per-reason copy once
  * the refusal is confirmed.
+ *
+ * `hasReadySession` is the component's REACTIVE answer to
+ * `hasReadyRemoteSession` (via `useRemoteSessionPollReadiness`), not read
+ * here: the session cache is pull-only and a readiness flip changes neither
+ * the notification row nor any directory value, so a direct read froze the
+ * refusal at whatever the cache said when something else happened to
+ * re-render the row - the same staleness the host picker's refusal predicate
+ * had.
  */
 function originRefusal(input: {
   readonly row: MergedNotificationRow;
   readonly originEntry: HostDirectoryEntry | null;
+  readonly hasReadySession: boolean;
 }): HostUnavailability | null {
   const requiresOriginHost =
     input.row.payload !== null &&
@@ -92,12 +101,7 @@ function originRefusal(input: {
   if (!requiresOriginHost) return null;
   if (input.row.originHostId === null) return "offline";
   if (input.originEntry === null) return "offline";
-  if (
-    !isConfirmedTransportRefusal(
-      input.originEntry,
-      hasReadyRemoteSession(input.originEntry.hostId),
-    )
-  ) {
+  if (!isConfirmedTransportRefusal(input.originEntry, input.hasReadySession)) {
     return null;
   }
   // Confirmed refusals are exactly `offline` / `plan-restricted`; the verdict
@@ -152,14 +156,21 @@ function rowMotionProps(options: {
 export function NotificationRow(props: NotificationRowProps): ReactNode {
   const row = useMergedNotificationRow(props.feedId);
   // Hooks must remain unconditional while an exact-removal frame makes this
-  // row disappear between renders.
-  const originHost = useHostDirectoryEntry(row?.originHostId ?? "");
+  // row disappear between renders; the empty-id fallback is what keeps the
+  // two origin-host subscriptions below callable for a vanished row.
+  const originHostId = row?.originHostId ?? "";
+  const originHost = useHostDirectoryEntry(originHostId);
   // This machine — not the ambient active host (G8 / D7). Pack-store events
   // are machine-local; comparing against active would mis-caption when the
   // user has a remote host selected.
   const localHost = useReactiveLocalHostEntry();
   const runnerHost = useRunnerHostOrNull();
   const shouldReduceMotion = useReducedMotion() === true;
+  // Subscribed, not read at render time: `originRefusal` is ready-session-
+  // aware, and a readiness flip changes no value this row otherwise
+  // subscribes to. An empty id reads as "no ready session", the right answer
+  // for a row with no origin host.
+  const originHasReadySession = useRemoteSessionPollReadiness(originHostId);
   if (row === null) return null;
 
   const packPresentation = resolvePackRowPresentation({
@@ -170,7 +181,11 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasPayload: row.payload !== null,
   });
   const isRead = row.readAt !== null;
-  const originUnavailability = originRefusal({ row, originEntry: originHost });
+  const originUnavailability = originRefusal({
+    row,
+    originEntry: originHost,
+    hasReadySession: originHasReadySession,
+  });
   const originUnavailable = originUnavailability !== null;
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
