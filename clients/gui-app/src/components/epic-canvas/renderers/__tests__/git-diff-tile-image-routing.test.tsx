@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import type {
   GitChangedFile,
   GitGetFileDiffResponse,
@@ -288,6 +294,8 @@ function changedFile(args: {
   readonly stage?: GitChangedFile["stage"];
   readonly isBinary?: boolean;
   readonly previousPath?: string | null;
+  readonly stagedOid?: string | null;
+  readonly worktreeOid?: string | null;
 }): GitChangedFile {
   return {
     path: args.path,
@@ -298,8 +306,8 @@ function changedFile(args: {
     deletions: 1,
     isBinary: args.isBinary ?? false,
     sizeBytes: 12,
-    stagedOid: null,
-    worktreeOid: "worktree-1",
+    stagedOid: args.stagedOid ?? null,
+    worktreeOid: args.worktreeOid ?? "worktree-1",
   };
 }
 
@@ -313,7 +321,7 @@ function tileFor(filePath: string, stage: GitChangedFile["stage"]) {
   });
 }
 
-function renderTile(file: GitChangedFile): void {
+function renderTile(file: GitChangedFile): RenderResult {
   state.file = file;
   state.subscribe.mockReturnValue({
     data: {
@@ -330,7 +338,33 @@ function renderTile(file: GitChangedFile): void {
   });
 
   const node = tileFor(file.path, file.stage);
-  render(
+  return render(
+    <GitDiffTile node={node} viewTabId="view-1" tileId={node.id} isActive />,
+  );
+}
+
+function rerenderTile(
+  rendered: RenderResult,
+  file: GitChangedFile,
+  headSha: string,
+): void {
+  state.file = file;
+  state.subscribe.mockReturnValue({
+    data: {
+      branch: "main",
+      headSha,
+      files: [file],
+    },
+    error: null,
+    isPending: false,
+    repoState: null,
+    repoMode: "normal",
+    pollStartedAtMs: 1,
+    watcherStatus: null,
+  });
+
+  const node = tileFor(file.path, file.stage);
+  rendered.rerender(
     <GitDiffTile node={node} viewTabId="view-1" tileId={node.id} isActive />,
   );
 }
@@ -367,6 +401,48 @@ describe("<GitDiffTile /> image routing", () => {
     expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(screen.queryByTestId("binary-placeholder")).toBeNull();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("remounts image subscriptions only when the git revision changes", () => {
+    const initial = changedFile({
+      path: "assets/photo.png",
+      isBinary: true,
+      stage: "staged",
+      stagedOid: "staged-1",
+    });
+    const rendered = renderTile(initial);
+    const initialSides = screen.getAllByTestId("image-preview-side");
+    expect(initialSides).toHaveLength(2);
+
+    rerenderTile(
+      rendered,
+      changedFile({
+        path: "assets/photo.png",
+        isBinary: true,
+        stage: "staged",
+        stagedOid: "staged-1",
+      }),
+      "head-1",
+    );
+    const unchangedRevisionSides = screen.getAllByTestId("image-preview-side");
+    // The mocked preview DOM nodes stand in for the mounted asset subscriptions.
+    expect(unchangedRevisionSides[0]).toBe(initialSides[0]);
+    expect(unchangedRevisionSides[1]).toBe(initialSides[1]);
+
+    rerenderTile(
+      rendered,
+      changedFile({
+        path: "assets/photo.png",
+        isBinary: true,
+        stage: "staged",
+        stagedOid: "staged-2",
+      }),
+      "head-1",
+    );
+    const changedRevisionSides = screen.getAllByTestId("image-preview-side");
+    expect(changedRevisionSides).toHaveLength(initialSides.length);
+    expect(changedRevisionSides[0]).not.toBe(initialSides[0]);
+    expect(changedRevisionSides[1]).not.toBe(initialSides[1]);
   });
 
   it("keeps non-image binary files on BinaryPlaceholder", () => {
