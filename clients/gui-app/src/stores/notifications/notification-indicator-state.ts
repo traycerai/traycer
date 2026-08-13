@@ -79,9 +79,9 @@ export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResp
  * snapshots, already filtered for cleared/superseded), and every row carries
  * the entity columns, severity, kind and markers - so the four predicates are
  * exactly the host's, evaluated over rows from EVERY host rather than only the
- * connected one. Ported verbatim from
- * `hostNotificationsGetIndicatorState`: an epic aggregates all of its rows
- * including its chats', a chat aggregates only its own, and pending is
+ * connected one. Ported from `hostNotificationsGetIndicatorState`: an epic
+ * aggregates its direct rows plus rows for the live chat ids supplied by the
+ * current task projection, a chat aggregates only its own, and pending is
  * `resolvedAt === null` on the two request kinds. `pendingFork` is always
  * false here: fork truth is host-local and is merged from the host response
  * after this feed-row derivation, never inferred from a retained cloud row.
@@ -108,7 +108,11 @@ export function selectCloudNotificationIndicators(
     const contribution = indicatorContribution(row.entry);
     if (contribution === null) continue;
     const { epicId, chatId } = row.entry;
-    if (epicId !== null && wantedEpicIds.has(epicId)) {
+    if (
+      epicId !== null &&
+      wantedEpicIds.has(epicId) &&
+      (chatId === null || wantedChatIds.has(chatId))
+    ) {
       epics[epicId] = mergeIndicatorFlags(epics[epicId], contribution);
     }
     if (chatId !== null && wantedChatIds.has(chatId)) {

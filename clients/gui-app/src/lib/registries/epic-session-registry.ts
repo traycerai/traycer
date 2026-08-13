@@ -1,4 +1,9 @@
-import { createContext } from "react";
+import {
+  createContext,
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
@@ -81,6 +86,72 @@ export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {
  */
 export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
   return registry;
+}
+
+const EMPTY_LIVE_CHAT_IDS: ReadonlyArray<string> = [];
+const liveChatSnapshotCache = new Map<
+  string,
+  { readonly signature: string; readonly chatIds: ReadonlyArray<string> }
+>();
+
+/**
+ * The chat ids that still exist in the currently-live sessions for a set of
+ * task tabs. Notification task rollups use this as a whitelist: deleting a
+ * chat removes its id here immediately, so its historical notification can
+ * stay in the bell without continuing to bubble up to the task tab.
+ */
+export function useLiveChatIdsForEpics(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const canonicalEpicIds = useMemo(
+    () =>
+      [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
+    [epicIds],
+  );
+  const cacheKey = useMemo(
+    () => JSON.stringify(canonicalEpicIds),
+    [canonicalEpicIds],
+  );
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) => {
+      let storeUnsubscribers: Array<() => void> = [];
+      const bindStores = (): void => {
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+        storeUnsubscribers = canonicalEpicIds.flatMap((epicId) => {
+          const handle = registry.peek(epicId);
+          return handle === null ? [] : [handle.store.subscribe(listener)];
+        });
+      };
+      bindStores();
+      const unsubscribeRegistry = registry.subscribe(() => {
+        bindStores();
+        listener();
+      });
+      return () => {
+        unsubscribeRegistry();
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+      };
+    },
+    [canonicalEpicIds],
+  );
+  const getSnapshot = useCallback((): ReadonlyArray<string> => {
+    const chatIds = canonicalEpicIds.flatMap(
+      (epicId) => registry.peek(epicId)?.store.getState().chats.allIds ?? [],
+    );
+    const snapshot = [...new Set(chatIds)].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const signature = JSON.stringify(snapshot);
+    const cached = liveChatSnapshotCache.get(cacheKey);
+    if (cached?.signature === signature) return cached.chatIds;
+    liveChatSnapshotCache.set(cacheKey, { signature, chatIds: snapshot });
+    return snapshot;
+  }, [cacheKey, canonicalEpicIds]);
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_LIVE_CHAT_IDS,
+  );
 }
 
 /**

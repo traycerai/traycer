@@ -23,7 +23,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationFilterMenu } from "@/components/notifications/notification-filter-menu";
 import { NotificationRow } from "@/components/notifications/notification-row";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
 import { useNotificationCenterScrollAnchor } from "@/hooks/notifications/use-notification-center-scroll-anchor";
@@ -101,22 +100,8 @@ function isAttentionSectionVisible(input: {
   return input.loadedAttentionCount > 0 || input.canLoadMoreAttention;
 }
 
-// The "Mark all read" double-tick now also dismisses loaded Attention rows, so
-// it stays actionable whenever there is EITHER unread activity to mark read OR a
-// loaded HOST Attention row to dismiss - a needs_action row read via navigation
-// is no longer unread but is still dismissable, so `unreadCount` alone would
-// wrongly disable it.
-//
-// Retained HOST Attention rows only count while an active host exists: a real
-// disconnect keeps the rendered rows but makes their mark-read/resolve
-// mutations unbound, so counting them then would re-enable the control into a
-// pair of failing RPCs. Unread global/app-local rows stay locally actionable
-// regardless and flow through `unreadCount` (which itself drops the host
-// contribution to 0 once the summary is unknown).
 function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
-  readonly loadedHostAttentionCount: number;
-  readonly hasActiveHost: boolean;
   readonly cloudConnectionState: CloudNotificationsConnectionState | null;
 }): boolean {
   if (input.cloudConnectionState !== null) {
@@ -124,10 +109,7 @@ function isMarkAllReadDisabled(input: {
       input.unreadCount === 0 || input.cloudConnectionState !== "connected"
     );
   }
-  const actionableHostAttention = input.hasActiveHost
-    ? input.loadedHostAttentionCount
-    : 0;
-  return input.unreadCount === 0 && actionableHostAttention === 0;
+  return input.unreadCount === 0;
 }
 
 /** Local-fallback header subtitle text. A partial host state is either
@@ -206,14 +188,6 @@ export function NotificationsPopover(
   const notificationsSupport = useStreamMethodSupport(
     "host.notifications.feed.subscribe",
   );
-  // Authoritative active-host signal for the "Mark all read" enablement gate -
-  // `null` during a disconnect even though the runtime binding is retained.
-  const activeHostId = useReactiveActiveHostId();
-  // Loaded HOST Attention rows (feed ids are `host:<id>`); app-local/global
-  // attention is locally actionable and already reflected in `unreadCount`.
-  const loadedHostAttentionCount = attentionIds.filter((feedId) =>
-    feedId.startsWith("host:"),
-  ).length;
   const { activate } = useNotificationActivation();
   const { openSettings } = useSystemTabModalActions();
   const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
@@ -338,20 +312,6 @@ export function NotificationsPopover(
     [actions],
   );
 
-  const handleResolve = useCallback(
-    (row: MergedNotificationRow) => {
-      // Dismiss stamps `resolvedAt` (and marks read), so it registers as an
-      // explicit acknowledgment for the same metric the mark-read control
-      // reports - it just also clears the row from the blocking tier.
-      Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
-        category: row.category,
-        acknowledgment_source: "explicit_action",
-      });
-      actions.resolve(row);
-    },
-    [actions],
-  );
-
   const handleMarkAllRead = useCallback(() => {
     Analytics.getInstance().track(AnalyticsEvent.NotificationsMarkedAllRead, {
       affected_count_bucket: hostState.isPartial
@@ -435,8 +395,6 @@ export function NotificationsPopover(
           onMarkAllRead={handleMarkAllRead}
           isMarkAllReadDisabled={isMarkAllReadDisabled({
             unreadCount,
-            loadedHostAttentionCount,
-            hasActiveHost: activeHostId !== null,
             cloudConnectionState: cloudPresentationState,
           })}
           showClearAll={feedMode === "cloud"}
@@ -487,7 +445,6 @@ export function NotificationsPopover(
               onLoadMoreAttention={() => actions.loadMoreAttention()}
               onActivate={handleActivate}
               onAcknowledge={handleAcknowledge}
-              onResolve={handleResolve}
               onResetFilters={resetFilters}
             />
           </NotificationsFeedContent>
@@ -529,7 +486,6 @@ interface NotificationsFeedSectionsProps {
   readonly onLoadMoreAttention: () => void;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
 }
 
@@ -569,7 +525,6 @@ function NotificationsFeedSections(
                     highlightRelocation={false}
                     onActivate={props.onActivate}
                     onAcknowledge={props.onAcknowledge}
-                    onResolve={props.onResolve}
                   />
                 ))}
               </AnimatePresence>
@@ -599,7 +554,6 @@ function NotificationsFeedSections(
           isFilteredEmpty={props.isRecentFilteredEmpty}
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
-          onResolve={props.onResolve}
           onResetFilters={props.onResetFilters}
         />
       </m.section>
@@ -896,7 +850,6 @@ interface RecentSectionBodyProps {
   readonly isFilteredEmpty: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
 }
 
@@ -908,7 +861,6 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
         relocatedIds={props.relocatedIds}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
-        onResolve={props.onResolve}
       />
     );
   }
@@ -930,7 +882,6 @@ interface RecentRowListProps {
   readonly relocatedIds: ReadonlySet<string>;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
 /** Inserts a temporal separator whenever the calendar-day group changes
@@ -951,7 +902,6 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
           now={now}
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
-          onResolve={props.onResolve}
         />
       ))}
     </ul>
@@ -965,7 +915,6 @@ interface RecentRowProps {
   readonly now: number;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
 function RecentRow(props: RecentRowProps): ReactNode {
@@ -992,7 +941,6 @@ function RecentRow(props: RecentRowProps): ReactNode {
         highlightRelocation={props.highlightRelocation}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
-        onResolve={props.onResolve}
       />
     </>
   );

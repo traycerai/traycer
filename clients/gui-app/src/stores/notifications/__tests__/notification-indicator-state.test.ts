@@ -184,6 +184,17 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"].unreadDone).toBe(true);
   });
 
+  it("does not bubble a deleted chat's retained notification to its epic", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([prompt("approval", "approval.requested", null)]),
+      ["epic-1"],
+      [],
+    );
+
+    expect(result.epics["epic-1"]).toBeUndefined();
+    expect(result.chats).toEqual({});
+  });
+
   it("treats a read marker as clearing the unread arms", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([

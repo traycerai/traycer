@@ -62,7 +62,24 @@ describe("indicatorRequests", () => {
       `epic-${String(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP).padStart(3, "0")}`,
     ]);
     expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
-    expect(requests[1].chatIds).toEqual([]);
+    expect(requests[1].chatIds).toEqual(["chat-a", "chat-b"]);
+  });
+
+  it("crosses epic and chat chunks so every task sees the full live-chat whitelist", () => {
+    const epicIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `epic-${index}`,
+    );
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${index}`,
+    );
+
+    const requests = indicatorRequests(epicIds, chatIds);
+
+    expect(requests).toHaveLength(4);
+    expect(requests.every((request) => request.epicIds.length > 0)).toBe(true);
+    expect(requests.every((request) => request.chatIds.length > 0)).toBe(true);
   });
 });
 
