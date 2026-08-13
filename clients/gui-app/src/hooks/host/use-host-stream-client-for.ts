@@ -76,6 +76,24 @@ export interface HostStreamClientBinding {
    * session the same way the S1-era owners did.
    */
   readonly transportKey: string;
+  /**
+   * Opt-in transport lease (Codex re-review, image-preview coalescing):
+   * `client` is otherwise TRANSIENT, scoped to the calling hook instance -
+   * its cleanup closes it unconditionally on that instance's OWN unmount,
+   * with no visibility into whether something built on top of `client`
+   * (e.g. a stream a DIFFERENT, sibling hook instance is also reading from)
+   * still needs it. A caller that hands `client` to such a cross-hook-
+   * lifetime consumer must `pin()` it first and `unpin()` exactly when that
+   * consumer's OWN need for it ends - **a pinned transport must outlive
+   * every shared subscription opened through it; the underlying close
+   * defers until the pin count reaches zero**, whether that happens before
+   * or after this hook instance's own unmount. Every OTHER caller that
+   * never pins is completely unaffected: the pin count starts at 0, so the
+   * unmount-time close still fires immediately, exactly as before this
+   * existed.
+   */
+  readonly pin: () => void;
+  readonly unpin: () => void;
 }
 
 export function hostStreamTransportKeyFor(
@@ -371,14 +389,40 @@ export function useHostStreamClientBindingFor(
       setBinding(null);
       return;
     }
+    // Plain closure state, not React state - `pin`/`unpin` must keep working
+    // correctly from a caller that outlives THIS hook instance's own
+    // unmount (see `HostStreamClientBinding.pin`'s doc comment), so they
+    // cannot depend on a re-render to take effect.
+    let pinCount = 0;
+    let unmountedWhilePinned = false;
+    const pin = (): void => {
+      pinCount += 1;
+    };
+    const unpin = (): void => {
+      pinCount = Math.max(0, pinCount - 1);
+      if (pinCount === 0 && unmountedWhilePinned) {
+        client.close("transient-host-client-teardown");
+      }
+    };
     setBinding({
       transportKey: remoteAwareOwnerIdentity(memoizedTarget, userId),
       client,
+      pin,
+      unpin,
     });
 
     return () => {
       teardownInProgressRef.current = true;
-      client.close("transient-host-client-teardown");
+      if (pinCount === 0) {
+        client.close("transient-host-client-teardown");
+      } else {
+        // A pinned transport must outlive every shared subscription opened
+        // through it - defer the actual close to whichever `unpin()` call
+        // brings the count back to zero, instead of tearing down a
+        // transport a sibling hook instance is still reading a stream
+        // through.
+        unmountedWhilePinned = true;
+      }
       teardownInProgressRef.current = false;
     };
   }, [

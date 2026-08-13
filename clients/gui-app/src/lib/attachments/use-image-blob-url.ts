@@ -60,6 +60,12 @@ export function useImageBlobUrlState(
     let attemptCount = 0;
     let cancelRetry: (() => void) | null = null;
     let cancelUnavailable: (() => void) | null = null;
+    // Rebound to the LATEST attempt's lease on every `acquire()` call - a
+    // failed attempt's entry is already self-removed by the cache (see
+    // image-blob-cache.ts's poisoned-entry cleanup), so there is never a
+    // stale lease from an earlier attempt worth separately releasing before
+    // overwriting this.
+    let releaseLease: (() => void) | null = null;
 
     if (unavailableAfterMs !== null) {
       const unavailableTimer = window.setTimeout(() => {
@@ -75,8 +81,16 @@ export function useImageBlobUrlState(
 
     const acquire = (): void => {
       attemptCount += 1;
-      imageBlobCache
-        .acquire(hash, mediaType, fetcher)
+      const lease = imageBlobCache.acquire(
+        hash,
+        mediaType,
+        fetcher,
+        // Chat attachments are content-hash-keyed but not treated as
+        // session-immutable here - unchanged grace-window behavior.
+        "grace",
+      );
+      releaseLease = lease.release;
+      lease.promise
         .then((url) => {
           if (!active) return;
           cancelUnavailable?.();
@@ -111,7 +125,7 @@ export function useImageBlobUrlState(
       active = false;
       cancelRetry?.();
       cancelUnavailable?.();
-      imageBlobCache.release(hash);
+      releaseLease?.();
     };
   }, [hash, mediaType, fetcher, unavailableAfterMs]);
 
