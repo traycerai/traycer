@@ -390,34 +390,38 @@ export function useChatTimelineFollowLatch(
     [cancelActiveCorrection, setFollowIntent],
   );
 
-  const reconcileStrictBottom = useCallback((): void => {
-    cancelActiveCorrection();
-    readerEndCandidateRef.current = null;
-    const armedDeparture = armedReaderDepartureRef.current;
-    if (
-      armedDeparture?.source === "gesture" &&
-      !armedDeparture.blocksAutomaticCorrection
-    ) {
-      // Only issue-time geometry that proved this gesture cannot move can
-      // release on a strict-bottom observation. A movable wheel/touch gesture
-      // can still be awaiting its native scroll report, so treating the
-      // unchanged geometry as a no-op would let a subsequent maintain
-      // correction mask the reader's departure. Owned navigation deliberately
-      // survives too: an animated free jump may report a sub-epsilon first
-      // frame before it genuinely leaves the edge.
-      armedReaderDepartureRef.current = null;
-    }
-    const isSuppressed = isCorrectionSuppressed?.() === true;
-    const mayReleaseSuppression =
-      isSuppressed && resolveSuppressedEndLanding?.() === true;
-    const mayFollow = !isSuppressed || mayReleaseSuppression;
-    setFollowIntent(mayFollow);
-  }, [
-    cancelActiveCorrection,
-    isCorrectionSuppressed,
-    resolveSuppressedEndLanding,
-    setFollowIntent,
-  ]);
+  const reconcileStrictBottom = useCallback(
+    (isNativeScrollReport: boolean): void => {
+      cancelActiveCorrection();
+      readerEndCandidateRef.current = null;
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (
+        armedDeparture?.source === "gesture" &&
+        (!armedDeparture.blocksAutomaticCorrection || isNativeScrollReport)
+      ) {
+        // Only issue-time geometry that proved this gesture cannot move can
+        // release on a maintenance observation. A movable wheel/touch gesture
+        // can still be awaiting its native scroll report, so treating unchanged
+        // geometry as a no-op would let a subsequent maintain correction mask
+        // the reader's departure. Once a native report confirms it remained at
+        // the strict edge, though, release the arm so later streaming can follow.
+        // Owned navigation deliberately survives: an animated free jump may
+        // report a sub-epsilon first frame before it genuinely leaves the edge.
+        armedReaderDepartureRef.current = null;
+      }
+      const isSuppressed = isCorrectionSuppressed?.() === true;
+      const mayReleaseSuppression =
+        isSuppressed && resolveSuppressedEndLanding?.() === true;
+      const mayFollow = !isSuppressed || mayReleaseSuppression;
+      setFollowIntent(mayFollow);
+    },
+    [
+      cancelActiveCorrection,
+      isCorrectionSuppressed,
+      resolveSuppressedEndLanding,
+      setFollowIntent,
+    ],
+  );
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
@@ -447,7 +451,7 @@ export function useChatTimelineFollowLatch(
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
-      reconcileStrictBottom();
+      reconcileStrictBottom(true);
       return;
     }
 
@@ -502,7 +506,7 @@ export function useChatTimelineFollowLatch(
       // leave a jump pill visible when there is no useful bottom to reach.
       // This performs no imperative navigation, preserving destructive-clamp
       // behavior while allowing subsequent streaming growth to stay latched.
-      reconcileStrictBottom();
+      reconcileStrictBottom(false);
       return;
     }
     if (!permissionRef.current) return;

@@ -523,6 +523,33 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
   });
 
+  it("releases a movable wheel arm after a sub-epsilon strict-bottom scroll", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+    // Native delivery confirms that the gesture completed without departing:
+    // the fractional movement remains inside the strict-bottom epsilon.
+    shim.setGeometry(node, { scrollTop: 999.5 });
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks a maintain correction between touch intent and native scroll", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
