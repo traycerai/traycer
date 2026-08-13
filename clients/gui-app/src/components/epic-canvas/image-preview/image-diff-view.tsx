@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -13,8 +14,10 @@ import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { isImageAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { cn } from "@/lib/utils";
 import {
   useImageAsset,
+  type ImageAssetMeta,
   type ImageAssetRequest,
   type UseImageAssetResult,
 } from "@/hooks/assets/use-image-asset";
@@ -110,6 +113,71 @@ function combinedMode(
     isActualSize:
       (!oldActive || oldMode.isActualSize) &&
       (!newActive || newMode.isActualSize),
+  };
+}
+
+/** `meta`'s own width/height ratio, or `null` when either dimension is unknown (a dimensionless SVG, or the header hasn't arrived yet). */
+function aspectRatioOf(meta: ImageAssetMeta | null): number | null {
+  if (meta === null) return null;
+  if (meta.width === null || meta.height === null) return null;
+  if (meta.width <= 0 || meta.height <= 0) return null;
+  return meta.width / meta.height;
+}
+
+/**
+ * The COMPACT root's own width:height ratio for a CSS `aspect-ratio` style
+ * (Codex re-review, #3773298843) - `null` when neither side has a usable
+ * ratio (both dimensionless, or still loading), the caller's cue to fall
+ * back to a fixed-vh height instead.
+ *
+ * The two sides render at roughly HALF the root's own width each (both
+ * `flex-1` in the row below), so a side needing `height = (width/2) / ratio`
+ * to show uncropped drives the root's OWN ratio as `width / height`, i.e.
+ * `2 * ratio` for that side - using whichever side needs MORE height per
+ * unit width (the smaller of the two ratios) so neither side is cropped by
+ * the resulting box.
+ */
+function compactAspectRatio(
+  oldMeta: ImageAssetMeta | null,
+  newMeta: ImageAssetMeta | null,
+): number | null {
+  const oldRatio = aspectRatioOf(oldMeta);
+  const newRatio = aspectRatioOf(newMeta);
+  if (oldRatio === null && newRatio === null) return null;
+  return 2 * Math.min(oldRatio ?? Infinity, newRatio ?? Infinity);
+}
+
+interface CompactRootSizing {
+  readonly className: string;
+  readonly style: CSSProperties | undefined;
+}
+
+/**
+ * The compact root's own height (Codex re-review, #3773015605's follow-up
+ * #3773298843): a definite `h-full` needs a definite ancestor height, which
+ * a bundle row never provides on its own - but a FIXED px/rem value is a
+ * `gui-app/AGENTS.md` fluid-layout violation regardless of what fills it
+ * (an upscaled icon in a mostly-empty box on a small image, or an
+ * always-320px band on every row on a tall viewport). An `aspect-ratio` box
+ * with `w-full` has a DEFINITE computed height derived from the image's own
+ * decoded dimensions - snug for a small/wide image, capped by
+ * `max-h-[min(45vh,20rem)]` (this repo's existing viewport-cap convention,
+ * `git-diff-repo-switcher.tsx`) for a tall one. Falls back to a fixed-vh
+ * (never px/rem) height only when NEITHER side has decoded dimensions yet
+ * to derive a ratio from.
+ */
+function compactRootSizing(
+  compact: boolean,
+  oldMeta: ImageAssetMeta | null,
+  newMeta: ImageAssetMeta | null,
+): CompactRootSizing {
+  if (!compact) return { className: "h-full", style: undefined };
+  const ratio = compactAspectRatio(oldMeta, newMeta);
+  if (ratio === null)
+    return { className: "h-[45vh] overflow-hidden", style: undefined };
+  return {
+    className: "max-h-[min(45vh,20rem)] overflow-hidden",
+    style: { aspectRatio: `${ratio}` },
   };
 }
 
@@ -388,9 +456,17 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     zoomDisabled ||
     sideAtMax(oldActive, oldBounds) ||
     sideAtMax(newActive, newBounds);
+  const rootSizing = compactRootSizing(
+    props.compact,
+    oldAsset.meta,
+    newAsset.meta,
+  );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
+    <div
+      className={cn("flex min-h-0 w-full flex-col", rootSizing.className)}
+      style={rootSizing.style}
+    >
       {props.compact ? null : (
         <div
           role="toolbar"

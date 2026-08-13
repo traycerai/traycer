@@ -6,6 +6,7 @@ import {
   render,
   screen,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import type {
   ImageAssetRequest,
@@ -90,8 +91,8 @@ const DEFAULT_PROPS: ImageDiffViewProps = {
   revisionKey: "revision-1",
 };
 
-function renderDiff(overrides: Partial<ImageDiffViewProps>): void {
-  render(<ImageDiffView {...DEFAULT_PROPS} {...overrides} />);
+function renderDiff(overrides: Partial<ImageDiffViewProps>): RenderResult {
+  return render(<ImageDiffView {...DEFAULT_PROPS} {...overrides} />);
 }
 
 beforeEach(() => {
@@ -351,5 +352,70 @@ describe("<ImageDiffView />", () => {
 
     expect(screen.queryByRole("toolbar")).toBeNull();
     expect(screen.getAllByRole("img")).toHaveLength(2);
+  });
+
+  it("uses full height for the non-compact root", () => {
+    const { container } = renderDiff({});
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("h-full");
+  });
+
+  it("sizes a compact root from the more demanding known side ratio", () => {
+    const { container } = renderDiff({ compact: true });
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("max-h-[min(45vh,20rem)]");
+    expect(root?.className).toContain("overflow-hidden");
+    expect(root?.className).not.toContain("h-full");
+    const aspectRatio =
+      root instanceof HTMLElement ? root.style.aspectRatio : "";
+    expect(Number.parseFloat(aspectRatio)).toBeCloseTo(2.4);
+  });
+
+  it("uses the single known side when the other side has no dimensions", () => {
+    state.new = {
+      status: "ready",
+      url: "blob:new",
+      meta: null,
+      reason: null,
+      totalBytes: 18,
+      servedFromCache: false,
+    };
+    const { container } = renderDiff({ compact: true });
+    const root = container.firstElementChild;
+
+    const aspectRatio =
+      root instanceof HTMLElement ? root.style.aspectRatio : "";
+    expect(Number.parseFloat(aspectRatio)).toBeCloseTo(2 * (4 / 3));
+    expect(root?.className).toContain("max-h-[min(45vh,20rem)]");
+  });
+
+  it("falls back to a viewport-only height when neither side has dimensions", () => {
+    state.old = {
+      status: "ready",
+      url: "blob:old",
+      meta: null,
+      reason: null,
+      totalBytes: 12,
+      servedFromCache: false,
+    };
+    state.new = {
+      status: "ready",
+      url: "blob:new",
+      meta: null,
+      reason: null,
+      totalBytes: 18,
+      servedFromCache: false,
+    };
+    const { container } = renderDiff({ compact: true });
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("h-[45vh]");
+    expect(root?.className).toContain("overflow-hidden");
+    const aspectRatio =
+      root instanceof HTMLElement ? root.style.aspectRatio : "";
+    expect(aspectRatio).toBe("");
+    expect(root?.className).not.toContain("max-h-[min(45vh,20rem)]");
   });
 });

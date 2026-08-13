@@ -276,20 +276,11 @@ describe("<BundleFileSection /> image routing", () => {
     );
   });
 
-  // jsdom does not calculate real layout, so this pins the viewport-capped
-  // wrapper's class contract rather than asserting a pixel height.
-  it("bounds compact image rows with a viewport-capped wrapper", () => {
-    const changedFile = file({ path: "assets/tall.png", isBinary: true });
-    renderSection(changedFile, node([]));
-
-    const boundedWrapper = Array.from(document.querySelectorAll("div")).find(
-      (element) => element.className.includes("h-[min(45vh,20rem)]"),
-    );
-    expect(boundedWrapper).toBeTruthy();
-    expect(boundedWrapper?.className).toContain("min-h-0");
-    expect(boundedWrapper?.className).toContain("w-full");
-    expect(boundedWrapper?.className).toContain("overflow-hidden");
-  });
+  // The compact height bound now lives INSIDE `ImageDiffView` itself (it
+  // needs both sides' decoded dimensions, which only it has - see
+  // `image-diff-view.test.tsx` for the sizing contract); `ImageDiffView` is
+  // mocked at this routing level, so there is no wrapper class to pin here
+  // anymore.
 
   it("routes SVG files to compact ImageDiffView even though git marks them as text", () => {
     const changedFile = file({ path: "assets/icon.svg", isBinary: false });

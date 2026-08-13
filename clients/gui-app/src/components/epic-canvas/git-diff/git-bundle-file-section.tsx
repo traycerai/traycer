@@ -171,29 +171,26 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   if (routeToImageDiff) {
     const sides = gitImageDiffSides(props.file);
     const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
+    // `ImageDiffView` owns its own bounded height in `compact` mode (Codex
+    // re-review, #3773048701 / #3773298843) - it needs both sides' decoded
+    // dimensions to size itself snugly, which only it has access to (this
+    // bundle row never fetches the asset itself), so there is no wrapper
+    // height to apply here.
     return (
-      // `ImageDiffView`'s root is `h-full` (Codex re-review, #3773048701) -
-      // it relies on a definite ancestor height, which this bundle row (an
-      // auto-height `Virtuoso` item, see `DiffBundleFileSectionFrame`) never
-      // provides on its own, so a tall/narrow image could otherwise grow
-      // this virtualized row unbounded. Same viewport-capped fluid height as
-      // the compact scrollable content area in `git-diff-repo-switcher.tsx`.
-      <div className="h-[min(45vh,20rem)] min-h-0 w-full overflow-hidden">
-        <ImageDiffView
-          key={revisionKey}
-          revisionKey={revisionKey}
-          runningDir={props.node.diff.runningDir}
-          filePath={props.file.path}
-          previousPath={props.file.previousPath}
-          oldStage={sides.oldStage}
-          newStage={sides.newStage}
-          fileName={props.file.path}
-          conflicted={sides.conflicted}
-          compact
-          onOpenExternally={null}
-          openExternallyOpening={false}
-        />
-      </div>
+      <ImageDiffView
+        key={revisionKey}
+        revisionKey={revisionKey}
+        runningDir={props.node.diff.runningDir}
+        filePath={props.file.path}
+        previousPath={props.file.previousPath}
+        oldStage={sides.oldStage}
+        newStage={sides.newStage}
+        fileName={props.file.path}
+        conflicted={sides.conflicted}
+        compact
+        onOpenExternally={null}
+        openExternallyOpening={false}
+      />
     );
   }
   if (props.file.isBinary) {
