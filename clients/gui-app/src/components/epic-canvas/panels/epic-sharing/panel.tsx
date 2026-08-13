@@ -7,6 +7,7 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { TeamsAccess, PeopleWithAccess } from "./access-lists";
 import { InviteCard } from "./invite-card";
+import { MyAgentsSharingSection } from "./my-agents-section";
 import {
   useEpicSharingPanelController,
   type SharingPanelController,
@@ -18,10 +19,11 @@ const SHARING_REFRESH_TIMEOUT_MS = 10_000;
 
 export function SharingPanel(props: { readonly epicId: string }) {
   const controller = useEpicSharingPanelController(props.epicId);
-  return <SharingPanelContent controller={controller} />;
+  return <SharingPanelContent epicId={props.epicId} controller={controller} />;
 }
 
 function SharingPanelContent(props: {
+  readonly epicId: string;
   readonly controller: SharingPanelController;
 }) {
   const {
@@ -59,6 +61,10 @@ function SharingPanelContent(props: {
           <TeamsAccess {...teamsProps} />
         </PanelSection>
       ) : null}
+
+      {/* Deliberately last: the panel's primary job is granting people access;
+          the per-viewer agents default is a secondary, personal control. */}
+      <MyAgentsSharingSection epicId={props.epicId} />
 
       <ConfirmDestructiveDialog
         open={revokeDialogProps.open}

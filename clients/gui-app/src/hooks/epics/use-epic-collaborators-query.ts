@@ -6,7 +6,8 @@ import type {
   PermissionRole,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostClient } from "@/lib/host";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 
@@ -52,12 +53,20 @@ export interface UseEpicCollaboratorsQueryResult {
 }
 
 export interface UseEpicCollaboratorsQueryOptions {
+  /**
+   * The host to ask, explicitly. Inside an Epic tab this must be the Epic
+   * session's client (`useEpicSessionHostClient()`), never the app-active
+   * host — a retained tab whose owning host is still connected would
+   * otherwise answer from whichever host the app moved to. `null` disables
+   * the query until a client exists.
+   */
+  readonly client: HostRequester<HostRpcRegistry> | null;
   readonly poll: boolean | undefined;
   readonly staleTime: number | undefined;
 }
 
 /**
- * TanStack-Query-backed collaborators list keyed off the active host.
+ * TanStack-Query-backed collaborators list, keyed off the caller-chosen host.
  * Returned data keeps direct-user grants separate from team grants so callers
  * can mutate the actual grant source instead of flattening team access into
  * person rows.
@@ -70,12 +79,12 @@ export interface UseEpicCollaboratorsQueryOptions {
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,
-  options: UseEpicCollaboratorsQueryOptions | null,
+  options: UseEpicCollaboratorsQueryOptions,
 ): UseEpicCollaboratorsQueryResult {
   const staleTime =
-    options?.staleTime ?? EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS;
-  const poll = options?.poll ?? false;
-  const client = useHostClient();
+    options.staleTime ?? EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS;
+  const poll = options.poll ?? false;
+  const client = options.client;
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
     client,
