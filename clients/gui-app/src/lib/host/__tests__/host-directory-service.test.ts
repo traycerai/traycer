@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -3044,12 +3046,38 @@ describe("HostDirectoryService", () => {
   });
 
   describe("credential-scoped destructive commits (same-user bearer rotation)", () => {
+    // The counter these fence on is the REAL one, driven by a real rotation
+    // through `DefaultRequestContextProvider` — not a local variable the test
+    // increments where it thinks a rotation would be.
+    //
+    // That distinction is the reason this pair is here at all. The previous
+    // version of these tests hand-drove a number, so they passed while
+    // production was wired to an identity-transition counter that does not
+    // move on a rotation at all: they proved the fence works GIVEN a credential
+    // counter, never that the thing wired into it is one. What they still do
+    // not reach is the wiring from `AuthService` down to the credential a fetch
+    // actually uses — `auth-era-composition.test.ts` covers that end to end.
+    function signedInProvider(): DefaultRequestContextProvider {
+      const provider = new DefaultRequestContextProvider({
+        origin: "renderer",
+      });
+      const user = createAuthenticatedUserFixture({});
+      (user.user as { id: string }).id = "account-a";
+      provider.setSignedIn({
+        user,
+        bearerToken: "bearer-a1",
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+      return provider;
+    }
+
     it("drops the in-flight refresh on rotation (a fresh fetcher call, not a join) and fences the old bearer's late sign-out clear by the exact credential", async () => {
-      let generation = 0;
+      const provider = signedInProvider();
       const { fetcher, callCount, resolve } = deferredFetcher();
       const directory = makeDirectory({
         authContextId: () => "account-a",
-        credentialGeneration: () => generation,
+        credentialGeneration: () => provider.getCredentialGeneration(),
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -3068,12 +3096,16 @@ describe("HostDirectoryService", () => {
       const oldBearerPoll = directory.refresh();
       expect(callCount()).toBe(2);
 
-      // Rotation: same user, new credential. `HostRuntime.onBearerRotated`
-      // drops the in-flight memo before the generation the new bearer's
-      // refresh will carry - a joined promise from the OLD bearer must not
-      // satisfy a caller under the new one.
+      // Rotation: same user, new credential, through the real provider - the
+      // generation moves because a bearer was replaced, not because the test
+      // said so. `HostRuntime.onBearerRotated` drops the in-flight memo: a
+      // joined promise from the OLD bearer must not satisfy a caller under
+      // the new one.
       directory.invalidateInFlightRefresh();
-      generation = 1;
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
 
       // A refresh issued right after rotation must be a NEW fetcher call,
       // not a join onto the old bearer's dropped flight - proving the memo
@@ -3090,8 +3122,8 @@ describe("HostDirectoryService", () => {
       // token earned. The user id still matches ("account-a" throughout), so
       // a user-id-only fence would let this clear the directory the new
       // credential just legitimately filled. The credential fence must
-      // discard it instead: the generation this refresh was issued under (0)
-      // no longer matches the current one (1).
+      // discard it instead: the generation this refresh was issued under no
+      // longer matches the one the rotation left behind.
       resolve(1, { kind: "signed-out" });
       await oldBearerPoll;
       expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
@@ -3099,24 +3131,59 @@ describe("HostDirectoryService", () => {
       ]);
     });
 
-    it("still commits a constructive (hosts) outcome that resolves after a mid-flight rotation - only destructive commits are credential-fenced", async () => {
-      let generation = 0;
-      const { fetcher, resolve } = deferredFetcher();
+    it("does not let a caller in a NEW credential era join a request issued in the old one, even with the memo left in place", async () => {
+      const provider = signedInProvider();
+      const { fetcher, callCount, resolve } = deferredFetcher();
       const directory = makeDirectory({
         authContextId: () => "account-a",
-        credentialGeneration: () => generation,
+        credentialGeneration: () => provider.getCredentialGeneration(),
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
       });
 
-      // Issued under generation 0, and deliberately NOT dropped by
-      // `invalidateInFlightRefresh()` here - this is the case the asymmetry
+      const oldEraRefresh = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // Deliberately NOT calling `invalidateInFlightRefresh()` - that is the
+      // runtime's rotation hook, and this asserts the memo KEY on its own.
+      // Both guards cover this, and either alone is enough; the key is what
+      // holds if a future caller reaches the directory without going through
+      // the rotation listener.
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+
+      const newEraRefresh = directory.refresh();
+      expect(callCount()).toBe(2);
+
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      resolve(1, { kind: "hosts", entries: [accountAHostEntry] });
+      await Promise.all([oldEraRefresh, newEraRefresh]);
+    });
+
+    it("still commits a constructive (hosts) outcome that resolves after a mid-flight rotation - only destructive commits are credential-fenced", async () => {
+      const provider = signedInProvider();
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Issued under the pre-rotation generation, and deliberately NOT dropped
+      // by `invalidateInFlightRefresh()` here - this is the case the asymmetry
       // is about: a rotation happens while this refresh is in flight, but it
       // still describes the right account's hosts, so it must not be fenced
       // the way a `signed-out` clear is.
       const inFlight = directory.refresh();
-      generation = 1;
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
       resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
       await inFlight;
 
