@@ -59,6 +59,7 @@ export type AnalyticsCommand =
 
 export type AnalyticsSettingsSection =
   | "agents"
+  | "app-diagnostics"
   | "appearance"
   | "devices"
   | "diagnostics"
@@ -954,6 +955,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
 const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
   Object.keys({
     agents: true,
+    "app-diagnostics": true,
     appearance: true,
     devices: true,
     diagnostics: true,

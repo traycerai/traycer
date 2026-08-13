@@ -14,7 +14,9 @@
 import { useMemo } from "react";
 import {
   SETTINGS_SECTIONS,
+  SETTINGS_SECTION_GROUPS,
   type SettingsSection,
+  type SettingsSectionGroupId,
 } from "@/lib/settings-sections";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
@@ -101,13 +103,31 @@ function buildSectionItem(section: SettingsSection): CommandItem {
     description: null,
     // The section `id` rides along as a keyword so a renamed section stays
     // findable under the vocabulary users already learned (e.g. "agents" still
-    // reaches "Agent selection").
-    keywords: ["settings", section.label.toLowerCase(), section.id],
+    // reaches "Agent selection"). The group label joins it so the scope is
+    // TYPEABLE as well as visible — "host diag" has to reach the host page.
+    keywords: [
+      "settings",
+      section.label.toLowerCase(),
+      section.id,
+      groupLabel(section.group).toLowerCase(),
+    ],
     group: "navigation",
     scope: "actions",
     shortcut: null,
     actionId: null,
+    // The rail says which scope a section belongs to with a group heading; this
+    // list has no headings, so the badge carries it per row. Rendered on EVERY
+    // section, not just the pair that collides: badging only the ambiguous ones
+    // makes the absence of a badge mean something, and the next duplicate label
+    // would then ship looking unambiguous.
+    statusBadge: groupLabel(section.group),
     run: (ctx) => ctx.router.navigateSettingsSection(section.id),
     subpage: null,
   };
+}
+
+function groupLabel(group: SettingsSectionGroupId): string {
+  return (
+    SETTINGS_SECTION_GROUPS.find((entry) => entry.id === group)?.label ?? ""
+  );
 }
