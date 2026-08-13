@@ -83,9 +83,28 @@ export function hostTransportKey(
 export function dialableHostEndpoint(
   entry: HostDirectoryEntry | null,
 ): HostTransportEndpoint | null {
+  return dialableHostEndpointFor(
+    entry,
+    entry !== null && hasReadyRemoteSession(entry.hostId),
+  );
+}
+
+/**
+ * The parametric core of {@link dialableHostEndpoint}: the caller supplies
+ * the ready-session answer instead of this function reading the pull-only
+ * cache itself. For a React render path that must UPDATE when a session dies
+ * or appears, the ambient read above is a frozen answer (the cache emits no
+ * event and changes no directory value) - such callers subscribe
+ * (`useRemoteSessionPollReadiness` / `useRemoteSessionsPollReadiness`) and
+ * thread the current answer through here. Non-render callers (live re-dial
+ * paths that re-read on every attempt) keep using the ambient form.
+ */
+export function dialableHostEndpointFor(
+  entry: HostDirectoryEntry | null,
+  hasReadySession: boolean,
+): HostTransportEndpoint | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (isConfirmedTransportRefusal(entry, hasReadyRemoteSession(entry.hostId)))
-    return null;
+  if (isConfirmedTransportRefusal(entry, hasReadySession)) return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
 }
 
