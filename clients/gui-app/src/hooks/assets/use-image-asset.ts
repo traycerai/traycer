@@ -190,21 +190,39 @@ function requestKeyFor(request: ImageAssetRequest): string {
 /**
  * The pre-header shared-subscription coalescing map's key (sol re-review) -
  * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
- * for a workspace request, which has no revision concept). Deliberately
- * WIDER than `requestKeyFor` alone: two requests that are otherwise
- * identical but at different git revisions must never coalesce onto the
- * same in-flight stream, even though `requestKeyFor` treats them as the
- * SAME request (by design - `coalesceRevision` isn't part of what decides
- * whether a single mount's own effect needs to re-run).
+ * for a workspace request, which has no revision concept) + this hook's own
+ * `focusRefreshNonce`. Deliberately WIDER than `requestKeyFor` alone: two
+ * requests that are otherwise identical but at different git revisions, or
+ * different local freshness generations, must never coalesce onto the same
+ * in-flight stream, even though `requestKeyFor` treats them as the SAME
+ * request (by design - neither is part of what decides whether a single
+ * mount's own effect needs to re-run).
+ *
+ * The nonce specifically closes a worktree-file gap (Codex re-review): it is
+ * only ever an effect DEPENDENCY (triggers a worktree-backed request's own
+ * refetch on refocus, decision #11), never part of the shared key before
+ * this - so a second, still-focused pane's refocus-triggered "refresh" could
+ * silently JOIN a first pane's older in-flight transfer instead of forcing a
+ * fresh one, defeating the exact staleness signal the nonce exists to send
+ * (and, since the nonce only bumps on a focus EVENT, the second pane would
+ * have no further trigger to recover while it stayed focused). Folding it
+ * in here is deliberately NOT the same as folding a global generation
+ * counter: it is each hook's own LOCAL refresh count, so two panes mounting
+ * a file CONCURRENTLY still coalesce (both start at nonce 0 - the original
+ * P1 fix's target scenario is untouched) and only diverge once either one
+ * has genuinely asked for a refresh, which is exactly when they should stop
+ * sharing.
  */
 function sharedSubscriptionKeyFor(
   hostId: string,
   request: ImageAssetRequest,
+  focusRefreshNonce: number,
 ): string {
   return JSON.stringify([
     hostId,
     requestKeyFor(request),
     request.method === "git" ? request.coalesceRevision : null,
+    focusRefreshNonce,
   ]);
 }
 
@@ -681,7 +699,7 @@ export function useImageAsset(
     };
 
     const acquired = acquireSharedAssetSubscription(
-      sharedSubscriptionKeyFor(hostId, normalizedRequest),
+      sharedSubscriptionKeyFor(hostId, normalizedRequest, focusRefreshNonce),
       wsStreamClient,
       normalizedRequest,
       callbacks,

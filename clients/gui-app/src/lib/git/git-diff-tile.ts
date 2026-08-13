@@ -98,14 +98,55 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * state SHOULD reset for a genuinely different image, not just the bytes.
  * Mirrors `git-query-keys.ts`'s `fileDiff` key - the sibling TEXT-diff cache
  * key for the SAME file already includes all three.
+ *
+ * A null OID is not always "this side doesn't exist" (Codex re-review):
+ * ADR-0007's degraded-repo-mode fallback (`assessRepoMode`,
+ * `computeStatusPipeline` in `git-service.ts`) skips OID computation
+ * entirely under load, nulling `stagedOid`/`worktreeOid` for every changed
+ * file in that snapshot regardless of whether the side has real content -
+ * indistinguishable, from here, from a genuinely absent side. Falling back
+ * to a constant would mean a re-stage/edit that lands while degraded, at an
+ * unchanged `headSha`, produces the SAME key and never remounts - and the
+ * staged/old side has no other recovery path (unlike the unstaged side's
+ * focus-nonce backstop). Falling back to `[insertions, deletions,
+ * sizeBytes]` instead - already populated from real diff data even in
+ * degraded mode - closes that for any edit that changes line count or byte
+ * size (the overwhelming majority); a content swap that preserves all three
+ * exactly, during degraded mode, at an unchanged `headSha`, is an accepted
+ * residual gap, not chased further.
+ *
+ * JSON-encoded with an explicit `"oid"`/`"stats"` tag on each side, not
+ * delimiter-joined into the OID's own slot: an OID and a stats fallback
+ * must never be able to alias each other structurally, not just avoid
+ * colliding by string luck (mirrors `requestKeyFor`/`buildImageAssetCacheKey`'s
+ * own JSON-array discipline for the identical reason).
  */
+type GitRevisionSideKey =
+  readonly ["oid", string] | readonly ["stats", string, string, string];
+
+function gitRevisionSideKey(
+  oid: string | null,
+  file: GitChangedFile,
+): GitRevisionSideKey {
+  return oid !== null
+    ? ["oid", oid]
+    : [
+        "stats",
+        String(file.insertions),
+        String(file.deletions),
+        String(file.sizeBytes),
+      ];
+}
+
 export function gitImageDiffRevisionKey(
   file: GitChangedFile,
   headSha: string,
 ): string {
-  return [headSha, file.stagedOid ?? "none", file.worktreeOid ?? "none"].join(
-    ":",
-  );
+  return JSON.stringify([
+    headSha,
+    gitRevisionSideKey(file.stagedOid, file),
+    gitRevisionSideKey(file.worktreeOid, file),
+  ]);
 }
 
 export interface GitImageDiffRouting {
