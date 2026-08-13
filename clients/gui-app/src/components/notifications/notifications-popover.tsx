@@ -64,6 +64,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useAppLocalNotificationUnreadCount } from "@/stores/notifications/app-local-notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 interface NotificationsPopoverProps {
@@ -116,12 +117,15 @@ function isAttentionSectionVisible(input: {
 function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
   readonly loadedHostAttentionCount: number;
+  readonly appLocalUnreadCount: number;
   readonly hasActiveHost: boolean;
   readonly cloudConnectionState: CloudNotificationsConnectionState | null;
 }): boolean {
   if (input.cloudConnectionState !== null) {
     return (
-      input.unreadCount === 0 || input.cloudConnectionState !== "connected"
+      input.unreadCount === 0 ||
+      (input.appLocalUnreadCount === 0 &&
+        input.cloudConnectionState !== "connected")
     );
   }
   const actionableHostAttention = input.hasActiveHost
@@ -179,6 +183,7 @@ export function NotificationsPopover(
   const attentionIds = useAttentionNotificationIds();
   const recentIds = useRecentNotificationIds();
   const unreadCount = useMergedNotificationUnreadCount();
+  const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const hostState = useNotificationCenterHostState();
@@ -188,6 +193,9 @@ export function NotificationsPopover(
   );
   const cloudHasSnapshot = useCloudNotificationsStore(
     (state) => state.hasSnapshot,
+  );
+  const cloudTotalCount = useCloudNotificationsStore(
+    (state) => state.summary?.totalCount ?? 0,
   );
   const cloudPresentationState = cloudStateForFeedMode(
     feedMode,
@@ -436,6 +444,7 @@ export function NotificationsPopover(
           isMarkAllReadDisabled={isMarkAllReadDisabled({
             unreadCount,
             loadedHostAttentionCount,
+            appLocalUnreadCount,
             hasActiveHost: activeHostId !== null,
             cloudConnectionState: cloudPresentationState,
           })}
@@ -443,7 +452,7 @@ export function NotificationsPopover(
           isClearAllDisabled={
             !cloudHasSnapshot ||
             cloudConnectionState !== "connected" ||
-            fullOccurrenceOrder.length === 0
+            cloudTotalCount === 0
           }
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}

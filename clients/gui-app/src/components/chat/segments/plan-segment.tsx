@@ -38,6 +38,7 @@ import {
   payloadTruncationNotice,
   usePublishedChatSource,
   usePublishedPlanContent,
+  type PayloadReadFailure,
   type PublishedChatSource,
 } from "@/lib/chats/published-chat-source";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -253,6 +254,9 @@ function LivePlanModal(props: PlanModalProps) {
       unavailable={resolved.unavailable}
       isFetching={planQuery.isFetching}
       truncationNotice={null}
+      // Unchanged: the local path folds its own failure into `unavailable`, and
+      // this ticket did not touch it.
+      failure={null}
     />
   );
 }
@@ -277,10 +281,16 @@ function PublishedPlanModal(
       // on purpose. Without the first clause that disabled query's `null`
       // markdown read as "unavailable" and warned about content that was
       // already on screen - the live path gates the same way.
+      //
+      // The last clause is the same shape of mistake one layer up: a read that
+      // FAILED also leaves `markdown === null`, and calling that "unavailable"
+      // told the reader their plan was gone when the network was the only thing
+      // missing. That case draws the retry below instead.
       unavailable={
         segment.fullContentRef !== null &&
         !publishedPlan.isLoading &&
-        publishedPlan.markdown === null
+        publishedPlan.markdown === null &&
+        publishedPlan.failure === null
       }
       isFetching={publishedPlan.isLoading}
       truncationNotice={
@@ -288,6 +298,7 @@ function PublishedPlanModal(
           ? null
           : payloadTruncationNotice(publishedPlan.truncation)
       }
+      failure={publishedPlan.failure}
     />
   );
 }
@@ -305,6 +316,13 @@ function PlanModalView(
      * and a plan cut mid-step must not read as the whole plan.
      */
     readonly truncationNotice: string | null;
+    /**
+     * Set when the full markdown's read FAILED on the wire. Null on the live
+     * path. Drawn in place of the unavailable banner: the saved preview still
+     * shows, but the reader is told the full plan is one request away rather
+     * than gone.
+     */
+    readonly failure: PayloadReadFailure | null;
   },
 ) {
   const { segment, open, modalMarkdown, unavailable } = props;
@@ -360,6 +378,27 @@ function PlanModalView(
               Full plan content is unavailable. Showing the saved preview.
             </div>
           ) : null}
+          {props.failure === null ? null : (
+            <div
+              className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground"
+              data-testid="plan-content-error"
+            >
+              <span>
+                Couldn&apos;t load the full plan. Showing the saved preview.
+              </span>
+              <button
+                type="button"
+                onClick={props.failure.retry}
+                data-testid="plan-content-retry"
+                className={cn(
+                  "underline underline-offset-2",
+                  "hover:text-foreground focus-visible:outline-none focus-visible:text-foreground",
+                )}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <TraycerMarkdown
             className={null}
             proseSize="normal"

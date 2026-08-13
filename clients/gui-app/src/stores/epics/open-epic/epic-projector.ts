@@ -28,6 +28,7 @@ import {
   arrayShallowEq,
   artifactProjectionsEq,
   chatProjectionsEq,
+  chatSlicesEq,
   deletedArtifactProjectionsEq,
   getArtifactEntry,
   getArtifactsMap,
@@ -52,6 +53,7 @@ import {
   readMaybeString,
   terminalAgentProjectionsEq,
   treeNodesEq,
+  unionChatsSlice,
 } from "./projection-helpers";
 import type {
   AgentRolesSlice,
@@ -171,6 +173,14 @@ export interface EpicProjector {
   attach: (doc: Y.Doc, store: StoreApi<OpenEpicState>) => void;
   detach: () => void;
   /**
+   * Whether a doc is currently attached. Callers that want to force a
+   * re-projection (the chat-record channel, when new rows land) must ask
+   * first: {@link EpicProjector.projectFull} answers with the EMPTY slices
+   * when nothing is attached, and writing those into a live store would
+   * erase the projection rather than refresh it.
+   */
+  isAttached: () => boolean;
+  /**
    * Suspend observeDeep-driven setState calls. Used by `onSnapshot` to
    * apply the snapshot bytes and then run a single atomic re-project as
    * part of its own setState - without this guard the intermediate
@@ -191,6 +201,15 @@ export interface EpicProjector {
  */
 export function createEpicProjector(
   getCurrentUserId: () => string | null,
+  /**
+   * The host's store-backed chat records (`epic.listChatRecords`), read at
+   * projection time for the same reason `getCurrentUserId` is: they arrive on
+   * their own schedule (a unary read, polled), and every projection that runs
+   * before or after one lands must fold in whatever is current rather than a
+   * value captured when the session was constructed. Returns the shared empty
+   * slice in doc-only mode, which makes the union a reference pass-through.
+   */
+  getChatRecords: () => ChatsSlice,
 ): EpicProjector {
   let attached: AttachedConfig | null = null;
   let suspended = false;
@@ -213,7 +232,13 @@ export function createEpicProjector(
       const patches = collectPatches(events, doc);
       if (patchesEmpty(patches)) return;
       store.setState(
-        applyPatches(store.getState(), doc, patches, getCurrentUserId()),
+        applyPatches({
+          state: store.getState(),
+          doc,
+          patches,
+          currentUserId: getCurrentUserId(),
+          chatRecords: getChatRecords(),
+        }),
       );
     };
     attached = { doc, store, handler };
@@ -223,7 +248,9 @@ export function createEpicProjector(
     // store deterministically. Skipped during suspended attach so snapshot
     // ingest can apply bytes and then call `projectFull` once.
     if (!suspended) {
-      store.setState(projectFullState(doc, getCurrentUserId()));
+      store.setState(
+        projectFullState(doc, getCurrentUserId(), getChatRecords()),
+      );
     }
   }
 
@@ -241,10 +268,17 @@ export function createEpicProjector(
 
   function projectFull(): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
-    return projectFullState(attached.doc, getCurrentUserId());
+    return projectFullState(attached.doc, getCurrentUserId(), getChatRecords());
   }
 
-  return { attach, detach, suspend, resume, projectFull };
+  return {
+    attach,
+    detach,
+    isAttached: () => attached !== null,
+    suspend,
+    resume,
+    projectFull,
+  };
 }
 
 // ─── Path classification ──────────────────────────────────────────────────
@@ -564,6 +598,7 @@ type MutableProjectedPatch = {
   epic?: EpicHeader;
   artifacts?: ArtifactsSlice;
   deletedArtifacts?: DeletedArtifactsSlice;
+  docChats?: ChatsSlice;
   chats?: ChatsSlice;
   tuiAgents?: TerminalAgentsSlice;
   agentRoles?: AgentRolesSlice;
@@ -807,10 +842,22 @@ interface ApplyChatsArgs {
   readonly patches: ProjectorPatches;
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
+  readonly chatRecords: ChatsSlice;
 }
 
+/**
+ * Reconciles the DOC chat slice from this transaction's patches, then unions the
+ * host's store-backed records over it.
+ *
+ * The two halves are deliberately separate state. The doc reconcile has to run
+ * against the doc's own previous projection: its removal path deletes an id
+ * outright, and after the single-write pivot a doc removal is the upgrade
+ * sweep's ordinary behaviour for a chat that is alive and published. Applied to
+ * the union, that delete would take the live record with it - the record layer
+ * would go on losing exactly the chats this channel exists to keep.
+ */
 function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
-  const { state, doc, patches, next, currentUserId } = args;
+  const { state, doc, patches, next, currentUserId, chatRecords } = args;
   if (patches.chatsContainerReseeded) {
     reseedFromContainer(doc, getChatsMap, patches.chatsChanged);
   }
@@ -819,9 +866,13 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
     patches.chatsRemoved.size === 0 &&
     patches.chatsCreated.size === 0
   ) {
+    // Nothing doc-side moved, and the record slice can only change through a
+    // full re-projection (see `createEpicProjector`'s `getChatRecords`), so the
+    // union already in the store is still the union. Recomputing it here would
+    // put an O(chats) merge on every artifact keystroke's transaction.
     return state.chats;
   }
-  const byId: Record<string, ChatProjection> = { ...state.chats.byId };
+  const byId: Record<string, ChatProjection> = { ...state.docChats.byId };
   let mutated = false;
   for (const id of patches.chatsRemoved) {
     if (Object.hasOwn(byId, id)) {
@@ -855,12 +906,52 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
       mutated = true;
     }
   }
-  if (!mutated) return state.chats;
+  if (!mutated) {
+    return unionInto({
+      state,
+      next,
+      docChats: state.docChats,
+      chatRecords,
+      currentUserId,
+    });
+  }
   const allIds = computeIdsFromMap(byId);
-  const allIdsRef = pickStableIds(allIds, state.chats.allIds);
-  const nextChats: ChatsSlice = { byId, allIds: allIdsRef };
-  next.chats = nextChats;
-  return nextChats;
+  const allIdsRef = pickStableIds(allIds, state.docChats.allIds);
+  const nextDocChats: ChatsSlice = { byId, allIds: allIdsRef };
+  next.docChats = nextDocChats;
+  return unionInto({
+    state,
+    next,
+    docChats: nextDocChats,
+    chatRecords,
+    currentUserId,
+  });
+}
+
+/**
+ * Publishes the union of a doc slice and the record slice, writing `chats` only
+ * when the result differs from what the store already holds. Returns the slice
+ * the tree and role-claim projections must be built from.
+ *
+ * The gate is STRUCTURAL ({@link chatSlicesEq}, reference fast path included),
+ * not per-entry reference equality: `unionChatsSlice` builds a fresh MERGED
+ * object for every chat present in both sources whose frozen doc entry differs
+ * from its row - the normal post-pivot state - so a reference gate could never
+ * say "unchanged" for those entries, and every doc-side chat patch would hand
+ * all chat consumers a new `chats` identity carrying the same content.
+ */
+function unionInto(args: {
+  readonly state: OpenEpicState;
+  readonly next: MutableProjectedPatch;
+  readonly docChats: ChatsSlice;
+  readonly chatRecords: ChatsSlice;
+  readonly currentUserId: string | null;
+}): ChatsSlice {
+  const { state, next, docChats, chatRecords, currentUserId } = args;
+  const union = unionChatsSlice(docChats, chatRecords, currentUserId);
+  if (chatSlicesEq(union, state.chats)) return state.chats;
+  next.chats = union;
+  return union;
 }
 
 interface ApplyTerminalAgentsArgs {
@@ -1018,12 +1109,17 @@ function spliceNodeById(
   return { value: out, identical };
 }
 
-function applyPatches(
-  state: OpenEpicState,
-  doc: Y.Doc,
-  patches: ProjectorPatches,
-  currentUserId: string | null,
-): Partial<OpenEpicState> {
+/** Everything one transaction's reconcile reads. */
+interface ApplyPatchesArgs {
+  readonly state: OpenEpicState;
+  readonly doc: Y.Doc;
+  readonly patches: ProjectorPatches;
+  readonly currentUserId: string | null;
+  readonly chatRecords: ChatsSlice;
+}
+
+function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
+  const { state, doc, patches, currentUserId, chatRecords } = args;
   const next: MutableProjectedPatch = {};
   applyEpicHeader(state, doc, patches, next);
   const nextArtifacts = applyArtifactsSlice(state, doc, patches, next);
@@ -1034,6 +1130,7 @@ function applyPatches(
     patches,
     next,
     currentUserId,
+    chatRecords,
   });
   if (nextChats.allIds !== state.chats.allIds) {
     patches.structuralTreeDirty = true;

@@ -1099,6 +1099,84 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     ).toHaveLength(0);
   });
 
+  it("marks renderer-local failures read alongside the cloud feed", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-crash",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-instance",
+      payload: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
+      message: "Build terminal exited unexpectedly.",
+      detail: "The terminal process ended with an error.",
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId["terminal-crash"].readAt,
+    ).toBeTypeOf("number");
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+  });
+
+  it("marks renderer-local failures read without mutating a reconnecting cloud feed", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-crash",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-instance",
+      payload: null,
+      message: "Build terminal exited unexpectedly.",
+      detail: "The terminal process ended with an error.",
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId["terminal-crash"].readAt,
+    ).toBeTypeOf("number");
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(1);
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to renderable cloud entries when an older relay lacks mark-all", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

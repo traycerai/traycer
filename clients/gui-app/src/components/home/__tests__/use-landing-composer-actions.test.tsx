@@ -88,6 +88,18 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
+
+// The recorded RPC payload is `unknown` at this boundary, so the folded chat's
+// id is narrowed structurally rather than asserted through a cast.
+function foldedChatIdFromCreateEpicPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("chat" in payload)) return null;
+  const chat = payload.chat;
+  if (typeof chat !== "object" || chat === null) return null;
+  if (!("chatId" in chat)) return null;
+  const chatId = chat.chatId;
+  return typeof chatId === "string" ? chatId : null;
+}
 const WORKSPACE_PATH = "/tmp/traycer";
 const DRAFT_WORKSPACE_PATH = "/tmp/draft-workspace";
 const GLOBAL_WORKSPACE_PATH = "/tmp/global-workspace";
@@ -228,6 +240,48 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(toast.error).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("folds the SAME chat id into epic.create that the launch handoff carries", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    // ONE MINT. The launch tab is opened around `handoff.chatId` (see
+    // `initial-chat-handoff.test.tsx`, which asserts the eager-opened tile
+    // carries exactly that id) and the chat itself is created by the folded
+    // seed on this request - so if these two ids could ever diverge, the tab
+    // would sit on a chat id that exists on no host and in no cloud row while
+    // the real chat lived under the other one.
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    const foldedChatId = foldedChatIdFromCreateEpicPayload(createEpicCall?.[1]);
+    const handoff = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    ).at(0);
+    expect(foldedChatId).not.toBeNull();
+    expect(handoff?.chatId).toBe(foldedChatId);
 
     queryClient.clear();
   });

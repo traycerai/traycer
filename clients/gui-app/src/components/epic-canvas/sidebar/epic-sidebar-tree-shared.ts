@@ -4,6 +4,8 @@
  */
 
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
@@ -91,6 +93,31 @@ export function computeArtifactNodeAddChildPending(args: {
 
 export function anyMutationPending(values: ReadonlyArray<boolean>): boolean {
   return values.some(Boolean);
+}
+
+/**
+ * Per-type icon color customization for a sidebar row's leading glyph, read
+ * here rather than threaded from the tree root so the leading icon stays a
+ * leaf concern. `ChatProgressIcon` already subscribes to exactly these two
+ * settings internally for chat rows; every OTHER sidebar row glyph (terminal
+ * agents, cloud rows, static node icons) mirrors it through this hook so one
+ * row kind cannot drift muted while another picks up "color by type" in the
+ * same column - a chat glyph's tint must depend on the user's icon-color
+ * setting, never on which list the row arrived from.
+ */
+export function useNodeIconDisplay(artifactType: EpicNodeKind): {
+  readonly className: string;
+  readonly style: { color: string | undefined } | undefined;
+} {
+  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
+  const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
+  return {
+    className: cn(
+      "size-3.5 shrink-0",
+      colorMode === "none" && "text-muted-foreground/70",
+    ),
+    style: colorMode === "byType" ? { color } : undefined,
+  };
 }
 
 export function nodePadRightClass(canEdit: boolean, showAdd: boolean): string {

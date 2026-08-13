@@ -219,6 +219,7 @@ function fakeHostLifecycle(): HostControllerHostLifecycle & {
       pid: process.pid,
       systemHostName: "test-host",
       displayName: "Test Host",
+      availability: "available",
     })),
   };
 }

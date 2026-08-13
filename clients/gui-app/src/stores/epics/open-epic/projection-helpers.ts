@@ -24,6 +24,7 @@
  *   }
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -605,6 +606,160 @@ function projectChatsSlice(
   };
 }
 
+/**
+ * One host-served registry row, in the renderer's chat-record shape.
+ *
+ * ## `settings` is `null`, and that is the row's honest answer
+ *
+ * The registry carries a settings SUMMARY (the harness id) and not the tuple -
+ * see `chat-registry-row.ts` for why a growing settings object has no place in
+ * an index that holds every chat at once. Synthesizing a `ChatRunSettings` from
+ * a harness id would mean inventing a model, a permission mode and an agent
+ * mode this host never said anything about, so a store-only chat reads as
+ * "settings not known here" until its own `chat.subscribe` stream supplies
+ * them. A chat that ALSO has a frozen doc entry keeps that entry's settings -
+ * see {@link unionChatsSlice}.
+ *
+ * ## `archivedAt` is derived from `archived`, not copied
+ *
+ * The renderer has exactly one archived-ness carrier - `archivedAt !== null` is
+ * the predicate the sidebar, the tree filter, the quote targets and the comm
+ * graph all read - while the two sync planes disagree about the TYPE of that
+ * fact: the host registry stores a TIMESTAMP, the cloud row stores a BOOLEAN,
+ * and a FOREIGN row is a replica of the cloud row. So copying `archivedAt`
+ * straight through would read every foreign archived chat as active, which is
+ * the one way this projection can silently lie about state rather than merely
+ * lack detail. `archived` is the rendering-authoritative field per the
+ * contract; the timestamp is display detail, and `updatedAt` stands in when the
+ * plane that answered never carried one.
+ */
+export function chatProjectionFromRecord(
+  record: ChatRecordSummary,
+): ChatProjection {
+  return {
+    id: record.chatId,
+    title: record.title,
+    parentId: record.parentChatId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    userId: record.ownerUserId,
+    // Never `null` here, unlike a legacy doc entry: the registry row always
+    // names the host that minted the chat.
+    hostId: record.originHostId,
+    isTitleEditedByUser: record.isTitleEditedByUser,
+    settings: null,
+    archivedAt: record.archived
+      ? (record.archivedAt ?? record.updatedAt)
+      : null,
+  };
+}
+
+/**
+ * The host-served rows as a slice.
+ *
+ * A pure mapping, with no ownership filter: the display boundary for "somebody
+ * else's agent" is applied in {@link unionChatsSlice}, at projection time,
+ * because that is when the signed-in user is known. Filtering here would freeze
+ * the answer at the moment the rows ARRIVED, and a user switch afterwards would
+ * re-project the previous user's chats out of a slice that had already been
+ * declared safe.
+ */
+export function chatRecordsSlice(
+  records: readonly ChatRecordSummary[],
+): ChatsSlice {
+  const byId: Record<string, ChatProjection> = {};
+  const allIds: string[] = [];
+  for (const record of records) {
+    const projected = chatProjectionFromRecord(record);
+    byId[projected.id] = projected;
+    allIds.push(projected.id);
+  }
+  return { byId, allIds: allIds.length === 0 ? EMPTY_ARRAY : allIds };
+}
+
+/**
+ * Whether two chat tables say the same thing, entry for entry.
+ *
+ * The record channel's change gate: a poll that re-serves an unchanged list
+ * must not re-project the epic, and reference equality cannot answer that -
+ * every response is freshly parsed objects.
+ */
+export function chatSlicesEq(a: ChatsSlice, b: ChatsSlice): boolean {
+  if (a === b) return true;
+  if (!arrayShallowEq(a.allIds, b.allIds)) return false;
+  return a.allIds.every((id) => chatProjectionsEq(a.byId[id], b.byId[id]));
+}
+
+/**
+ * The renderer's chat record table: the doc projection UNIONED with the host's
+ * store-backed rows.
+ *
+ * ## Why a union, and who wins
+ *
+ * The two sources describe the same chats at different ages. Since the
+ * single-write pivot NOTHING maintains a doc chat entry: a chat created after
+ * the upgrade never gets one, and an existing entry freezes at whatever an
+ * earlier build last projected, until the upgrade sweep deletes it outright once
+ * publication is proven. The registry row, by contrast, is written by the same
+ * commit that decides the fact. So for every field both carry, the ROW wins -
+ * not as a tie-break preference but because the doc's copy is a stale mirror by
+ * construction.
+ *
+ * The single exception is `settings`, and it is not a conflict at all: the row
+ * does not carry the tuple (only the harness summary), so a frozen doc entry is
+ * the only place a client-side settings value can come from. Taking the row's
+ * `null` there would DROP a value rather than replace it.
+ *
+ * ## Identity
+ *
+ * With no records (doc-only mode - an older host that lacks
+ * `epic.listChatRecords`, or a response that has not arrived yet) the doc slice
+ * is returned by REFERENCE. That is what makes the union free for every host
+ * without the method: the record table, `allIds`, and every downstream slice
+ * keep the exact identities the projector produced.
+ */
+export function unionChatsSlice(
+  docChats: ChatsSlice,
+  records: ChatsSlice,
+  currentUserId: string | null,
+): ChatsSlice {
+  if (records.allIds.length === 0) return docChats;
+  const byId: Record<string, ChatProjection> = { ...docChats.byId };
+  const allIds: string[] = [...docChats.allIds];
+  for (const id of records.allIds) {
+    const record = records.byId[id];
+    // The same display filter `projectChatsSlice` applies, applied to the same
+    // effect: a host that answered for a DIFFERENT signed-in user (rows in hand
+    // when the account switched) must not reach a slice this user reads.
+    // Redundant against a correct host - the resolver is viewer-scoped - and a
+    // boundary that only holds while the other side behaves is not one.
+    //
+    // It also has a SECOND job now that the record layer serves FOREIGN rows.
+    // A foreign row on another of the viewer's OWN hosts passes here and lands
+    // in the table, which is what makes cross-host chats renderable from one
+    // read path. A COLLABORATOR's row (task-visibility, a different owner) does
+    // not, and must not until this slice is re-keyed: `byId` is keyed on
+    // `chatId` ALONE, while a chat is only identified server-side by the triple
+    // `(taskId, ownerUserId, chatId)` - two users can legitimately hold the
+    // same host-minted `chatId` in one task. Admitting other owners here would
+    // collapse two people's chats into one entry. That re-keying is the real
+    // precondition for retiring the sidebar's `epic.listCloudChats` arm, which
+    // is where collaborators' chats are served from today.
+    if (!isChatVisibleToUser(record.userId, currentUserId)) continue;
+    if (!Object.hasOwn(byId, id)) {
+      byId[id] = record;
+      allIds.push(id);
+      continue;
+    }
+    const doc = byId[id];
+    const merged: ChatProjection = { ...record, settings: doc.settings };
+    // Preserve the previous reference when nothing actually differs, so a chat
+    // present in BOTH sources does not churn its `byId` entry on every poll.
+    byId[id] = chatProjectionsEq(doc, merged) ? doc : merged;
+  }
+  return { byId, allIds };
+}
+
 function projectTerminalAgentsSlice(
   doc: Y.Doc,
   currentUserId: string | null,
@@ -839,10 +994,17 @@ export function projectTreeSlice(
 export function projectFullState(
   doc: Y.Doc,
   currentUserId: string | null,
+  /**
+   * The host's store-backed chat records (`epic.listChatRecords`). Empty in
+   * doc-only mode - an older host, or before the first response - and the union
+   * then returns the doc slice itself.
+   */
+  chatRecords: ChatsSlice,
 ): EpicProjectedSlices {
   const artifacts = projectArtifactsSlice(doc);
   const deletedArtifacts = projectDeletedArtifactsSlice(doc);
-  const chats = projectChatsSlice(doc, currentUserId);
+  const docChats = projectChatsSlice(doc, currentUserId);
+  const chats = unionChatsSlice(docChats, chatRecords, currentUserId);
   const tuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
   const agentRoles = projectAgentRolesSlice(
     doc,
@@ -859,6 +1021,7 @@ export function projectFullState(
     epic: projectEpicHeader(doc),
     artifacts,
     deletedArtifacts,
+    docChats,
     chats,
     tuiAgents,
     agentRoles,

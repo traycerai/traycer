@@ -282,6 +282,7 @@ async function renderOverviewSnapshot(options: {
     localHost: options.isLocalMachine
       ? {
           hostId: options.hostId,
+          availability: "available" as const,
           websocketUrl: "ws://127.0.0.1:8765",
           version: "1.5.0",
           pid: 4821,

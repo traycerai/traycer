@@ -683,17 +683,19 @@ export function BackgroundItemsPanel(props: {
   const waitingWakeCount = items.filter(
     (item) => item.kind === "wakeup",
   ).length;
+  const hostId = useTabHostId();
   // Read from the same store the rows below read, so the header can never
-  // claim a count the list does not show.
-  const managedCommands = useRunningManagedCommandsForChat(
-    props.epicId,
-    props.chatId,
-  );
+  // claim a count the list does not show. Scoped to the TAB's bound host,
+  // which is the host this panel's chat session was opened under.
+  const managedCommands = useRunningManagedCommandsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId,
+  });
   const headerSummary = backgroundHeaderSummary({
     runningCount: runningGroupCount + managedCommands.length,
     waitingWakeCount,
   });
-  const hostId = useTabHostId();
   const openManagedCommand = useManagedCommandDoor();
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
   // Cross-instance: the same chat can be open in two tiles, and each panel

@@ -29,6 +29,13 @@ const flushQueryNotifications = async (): Promise<void> => {
   });
 };
 
+// The indicator hook resolves its own client from a host id (so the surfaces
+// that mount it need no host plumbing of their own). This suite builds the
+// `HostClient` itself, so the resolver is pointed straight at it.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => hostClient,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -141,6 +148,7 @@ describe("useHostNotificationIndicators recovery", () => {
     const { result } = renderHook(
       () =>
         useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
           epicIds: ["epic-a"],
           chatIds: [],
           enabled: true,

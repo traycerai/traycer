@@ -15,6 +15,8 @@ const WARM_CAP = 8;
 const SCOPE = "test-scope:user:host:transport";
 const SCOPE_A = "test-scope:user:host:transport-a";
 const SCOPE_B = "test-scope:user:host:transport-b";
+const HOST = "host-1";
+const HOST_B = "host-2";
 
 function createHandle(epicId: string, chatId: string) {
   let closeCount = 0;
@@ -56,23 +58,21 @@ describe("ChatSessionRegistry", () => {
     const owned = createHandle("epic-1", "chat-1");
 
     const acquired = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => owned.handle,
     );
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
 
     // Just below the TTL: still warm (websocket open), so a switch-back reuses
     // the loaded snapshot instead of re-subscribing.
     vi.advanceTimersByTime(TTL_MS - 1);
     expect(owned.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-1")).toBe(acquired);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
 
     // Past the TTL: dropped.
     vi.advanceTimersByTime(1);
     expect(owned.closeCount()).toBe(1);
-    expect(registry.peek("epic-1", "chat-1")).toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
   });
 
   it("re-acquiring before the TTL revives the session and cancels eviction", () => {
@@ -83,18 +83,14 @@ describe("ChatSessionRegistry", () => {
     const owned = createHandle("epic-1", "chat-1");
 
     const acquired = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => owned.handle,
     );
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
 
     vi.advanceTimersByTime(TTL_MS / 2);
     const revived = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => createHandle("epic-1", "chat-1").handle,
     );
     expect(revived).toBe(acquired);
@@ -102,7 +98,7 @@ describe("ChatSessionRegistry", () => {
     // The original eviction timer must not fire after the revive.
     vi.advanceTimersByTime(TTL_MS);
     expect(owned.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-1")).toBe(acquired);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
   });
 
   it("never expires a leased session, however long it stays open", () => {
@@ -112,11 +108,104 @@ describe("ChatSessionRegistry", () => {
     });
     const owned = createHandle("epic-1", "chat-1");
 
-    registry.acquire("epic-1", "chat-1", SCOPE, () => owned.handle);
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
 
     vi.advanceTimersByTime(TTL_MS * 10);
     expect(owned.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-1")).not.toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST)).not.toBeNull();
+  });
+
+  // The headline of ticket 43. Two tiles, ONE (epic, chat), TWO hosts - which
+  // is reachable in production (post-fork twins keep the source's chat id) and
+  // trivially reachable in dev (`--adopt-store` copies one identity store onto
+  // a second host). The pre-fix registry keyed entries on `epic:chat` only, so
+  // the second `acquire` found the first host's entry, read a scope key that
+  // legitimately differed (the scope carries the host), and DISPOSED a session
+  // whose tile was still mounted and still holding the handle.
+  it("does not dispose a live session when the same chat is opened on another host", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const onHostA = createHandle("epic-1", "chat-1");
+    const onHostB = createHandle("epic-1", "chat-1");
+
+    const handleA = registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: HOST,
+        scopeKey: `${SCOPE}:${HOST}`,
+      },
+      () => onHostA.handle,
+    );
+    const handleB = registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: HOST_B,
+        scopeKey: `${SCOPE}:${HOST_B}`,
+      },
+      () => onHostB.handle,
+    );
+
+    // Two distinct sessions, both live: the second open must not close the
+    // first tile's websocket.
+    expect(handleA).toBe(onHostA.handle);
+    expect(handleB).toBe(onHostB.handle);
+    expect(handleB).not.toBe(handleA);
+    expect(onHostA.closeCount()).toBe(0);
+    expect(onHostB.closeCount()).toBe(0);
+    expect(registry.size()).toBe(2);
+
+    // And each host's peek answers with ITS OWN session, never the other's.
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(handleA);
+    expect(registry.peek("epic-1", "chat-1", HOST_B)).toBe(handleB);
+
+    // Releasing one leaves the other leased and untouched: host A's tile
+    // closes, host B's stays open past the idle TTL that would have expired an
+    // unleased session.
+    registry.releaseHandle("epic-1", "chat-1", HOST, handleA);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(onHostA.closeCount()).toBe(1);
+    expect(onHostB.closeCount()).toBe(0);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST_B)).toBe(handleB);
+  });
+
+  // The other half of the same rule: within ONE host the old semantics are
+  // unchanged - a same-scope re-acquire still dedups onto the live session,
+  // and a genuine scope change (user / transport / owner-identity) still
+  // rebuilds it in place.
+  it("still dedups and still rebuilds on scope change within one host", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const original = createHandle("epic-1", "chat-1");
+    const rebuilt = createHandle("epic-1", "chat-1");
+
+    const first = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
+      () => original.handle,
+    );
+    const deduped = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
+      () => createHandle("epic-1", "chat-1").handle,
+    );
+    expect(deduped).toBe(first);
+    expect(original.closeCount()).toBe(0);
+
+    const replacement = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_B },
+      () => rebuilt.handle,
+    );
+    expect(replacement).toBe(rebuilt.handle);
+    expect(original.closeCount()).toBe(1);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(replacement);
   });
 
   it("reuses a same-scope session without recreating the stream client", () => {
@@ -130,11 +219,12 @@ describe("ChatSessionRegistry", () => {
       () => createHandle("epic-1", "chat-1").handle,
     );
 
-    const first = registry.acquire("epic-1", "chat-1", SCOPE_A, createFirst);
+    const first = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
+      createFirst,
+    );
     const second = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE_A,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
       createReplacement,
     );
 
@@ -153,21 +243,15 @@ describe("ChatSessionRegistry", () => {
     const newTransport = createHandle("epic-1", "chat-1");
 
     const firstLease = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE_A,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
       () => oldTransport.handle,
     );
     const secondLease = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE_A,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_A },
       () => createHandle("epic-1", "chat-1").handle,
     );
     const replacement = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE_B,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE_B },
       () => newTransport.handle,
     );
 
@@ -176,14 +260,14 @@ describe("ChatSessionRegistry", () => {
     expect(replacement).not.toBe(firstLease);
     expect(oldTransport.closeCount()).toBe(1);
     expect(newTransport.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-1")).toBe(replacement);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(replacement);
 
-    registry.releaseHandle("epic-1", "chat-1", firstLease);
-    registry.releaseHandle("epic-1", "chat-1", secondLease);
-    expect(registry.peek("epic-1", "chat-1")).toBe(replacement);
+    registry.releaseHandle("epic-1", "chat-1", HOST, firstLease);
+    registry.releaseHandle("epic-1", "chat-1", HOST, secondLease);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(replacement);
     expect(newTransport.closeCount()).toBe(0);
 
-    registry.releaseHandle("epic-1", "chat-1", replacement);
+    registry.releaseHandle("epic-1", "chat-1", HOST, replacement);
     vi.advanceTimersByTime(TTL_MS);
     expect(newTransport.closeCount()).toBe(1);
   });
@@ -197,9 +281,7 @@ describe("ChatSessionRegistry", () => {
     const hostIds = new WeakMap<object, string>();
 
     const acquired = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => owned.handle,
     );
     hostIds.set(acquired, "host-original");
@@ -208,18 +290,16 @@ describe("ChatSessionRegistry", () => {
     // The tile lease can disappear during a transient offline/null directory
     // state. The active turn must keep the retained session handle alive past
     // the normal idle TTL instead of closing the GUI stream handle.
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS);
 
     expect(owned.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-1")).toBe(acquired);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
 
     // Same host becomes available again: re-opening revives the exact handle,
     // preserving any external host-id association for the bound chat tab.
     const revived = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => createHandle("epic-1", "chat-1").handle,
     );
     expect(revived).toBe(acquired);
@@ -231,11 +311,11 @@ describe("ChatSessionRegistry", () => {
       runStatus: "idle",
       activeTurn: null,
     });
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS);
 
     expect(owned.closeCount()).toBe(1);
-    expect(registry.peek("epic-1", "chat-1")).toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
   });
 
   it("evicts a lease-free active session after the active defer cap", () => {
@@ -246,18 +326,16 @@ describe("ChatSessionRegistry", () => {
     const owned = createHandle("epic-1", "chat-1");
 
     const acquired = registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => owned.handle,
     );
     markRunning(acquired);
 
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(MAX_ACTIVE_CHAT_IDLE_DEFER_MS + TTL_MS);
 
     expect(owned.closeCount()).toBe(1);
-    expect(registry.peek("epic-1", "chat-1")).toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
   });
 
   it("restarts the idle window each time the session is re-opened", () => {
@@ -267,13 +345,19 @@ describe("ChatSessionRegistry", () => {
     });
     const owned = createHandle("epic-1", "chat-1");
 
-    registry.acquire("epic-1", "chat-1", SCOPE, () => owned.handle);
-    registry.release("epic-1", "chat-1");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS - 1);
 
     // Re-open + leave again just before expiry: the window resets.
-    registry.acquire("epic-1", "chat-1", SCOPE, () => owned.handle);
-    registry.release("epic-1", "chat-1");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    registry.release("epic-1", "chat-1", HOST);
 
     vi.advanceTimersByTime(TTL_MS - 1);
     expect(owned.closeCount()).toBe(0);
@@ -288,11 +372,14 @@ describe("ChatSessionRegistry", () => {
     });
     const owned = createHandle("epic-1", "chat-1");
 
-    registry.acquire("epic-1", "chat-1", SCOPE, () => owned.handle);
-    registry.release("epic-1", "chat-1");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    registry.release("epic-1", "chat-1", HOST);
 
     vi.advanceTimersByTime(TTL_MS - 1);
-    expect(registry.peek("epic-1", "chat-1")).toBe(owned.handle);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(owned.handle);
     vi.advanceTimersByTime(1);
     expect(owned.closeCount()).toBe(1);
   });
@@ -304,13 +391,16 @@ describe("ChatSessionRegistry", () => {
     });
     const owned = createHandle("epic-1", "chat-1");
 
-    registry.acquire("epic-1", "chat-1", SCOPE, () => owned.handle);
-    registry.release("epic-1", "chat-1");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    registry.release("epic-1", "chat-1", HOST);
     expect(owned.closeCount()).toBe(0);
 
-    registry.forceRelease("epic-1", "chat-1");
+    registry.forceRelease("epic-1", "chat-1", HOST);
     expect(owned.closeCount()).toBe(1);
-    expect(registry.peek("epic-1", "chat-1")).toBeNull();
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
 
     // The cancelled timer must not double-dispose later.
     vi.advanceTimersByTime(TTL_MS);
@@ -325,26 +415,35 @@ describe("ChatSessionRegistry", () => {
     const a = createHandle("epic-1", "chat-a");
     const b = createHandle("epic-1", "chat-b");
     const c = createHandle("epic-1", "chat-c");
-    registry.acquire("epic-1", "chat-a", SCOPE, () => a.handle);
-    registry.acquire("epic-1", "chat-b", SCOPE, () => b.handle);
-    registry.acquire("epic-1", "chat-c", SCOPE, () => c.handle);
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-a", hostId: HOST, scopeKey: SCOPE },
+      () => a.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-b", hostId: HOST, scopeKey: SCOPE },
+      () => b.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-c", hostId: HOST, scopeKey: SCOPE },
+      () => c.handle,
+    );
 
-    registry.release("epic-1", "chat-a");
+    registry.release("epic-1", "chat-a", HOST);
     vi.advanceTimersByTime(1_000);
-    registry.release("epic-1", "chat-b");
+    registry.release("epic-1", "chat-b", HOST);
     vi.advanceTimersByTime(1_000);
     // Two warm sessions: exactly at the cap, nothing evicted yet.
     expect(a.closeCount()).toBe(0);
     expect(b.closeCount()).toBe(0);
 
     // A third release overflows the cap; the oldest-released (a) goes.
-    registry.release("epic-1", "chat-c");
+    registry.release("epic-1", "chat-c", HOST);
     expect(a.closeCount()).toBe(1);
     expect(b.closeCount()).toBe(0);
     expect(c.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-a")).toBeNull();
-    expect(registry.peek("epic-1", "chat-b")).toBe(b.handle);
-    expect(registry.peek("epic-1", "chat-c")).toBe(c.handle);
+    expect(registry.peek("epic-1", "chat-a", HOST)).toBeNull();
+    expect(registry.peek("epic-1", "chat-b", HOST)).toBe(b.handle);
+    expect(registry.peek("epic-1", "chat-c", HOST)).toBe(c.handle);
   });
 
   it("does not evict lease-free active sessions to satisfy the warm cap", () => {
@@ -355,24 +454,38 @@ describe("ChatSessionRegistry", () => {
     const active = createHandle("epic-1", "chat-active");
     const b = createHandle("epic-1", "chat-b");
     const c = createHandle("epic-1", "chat-c");
-    registry.acquire("epic-1", "chat-active", SCOPE, () => active.handle);
-    registry.acquire("epic-1", "chat-b", SCOPE, () => b.handle);
-    registry.acquire("epic-1", "chat-c", SCOPE, () => c.handle);
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-active",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => active.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-b", hostId: HOST, scopeKey: SCOPE },
+      () => b.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-c", hostId: HOST, scopeKey: SCOPE },
+      () => c.handle,
+    );
 
     markRunning(active.handle);
 
-    registry.release("epic-1", "chat-active");
+    registry.release("epic-1", "chat-active", HOST);
     vi.advanceTimersByTime(1_000);
-    registry.release("epic-1", "chat-b");
+    registry.release("epic-1", "chat-b", HOST);
     vi.advanceTimersByTime(1_000);
-    registry.release("epic-1", "chat-c");
+    registry.release("epic-1", "chat-c", HOST);
 
     expect(active.closeCount()).toBe(0);
     expect(b.closeCount()).toBe(1);
     expect(c.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-active")).toBe(active.handle);
-    expect(registry.peek("epic-1", "chat-b")).toBeNull();
-    expect(registry.peek("epic-1", "chat-c")).toBe(c.handle);
+    expect(registry.peek("epic-1", "chat-active", HOST)).toBe(active.handle);
+    expect(registry.peek("epic-1", "chat-b", HOST)).toBeNull();
+    expect(registry.peek("epic-1", "chat-c", HOST)).toBe(c.handle);
   });
 
   it("never evicts leased sessions to satisfy the warm cap", () => {
@@ -383,20 +496,29 @@ describe("ChatSessionRegistry", () => {
     const leased = createHandle("epic-1", "chat-a");
     const b = createHandle("epic-1", "chat-b");
     const c = createHandle("epic-1", "chat-c");
-    registry.acquire("epic-1", "chat-a", SCOPE, () => leased.handle);
-    registry.acquire("epic-1", "chat-b", SCOPE, () => b.handle);
-    registry.acquire("epic-1", "chat-c", SCOPE, () => c.handle);
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-a", hostId: HOST, scopeKey: SCOPE },
+      () => leased.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-b", hostId: HOST, scopeKey: SCOPE },
+      () => b.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-c", hostId: HOST, scopeKey: SCOPE },
+      () => c.handle,
+    );
 
-    registry.release("epic-1", "chat-b");
+    registry.release("epic-1", "chat-b", HOST);
     vi.advanceTimersByTime(1_000);
-    registry.release("epic-1", "chat-c");
+    registry.release("epic-1", "chat-c", HOST);
 
     // Warm cap of 1: b (older warm) is evicted, c kept, the leased session
     // untouched no matter how the cap is squeezed.
     expect(leased.closeCount()).toBe(0);
     expect(b.closeCount()).toBe(1);
     expect(c.closeCount()).toBe(0);
-    expect(registry.peek("epic-1", "chat-a")).toBe(leased.handle);
+    expect(registry.peek("epic-1", "chat-a", HOST)).toBe(leased.handle);
   });
 
   it("notifies subscribers when sessions appear and expire", () => {
@@ -408,22 +530,18 @@ describe("ChatSessionRegistry", () => {
     const unsubscribe = registry.subscribe(listener);
 
     registry.acquire(
-      "epic-1",
-      "chat-1",
-      SCOPE,
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => createHandle("epic-1", "chat-1").handle,
     );
     expect(listener).toHaveBeenCalledTimes(1);
 
-    registry.release("epic-1", "chat-1");
+    registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS);
     expect(listener).toHaveBeenCalledTimes(2);
 
     unsubscribe();
     registry.acquire(
-      "epic-2",
-      "chat-2",
-      SCOPE,
+      { epicId: "epic-2", chatId: "chat-2", hostId: HOST, scopeKey: SCOPE },
       () => createHandle("epic-2", "chat-2").handle,
     );
     registry.disposeAll();

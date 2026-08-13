@@ -68,10 +68,15 @@ export interface ManagedCommandChatMenuProps {
 }
 
 export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
-  const commands = useManagedCommandsForChat(props.epicId, props.chatId);
+  const commands = useManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
   const connectionStatus = useManagedCommandsConnectionStatus(
     props.epicId,
     props.chatId,
+    props.hostId,
   );
   const [open, setOpen] = useState(false);
   const [rowDragging, setRowDragging] = useState(false);

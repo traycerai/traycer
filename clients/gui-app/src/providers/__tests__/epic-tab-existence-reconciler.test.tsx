@@ -54,6 +54,7 @@ const localSnapshot: LocalHostSnapshot = {
   pid: 4343,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;

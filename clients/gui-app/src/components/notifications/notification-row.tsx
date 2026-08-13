@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
+  isHostReachable,
+  type HostAvailability,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
   Bell,
   Check,
   CheckCircle2,
@@ -55,14 +59,19 @@ interface NotificationRowProps {
 
 function isOriginUnavailable(input: {
   readonly row: MergedNotificationRow;
-  readonly originStatus: "available" | "unavailable" | undefined;
+  readonly originStatus: HostAvailability | undefined;
 }): boolean {
   const requiresOriginHost =
     input.row.payload !== null &&
     notificationPayloadRequiresOriginHost(input.row.payload);
   if (!requiresOriginHost) return false;
   if (input.row.originHostId === null) return true;
-  return input.originStatus !== "available";
+  // A busy host is reachable (int #48): the row must not grey out an
+  // approval whose origin is merely slow. Absent directory entry stays
+  // fail-closed.
+  return (
+    input.originStatus === undefined || !isHostReachable(input.originStatus)
+  );
 }
 
 /**

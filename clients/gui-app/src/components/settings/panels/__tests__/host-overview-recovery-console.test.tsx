@@ -95,6 +95,7 @@ function renderPanel(options: {
       options.isLocalMachine && options.connectable
         ? {
             hostId: options.hostId,
+            availability: "available" as const,
             websocketUrl: "ws://127.0.0.1:8765",
             version: "1.5.0",
             pid: 4821,
