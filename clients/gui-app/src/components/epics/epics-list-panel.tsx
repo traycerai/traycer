@@ -301,6 +301,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [items],
   );
   const notificationIndicators = useNotificationIndicators({
+    // Epic ids only - see the header tab strip's note: the app-wide active
+    // host is the right scope for a shared cloud entity.
+    hostId: null,
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,

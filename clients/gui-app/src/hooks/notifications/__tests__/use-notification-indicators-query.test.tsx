@@ -54,13 +54,35 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
   return client;
 }
 
+// The binding carries a `directory` as well as a client: the indicator hook
+// now resolves its host EXPLICITLY (`useHostClientForHostId`), and that
+// resolution consults the directory listing so an explicit id keeps pointing
+// at the same machine when the app-wide default moves. A binding without one
+// is not a shape the app ever publishes.
+const hostDirectoryStub = {
+  list: () => Promise.resolve([mockLocalHostEntry]),
+  onChange: () => ({ dispose: () => undefined }),
+};
+
 vi.mock("@/lib/host", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host")>();
   return {
     ...actual,
     useHostClient: () => requireHostClient(),
-    useHostBinding: () => ({ hostClient: requireHostClient() }),
+    useHostBinding: () => ({
+      hostClient: requireHostClient(),
+      directory: hostDirectoryStub,
+    }),
   };
+});
+
+// `useHostClientForHostId` reaches the runtime through BOTH entry points: the
+// directory listing via `@/lib/host`, and the pinned-requester builder via
+// `@/lib/host/runtime`. Mocking only the first leaves the second on the real
+// provider, which throws outside `<HostRuntimeProvider>`.
+vi.mock("@/lib/host/runtime", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useHostClient: () => requireHostClient() };
 });
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
@@ -237,6 +259,7 @@ function IndicatorSurface(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const indicators = useNotificationIndicators({
+    hostId: null,
     epicIds: props.epicIds,
     chatIds: props.chatIds,
     enabled: props.epicIds.length > 0 || props.chatIds.length > 0,

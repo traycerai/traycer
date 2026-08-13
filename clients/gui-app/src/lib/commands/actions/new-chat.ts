@@ -43,8 +43,9 @@ export interface CreateChatCommandCallbacks {
   readonly onError: (error: HostRpcError) => void;
 }
 
-// Caller-supplied request never carries `hostId`; the mutation hook
-// (`useEpicCreateChat`) projects it from the active host.
+// The request names its own `hostId` (built by `buildCreateChatRequest` from
+// the caller's target host); the mutation hook only verifies that the client
+// it is about to send on still addresses that host.
 export type CreateChatCommand = (
   request: CreateChatMutationInput,
   callbacks: CreateChatCommandCallbacks,
@@ -129,12 +130,16 @@ export function openNewChatInActiveTile(
   let cancelled = false;
   let projectionCancel: CancelFn | null = null;
   args.createChat(
-    buildCreateChatRequest(
-      args.epicId,
-      args.worktreeIntent,
-      args.settings,
-      args.forkSource,
-    ),
+    buildCreateChatRequest({
+      epicId: args.epicId,
+      // The host this open intent names, which is also the host the new chat
+      // is bound to for life - not whichever host happens to be active when
+      // the mutation fires.
+      hostId: args.hostId,
+      worktreeIntent: args.worktreeIntent,
+      settings: args.settings,
+      forkSource: args.forkSource,
+    }),
     {
       onSuccess: (result) => {
         if (cancelled) return;
@@ -220,14 +225,17 @@ function openCreatedChatWhenProjectedInternal(
 const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
   prepare();
 
-function buildCreateChatRequest(
-  epicId: string,
-  worktreeIntent: WorktreeIntent | null,
-  settings: ChatRunSettings | null,
-  forkSource: CreateChatMutationInput["forkSource"] | null,
-): CreateChatMutationInput {
+function buildCreateChatRequest(args: {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly worktreeIntent: WorktreeIntent | null;
+  readonly settings: ChatRunSettings | null;
+  readonly forkSource: CreateChatMutationInput["forkSource"] | null;
+}): CreateChatMutationInput {
+  const { epicId, hostId, worktreeIntent, settings, forkSource } = args;
   return {
     epicId,
+    hostId,
     parentId: null,
     // Agents are created with an empty stored title ("no title yet"); the
     // "Untitled agent" fallback is applied at render via the display helper,

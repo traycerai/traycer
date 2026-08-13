@@ -255,6 +255,60 @@ describe("HostClient", () => {
     ]);
   });
 
+  it("treats a same-id host going BUSY as the same transport - no cancel, no sweep, no event", () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // Everything a caller can act on is unchanged - same process, same
+    // `websocketUrl`, same version - and `busy` only says one loopback probe
+    // went unanswered. A wedged host flaps this field for as long as the stall
+    // lasts, and each flap used to cancel-then-abort every in-flight request on
+    // the bound host, sweep its query scope with `refetchActive`, and announce
+    // `host-updated` to every subscriber.
+    const sameIdBusy = { ...mockLocalHostEntry, status: "busy" as const };
+    client.bind(sameIdBusy);
+
+    expect(client.getActiveHost()).toBe(sameIdBusy);
+    expect(invalidator.calls).toEqual([]);
+    expect(events).toEqual([]);
+
+    // ... and back, which is the other half of the flap.
+    client.bind(mockLocalHostEntry);
+    expect(invalidator.calls).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("still emits when a same-id host leaves reachability, with every other field held stable", () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // The sibling that makes the test above mean something: ONLY the status
+    // moves, and it crosses out of reachable. `websocketUrl` is deliberately
+    // held (the directory can mark a host unavailable while still carrying its
+    // last URL), so nothing but the status can be firing this.
+    const sameIdUnavailable = {
+      ...mockLocalHostEntry,
+      status: "unavailable" as const,
+    };
+    client.bind(sameIdUnavailable);
+
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(events).toEqual([
+      {
+        previousHostId: "mock-local",
+        currentHostId: "mock-local",
+        reason: "host-updated",
+      },
+    ]);
+  });
+
   it("emits host-updated on a same-id remote host's public-key rotation, isolated from every other field (R-1)", () => {
     const { client, invalidator, events } = buildHostClientWithMock();
     const remoteEntry = (publicKey: string): RemoteHostDirectoryEntry => ({

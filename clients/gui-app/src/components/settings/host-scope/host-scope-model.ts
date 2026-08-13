@@ -10,6 +10,7 @@ import {
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
 import type { ViewerReachabilityCheckLike } from "@/components/settings/panels/my-hosts-model";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -150,7 +151,10 @@ function isAdministrableRoute(
   remoteHostsPlanRestricted: boolean,
 ): boolean {
   if (entry === null || entry.websocketUrl === null) return false;
-  if (entry.status !== "available") return false;
+  // Reachable, not "answering this instant": a busy host is still the host
+  // this route administers, and disabling its settings for the duration of an
+  // epic open would be the same false-death read this ticket removes.
+  if (!isHostReachable(entry.status)) return false;
   return !(remoteHostsPlanRestricted && entry.kind === "remote");
 }
 
@@ -167,7 +171,7 @@ function isPlanRestrictedRoute(
   remoteHostsPlanRestricted: boolean,
 ): boolean {
   if (entry === null || entry.websocketUrl === null) return false;
-  if (entry.status !== "available") return false;
+  if (!isHostReachable(entry.status)) return false;
   return remoteHostsPlanRestricted && entry.kind === "remote";
 }
 

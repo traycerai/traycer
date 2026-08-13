@@ -42,6 +42,7 @@ describe("splitDoctorIssuesByVantage", () => {
 describe("overviewEndpointParts", () => {
   const localHost: LocalHostSnapshot = {
     hostId: "host-a",
+    availability: "available",
     websocketUrl: "ws://127.0.0.1:8765",
     version: "1.5.0",
     pid: 4821,

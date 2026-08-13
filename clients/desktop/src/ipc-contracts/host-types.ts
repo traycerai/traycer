@@ -6,6 +6,8 @@
  * shape here so `contextBridge` serializes a plain object while the renderer
  * consumes the fully typed shared interface.
  */
+import type { LiveHostAvailability } from "@traycer-clients/shared/host-client/host-directory";
+
 export interface DesktopLocalHostSnapshot {
   readonly hostId: string;
   readonly websocketUrl: string;
@@ -13,6 +15,27 @@ export interface DesktopLocalHostSnapshot {
   readonly pid: number;
   readonly systemHostName: string;
   readonly displayName: string;
+}
+
+/**
+ * What `HostLifecycle` actually PUBLISHES - the identity above plus how well
+ * that host is currently answering.
+ *
+ * Kept distinct from {@link DesktopLocalHostSnapshot}, which is the pid.json
+ * identity shape and is produced by a parser that knows nothing about
+ * reachability. Only the lifecycle - the one component that owns both the
+ * probe and the liveness check - is entitled to stamp `availability`, so the
+ * field is added exactly at that boundary rather than being defaulted by every
+ * upstream reader.
+ *
+ * There is no `"unavailable"` member: absence of a host is carried by the
+ * snapshot being `null`. `busy` exists so that a live-but-unresponsive host is
+ * no longer indistinguishable from that null - before this field the ONLY
+ * signal the desktop could send the renderer was "snapshot or nothing", which
+ * is why a single timed-out loopback probe read as a dead machine.
+ */
+export interface DesktopPublishedHostSnapshot extends DesktopLocalHostSnapshot {
+  readonly availability: LiveHostAvailability;
 }
 
 export interface DesktopTrayEpic {

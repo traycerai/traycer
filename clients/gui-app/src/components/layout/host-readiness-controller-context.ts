@@ -3,6 +3,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
 import type { AuthStatus } from "@/stores/auth/auth-store";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
@@ -213,7 +214,11 @@ export function useSurfaceReadiness(
 export function isHostDialable(entry: HostDirectoryEntry | undefined): boolean {
   return (
     entry !== undefined &&
-    entry.status === "available" &&
+    // Dialability is `isHostReachable`, not `=== "available"`. A busy host has
+    // the same pid and the same `websocketUrl`; the renderer's per-request
+    // dials to it keep completing. Gating readiness on the probe result is
+    // what let one timed-out probe take a whole session down (int #48).
+    isHostReachable(entry.status) &&
     entry.websocketUrl !== null
   );
 }

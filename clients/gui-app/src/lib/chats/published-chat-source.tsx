@@ -76,6 +76,9 @@ export function usePublishedChatSource(): PublishedChatSource | null {
  * as an explicit unavailability, and those map onto the reasons this surface
  * already draws - so a published diff whose blob was never uploaded renders the
  * same banner a local one does, rather than a new vocabulary for the same fact.
+ *
+ * A transport FAILURE is the one answer that does NOT map onto them, and it
+ * travels in `failure` instead - see {@link PayloadReadFailure}.
  */
 export interface PublishedSnapshotDiff {
   readonly data:
@@ -88,6 +91,33 @@ export interface PublishedSnapshotDiff {
   readonly isLoading: boolean;
   /** Set when either side was served as a prefix. See {@link PayloadExtent}. */
   readonly truncation: PayloadExtent | null;
+  /**
+   * Set when a side's read FAILED rather than answered. Mutually exclusive with
+   * `data`: a diff missing one of its halves is not a diff.
+   */
+  readonly failure: PayloadReadFailure | null;
+}
+
+/**
+ * A read that failed on the WIRE, carrying the only thing a reader can do about
+ * it.
+ *
+ * Error is not absence, and folding one into the other is a lie the reader
+ * cannot detect: `blob_missing` says the owner never uploaded these bytes, so
+ * looking again is pointless and the surface correctly offers nothing. An
+ * exhausted retry says the request never completed - the bytes may be sitting
+ * in the cloud, one reconnect away. Both reached this surface as the same
+ * sentence ("snapshot blob missing") because both arrive here as
+ * `payloadText(...) === null`, and separating them costs one flag plus the
+ * affordance that acts on it.
+ *
+ * `useCloudChatPayload` retries twice on its own, so anything that gets this
+ * far has already spent them; `retry` is the reader asking for a fresh set, not
+ * a first attempt.
+ */
+export interface PayloadReadFailure {
+  /** Re-issues the reads that failed - and only those. */
+  readonly retry: () => void;
 }
 
 /** One side's answer, as much of a payload query as the derivation reads. */
@@ -95,6 +125,19 @@ interface SnapshotSideAnswer {
   /** The decoder's union, so a contract change reaches this file as an error. */
   readonly data: CloudChatPayloadBytes | undefined;
   readonly isError: boolean;
+}
+
+/**
+ * Whether a side this block ACTUALLY asked for failed on the wire.
+ *
+ * The hash gate is not decoration: a side with no hash runs a disabled query,
+ * and a disabled query that still holds an old error would otherwise fail a
+ * diff that never needed it. Its own function only so the caller stays under
+ * this repo's complexity ceiling, which its own doc-comment records it was
+ * already brushing.
+ */
+function sideFailed(hash: string | null, side: SnapshotSideAnswer): boolean {
+  return hash !== null && side.isError;
 }
 
 /**
@@ -110,9 +153,16 @@ function snapshotDiffResult(input: {
   readonly afterHash: string | null;
   readonly before: SnapshotSideAnswer;
   readonly after: SnapshotSideAnswer;
+  /** Handed in rather than derived, so this stays a pure function of answers. */
+  readonly retry: () => void;
 }): PublishedSnapshotDiff {
   if (!input.enabled) {
-    return { data: undefined, isLoading: false, truncation: null };
+    return {
+      data: undefined,
+      isLoading: false,
+      truncation: null,
+      failure: null,
+    };
   }
   const beforePending =
     input.beforeHash !== null && input.before.data === undefined;
@@ -122,11 +172,31 @@ function snapshotDiffResult(input: {
     (beforePending && !input.before.isError) ||
     (afterPending && !input.after.isError)
   ) {
-    return { data: undefined, isLoading: true, truncation: null };
+    return {
+      data: undefined,
+      isLoading: true,
+      truncation: null,
+      failure: null,
+    };
+  }
+  // A side that FAILED has produced no evidence about its blob, so neither half
+  // of the answer below is available: `payloadText` would read its absent data
+  // as `null` and the diff would report `blob_missing` - a permanent verdict
+  // for a retryable fault. EITHER side is enough, because a diff needs both.
+  if (
+    sideFailed(input.beforeHash, input.before) ||
+    sideFailed(input.afterHash, input.after)
+  ) {
+    return {
+      data: undefined,
+      isLoading: false,
+      truncation: null,
+      failure: { retry: input.retry },
+    };
   }
   const beforeText = payloadText(input.before.data);
   const afterText = payloadText(input.after.data);
-  // A hash the block names but the cloud cannot serve is the same fact the
+  // A hash the block names but the cloud REFUSED to serve is the same fact the
   // local store reports as a missing blob, and the segment already draws it.
   const missing =
     (input.beforeHash !== null && beforeText === null) ||
@@ -142,6 +212,7 @@ function snapshotDiffResult(input: {
     // against a truncated "before" invents changes at the cut.
     truncation:
       payloadExtent(input.after.data) ?? payloadExtent(input.before.data),
+    failure: null,
   };
 }
 
@@ -171,16 +242,32 @@ export function usePublishedSnapshotDiff(args: {
         : { kind: "file-snapshot", sha256: args.afterHash },
     enabled: args.enabled && args.afterHash !== null,
   });
+  // Only the sides that FAILED are re-issued. A payload is content-addressed,
+  // so a side that answered holds bytes that cannot become different bytes -
+  // refetching it would spend a request to receive what it already has.
+  const retry = (): void => {
+    if (before.isError) void before.refetch();
+    if (after.isError) void after.refetch();
+  };
   return snapshotDiffResult({
     enabled: args.enabled,
     beforeHash: args.beforeHash,
     afterHash: args.afterHash,
     before,
     after,
+    retry,
   });
 }
 
-/** A published plan's full markdown, or `null` when the cloud cannot serve it. */
+/**
+ * A published plan's full markdown, or `null` when the cloud cannot serve it.
+ *
+ * `markdown: null` means the plan's content is genuinely not there, and the
+ * modal says so and falls back to the saved preview. A FAILED read used to
+ * arrive as that same `null` - a permanent-sounding refusal for a transport
+ * fault - so it now arrives in `failure` instead, and the modal offers the
+ * retry that answer earns. See {@link PayloadReadFailure}.
+ */
 export function usePublishedPlanContent(args: {
   readonly source: PublishedChatSource | null;
   readonly contentHash: string | null;
@@ -189,6 +276,7 @@ export function usePublishedPlanContent(args: {
   readonly markdown: string | null;
   readonly isLoading: boolean;
   readonly truncation: PayloadExtent | null;
+  readonly failure: PayloadReadFailure | null;
 } {
   const query = useCloudChatPayload({
     client: args.source?.client ?? null,
@@ -200,15 +288,33 @@ export function usePublishedPlanContent(args: {
     enabled: args.enabled && args.contentHash !== null,
   });
   if (!args.enabled || args.contentHash === null) {
-    return { markdown: null, isLoading: false, truncation: null };
+    return {
+      markdown: null,
+      isLoading: false,
+      truncation: null,
+      failure: null,
+    };
   }
   if (query.data === undefined && !query.isError) {
-    return { markdown: null, isLoading: true, truncation: null };
+    return { markdown: null, isLoading: true, truncation: null, failure: null };
+  }
+  if (query.isError) {
+    return {
+      markdown: null,
+      isLoading: false,
+      truncation: null,
+      failure: {
+        retry: () => {
+          void query.refetch();
+        },
+      },
+    };
   }
   return {
     markdown: payloadText(query.data),
     isLoading: false,
     truncation: payloadExtent(query.data),
+    failure: null,
   };
 }
 
@@ -258,6 +364,11 @@ export function payloadTruncationNotice(extent: PayloadExtent): string {
  * purpose: they are different facts, a reader can act on none of them
  * differently, and the surfaces above already have one marker for "this content
  * is not here".
+ *
+ * A transport failure is NOT one of them and must never be routed through here.
+ * It is the one outcome a reader can act on, its `data` is `undefined` for a
+ * reason that has nothing to do with the blob, and both callers branch on
+ * `isError` before they ever ask this function - see {@link PayloadReadFailure}.
  */
 function payloadText(
   payload: CloudChatPayloadBytes | undefined,

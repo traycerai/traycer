@@ -1,6 +1,7 @@
 export * from "./unary-schemas";
 export * from "./chat-publication-identity";
 export * from "./chat-backup-status";
+export * from "./chat-records";
 export * from "./chat-replica-read";
 export * from "./cloud-chat";
 export * from "./communication-graph";

@@ -640,6 +640,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
     this.hasGenuineRemoteOutcome = true;
     this.retireFailoverStateOnAuthoritativeClear(outcome.kind);
+    await this.reseedLocalHostIdIfUnknown();
     this.consumeRestoreAfterFailedRefresh();
     if (outcome.kind === "hosts") {
       this.consumeUnboundFollowUpRestore(outcome.entries);
@@ -700,6 +701,37 @@ export class HostDirectoryService implements IHostDirectoryService {
    * from starting. Failing closed here would trade a mislabelled row for an app
    * that lists no hosts at all.
    */
+  /**
+   * Re-attempt the shell seed while this machine's id is still UNKNOWN.
+   *
+   * `start()` asks exactly once, and the ask can come back `null` for reasons
+   * that are all transient: the query is `retry: false` over an IPC boundary,
+   * its result is cacheable for a minute, and on a fresh profile there is no
+   * persisted value to fall back to. A single `null` used to be permanent for
+   * the session - and a null id is not a harmless gap.
+   *
+   * It decides whether `snapshot()` recognises the registry's twin of THIS
+   * machine. Unrecognised, the twin is published as-is: `kind: "remote"` with
+   * the relay URL and whatever its presence lease says. Right after the host
+   * was down - which is exactly when this matters - that lease reads expired,
+   * so this machine's own row appears as a remote host marked `unavailable`,
+   * which `useHostReachability` reports as `unreachable` and every chat owned
+   * by it locks to a published copy. Both protections miss it: the
+   * empty-directory arm because the directory is not empty, and the
+   * booting-local arm because the row is not `kind: "local"`. Worse, that row
+   * is relay-DIALABLE, so selection can bind our own machine through the relay
+   * and disable the local provisioning lifecycle (see `lastKnownLocalHostId`).
+   *
+   * Cheap and self-retiring: it runs only while the id is unknown, on a poll
+   * that is already happening, and stops for good on the first answer.
+   */
+  private async reseedLocalHostIdIfUnknown(): Promise<void> {
+    if (this.lastKnownLocalHostId !== null) {
+      return;
+    }
+    await this.seedLocalHostIdFromShell();
+  }
+
   private async seedLocalHostIdFromShell(): Promise<void> {
     let hostId: string | null;
     try {
@@ -1472,13 +1504,24 @@ function hostDirectorySnapshotsEqual(
  * the freshest description available while the host is down.
  *
  * `status` is forced to `unavailable` rather than carried over from the twin's
- * presence lease. It is the truth - this host cannot be reached - and status
- * transitions are an event other surfaces subscribe to: the landing-terminal
- * tombstone recovery bridge fires its pending kill on an
- * `unavailable -> available` edge. Copying the lease's `available` would make
+ * presence lease. It is the truth about DIALABILITY - nothing can reach this
+ * entry - and status transitions are an event other surfaces subscribe to: the
+ * landing-terminal tombstone recovery bridge fires its pending kill on a
+ * not-available -> available edge. Copying the lease's `available` would make
  * it fire at boot against an entry with no `websocketUrl` (the mutation
  * rejects), and then see no edge when the real host publishes - stranding the
  * tombstone and leaving the host terminal alive.
+ *
+ * What that `unavailable` must NOT be read as is "this machine's host is
+ * dead". It is produced whenever the local snapshot is merely ABSENT, which
+ * covers boot, a restart, and a host busy enough to lose a probe - and on
+ * 2026-08-11 it was the row that locked a healthy machine's chats read-only,
+ * freshly derived on every relaunch because the registry twin arrives from the
+ * cloud before the local snapshot arrives from the shell. `useHostReachability`
+ * therefore recognises this entry by its shape (`kind: "local"` with no
+ * `websocketUrl` - nothing else in the directory can produce that pair) and
+ * reports `host-starting`, the same verdict the empty directory has produced
+ * since 2026-07-14 for the same "not published yet" reason.
  */
 function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
   return {
@@ -1503,6 +1546,12 @@ function toLocalEntry(
     kind: "local",
     websocketUrl: snapshot.websocketUrl,
     version: snapshot.version,
-    status: "available",
+    // Straight from the shell, never assumed. This used to hardcode
+    // `"available"`, which was true only because the shell dropped the whole
+    // snapshot the moment a probe failed - so the renderer's two states were
+    // "available" and "no entry at all". That is the vocabulary that turned a
+    // busy host into a dead one on 2026-08-11; the shell now says which, and
+    // this carries it verbatim.
+    status: snapshot.availability,
   };
 }

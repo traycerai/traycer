@@ -12,6 +12,7 @@ import {
   usePublishedChatSource,
   usePublishedSnapshotDiff,
   type PayloadExtent,
+  type PayloadReadFailure,
   type PublishedChatSource,
 } from "@/lib/chats/published-chat-source";
 import {
@@ -142,7 +143,9 @@ function fileChangeBody(
  * lazy-fetched from the host's snapshot blob store by hash on first expand
  * (this component only mounts when the row is open), then synthesized into a
  * unified patch client-side. While pending, a spinner shows; if the blob can't
- * be served the matching reason copy is shown.
+ * be served the matching reason copy is shown; and on a published copy, whose
+ * fetch crosses the network, a read that FAILED gets a retry instead of that
+ * copy - it is not the same fact.
  */
 function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const { segment } = props;
@@ -167,6 +170,9 @@ function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
       data={query.data}
       isLoading={query.isLoading}
       truncation={null}
+      // The local snapshot store either holds the blob or does not; there is no
+      // wire to fail, so this arm has nothing to retry.
+      failure={null}
     />
   );
 }
@@ -187,6 +193,7 @@ function PublishedFileChangeInlineDiff(props: {
       data={query.data}
       isLoading={query.isLoading}
       truncation={query.truncation}
+      failure={query.failure}
     />
   );
 }
@@ -209,6 +216,12 @@ function FileChangeDiffView(props: {
    * read as the complete set of changes.
    */
   truncation: PayloadExtent | null;
+  /**
+   * Set when a side's read FAILED. Always null on the live path. Drawn INSTEAD
+   * of the reason copy, because "snapshot blob missing" is a verdict about the
+   * owner's upload and this is a verdict about the network.
+   */
+  failure: PayloadReadFailure | null;
 }) {
   const { segment, data, isLoading } = props;
   const patch = useMemo(() => {
@@ -235,6 +248,27 @@ function FileChangeDiffView(props: {
           variant={undefined}
         />
         Loading diff…
+      </div>
+    );
+  }
+  // Before the reason copy: a failed read has no `data`, so falling through
+  // would print "Skipped - snapshot blob missing." for content the next request
+  // may well return.
+  if (props.failure !== null) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground">
+        <span>Couldn&apos;t load this diff.</span>
+        <button
+          type="button"
+          onClick={props.failure.retry}
+          data-testid="file-change-diff-retry"
+          className={cn(
+            "underline underline-offset-2",
+            "hover:text-foreground focus-visible:outline-none focus-visible:text-foreground",
+          )}
+        >
+          Retry
+        </button>
       </div>
     );
   }

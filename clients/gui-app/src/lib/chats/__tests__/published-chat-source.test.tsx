@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
 import { FileChangeSegment } from "@/components/chat/segments/file-change-segment";
@@ -54,6 +60,16 @@ const payloadAnswer: {
     | undefined;
 } = { current: undefined };
 
+/**
+ * The hashes whose reads FAILED - a query that exhausted its retries, not a
+ * payload that answered "unavailable". The two are the same `data: undefined`
+ * to a naive reader, which is exactly the confusion under test, so the mock
+ * keeps them as separate controls rather than one "no content" switch.
+ */
+const failedHashes = new Set<string>();
+/** Which side a retry re-issued, so "only the failed one" is checkable. */
+const refetched = vi.fn<(sha256: string) => void>();
+
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatPayload: (args: {
     readonly enabled: boolean;
@@ -62,8 +78,16 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     // Records only what a real query would ACT on. A disabled TanStack query
     // issues nothing, so counting mounts would prove nothing either way.
     if (args.enabled) readPayload(args.ref);
+    const sha256 = args.ref?.sha256 ?? "";
+    const refetch = (): Promise<void> => {
+      refetched(sha256);
+      return Promise.resolve();
+    };
+    if (args.enabled && failedHashes.has(sha256)) {
+      return { data: undefined, isError: true, refetch };
+    }
     if (payloadAnswer.current === undefined) {
-      return { data: undefined, isError: false };
+      return { data: undefined, isError: false, refetch };
     }
     // Distinct text per side, so a real unified patch can be built and the
     // segment reaches its diff branch rather than its reason copy.
@@ -71,6 +95,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     return {
       data: { ...payloadAnswer.current, text: side },
       isError: false,
+      refetch,
     };
   },
 }));
@@ -90,8 +115,14 @@ vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
 afterEach(() => {
   cleanup();
   readPayload.mockClear();
+  refetched.mockClear();
+  failedHashes.clear();
   payloadAnswer.current = undefined;
 });
+
+const BEFORE_HASH = "a".repeat(64);
+const AFTER_HASH = "b".repeat(64);
+const PLAN_HASH = "c".repeat(64);
 
 const IDENTITY = {
   taskId: "d60781ca",
@@ -193,6 +224,9 @@ describe("published chat source", () => {
     );
 
     expect(result.current.data?.reason).toBe("blob_missing");
+    // The other half of the distinction: an answered refusal is NOT a failure,
+    // so nothing offers to retry a blob the owner never uploaded.
+    expect(result.current.failure).toBeNull();
   });
 
   it("reports a truncated payload as a prefix, with its real byte length", () => {
@@ -288,5 +322,140 @@ describe("published chat source", () => {
     };
     render(<Diff published />);
     expect(screen.queryByTestId("file-change-truncated-notice")).toBeNull();
+  });
+
+  it("reports an exhausted read as a failure, not as a missing blob", () => {
+    // The defect: an errored query's `data` is `undefined`, `payloadText` reads
+    // that as `null`, and the diff reported `blob_missing` - a permanent
+    // verdict about the owner's upload for a fault that is one request away
+    // from clearing.
+    failedHashes.add(BEFORE_HASH);
+
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: BEFORE_HASH,
+        afterHash: null,
+        enabled: true,
+      }),
+    );
+
+    expect(result.current.failure).not.toBeNull();
+    // A diff cannot be rendered from a side that never answered, so no verdict
+    // is offered at all - `blob_missing` least of all.
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("fails the whole diff when only ONE side errored", () => {
+    // Both halves are required, so a served "before" against an unreachable
+    // "after" is not a partial diff - it is no diff.
+    payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
+    failedHashes.add(AFTER_HASH);
+
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: BEFORE_HASH,
+        afterHash: AFTER_HASH,
+        enabled: true,
+      }),
+    );
+
+    expect(result.current.failure).not.toBeNull();
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it("retries only the side that failed", () => {
+    // A payload is content-addressed: the side that answered holds bytes that
+    // cannot become different bytes, so re-requesting it is a wasted round trip.
+    payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
+    failedHashes.add(AFTER_HASH);
+
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: BEFORE_HASH,
+        afterHash: AFTER_HASH,
+        enabled: true,
+      }),
+    );
+    result.current.failure?.retry();
+
+    expect(refetched.mock.calls.map((call) => call[0])).toEqual([AFTER_HASH]);
+  });
+
+  it("keeps a pending read loading rather than calling it a failure", () => {
+    // The loading arm must still win while a side is genuinely in flight, or
+    // every published diff would flash a retry before its first answer.
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: BEFORE_HASH,
+        afterHash: AFTER_HASH,
+        enabled: true,
+      }),
+    );
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.failure).toBeNull();
+  });
+
+  it("reports an exhausted plan read as a failure, not as absent content", () => {
+    failedHashes.add(PLAN_HASH);
+
+    const { result } = renderHook(() =>
+      usePublishedPlanContent({
+        source: { identity: IDENTITY, client: null },
+        contentHash: PLAN_HASH,
+        enabled: true,
+      }),
+    );
+
+    expect(result.current.failure).not.toBeNull();
+    expect(result.current.markdown).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+
+    result.current.failure?.retry();
+    expect(refetched.mock.calls.map((call) => call[0])).toEqual([PLAN_HASH]);
+  });
+
+  it("reports a served plan payload as content, with no failure", () => {
+    payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
+
+    const { result } = renderHook(() =>
+      usePublishedPlanContent({
+        source: { identity: IDENTITY, client: null },
+        contentHash: PLAN_HASH,
+        enabled: true,
+      }),
+    );
+
+    expect(result.current.failure).toBeNull();
+    expect(result.current.markdown).not.toBeNull();
+  });
+
+  it("offers a working retry on the real segment, in place of the reason copy", () => {
+    // The rendered half of the finding: the hook can distinguish the two facts
+    // and the surface still print "blob missing" over it. This drives the REAL
+    // segment, and the click asserts the mechanism - the retry reaches the
+    // reader - rather than that a handler prop was passed.
+    payloadAnswer.current = { kind: "text", text: "x", isTruncated: false };
+    failedHashes.add(BEFORE_HASH);
+
+    render(<Diff published />);
+
+    expect(screen.queryByText("Skipped - snapshot blob missing.")).toBeNull();
+    fireEvent.click(screen.getByTestId("file-change-diff-retry"));
+    expect(refetched.mock.calls.map((call) => call[0])).toEqual([BEFORE_HASH]);
+  });
+
+  it("offers no retry on the real segment when the blob is simply absent", () => {
+    payloadAnswer.current = { kind: "unavailable" };
+
+    render(<Diff published />);
+
+    expect(screen.queryByTestId("file-change-diff-retry")).toBeNull();
+    expect(screen.getByText("Skipped - snapshot blob missing.")).toBeTruthy();
   });
 });

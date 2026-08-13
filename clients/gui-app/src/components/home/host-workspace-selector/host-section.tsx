@@ -2,6 +2,7 @@ import { Check, Globe, Monitor, Server, type LucideIcon } from "lucide-react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { cn } from "@/lib/utils";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 const HOST_KIND_ICONS: Record<HostDirectoryEntry["kind"], LucideIcon> = {
   remote: Globe,
@@ -89,10 +90,15 @@ function HostStatusDot(props: {
 }) {
   return (
     <span
-      aria-label={props.status === "available" ? "Available" : "Unavailable"}
+      // Reachability, not probe freshness. A `busy` host is one this picker can
+      // still select and dial, so it keeps the reachable dot; giving it the
+      // grey "Unavailable" affordance would be the picker telling the user
+      // their working machine is gone. Distinguishing busy from available
+      // visually is the copy follow-up's (int #47), not this dot's.
+      aria-label={isHostReachable(props.status) ? "Available" : "Unavailable"}
       className={cn(
         "size-1.5 rounded-full",
-        props.status === "available"
+        isHostReachable(props.status)
           ? "bg-emerald-500"
           : "bg-muted-foreground/40",
       )}

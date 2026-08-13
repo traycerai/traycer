@@ -343,6 +343,7 @@ describe("HostRuntime lifecycle", () => {
       pid: 123,
       systemHostName: "local-1",
       displayName: "local-1",
+      availability: "available",
     });
 
     expect(directory.refreshCalls.count).toBe(baseline + 1);
@@ -370,6 +371,7 @@ describe("HostRuntime lifecycle", () => {
       pid: 999,
       systemHostName: "local-after-dispose",
       displayName: "local-after-dispose",
+      availability: "available",
     });
 
     expect(setContextSpy).not.toHaveBeenCalled();

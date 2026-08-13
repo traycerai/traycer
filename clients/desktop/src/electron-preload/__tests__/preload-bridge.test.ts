@@ -99,7 +99,15 @@ vi.mock("electron", () => ({
   },
 }));
 
+interface PreloadLocalHostSnapshot {
+  readonly hostId: string;
+  readonly availability: string;
+}
+
 interface PreloadBridge {
+  onLocalHostChange(
+    handler: (snapshot: PreloadLocalHostSnapshot | null) => void,
+  ): { dispose: () => void };
   readonly authnBaseUrl: string;
   readonly initialRoute: string | null;
   readonly windows: {
@@ -887,5 +895,163 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
+  });
+});
+
+/**
+ * Regression guard for the delivery half of int #48.
+ *
+ * `localHostChange` is an edge-triggered push onto a preload-module cache that
+ * starts at `null`, and `null` is not "unknown" downstream - it is the
+ * renderer's only way of saying "this machine has no host", which the directory
+ * turns into an explicitly unavailable row and which turns every chat owned by
+ * that host into a read-only published copy.
+ *
+ * So every delivery hazard on that channel lies rather than degrades, and lies
+ * in the direction that costs the user their session: a window registering
+ * after the install-time fan-out, a ⌘R that re-executes this module and resets
+ * the cache, a send dropped mid-navigation. None of them self-correct on a
+ * steady-state host, because the correction would have to be a `change` event
+ * and nothing is changing. On 2026-08-11 the renderer sat snapshot-less while
+ * its own helper process held a dozen live TCP connections to the very host it
+ * was rendering as gone.
+ *
+ * The fix is that a subscriber ASKS. These tests pin that it asks, that the
+ * answer reaches handlers, and that it never overwrites a push.
+ */
+describe("preload local-host snapshot convergence", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("pulls the current snapshot when nothing was ever pushed", async () => {
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        Promise.resolve(
+          channel === RunnerHostInvoke.localHostSnapshot ? snapshot : undefined,
+        ),
+      sendSyncFn: undefined,
+    });
+
+    const seen: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => seen.push(next));
+    // Synchronous seed is still the cached value, which is all a push-only
+    // channel could ever offer.
+    expect(seen).toEqual([null]);
+
+    await vi.waitFor(() => {
+      expect(seen.at(-1)).toEqual(snapshot);
+    });
+  });
+
+  it("delivers the pulled snapshot to a handler that subscribed before it landed", async () => {
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "busy",
+    };
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        Promise.resolve(
+          channel === RunnerHostInvoke.localHostSnapshot ? snapshot : undefined,
+        ),
+      sendSyncFn: undefined,
+    });
+
+    const first: (PreloadLocalHostSnapshot | null)[] = [];
+    const second: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => first.push(next));
+    bridge.onLocalHostChange((next) => second.push(next));
+
+    await vi.waitFor(() => {
+      expect(first.at(-1)).toEqual(snapshot);
+      expect(second.at(-1)).toEqual(snapshot);
+    });
+  });
+
+  it("retries the pull for a later subscriber after a rejected invoke", async () => {
+    // The repair must not consume its once-per-preload slot on failure: a
+    // boot-time rejection (main not ready yet) with the flag left set would
+    // freeze the cache at `null` - "this machine has no host" - until a
+    // `change` event a steady-state host never sends.
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    let attempts = 0;
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) => {
+        if (channel !== RunnerHostInvoke.localHostSnapshot) {
+          return Promise.resolve(undefined);
+        }
+        attempts += 1;
+        return attempts === 1
+          ? Promise.reject(new Error("main not ready"))
+          : Promise.resolve(snapshot);
+      },
+      sendSyncFn: undefined,
+    });
+
+    const first: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => first.push(next));
+    expect(attempts).toBe(1);
+    // Let the rejection SETTLE (its `.catch` is what re-arms the pull) before
+    // the next subscriber arrives; the cache still honestly holds `null`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(first).toEqual([null]);
+
+    // A later subscriber re-runs the repair, and the fan-out reaches BOTH.
+    const second: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => second.push(next));
+    await vi.waitFor(() => {
+      expect(first.at(-1)).toEqual(snapshot);
+      expect(second.at(-1)).toEqual(snapshot);
+    });
+    expect(attempts).toBe(2);
+  });
+
+  it("lets a push that lands mid-flight win over the pull", async () => {
+    // The pull is a floor, never an overwrite: main's answer was read before
+    // the push, so applying it afterwards would move the renderer backwards.
+    const pushed: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    let releasePull: (value: unknown) => void = () => undefined;
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        channel === RunnerHostInvoke.localHostSnapshot
+          ? new Promise((resolve) => {
+              releasePull = resolve;
+            })
+          : Promise.resolve(undefined),
+      sendSyncFn: undefined,
+    });
+
+    const seen: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => seen.push(next));
+
+    fakeElectron.emit(RunnerHostEvent.localHostChange, pushed);
+    expect(seen.at(-1)).toEqual(pushed);
+
+    releasePull(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen.at(-1)).toEqual(pushed);
   });
 });

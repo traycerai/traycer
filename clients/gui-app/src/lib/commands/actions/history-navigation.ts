@@ -17,6 +17,11 @@ import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { queryClient } from "@/lib/query-client";
+import {
+  cloudChatViewerIdSnapshot,
+  readCloudKnownChatIds,
+} from "@/lib/chats/cloud-chat-list-cache";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -133,22 +138,50 @@ function preservedTileRecordIsLive(
       ? (id: string) =>
           Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
       : () => true;
+  const activeHostId =
+    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null;
   return isTileRefRecordLive(
     preserved.node,
     pendingCreateArtifactIds,
     {
       hasLiveRecord,
-      // No cloud-known exemption on this imperative, non-React path
-      // (chat-sync-v2 ticket 36 scoped the fix to the route-sync reap
-      // and the tab-group-view substitution, both React-hook-driven).
-      // `() => false` preserves exactly today's behavior here - a
-      // same-host, never-adopted chat restored from browser
-      // back/forward still closes rather than substituting, same as
-      // before this ticket.
-      isCloudKnown: () => false,
+      isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
     },
-    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+    activeHostId,
   );
+}
+
+/**
+ * The same-host cloud-known exemption, on the one path that has no hooks.
+ *
+ * The route-sync reap and the tab-group-view substitution both get this from a
+ * mounted `useCloudChatList`. This path cannot: it runs inside a synchronous
+ * `history.go` and must answer before the navigation fires. It therefore reads
+ * the slot that hook has already filled - which is not a fallback so much as the
+ * same answer, since the epic tab whose href we are landing on is by definition
+ * open, and its route synchronization mounts that very query for this epic.
+ *
+ * `null` from the cache reader is "no answer that may be acted on", and it maps
+ * to a predicate that says LIVE for every id. Absence of evidence is not
+ * evidence here, and the asymmetry of the two mistakes is what decides it:
+ * refusing the restore calls `discardClosedTilePayload`, which drops the
+ * preserved payload permanently, while restoring a tile whose record really is
+ * gone is loop-safe - route sync closes it and canonicalizes the URL, exactly as
+ * documented for the remote-deletion case above. It is also the rule
+ * `hasLiveRecord` already follows two lines up, where neither "no live session"
+ * nor "snapshot not loaded yet" is allowed to prove a record gone.
+ */
+function cloudKnownPredicate(
+  activeHostId: string | null,
+  epicId: string,
+): (id: string) => boolean {
+  const cloudKnownIds = readCloudKnownChatIds(queryClient, {
+    hostId: activeHostId,
+    viewerUserId: cloudChatViewerIdSnapshot(),
+    taskId: epicId,
+  });
+  if (cloudKnownIds === null) return () => true;
+  return (id: string) => cloudKnownIds.has(id);
 }
 
 function reopenClosedTilePreview(href: string): void {

@@ -99,7 +99,11 @@ const chatSessions = new Map<string, ManagedCommandChatSessionStub>();
 function chatSession(chatId: string): ManagedCommandChatSessionStub {
   const existing = chatSessions.get(chatId);
   if (existing !== undefined) return existing;
-  const created = installManagedCommandChatSession({ epicId: EPIC_ID, chatId });
+  const created = installManagedCommandChatSession({
+    epicId: EPIC_ID,
+    chatId,
+    hostId: HOST_ID,
+  });
   chatSessions.set(chatId, created);
   return created;
 }

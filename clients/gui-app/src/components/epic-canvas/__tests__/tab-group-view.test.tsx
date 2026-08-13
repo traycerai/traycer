@@ -76,6 +76,13 @@ interface TestState {
   /** Chat ids the `useCloudChatList` mock answers as present
    * (chat-sync-v2 ticket 36's same-host cloud-known exemption). */
   readonly cloudKnownChatIds: Set<string>;
+  /**
+   * Per-chat record-plane retraction, as `useEpicChatRetraction` reads it off
+   * `OpenEpicState.chatRetractions` (multi-host-chats record layer). Unlisted
+   * chats answer `null` - no removal delta seen - which is every pre-existing
+   * fixture in this file.
+   */
+  readonly chatRetractionByChatId: Map<string, "deleted" | "revoked">;
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -90,6 +97,7 @@ const testState = vi.hoisted((): TestState => ({
   activeHostId: null,
   fatalCloseCodeByChatId: new Map(),
   cloudKnownChatIds: new Set(),
+  chatRetractionByChatId: new Map(),
 }));
 
 vi.mock(
@@ -142,6 +150,10 @@ vi.mock("@/lib/epic-selectors", () => ({
   // owner from the projection, the way the live store shape provides it.
   useEpicArtifact: (id: string) =>
     testState.missingArtifactIds.has(id) ? null : { id, userId: "user-1" },
+  useEpicChatRetraction: (chatId: string | null) =>
+    chatId === null
+      ? null
+      : (testState.chatRetractionByChatId.get(chatId) ?? null),
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
@@ -1235,6 +1247,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
     testState.cloudKnownChatIds.clear();
+    testState.chatRetractionByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1260,9 +1273,14 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
         ),
       ).not.toBeNull();
     });
-    expect(
-      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
-    ).not.toBeNull();
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    // Nothing answered for this chat, so the banner is about the HOST - the
+    // one state of the three that is allowed to tell the reader to go wake a
+    // machine (ticket 47/48's copy split).
+    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
@@ -1413,6 +1431,7 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
     testState.cloudKnownChatIds.clear();
+    testState.chatRetractionByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1514,14 +1533,17 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
   });
 });
 
-// chat-sync-v2 ticket 36: a SAME-host chat (the active host IS the chat's
-// bound host) with no local record but still cloud-known - a leased
-// identity that never adopted this chat's rows. `chat-tile.tsx`'s own
-// `enabled` gate never attempts `chat.subscribe` for this shape (no local
-// record, not cross-host), so ticket 35's `fatalClose`-driven arm never
-// fires here - this is a genuinely separate exemption, driven by
-// `useCloudChatList` instead.
-describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (ticket 36)", () => {
+// chat-sync-v2 ticket 36, NARROWED by ticket 49: a SAME-host chat (the
+// active host IS the chat's bound host) with no local record but still
+// cloud-known is the ORDINARY shape of a healthy migrated chat, not evidence
+// of absence - creation stopped projecting into the epic doc (ticket 19) and
+// `ChatDocEntrySweep` deletes every entry whose publication it proves (ticket
+// 20). So the cloud row now supplies the copy's OWNER while the trigger must
+// be an honest absence signal: an unreachable owner, or the host's own
+// `CHAT_NOT_VISIBLE` terminate (which `chat-tile.tsx` can now produce for
+// this shape, because ticket 49 widened its record gate to let a cloud-known
+// chat subscribe).
+describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (tickets 36 + 49)", () => {
   afterEach(() => {
     cleanup();
     testState.mounts.clear();
@@ -1530,6 +1552,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
     testState.cloudKnownChatIds.clear();
+    testState.chatRetractionByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1542,9 +1565,44 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
 
   const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
 
-  it("substitutes for a same-host chat with no local record that is still cloud-known", async () => {
+  // This assertion is the INVERSE of the one that shipped with ticket 36
+  // ("substitutes for a same-host chat with no local record that is still
+  // cloud-known"), which codified the defect: post-sweep that shape is every
+  // healthy migrated chat, and substituting locked each one read-only on its
+  // own connected host.
+  it("keeps the LIVE chat surface for a same-host record-less cloud-known chat while its owner is REACHABLE", async () => {
     testState.missingArtifactIds.add(CHAT.id);
     testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    // The live tile mounts, so `chat-tile.tsx` gets to attempt
+    // `chat.subscribe` at all - which is what makes the CHAT_NOT_VISIBLE
+    // terminate below reachable as a signal.
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+    // Not reaped either - the cloud row still exempts it from
+    // `computeIsRemoteDeleted`, which is the other way this tab could have
+    // lost its live body.
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+  });
+
+  it("still substitutes the locked published copy when the same-host owner is UNREACHABLE", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.unreachableHostIds.add(CHAT.hostId);
     testState.cloudKnownChatIds.add(CHAT.id);
     seedCanvas([CHAT], CHAT.instanceId);
     const { container } = render(groupView([CHAT], CHAT.instanceId, true));
@@ -1560,7 +1618,53 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
       `[data-testid="chat-dead-tile-${CHAT.id}"]`,
     );
     expect(banner).not.toBeNull();
-    expect(banner?.getAttribute("data-reason")).toBe("chat-not-visible");
+    // SAME host, but nothing answered - reachability outranks the (absent)
+    // terminate, so this keeps the host sentence rather than claiming the
+    // history "is no longer on this host", which would assert something no
+    // one has said while the host is down.
+    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("substitutes for a same-host record-less chat once the REACHABLE owner's own subscribe terminates CHAT_NOT_VISIBLE", async () => {
+    // The honest absence detector for a reachable owner: not "this device's
+    // projection has no record" (true of every swept chat) but the host
+    // itself refusing the chat. `chat-tile.tsx` produces this terminate only
+    // because its record gate now lets a cloud-known chat open.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_NOT_VISIBLE");
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    // The host the reader is connected to answered "not here" about ITSELF.
+    // Its cross-host sentence ("history isn't available on <label>", "stays
+    // bound to <label>") would print this machine's own label as somewhere
+    // else - the 2026-08-11 lie. Separate reason, separate copy.
+    expect(banner?.getAttribute("data-reason")).toBe("chat-not-on-this-host");
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
     ).toBeNull();
@@ -1607,8 +1711,11 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
   });
 
   it("flips to the live surface once a local record appears (e.g. this identity adopts the chat)", async () => {
+    // Unreachable owner is what puts this tab on the copy in the first place
+    // now; the flip under test is still the record's arrival.
     testState.missingArtifactIds.add(CHAT.id);
     testState.activeHostId = CHAT.hostId;
+    testState.unreachableHostIds.add(CHAT.hostId);
     testState.cloudKnownChatIds.add(CHAT.id);
     seedCanvas([CHAT], CHAT.instanceId);
     const { container, rerender } = render(
@@ -1632,6 +1739,181 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     });
     expect(
       container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+});
+
+/**
+ * OPEN-TAB RETRACTION (multi-host-chats record layer).
+ *
+ * A `host.chatRecords.subscribe` `remove` delta for a chat that is currently
+ * open. The record table can only report that a row is gone; the delta's reason
+ * is what picks between the two honest end states, and the two are NOT
+ * interchangeable - one says the work no longer exists, the other says it does
+ * and is not yours to read.
+ *
+ * Both arms are ABSENT-BY-DEFAULT: without a retraction these fixtures render
+ * exactly what the ticket-49 tests above assert, which is what keeps this
+ * additive.
+ */
+describe("<TabGroupView /> open-tab retraction from the record plane", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
+    testState.chatRetractionByChatId.clear();
+    testState.activeHostId = null;
+    testState.stableTileSurfaceHostEnabled = false;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+
+  it("routes a DELETED retraction into the existing remote-deleted close flow", async () => {
+    // The chat is cloud-known and its host is reachable - the exact shape
+    // ticket 49 narrowed `computeIsRemoteDeleted` to LEAVE ALONE, because a
+    // record-less cloud-known chat is the steady state of a healthy migrated
+    // one. A `deleted` delta is the positive evidence that was missing.
+    //
+    // Ablation: drop the `retractedAsDeleted` check from
+    // `computeIsRemoteDeleted` and this renders the live tile forever - the
+    // stale transcript of a chat the host has destroyed.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+
+    testState.chatRetractionByChatId.set(CHAT.id, "deleted");
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="deleted-node-body"]'),
+      ).not.toBeNull();
+    });
+    // The deleted-node body is the SAME surface every other reap lands on,
+    // Close action included - not a fourth bespoke end state.
+    expect(
+      container.querySelector('[data-testid="deleted-node-close"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+    // Not the revoked banner: a deleted chat is not "no longer shared".
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+    // And the hosted surface has been told this body took the chat inline, so
+    // nothing paints over it.
+    expect(isChatRemoteDeleted(CHAT.instanceId)).toBe(true);
+  });
+
+  it("renders the no-longer-shared banner, alone, for a REVOKED retraction", async () => {
+    // Ablation: remove the `isRetractedAsRevoked` branch and this falls through
+    // to the published-copy substitution, which offers to clone a transcript
+    // the server has just stopped serving this viewer.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+
+    testState.chatRetractionByChatId.set(CHAT.id, "revoked");
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    const banner = await waitFor(() => {
+      const found = container.querySelector(
+        `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+    expect(banner?.getAttribute("data-reason")).toBe("chat-no-longer-shared");
+    // The live region: the banner appears mid-session with no focus move, so a
+    // screen-reader user is told nothing about why the tile emptied unless the
+    // sentence is announced.
+    expect(banner?.getAttribute("role")).toBe("status");
+    expect(banner?.textContent).toContain("no longer shared with you");
+    // No transcript under it - there is no copy this viewer may read - and no
+    // reap either: the chat still exists, it is simply not theirs.
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+    expect(isChatRemoteDeleted(CHAT.instanceId)).toBe(true);
+  });
+
+  it("outranks the unreachable-host banner - the reader's own machine is not the story", async () => {
+    // Reachability normally outranks everything (a terminate is a fact from an
+    // earlier moment; the host being down is the state right now). A revocation
+    // is newer still AND about a different subject, so naming the host would
+    // send the reader to inspect a machine that has nothing to do with it.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = "host-B";
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.chatRetractionByChatId.set(CHAT.id, "revoked");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    const banner = await waitFor(() => {
+      const found = container.querySelector(
+        `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+    expect(banner?.getAttribute("data-reason")).toBe("chat-no-longer-shared");
+    expect(banner?.textContent).not.toContain("host-A");
+  });
+
+  it("changes nothing for a chat with no retraction", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    // A retraction for a DIFFERENT chat must not reach this tab.
+    testState.chatRetractionByChatId.set("chat-other", "deleted");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
     ).toBeNull();
   });
 });

@@ -120,6 +120,10 @@ import {
   chatReplicaReadRequestSchema,
   chatReplicaReadResponseSchema,
 } from "@traycer/protocol/host/epic/chat-replica-read";
+import {
+  listChatRecordsRequestSchema,
+  listChatRecordsResponseSchema,
+} from "@traycer/protocol/host/epic/chat-records";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -690,6 +694,18 @@ export const epicChatReplicaReadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatReplicaReadRequestSchema,
   responseSchema: chatReplicaReadResponseSchema,
+});
+
+// The store-backed chat RECORD channel (chat-sync-v2 ticket 49). Optional, and
+// local like the two reads above it: it answers out of the host's own chat
+// registry, so a host that predates it has no second place to serve it from.
+// A client without it runs DOC-ONLY - exactly the record table that host's own
+// document produces - which is why the degrade arm needs no surface of its own.
+export const epicListChatRecordsV10 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listChatRecordsRequestSchema,
+  responseSchema: listChatRecordsResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

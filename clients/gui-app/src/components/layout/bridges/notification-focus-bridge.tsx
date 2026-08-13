@@ -32,6 +32,7 @@ import {
 } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * Mounted consumer of `useNotificationEventsStore.notificationEvent` - the
@@ -140,7 +141,8 @@ export function NotificationFocusBridge(): null {
         route: envelope.route,
         feedSource: envelope.feed.source,
         originHostId: envelope.originHostId,
-        originHostAvailable: originHostEntry?.status === "available",
+        originHostAvailable:
+          originHostEntry !== null && isHostReachable(originHostEntry.status),
         activeHostId,
         requiresOriginHost,
         directory: hostDirectory,
