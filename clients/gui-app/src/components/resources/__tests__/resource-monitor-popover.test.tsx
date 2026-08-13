@@ -501,6 +501,17 @@ afterEach(() => {
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("focuses resource search when the popover opens", () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    );
+  });
+
   it("defaults to tab order when the popover opens", () => {
     const stub = installStubFactory();
     renderPopover();
