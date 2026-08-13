@@ -707,6 +707,20 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Visibility mutations. Optional host capability; hide-the-affordance on
+  // older hosts. fifo: a share flip is a user-initiated write, and two
+  // in-flight flips of the same chat (or a master toggle overlapping a
+  // per-chat override) must not race at the transport.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "epic.prepareArtifactImage": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

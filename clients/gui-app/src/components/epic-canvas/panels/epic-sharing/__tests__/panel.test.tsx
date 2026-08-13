@@ -47,6 +47,15 @@ interface TestState {
     dataUpdatedAt: number;
     readonly refetch: Mock;
   };
+  sharingDefaultSupported: boolean;
+  setSharingDefault: {
+    readonly mutate: Mock;
+    isPending: boolean;
+  };
+  ownCloudChats: ReadonlyArray<{
+    readonly visibility: "private" | "task";
+    readonly isOwnedByViewer: boolean;
+  }>;
 }
 
 const testState = vi.hoisted<TestState>(() => ({
@@ -62,6 +71,9 @@ const testState = vi.hoisted<TestState>(() => ({
   },
   sendInvites: { mutateAsync: vi.fn(), isPending: false },
   collaboratorsQuery: { isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() },
+  sharingDefaultSupported: false,
+  setSharingDefault: { mutate: vi.fn(), isPending: false },
+  ownCloudChats: [],
 }));
 
 vi.mock("sonner", () => ({
@@ -99,6 +111,38 @@ vi.mock("@/hooks/epic/use-epic-send-queued-invites-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-shareable-teams", () => ({
   useEpicShareableTeams: () => testState.shareableTeams,
+}));
+
+vi.mock("@/hooks/epic/use-chat-sharing-support", () => ({
+  useChatSharingDefaultSupported: () => testState.sharingDefaultSupported,
+  useCloudChatVisibilitySupported: () => false,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-visibility-mutations", () => ({
+  useEpicSetChatSharingDefault: () => testState.setSharingDefault,
+  useEpicSetCloudChatVisibility: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/chats/use-cloud-chat-queries")>();
+  return {
+    ...actual,
+    useCloudChatList: () => ({
+      data: { chats: testState.ownCloudChats },
+      isEnabled: true,
+      isSuccess: true,
+      isError: false,
+    }),
+    useCloudChatViewerId: () => "user-1",
+  };
+});
+
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
 import { SharingPanel } from "../panel";
@@ -180,6 +224,9 @@ function resetTestState(): void {
     dataUpdatedAt: 0,
     refetch: vi.fn(),
   };
+  testState.sharingDefaultSupported = false;
+  testState.setSharingDefault = { mutate: vi.fn(), isPending: false };
+  testState.ownCloudChats = [];
 }
 
 function renderSharingPanel(): void {
@@ -449,5 +496,81 @@ describe("<SharingPanel />", () => {
     expect(
       screen.getByTestId("collaborator-role-select").textContent,
     ).toContain("Editor");
+  });
+});
+
+describe("<SharingPanel /> My agents", () => {
+  beforeEach(() => {
+    resetTestState();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("hides the section when the host does not advertise the RPC", () => {
+    renderSharingPanel();
+    expect(screen.queryByTestId("epic-sharing-my-agents-section")).toBeNull();
+  });
+
+  it("shows the section to a viewer and derives on from any task-visible own row", () => {
+    testState.role = "viewer";
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "task", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    expect(screen.queryByTestId("invite-card")).toBeNull();
+    expect(screen.getByTestId("epic-sharing-my-agents-section")).toBeTruthy();
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-switch").getAttribute(
+        "data-state",
+      ),
+    ).toBe("checked");
+  });
+
+  it("confirms the share direction with the count of chats about to become visible", () => {
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "private", isOwnedByViewer: true },
+      { visibility: "task", isOwnedByViewer: false },
+    ];
+
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("2 of your agent chats");
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-confirm-action"));
+    expect(testState.setSharingDefault.mutate).toHaveBeenCalledTimes(1);
+    expect(testState.setSharingDefault.mutate.mock.calls[0]?.[0]).toEqual({
+      taskId: "epic-1",
+      defaultVisibility: "task",
+      applyToExisting: true,
+    });
+  });
+
+  it("confirms the private direction without a count", () => {
+    testState.sharingDefaultSupported = true;
+    testState.ownCloudChats = [{ visibility: "task", isOwnedByViewer: true }];
+
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("Make your agents private?");
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).toContain("all of your agents on this task private");
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
+    ).not.toContain("will be able to view and clone");
   });
 });

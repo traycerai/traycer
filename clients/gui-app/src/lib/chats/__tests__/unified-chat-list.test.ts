@@ -3,6 +3,7 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SortableNode } from "@/lib/epic-sort";
 import {
   cloudChatRowKey,
+  indexOwnCloudChatsByLocalId,
   localChatRowKey,
   mergeChatListEntries,
   selectUnfoldedCloudChats,
@@ -151,6 +152,43 @@ describe("selectUnfoldedCloudChats", () => {
       });
       expect(kept).toEqual([LOCAL_BACKUP_ROW]);
     });
+  });
+});
+
+describe("indexOwnCloudChatsByLocalId", () => {
+  it("leaves an unpublished local chat out of the map", () => {
+    const byLocalId = indexOwnCloudChatsByLocalId({
+      chats: [],
+      localChatIds: ["chat-new"],
+      publicationChatIdByChatId: NO_REDIRECTS,
+    });
+    expect(byLocalId.get("chat-new")).toBeUndefined();
+  });
+
+  it("joins a local chat to the cloud row it publishes into after a fork", () => {
+    const byLocalId = indexOwnCloudChatsByLocalId({
+      chats: [INCUMBENT_ROW, LOCAL_BACKUP_ROW],
+      localChatIds: [WALKTHROUGH],
+      publicationChatIdByChatId: FORK_REDIRECT,
+    });
+    expect(byLocalId.get(WALKTHROUGH)).toEqual(LOCAL_BACKUP_ROW);
+  });
+
+  it("does not fold another owner's row that happens to share the local id", () => {
+    const foreign: CloudChatSummary = {
+      ...INCUMBENT_ROW,
+      isOwnedByViewer: false,
+      identity: {
+        ...INCUMBENT_ROW.identity,
+        ownerUserId: "someone-else",
+      },
+    };
+    const byLocalId = indexOwnCloudChatsByLocalId({
+      chats: [foreign],
+      localChatIds: [WALKTHROUGH],
+      publicationChatIdByChatId: NO_REDIRECTS,
+    });
+    expect(byLocalId.get(WALKTHROUGH)).toBeUndefined();
   });
 });
 

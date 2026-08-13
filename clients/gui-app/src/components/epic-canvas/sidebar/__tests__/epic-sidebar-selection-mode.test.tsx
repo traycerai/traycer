@@ -680,6 +680,36 @@ vi.mock("@/hooks/epic/use-chat-archive-support", () => ({
   useChatArchiveSupportState: () => testState.archiveSupport,
 }));
 
+vi.mock("@/hooks/epic/use-chat-sharing-support", () => ({
+  SET_CLOUD_CHAT_VISIBILITY_METHOD: "epic.setCloudChatVisibility",
+  SET_CHAT_SHARING_DEFAULT_METHOD: "epic.setChatSharingDefault",
+  useCloudChatVisibilitySupported: () => false,
+  useChatSharingDefaultSupported: () => false,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-visibility-mutations", () => ({
+  useEpicSetCloudChatVisibility: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+  useEpicSetChatSharingDefault: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
+  EPIC_COLLABORATORS_OPEN_REFRESH_MS: 5 * 60_000,
+  useEpicCollaboratorsQuery: () => ({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    error: null,
+    query: { dataUpdatedAt: 0, refetch: vi.fn() },
+  }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
   useChildIds: (parentId: string) =>
