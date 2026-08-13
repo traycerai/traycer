@@ -334,11 +334,10 @@ describe("S4 · output window", () => {
       reachedStart: true,
     });
 
-    // Entity naming: the noun follows the monitor flag, and this fixture is
-    // watching.
-    expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Monitor · deploy watcher",
-    );
+    // The window carries no title of its own: identity lives in the tab, and a
+    // bar here would restate the tab's own "Monitor · deploy watcher" over the
+    // one thing a reader came for. What floats over the log is live state.
+    expect(screen.queryByTestId("managed-command-output-title")).toBeNull();
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
     ).toMatch(/running/i);

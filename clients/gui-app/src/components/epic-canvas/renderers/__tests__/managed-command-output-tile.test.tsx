@@ -314,14 +314,17 @@ describe("managed-command output window", () => {
     ).toMatch(/\d{1,2}:\d{2}:\d{2}/);
   });
 
-  it("names the kind and the live status in its header", () => {
+  it("floats live status over the log instead of titling itself", () => {
     const stub = installOutputStub();
     renderTile();
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
-    expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Monitor · deploy watcher",
-    );
+    // The title bar is gone - the tab beside this window already says
+    // "Monitor · deploy watcher", and repeating it cost the log a row.
+    expect(screen.queryByTestId("managed-command-output-title")).toBeNull();
+    expect(
+      screen.getByTestId("managed-command-output-status").textContent,
+    ).toBe("Running");
 
     act(() => {
       stub.emit().onStatus({
@@ -333,6 +336,31 @@ describe("managed-command output window", () => {
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
     ).toBe("Exited · code 1");
+  });
+
+  it("keeps its chrome off the log's flow, and reserves a lane for it", () => {
+    const stub = installOutputStub();
+    renderTile();
+    openAtTail(stub.emit, [line("stdout", "watching src/")]);
+
+    const status = screen.getByTestId("managed-command-output-status");
+    const view = timeline();
+    // Floating, not a bar: the cluster is lifted out of the column the log
+    // occupies, so the log starts at the top of the pane.
+    const floating = status.closest(".absolute");
+    expect(floating).not.toBeNull();
+    expect(floating?.contains(view)).toBe(false);
+    // Status is a readout, never a control - the verbs beside it are.
+    expect(status.querySelector("button")).toBeNull();
+    expect(
+      screen.getByTestId(`managed-command-stop-${COMMAND.id}`),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId(`managed-command-delete-${COMMAND.id}`),
+    ).toBeTruthy();
+    // And the log holds a lane clear on the right, or the cluster would sit on
+    // the tail of whichever line scrolled under it - permanently.
+    expect(view.getAttribute("class")).toContain("pr-");
   });
 
   it("follows new output until the human scrolls up, then offers a way back", () => {

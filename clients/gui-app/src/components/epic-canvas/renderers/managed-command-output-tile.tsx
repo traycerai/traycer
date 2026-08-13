@@ -22,9 +22,7 @@ import { ArrowDownToLine } from "lucide-react";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
-import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
 import { ManagedCommandDeletedBanner } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -32,6 +30,7 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   ManagedCommandOutputStoreHandle,
   ManagedCommandTimelineLine,
@@ -40,7 +39,6 @@ import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-
 import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
-  managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
 import type { ManagedCommandOutputTileRef } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
@@ -166,7 +164,6 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
     <ManagedCommandOutputTileLive
       epicId={epicId}
       node={node}
-      viewTabId={props.viewTabId}
       onClose={closeCanvasTile}
     />
   );
@@ -175,7 +172,6 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
 function ManagedCommandOutputTileLive(props: {
   readonly epicId: string;
   readonly node: ManagedCommandOutputTileRef;
-  readonly viewTabId: string;
   readonly onClose: () => void;
 }) {
   const { epicId, node } = props;
@@ -200,7 +196,6 @@ function ManagedCommandOutputTileLive(props: {
     <ManagedCommandOutputTileBody
       epicId={epicId}
       node={node}
-      viewTabId={props.viewTabId}
       onClose={props.onClose}
       session={session}
     />
@@ -210,7 +205,6 @@ function ManagedCommandOutputTileLive(props: {
 function ManagedCommandOutputTileBody(props: {
   readonly epicId: string;
   readonly node: ManagedCommandOutputTileRef;
-  readonly viewTabId: string;
   readonly onClose: () => void;
   readonly session: ManagedCommandOutputStoreHandle;
 }) {
@@ -408,54 +402,6 @@ function ManagedCommandOutputTileBody(props: {
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col bg-canvas">
-      <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5">
-        {command === null ? null : (
-          <>
-            <ManagedCommandMonitorIcon
-              monitoring={command.monitoring}
-              decorative
-              className={undefined}
-            />
-            <ManagedCommandStatusDot
-              status={command.status}
-              className={undefined}
-            />
-          </>
-        )}
-        <span
-          className="min-w-0 flex-1 truncate text-ui-sm font-medium"
-          data-testid="managed-command-output-title"
-        >
-          {command === null ? "Output" : managedCommandTitle(command)}
-        </span>
-        {command === null ? null : (
-          <>
-            <span
-              className="shrink-0 text-ui-xs text-muted-foreground"
-              data-testid="managed-command-output-status"
-            >
-              {managedCommandStatusLabel(command.status)}
-            </span>
-            <ManagedCommandChatBacklink
-              epicId={epicId}
-              tabId={props.viewTabId}
-              chatId={command.chatId}
-              fallbackHostId={node.hostId}
-              testId="managed-command-output-backlink"
-              className={undefined}
-            />
-            {gone ? null : (
-              <ManagedCommandLifecycleActions
-                command={command}
-                epicId={epicId}
-                hostId={node.hostId}
-                className={undefined}
-              />
-            )}
-          </>
-        )}
-      </div>
-
       {gone ? (
         <ManagedCommandDeletedBanner
           deletionConfirmed={command !== null}
@@ -472,6 +418,14 @@ function ManagedCommandOutputTileBody(props: {
       ) : null}
 
       <div className="relative min-h-0 flex-1">
+        {command === null ? null : (
+          <ManagedCommandOutputControls
+            command={command}
+            epicId={epicId}
+            hostId={node.hostId}
+            gone={gone}
+          />
+        )}
         <div
           ref={viewRef}
           onScroll={onScroll}
@@ -490,7 +444,12 @@ function ManagedCommandOutputTileBody(props: {
             fontFamily: terminalFont.fontFamily,
             fontSize: `${terminalFont.fontSize}px`,
           }}
-          className="h-full w-full overflow-y-auto px-3 py-2 leading-relaxed"
+          // The floating cluster hangs over this surface, so the log reserves
+          // a lane wide enough for it on the right. Without that, the cluster
+          // sits on the tail of whichever line happens to be at the top -
+          // permanently, since the log scrolls under it - and a reader loses
+          // the end of a line for no reason they can see.
+          className="h-full w-full overflow-y-auto py-2 pr-48 pl-3 leading-relaxed"
         >
           {loadingOlder ? (
             <div className="flex justify-center py-1">
@@ -527,6 +486,59 @@ function ManagedCommandOutputTileBody(props: {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The window's whole chrome, floating over the log's top-right corner instead
+ * of sitting in a bar above it.
+ *
+ * The bar this replaces spent a permanent row of every shell window restating
+ * what the TAB beside it already said - the same glyph, the same
+ * "Monitor · deploy watcher" - so the log, which is the only thing here a
+ * person came to read, started one line lower for nothing. Identity lives in
+ * the tab; what stays is the pair of facts the tab cannot carry: what the shell
+ * is doing right now, and the two verbs that change it.
+ *
+ * Backdrop-blurred rather than opaque, so it reads as hovering over the log
+ * rather than as a hole punched in it, and the reader can still see that text
+ * continues underneath.
+ */
+function ManagedCommandOutputControls(props: {
+  readonly command: ManagedCommand;
+  readonly epicId: string;
+  readonly hostId: string;
+  /** The command is gone - lifecycle verbs would act on nothing. */
+  readonly gone: boolean;
+}) {
+  return (
+    <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1">
+      {/*
+       * Stays pointer-transparent: it is a readout, and it sits permanently
+       * over a corner of a scrollable log, so a wheel turn there has to reach
+       * the log rather than land on a label that cannot do anything with it.
+       */}
+      <span
+        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-canvas/80 px-2 py-1 text-ui-xs text-foreground/85 shadow-sm backdrop-blur-sm"
+        data-testid="managed-command-output-status"
+      >
+        <ManagedCommandStatusDot
+          status={props.command.status}
+          className={undefined}
+        />
+        {managedCommandStatusLabel(props.command.status)}
+      </span>
+      {props.gone ? null : (
+        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm backdrop-blur-sm">
+          <ManagedCommandLifecycleActions
+            command={props.command}
+            epicId={props.epicId}
+            hostId={props.hostId}
+            className={undefined}
+          />
+        </span>
+      )}
     </div>
   );
 }
