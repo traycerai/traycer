@@ -165,6 +165,17 @@ interface CompactRootSizing {
  * `git-diff-repo-switcher.tsx`) for a tall one. Falls back to a fixed-vh
  * (never px/rem) height only when NEITHER side has decoded dimensions yet
  * to derive a ratio from.
+ *
+ * `min-h-24` (sol re-review, #3773298843's follow-up): a panoramic/sprite-
+ * strip ratio (e.g. 4000x100) can derive a root height BELOW each compact
+ * `ImagePreview`'s own non-shrinking `h-6` caption, collapsing the
+ * `min-h-0 flex-1` image stage to zero beneath it - a valid image renders
+ * blank. This is a CHROME-driven floor, not a primary sizing mechanism: it
+ * only ever binds in that degenerate regime (`aspect-ratio`/`max-height`
+ * govern every normal case), the same shape as the fluid-layout rule's own
+ * icon/touch-target carve-out for small chrome dimensions - stated
+ * explicitly here since this rule has now been litigated twice on this
+ * file.
  */
 function compactRootSizing(
   compact: boolean,
@@ -176,7 +187,7 @@ function compactRootSizing(
   if (ratio === null)
     return { className: "h-[45vh] overflow-hidden", style: undefined };
   return {
-    className: "max-h-[min(45vh,20rem)] overflow-hidden",
+    className: "max-h-[min(45vh,20rem)] min-h-24 overflow-hidden",
     style: { aspectRatio: `${ratio}` },
   };
 }

@@ -366,6 +366,7 @@ describe("<ImageDiffView />", () => {
     const root = container.firstElementChild;
 
     expect(root?.className).toContain("max-h-[min(45vh,20rem)]");
+    expect(root?.className).toContain("min-h-24");
     expect(root?.className).toContain("overflow-hidden");
     expect(root?.className).not.toContain("h-full");
     const aspectRatio =
@@ -388,6 +389,36 @@ describe("<ImageDiffView />", () => {
     const aspectRatio =
       root instanceof HTMLElement ? root.style.aspectRatio : "";
     expect(Number.parseFloat(aspectRatio)).toBeCloseTo(2 * (4 / 3));
+    expect(root?.className).toContain("max-h-[min(45vh,20rem)]");
+    expect(root?.className).toContain("min-h-24");
+  });
+
+  it("adds a compact height floor for panoramic image ratios", () => {
+    state.old = {
+      status: "ready",
+      url: "blob:old",
+      meta: {
+        mediaType: "image/png",
+        sizeBytes: 160_000,
+        width: 4_000,
+        height: 40,
+      },
+      reason: null,
+      totalBytes: 160_000,
+      servedFromCache: false,
+    };
+    state.new = {
+      status: "ready",
+      url: "blob:new",
+      meta: null,
+      reason: null,
+      totalBytes: 18,
+      servedFromCache: false,
+    };
+    const { container } = renderDiff({ compact: true });
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain("min-h-24");
     expect(root?.className).toContain("max-h-[min(45vh,20rem)]");
   });
 
@@ -417,5 +448,6 @@ describe("<ImageDiffView />", () => {
       root instanceof HTMLElement ? root.style.aspectRatio : "";
     expect(aspectRatio).toBe("");
     expect(root?.className).not.toContain("max-h-[min(45vh,20rem)]");
+    expect(root?.className).not.toContain("min-h-24");
   });
 });
