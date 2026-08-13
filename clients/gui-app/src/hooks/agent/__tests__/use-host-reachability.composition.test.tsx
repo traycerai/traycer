@@ -167,7 +167,11 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("reports unreachable with unavailability: 'plan-restricted' for a local-only (free-tier) host", async () => {
-    const entry = directoryEntry("host-local-only", "local-only", STALE_LAST_SEEN);
+    const entry = directoryEntry(
+      "host-local-only",
+      "local-only",
+      STALE_LAST_SEEN,
+    );
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 
@@ -186,7 +190,11 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("a live E2E session outranks an 'offline' cloud verdict — reachable, not unreachable", async () => {
-    const entry = directoryEntry("host-offline-but-live", "offline", STALE_LAST_SEEN);
+    const entry = directoryEntry(
+      "host-offline-but-live",
+      "offline",
+      STALE_LAST_SEEN,
+    );
     directoryRef.value = makeDirectory([entry]).directory;
     readySessionHosts.value = new Set(["host-offline-but-live"]);
     const queryClient = makeQueryClient();
@@ -210,7 +218,11 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     // The counterpart to the override above: absent live-session evidence,
     // `offline` still gates the tile. Guards against a broad mock making
     // every host look alive.
-    const entry = directoryEntry("host-offline-no-session", "offline", STALE_LAST_SEEN);
+    const entry = directoryEntry(
+      "host-offline-no-session",
+      "offline",
+      STALE_LAST_SEEN,
+    );
     directoryRef.value = makeDirectory([entry]).directory;
     const queryClient = makeQueryClient();
 

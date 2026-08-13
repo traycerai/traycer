@@ -289,9 +289,7 @@ describe("F7 relay fuse grace - recovery dial on a lease-lapse offline entry", (
   });
 
   it("refuses the dial (null key and endpoint) for a genuinely offline entry past the fuse cap", () => {
-    const oldLastSeen = new Date(
-      Date.now() - 5 * 60 * 60 * 1000,
-    ).toISOString();
+    const oldLastSeen = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
     const genuineOfflineEntry = hostListItemToDirectoryEntry(
       offlineHostListItem(oldLastSeen),
       "wss://relay.example.test/attach",
