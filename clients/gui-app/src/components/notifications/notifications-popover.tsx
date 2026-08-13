@@ -102,18 +102,6 @@ function isAttentionSectionVisible(input: {
   return input.loadedAttentionCount > 0 || input.canLoadMoreAttention;
 }
 
-// The "Mark all read" double-tick now also dismisses loaded Attention rows, so
-// it stays actionable whenever there is EITHER unread activity to mark read OR a
-// loaded HOST Attention row to dismiss - a needs_action row read via navigation
-// is no longer unread but is still dismissable, so `unreadCount` alone would
-// wrongly disable it.
-//
-// Retained HOST Attention rows only count while an active host exists: a real
-// disconnect keeps the rendered rows but makes their mark-read/resolve
-// mutations unbound, so counting them then would re-enable the control into a
-// pair of failing RPCs. Unread global/app-local rows stay locally actionable
-// regardless and flow through `unreadCount` (which itself drops the host
-// contribution to 0 once the summary is unknown).
 function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
   readonly loadedHostAttentionCount: number;
@@ -346,20 +334,6 @@ export function NotificationsPopover(
     [actions],
   );
 
-  const handleResolve = useCallback(
-    (row: MergedNotificationRow) => {
-      // Dismiss stamps `resolvedAt` (and marks read), so it registers as an
-      // explicit acknowledgment for the same metric the mark-read control
-      // reports - it just also clears the row from the blocking tier.
-      Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
-        category: row.category,
-        acknowledgment_source: "explicit_action",
-      });
-      actions.resolve(row);
-    },
-    [actions],
-  );
-
   const handleMarkAllRead = useCallback(() => {
     Analytics.getInstance().track(AnalyticsEvent.NotificationsMarkedAllRead, {
       affected_count_bucket: hostState.isPartial
@@ -496,7 +470,6 @@ export function NotificationsPopover(
               onLoadMoreAttention={() => actions.loadMoreAttention()}
               onActivate={handleActivate}
               onAcknowledge={handleAcknowledge}
-              onResolve={handleResolve}
               onResetFilters={resetFilters}
             />
           </NotificationsFeedContent>
@@ -538,7 +511,6 @@ interface NotificationsFeedSectionsProps {
   readonly onLoadMoreAttention: () => void;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
 }
 
@@ -578,7 +550,6 @@ function NotificationsFeedSections(
                     highlightRelocation={false}
                     onActivate={props.onActivate}
                     onAcknowledge={props.onAcknowledge}
-                    onResolve={props.onResolve}
                   />
                 ))}
               </AnimatePresence>
@@ -608,7 +579,6 @@ function NotificationsFeedSections(
           isFilteredEmpty={props.isRecentFilteredEmpty}
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
-          onResolve={props.onResolve}
           onResetFilters={props.onResetFilters}
         />
       </m.section>
@@ -905,7 +875,6 @@ interface RecentSectionBodyProps {
   readonly isFilteredEmpty: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
 }
 
@@ -917,7 +886,6 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
         relocatedIds={props.relocatedIds}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
-        onResolve={props.onResolve}
       />
     );
   }
@@ -939,7 +907,6 @@ interface RecentRowListProps {
   readonly relocatedIds: ReadonlySet<string>;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
 /** Inserts a temporal separator whenever the calendar-day group changes
@@ -960,7 +927,6 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
           now={now}
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
-          onResolve={props.onResolve}
         />
       ))}
     </ul>
@@ -974,7 +940,6 @@ interface RecentRowProps {
   readonly now: number;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
-  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
 function RecentRow(props: RecentRowProps): ReactNode {
@@ -1001,7 +966,6 @@ function RecentRow(props: RecentRowProps): ReactNode {
         highlightRelocation={props.highlightRelocation}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
-        onResolve={props.onResolve}
       />
     </>
   );

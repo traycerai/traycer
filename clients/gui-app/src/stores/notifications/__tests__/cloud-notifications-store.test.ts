@@ -421,7 +421,7 @@ describe("cloud notifications store", () => {
     });
   });
 
-  it("keeps unresolved needs-action rows in attention after optimistic mark-all-read", () => {
+  it("moves unresolved needs-action rows out of attention after optimistic mark-all-read", () => {
     const failure = cloudFailureRow("entry-failure", 10);
     const prompt = cloudPromptRow("entry-prompt", 20);
     useCloudNotificationsStore.getState().applySnapshot({
@@ -436,14 +436,14 @@ describe("cloud notifications store", () => {
     expect(cloud.summary).toEqual({
       totalCount: 2,
       unreadCount: 0,
-      attentionCount: 1,
+      attentionCount: 0,
     });
     expect(Object.values(cloud.rows).map((row) => row?.entry.readAt)).toEqual([
       30, 30,
     ]);
   });
 
-  it("preserves summary-only attention after optimistic mark-all-read", () => {
+  it("clears summary-only attention after optimistic mark-all-read", () => {
     const failure = cloudFailureRow("entry-failure", 10);
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [failure],
@@ -457,22 +457,22 @@ describe("cloud notifications store", () => {
     expect(useCloudNotificationsStore.getState().summary).toEqual({
       totalCount: 2,
       unreadCount: 0,
-      attentionCount: 1,
+      attentionCount: 0,
     });
   });
 
-  it("decrements optimistic attention only for failures during entity-read fan-out", () => {
+  it("decrements optimistic attention for every read-based attention row during entity-read fan-out", () => {
     const failure = cloudFailureRow("entry-failure", 10);
-    const informational = cloudRow("entry-info", 20, "host-a");
+    const prompt = cloudPromptRow("entry-prompt", 20);
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [failure, informational],
-      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      rows: [failure, prompt],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
       version: 1,
     });
 
     useCloudNotificationsStore
       .getState()
-      .beginEntityRead([failure.entryId, informational.entryId], 30);
+      .beginEntityRead([failure.entryId, prompt.entryId], 30);
 
     expect(useCloudNotificationsStore.getState().summary).toEqual({
       totalCount: 2,

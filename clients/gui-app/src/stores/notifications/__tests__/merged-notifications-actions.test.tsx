@@ -233,7 +233,8 @@ function applyHostSnapshot(
     attention: {
       entries: entries.filter(
         (entry) =>
-          entry.severity === "needs_action" || entry.severity === "failure",
+          entry.readAt === null &&
+          (entry.severity === "needs_action" || entry.severity === "failure"),
       ),
       nextCursor: null,
     },
@@ -254,7 +255,6 @@ function bindHostClient(): void {
 function defaultHostRequest(method: string): Promise<unknown> {
   if (
     method === "host.notifications.markRead" ||
-    method === "host.notifications.resolve" ||
     method === "host.notifications.markAllRead"
   ) {
     return Promise.resolve({ ok: true });
@@ -262,12 +262,12 @@ function defaultHostRequest(method: string): Promise<unknown> {
   return Promise.resolve({});
 }
 
-function unsupportedResolveError(): HostRpcError {
+function unsupportedHostError(method: string): HostRpcError {
   return new HostRpcError({
     code: "E_HOST_UNSUPPORTED",
-    message: "host.notifications.resolve is not supported",
-    requestId: "req-unsupported-resolve",
-    method: "host.notifications.resolve",
+    message: `${method} is not supported`,
+    requestId: "req-unsupported-method",
+    method,
     fatalDetails: {
       code: "E_HOST_UNSUPPORTED",
       reason: "Method not advertised by this host",
@@ -296,44 +296,6 @@ function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
   return { beforeUpdatedAt };
 }
 
-function resolveCallOccurrences(): ReadonlyArray<{
-  readonly id: string;
-  readonly updatedAt: number;
-  readonly sourceRef: string | null;
-}> {
-  const call = hostRequestMock.mock.calls.find(
-    (entry) => entry[0] === "host.notifications.resolve",
-  );
-  const params: unknown = call === undefined ? undefined : call[1];
-  if (!isRecord(params)) {
-    throw new Error("expected host.notifications.resolve params");
-  }
-  const occurrences = params["occurrences"];
-  if (!Array.isArray(occurrences)) {
-    throw new Error("expected host.notifications.resolve params");
-  }
-  return occurrences.map((raw: unknown) => {
-    if (!isRecord(raw)) {
-      throw new Error("expected resolve occurrence token");
-    }
-    const id = raw["id"];
-    const updatedAt = raw["updatedAt"];
-    const sourceRef = raw["sourceRef"];
-    if (
-      typeof id !== "string" ||
-      typeof updatedAt !== "number" ||
-      (sourceRef !== null && typeof sourceRef !== "string")
-    ) {
-      throw new Error("expected resolve occurrence token");
-    }
-    return {
-      id,
-      updatedAt,
-      sourceRef: sourceRef === null ? null : sourceRef,
-    };
-  });
-}
-
 /** The exact `useHostQueries` cache key shape for one `indicatorState`
  * request pair: host scope, method, request params, identity suffix. */
 type IndicatorQueryKey = readonly [
@@ -346,15 +308,6 @@ type IndicatorQueryKey = readonly [
   },
   string,
 ];
-
-function entryResolvedAt(id: string): number | null {
-  const byId = useHostNotificationsStore.getState().byId;
-  if (!(id in byId)) {
-    throw new Error(`missing host notification ${id}`);
-  }
-  const entry = byId[id];
-  return "resolvedAt" in entry ? entry.resolvedAt : null;
-}
 
 describe("useMergedNotificationsActions markAllAsRead composition", () => {
   beforeEach(() => {
@@ -385,7 +338,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     __resetAppLocalNotificationsStoreForTests();
   });
 
-  it("fires markAllRead and resolve concurrently with loaded blocking occurrence tokens", async () => {
+  it("marks every unread host row read without resolving prompts", async () => {
     bindHostClient();
     applyHostSnapshot(
       [
@@ -393,7 +346,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
         hostPrompt("prompt-b", 150, 40),
         hostDone("done-unread", 100, null),
       ],
-      { unreadCount: 2, attentionCount: 2 },
+      { unreadCount: 2, attentionCount: 1 },
     );
 
     const { result } = renderHook(
@@ -404,10 +357,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
       { wrapper: createWrapper() },
     );
 
-    expect(result.current.attentionIds).toEqual([
-      "host:prompt-a",
-      "host:prompt-b",
-    ]);
+    expect(result.current.attentionIds).toEqual(["host:prompt-a"]);
 
     act(() => {
       result.current.actions.markAllAsRead();
@@ -415,28 +365,19 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
 
     await waitFor(() => {
       expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
-      expect(
-        [...resolveCallOccurrences()].sort((a, b) => a.id.localeCompare(b.id)),
-      ).toEqual([
-        { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
-        { id: "prompt-b", updatedAt: 150, sourceRef: "prompt-b" },
-      ]);
     });
-
-    // No optimistic resolve: Attention still holds the loaded prompts until the
-    // host's authoritative readStateChanged frame lands.
-    expect(result.current.attentionIds).toEqual([
-      "host:prompt-a",
-      "host:prompt-b",
-    ]);
-    expect(entryResolvedAt("prompt-a")).toBeNull();
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
 
     act(() => {
       useHostNotificationsStore
         .getState()
         .applyReadStateFrame(["prompt-a", "prompt-b"], {
           readAt: 999,
-          resolvedAt: 999,
+          resolvedAt: null,
           removedIds: [],
           summary: { unreadCount: 0, attentionCount: 0 },
         });
@@ -445,9 +386,13 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     await waitFor(() => {
       expect(result.current.attentionIds).toEqual([]);
     });
+    for (const id of ["prompt-a", "prompt-b"]) {
+      const entry = useHostNotificationsStore.getState().byId[id];
+      expect("resolvedAt" in entry ? entry.resolvedAt : null).toBeNull();
+    }
   });
 
-  it("skips resolve when no loaded blocking Attention rows exist", async () => {
+  it("does not need a resolve call when no Attention rows exist", async () => {
     bindHostClient();
     applyHostSnapshot([hostDone("done-only", 100, null)], {
       unreadCount: 1,
@@ -471,186 +416,6 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
         (call) => call[0] === "host.notifications.resolve",
       ),
     ).toBe(false);
-  });
-
-  it("keeps markAllRead when resolve is E_HOST_UNSUPPORTED without a failure row or double toast", async () => {
-    bindHostClient();
-    applyHostSnapshot(
-      [
-        hostPrompt("prompt-old-host", 200, null),
-        hostDone("done-unread", 100, null),
-      ],
-      { unreadCount: 2, attentionCount: 1 },
-    );
-
-    hostRequestMock.mockImplementation((method: string) => {
-      if (method === "host.notifications.resolve") {
-        return Promise.reject(unsupportedResolveError());
-      }
-      return defaultHostRequest(method);
-    });
-
-    const { result } = renderHook(
-      () => ({
-        actions: useMergedNotificationsActions(),
-        attentionIds: useAttentionNotificationIds(),
-      }),
-      { wrapper: createWrapper() },
-    );
-
-    act(() => {
-      result.current.actions.markAllAsRead();
-    });
-
-    await waitFor(() => {
-      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
-      expect(resolveCallOccurrences()).toEqual([
-        {
-          id: "prompt-old-host",
-          updatedAt: 200,
-          sourceRef: "prompt-old-host",
-        },
-      ]);
-    });
-
-    await waitFor(() => {
-      expect(
-        useHostNotificationsStore.getState().byId["done-unread"].readAt,
-      ).toBeTypeOf("number");
-    });
-
-    await waitFor(() => {
-      expect(toastFromHostError).toHaveBeenCalledTimes(1);
-    });
-    expect(toastFromHostError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "E_HOST_UNSUPPORTED",
-        method: "host.notifications.resolve",
-      }),
-      "Couldn't dismiss the notifications.",
-    );
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    expect(toast.error).toHaveBeenCalledWith(
-      "This needs a newer Traycer host. Update the host to continue.",
-      {
-        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
-        cancel: null,
-      },
-    );
-    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
-    expect(result.current.attentionIds).toEqual(["host:prompt-old-host"]);
-    expect(entryResolvedAt("prompt-old-host")).toBeNull();
-  });
-});
-
-describe("useMergedNotificationsActions row-level resolve", () => {
-  beforeEach(() => {
-    hostRequestMock.mockReset();
-    hostRequestMock.mockImplementation(defaultHostRequest);
-    hostBindingState.current = null;
-    vi.mocked(toastFromHostError).mockClear();
-    vi.mocked(toast.error).mockClear();
-    __resetNotificationsStoreForTests();
-    __resetHostNotificationsStoreForTests();
-    __resetAppLocalNotificationsStoreForTests();
-    useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
-    useHostNotificationsStore.getState().applySnapshot({
-      attention: { entries: [], nextCursor: null },
-      recent: { entries: [], nextCursor: null },
-      summary: { unreadCount: 0, attentionCount: 0 },
-    });
-  });
-
-  afterEach(() => {
-    cleanup();
-    hostBindingState.current = null;
-    __resetHostNotificationsStoreForTests();
-    __resetAppLocalNotificationsStoreForTests();
-  });
-
-  it("no-ops when the host binding is retained but has no active host", async () => {
-    // A disconnect keeps the runtime binding (`client !== null`) and the
-    // rendered blocking row, but drops the active host id to null. The Dismiss
-    // tick stays clickable, yet firing resolve then would only yield an
-    // unbound-rejection toast while the row cannot change - so it must no-op,
-    // mirroring markAllAsRead's dismiss-all active-host gate.
-    hostBindingState.current = {
-      hostClient: {
-        request: hostRequestMock,
-        getActiveHostId: () => null,
-      },
-    };
-    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
-      unreadCount: 1,
-      attentionCount: 1,
-    });
-
-    const { result } = renderHook(
-      () => ({
-        actions: useMergedNotificationsActions(),
-        row: useMergedNotificationRow("host:prompt-a"),
-      }),
-      { wrapper: createWrapper() },
-    );
-
-    const row = result.current.row;
-    expect(row).not.toBeNull();
-    if (row === null) return;
-
-    act(() => {
-      result.current.actions.resolve(row);
-    });
-    // Flush any scheduled mutation so a regression that dropped the guard would
-    // surface the resolve RPC here rather than pass on an unflushed microtask.
-    await act(async () => {
-      await new Promise((done) => setTimeout(done, 0));
-    });
-
-    expect(
-      hostRequestMock.mock.calls.some(
-        (call) => call[0] === "host.notifications.resolve",
-      ),
-    ).toBe(false);
-    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
-    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
-  });
-
-  it("fires the resolve RPC with the occurrence token when an active host is bound", async () => {
-    bindHostClient();
-    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
-      unreadCount: 1,
-      attentionCount: 1,
-    });
-
-    const { result } = renderHook(
-      () => ({
-        actions: useMergedNotificationsActions(),
-        row: useMergedNotificationRow("host:prompt-a"),
-      }),
-      { wrapper: createWrapper() },
-    );
-
-    const row = result.current.row;
-    expect(row).not.toBeNull();
-    if (row === null) return;
-
-    act(() => {
-      result.current.actions.resolve(row);
-    });
-
-    await waitFor(() => {
-      expect(
-        hostRequestMock.mock.calls.some(
-          (call) => call[0] === "host.notifications.resolve",
-        ),
-      ).toBe(true);
-    });
-    // The resolve carries the row's immutable occurrence token
-    // (id, updatedAt, sourceRef) - the exact tuple the host guards on - not just
-    // the method name.
-    expect(resolveCallOccurrences()).toEqual([
-      { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
-    ]);
   });
 });
 
@@ -902,7 +667,11 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostRequestMock.mockImplementation((method: string) => {
       if (method === "host.notifications.cloudFeed.markRead") {
         attempts += 1;
-        if (attempts === 1) return Promise.reject(unsupportedResolveError());
+        if (attempts === 1) {
+          return Promise.reject(
+            unsupportedHostError("host.notifications.cloudFeed.markRead"),
+          );
+        }
         return Promise.resolve({ status: "applied", version: 11 });
       }
       return defaultHostRequest(method);

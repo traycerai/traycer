@@ -18,7 +18,7 @@ export type NotificationLifecycleClassification =
 
 /**
  * The single lifecycle classifier: every feed row belongs to Attention or
- * Recent, never both. Attention membership is unresolved host prompts,
+ * Recent, never both. Attention membership is unread host prompts,
  * unread host failures, and unread app-local failures - collaboration rows
  * are never attention-eligible.
  */
@@ -27,7 +27,7 @@ export function classifyNotificationLifecycle(
 ): NotificationLifecycleClassification {
   if (row.source === "global") return { section: "recent" };
   if (row.severity === "needs_action") {
-    return row.resolvedAt === null
+    return row.readAt === null
       ? { section: "attention", tier: "blocking" }
       : { section: "recent" };
   }

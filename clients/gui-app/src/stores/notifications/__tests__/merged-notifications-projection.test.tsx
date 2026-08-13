@@ -122,11 +122,12 @@ function hostInterview(
   id: string,
   updatedAt: number,
   resolvedAt: number | null,
+  readAt: number | null,
 ): HostNotificationEntry {
   return {
     id,
     updatedAt,
-    readAt: null,
+    readAt,
     kind: "interview.requested",
     sourceRef: id,
     severity: "needs_action",
@@ -335,7 +336,8 @@ function applyHostSnapshot(
     attention: {
       entries: entries.filter(
         (item) =>
-          item.severity === "needs_action" || item.severity === "failure",
+          item.readAt === null &&
+          (item.severity === "needs_action" || item.severity === "failure"),
       ),
       nextCursor: null,
     },
@@ -491,8 +493,8 @@ describe("merged notification projection (Attention / Recent)", () => {
     ]);
   });
 
-  it("moves unresolved host prompts to Recent when resolvedAt is set", () => {
-    applyHostSnapshot([hostInterview("interview", 100, null)], {
+  it("keeps resolved prompts in Attention until their notification is read", () => {
+    applyHostSnapshot([hostInterview("interview", 100, null, null)], {
       unreadCount: 1,
       attentionCount: 1,
     });
@@ -511,16 +513,26 @@ describe("merged notification projection (Attention / Recent)", () => {
     expect(row.current?.resolvedAt).toBeNull();
 
     act(() => {
-      applyHostSnapshot([hostInterview("interview", 100, 500)], {
+      applyHostSnapshot([hostInterview("interview", 100, 500, null)], {
         unreadCount: 1,
+        attentionCount: 1,
+      });
+    });
+
+    expect(attention.current).toEqual([hostFeedId("interview")]);
+    expect(recent.current).toEqual([]);
+    expect(row.current?.createdAt).toBe(100);
+    expect(row.current?.resolvedAt).toBe(500);
+
+    act(() => {
+      applyHostSnapshot([hostInterview("interview", 100, 500, 600)], {
+        unreadCount: 0,
         attentionCount: 0,
       });
     });
 
     expect(attention.current).toEqual([]);
     expect(recent.current).toEqual([hostFeedId("interview")]);
-    expect(row.current?.createdAt).toBe(100);
-    expect(row.current?.resolvedAt).toBe(500);
   });
 
   it("moves unread failures to Recent when readAt is set (original timestamps preserved)", () => {
@@ -574,7 +586,7 @@ describe("merged notification projection (Attention / Recent)", () => {
         hostFailure("newer-failure", 1_000, null),
         hostPrompt("older-prompt", 10, null),
         hostFailure("mid-failure", 500, null),
-        hostInterview("mid-prompt", 200, null),
+        hostInterview("mid-prompt", 200, null, null),
       ],
       { unreadCount: 4, attentionCount: 4 },
     );

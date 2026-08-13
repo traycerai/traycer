@@ -238,7 +238,8 @@ function applyHostSnapshot(
     attention: {
       entries: entries.filter(
         (entry) =>
-          entry.severity === "needs_action" || entry.severity === "failure",
+          entry.readAt === null &&
+          (entry.severity === "needs_action" || entry.severity === "failure"),
       ),
       nextCursor: null,
     },
@@ -466,7 +467,6 @@ function resetStores(): void {
     }
     if (
       method === "host.notifications.markRead" ||
-      method === "host.notifications.resolve" ||
       method === "host.notifications.markAllRead"
     ) {
       return Promise.resolve({ ok: true });
@@ -555,22 +555,21 @@ describe("notification desktop-pass design corrections", () => {
       expect(unread.className).toBe(read.className);
     });
 
-    it("keys the rail and trailing tick only on unread state across sections", async () => {
-      // needs_action can stay in Attention via resolvedAt after it has been
-      // read, but read state still owns the row-level rail and tick affordance.
+    it("keys the rail and trailing tick only on unread state", async () => {
       applyHostSnapshot(
         [
           hostPrompt("attn-read", 200, 50),
           hostDone("recent-read", 100, 40, "Recent read task"),
           hostDone("recent-unread", 90, null, "Recent unread task"),
         ],
-        { unreadCount: 2, attentionCount: 1 },
+        { unreadCount: 1, attentionCount: 0 },
       );
       renderPopoverRouter(noopFilterMenuOpenChange);
 
-      expect(await screen.findByText("Needs attention")).not.toBeNull();
+      expect(await screen.findByText("Recent activity")).not.toBeNull();
+      expect(screen.queryByText("Needs attention")).toBeNull();
       const rows = screen.getAllByTestId("notification-entry");
-      const attention = rows.find(
+      const promptRead = rows.find(
         (row) => row.dataset.notificationId === "host:attn-read",
       );
       const recentRead = rows.find(
@@ -580,29 +579,23 @@ describe("notification desktop-pass design corrections", () => {
         (row) => row.dataset.notificationId === "host:recent-unread",
       );
       if (
-        attention === undefined ||
+        promptRead === undefined ||
         recentRead === undefined ||
         recentUnread === undefined
       ) {
-        throw new Error("expected attention + recent rows");
+        throw new Error("expected recent rows");
       }
 
-      expect(attention.dataset.notificationRead).toBe("true");
+      expect(promptRead.dataset.notificationRead).toBe("true");
       expect(
-        within(attention).queryByTestId("notification-unread-rail"),
+        within(promptRead).queryByTestId("notification-unread-rail"),
       ).toBeNull();
       expect(
-        within(attention).queryByRole("button", { name: "Dismiss" }),
-      ).toBeNull();
-      expect(
-        within(attention).queryByRole("button", { name: "Mark as read" }),
+        within(promptRead).queryByRole("button", { name: "Mark as read" }),
       ).toBeNull();
       expect(recentRead.dataset.notificationRead).toBe("true");
       expect(
         within(recentRead).queryByTestId("notification-unread-rail"),
-      ).toBeNull();
-      expect(
-        within(recentRead).queryByTestId("notification-dismiss"),
       ).toBeNull();
       expect(
         within(recentRead).queryByTestId("notification-mark-read"),
@@ -746,7 +739,6 @@ describe("notification desktop-pass design corrections", () => {
       expect(
         within(navRead).queryByTestId("notification-acknowledge"),
       ).toBeNull();
-      expect(within(navRead).queryByTestId("notification-dismiss")).toBeNull();
 
       const ack = within(localUnread).getByTestId("notification-acknowledge");
       expect(ack.hasAttribute("disabled")).toBe(false);
@@ -769,7 +761,7 @@ describe("notification desktop-pass design corrections", () => {
       });
     });
 
-    it("exposes Dismiss only on unread blocking Attention and resolve does not activate the row", async () => {
+    it("marks unread prompts read without resolving their workflow", async () => {
       applyHostSnapshot(
         [
           hostPrompt("blocking-unread", 200, null),
@@ -794,39 +786,31 @@ describe("notification desktop-pass design corrections", () => {
       const recent = findRow("host:recent-unread");
 
       expect(blocking.dataset.notificationRead).toBe("false");
-      const dismiss = within(blocking).getByTestId("notification-dismiss");
-      expect(dismiss.getAttribute("aria-label")).toBe("Dismiss");
-      expect(
-        within(blocking).queryByTestId("notification-mark-read"),
-      ).toBeNull();
+      const markRead = within(blocking).getByTestId("notification-mark-read");
+      expect(markRead.getAttribute("aria-label")).toBe("Mark as read");
 
       expect(
         within(failure).getByTestId("notification-mark-read"),
       ).not.toBeNull();
-      expect(within(failure).queryByTestId("notification-dismiss")).toBeNull();
 
       expect(
         within(recent).getByTestId("notification-mark-read"),
       ).not.toBeNull();
-      expect(within(recent).queryByTestId("notification-dismiss")).toBeNull();
 
-      fireEvent.click(dismiss);
+      fireEvent.click(markRead);
       await waitFor(() => {
         expect(hostRequestMock).toHaveBeenCalledWith(
-          "host.notifications.resolve",
-          {
-            occurrences: [
-              {
-                id: "blocking-unread",
-                updatedAt: 200,
-                sourceRef: "blocking-unread",
-              },
-            ],
-          },
+          "host.notifications.markRead",
+          { kind: "ids", ids: ["blocking-unread"] },
         );
       });
+      expect(
+        hostRequestMock.mock.calls.some(
+          (call) => call[0] === "host.notifications.resolve",
+        ),
+      ).toBe(false);
 
-      // No optimistic client write: row remains unresolved until the host frame.
+      // Notification consumption never changes the underlying prompt state.
       const stillPending =
         useHostNotificationsStore.getState().byId["blocking-unread"];
       expect(
@@ -840,27 +824,25 @@ describe("notification desktop-pass design corrections", () => {
           ),
       ).not.toBeUndefined();
 
-      const resolvedAt = 888;
-      // Resolving the unread blocking row drops unreadCount by one and leaves
-      // failure-tier Attention in place.
+      const readAt = 888;
       act(() => {
         useHostNotificationsStore
           .getState()
           .applyReadStateFrame(["blocking-unread"], {
-            readAt: resolvedAt,
-            resolvedAt,
+            readAt,
+            resolvedAt: null,
             removedIds: [],
             summary: { unreadCount: 2, attentionCount: 1 },
           });
       });
 
       await waitFor(() => {
-        const resolved =
+        const acknowledged =
           useHostNotificationsStore.getState().byId["blocking-unread"];
-        expect(resolved.readAt).toBe(resolvedAt);
-        expect("resolvedAt" in resolved ? resolved.resolvedAt : null).toBe(
-          resolvedAt,
-        );
+        expect(acknowledged.readAt).toBe(readAt);
+        expect(
+          "resolvedAt" in acknowledged ? acknowledged.resolvedAt : null,
+        ).toBeNull();
       });
       expect(useHostNotificationsStore.getState().summary).toEqual({
         unreadCount: 2,
@@ -873,11 +855,10 @@ describe("notification desktop-pass design corrections", () => {
             (entry) => entry.dataset.notificationId === "host:blocking-unread",
           );
         if (live === undefined) {
-          // Left Attention after resolve - no longer in the blocking section.
-          expect(screen.queryByTestId("notification-dismiss")).toBeNull();
+          // The prompt moved from Attention into Recent after it was read.
           return;
         }
-        expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
+        expect(within(live).queryByTestId("notification-mark-read")).toBeNull();
         expect(live.dataset.notificationRead).toBe("true");
       });
     });

@@ -363,7 +363,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Dismissing an attention row resolves it (persists the acknowledgement).
+  // Retained for compatible occurrence-scoped workflow resolution callers.
   "host.notifications.resolve": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
