@@ -1,0 +1,189 @@
+import { useMemo } from "react";
+import { queryOptions, useQuery } from "@tanstack/react-query";
+import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
+import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
+import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
+import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
+import { getViewerReachabilityCheck } from "@/lib/host/viewer-reachability-store";
+import { useHostBinding } from "@/lib/host";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+import {
+  buildHostScopeOptions,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
+import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
+
+/**
+ * THE answer to "what hosts does this account have, and can I reach them".
+ *
+ * Every host picker in the app reads this and nothing else. It used to be
+ * private to `useHostScopeFor`, which meant Settings answered the question from
+ * the merged view (directory + account registry + this machine's own service)
+ * while the composer, the file tree, the git-diff panel and the terminal picker
+ * answered it from the raw directory alone. The two lists disagreed by design:
+ * a host you own but cannot currently dial existed in one and simply did not
+ * exist in the others, so "my other laptop is gone" and "my other laptop is
+ * offline" were the same picture depending on which picker you happened to open.
+ *
+ * What a surface DOES with a listed host still differs — see `HostPickIntent` —
+ * but which hosts exist no longer does.
+ */
+export interface HostOptions {
+  /** Every host this account owns or this client can dial, merged and sorted. */
+  readonly hosts: readonly HostScopeOption[];
+  /** The app-wide active host — where new work lands and the bell reads from. */
+  readonly activeHostId: string | null;
+  readonly isLoading: boolean;
+  /**
+   * Both lists have ANSWERED (an error is an answer). Callers that decide a
+   * host is gone must wait for this, or a slow request reads as a removal.
+   */
+  readonly listsResolved: boolean;
+  /**
+   * A host list came back as an ERROR, so an empty `hosts` means "we could not
+   * find out", not "you own no machines". The difference is the whole message:
+   * one is recoverable by retrying, the other by installing a host.
+   */
+  readonly listsFailed: boolean;
+  /** Re-request both host lists after a failure. */
+  readonly retryLists: () => void;
+  /** Reference "now" for relative timestamps; ticks once a minute. */
+  readonly nowMs: number;
+}
+
+const HEALTHY_PRESENCE: HostPresenceHealth = {
+  status: "healthy",
+  reason: null,
+};
+
+/**
+ * Stand-in `queryFn` for the disabled installed-record query.
+ *
+ * TanStack requires one even when `enabled` is false, and a rejecting stub is
+ * the honest shape: if it ever runs, the `enabled` guard above it is wrong and
+ * should fail loudly rather than resolve a fake `null` that would read as
+ * "nothing is installed".
+ */
+function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+export function useHostOptions(): HostOptions {
+  const binding = useHostBinding();
+  const runnerHost = useRunnerHost();
+  const activeHostId = useReactiveActiveHostId();
+  const nowMs = useNowMs();
+
+  const directoryQuery = useHostDirectoryList();
+  const registryQuery = useRegisteredHosts();
+  const localSnapshot = useLocalHostSnapshot(runnerHost);
+  // Same gate the header and workspace pickers consult, so no picker can offer
+  // a remote route another one already refuses.
+  const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
+
+  const directory = directoryQuery.data;
+  const registry = registryQuery.data;
+
+  // Which host id is THIS computer's, asked of the directory rather than of
+  // `getLocalEntry()`.
+  //
+  // `getLocalEntry()` is backed by the live local snapshot, so it goes null the
+  // moment the local host stops — exactly when "is this my machine?" has to
+  // keep answering yes, because the answer gates install / restart / recovery.
+  // The directory keeps answering: while the local host is down it presents the
+  // registry twin carrying this machine's id as a non-dialable `kind: "local"`
+  // entry (`bootingLocalEntry`). Reading the list is therefore the durable
+  // question; the live entry is only a faster path to the same id.
+  const localHostId = useMemo(() => {
+    const fromDirectory = (directory ?? []).find(
+      (entry) => entry.kind === "local",
+    );
+    if (fromDirectory !== undefined) return fromDirectory.hostId;
+    return binding?.directory.getLocalEntry()?.hostId ?? null;
+  }, [directory, binding]);
+
+  // The installed record is what separates "stopped" from "not installed" — the
+  // two local states a person can actually act on. Without it `deriveStatus`
+  // can only answer `running` or `undefined`, and a stopped local host falls
+  // through to its registry lease and reads "Offline · last seen 3h ago": true
+  // of the lease, useless to someone whose host is sitting there stopped with a
+  // Start button one click away.
+  //
+  // Same query key as the Host panel's, so the two share one request rather
+  // than doubling it, and `enabled` keeps shells without the CLI bridge on the
+  // old honest-`undefined` path instead of guessing.
+  const management = runnerHost.hostManagement;
+  const installedQuery = useQuery(
+    queryOptions<HostInstalledRecord | null>({
+      queryKey:
+        management === null
+          ? runnerQueryKeys.hostInstalledRecordUnavailable()
+          : runnerQueryKeys.hostInstalledRecord(management),
+      queryFn:
+        management === null
+          ? skipInstalledRecord
+          : () => management.installedRecord(),
+      enabled: management !== null,
+      staleTime: 30_000,
+    }),
+  );
+
+  const localService = useMemo(
+    () => deriveStatus(localSnapshot, installedQuery.data),
+    [localSnapshot, installedQuery.data],
+  );
+
+  const hosts = useMemo(
+    () =>
+      buildHostScopeOptions({
+        directory: directory ?? [],
+        registry: registry?.hosts ?? [],
+        presenceHealth: registry?.presenceHealth ?? HEALTHY_PRESENCE,
+        localHostId,
+        activeHostId,
+        localService,
+        hasLiveSession: hasReadyRemoteSession,
+        viewerCheck: getViewerReachabilityCheck,
+        remoteHostsPlanRestricted,
+        nowMs,
+      }),
+    [
+      directory,
+      registry,
+      localHostId,
+      activeHostId,
+      localService,
+      remoteHostsPlanRestricted,
+      nowMs,
+    ],
+  );
+
+  // `data !== undefined` rather than `!isLoading`, because a background refetch
+  // of an already-resolved list must not re-open the "still loading" window and
+  // un-say `vanished`. The rule itself — including that an error is an ANSWER —
+  // lives in `hostListReadiness`, where a test can reach it.
+  const lists = hostListReadiness(
+    { hasData: directory !== undefined, isError: directoryQuery.isError },
+    { hasData: registry !== undefined, isError: registryQuery.isError },
+  );
+
+  return {
+    hosts,
+    activeHostId,
+    isLoading: directoryQuery.isLoading || registryQuery.isLoading,
+    listsResolved: lists.resolved,
+    listsFailed: lists.failed,
+    retryLists: () => {
+      void directoryQuery.refetch();
+      void registryQuery.refetch();
+    },
+    nowMs,
+  };
+}

@@ -60,21 +60,26 @@ function stubLoadedBindings(): void {
   };
 }
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: [
-      {
-        hostId: "host-1",
-        label: "MacBook",
-        kind: "local",
-        websocketUrl: null,
-        version: null,
-        status: "available",
-      },
-    ],
-  }),
-}));
+// This suite is about the WORKSPACE / terminal-launch list, not the host
+// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
+// suites use for `useHostScope`) rather than standing up the six hooks it
+// composes. The host section itself is now a collapsed `HostSwitcher`
+// trigger (one host here, so its nested popover renders no search box, just
+// the one option row).
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" })],
+        activeHostId: "host-1",
+      }),
+  };
+});
 
+// `NewTerminalPickerBody` also reads this directly (the folderless-launch
+// target's host id), independent of `useHostOptions`.
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
@@ -159,6 +164,10 @@ describe("<NewTerminalPicker />", () => {
     expect(
       screen.getByTestId("host-workspace-selector-host-section"),
     ).toBeDefined();
+    // The host section is now a collapsed switcher trigger, not a flat row
+    // list - its rows are one click away, not asserted here.
+    const hostTrigger = screen.getByTestId("settings-host-switcher");
+    expect(hostTrigger.getAttribute("aria-label")).toBe("Host: MacBook");
     const workspacesHeader = screen.getByText("Workspaces");
     const search = screen.getByRole("combobox");
     expect(screen.getAllByText("Workspaces")).toHaveLength(1);
@@ -461,9 +470,9 @@ describe("<NewTerminalPicker />", () => {
   it("swaps the bound host without creating a tile when a host row is clicked", () => {
     const tabId = openPicker();
 
-    fireEvent.click(
-      screen.getByTestId("host-workspace-selector-host-row-host-1"),
-    );
+    // The host row is one click behind the switcher trigger now.
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-1"));
 
     expect(selectById).toHaveBeenCalledWith("host-1");
     const tiles = tabTiles(tabId);

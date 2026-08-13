@@ -18,6 +18,20 @@ let scope: HostScope = hostScopeFixture({});
 /** Default: following the active host, not an explicit pick. */
 let hasExplicitPick = false;
 /**
+ * The scope's client, kept beside the scope rather than inside the fixture
+ * because nothing here CALLS it: `useScopedHostBinding` checks it for null and
+ * hands it to a context provider this suite stubs out. So the stub is an
+ * identity, not a shape — naming it says that, where casting an empty object to
+ * `HostClient` would claim a surface nothing in this file provides.
+ *
+ * It is what separates a pick that has RESOLVED (a scoped binding exists) from
+ * one still resolving, which is the difference the re-mount case below turns on.
+ */
+const SCOPE_CLIENT_STUB = { stub: "scope-host-client" };
+let scopeClient: typeof SCOPE_CLIENT_STUB | null = null;
+/** The ambient binding `useScopedHostBinding` spreads. Same reasoning. */
+const AMBIENT_BINDING_STUB = { stub: "ambient-binding" };
+/**
  * Whether `useHeaderRateLimitBars` was mounted this render. A plain counter
  * rather than `vi.fn()` because the return value already flows through the
  * mutable `bars` above — this only needs to answer "did the icon mount the
@@ -38,13 +52,23 @@ vi.mock("@/hooks/rate-limits/use-header-rate-limit-bars", () => ({
 // function of the scope, and stubbing it would hide the one thing this suite
 // cares about (that a null binding means the glyph must not draw).
 vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
-  useRateLimitHostScope: () => ({ scope, hasExplicitPick }),
+  // The client is spread OVER the fixture rather than passed into it: the
+  // fixture's type demands a real `HostClient`, and the stub deliberately is
+  // not one (see `SCOPE_CLIENT_STUB`).
+  useRateLimitHostScope: () => ({
+    scope: { ...scope, client: scopeClient },
+    hasExplicitPick,
+  }),
 }));
 vi.mock("@/lib/host", () => ({
   HostRuntimeContext: {
     Provider: (props: { readonly children: unknown }) => props.children,
   },
-  useHostBinding: () => null,
+  // A binding EXISTS here, as it does in the app — `useScopedHostBinding`
+  // spreads it and swaps in the scope's client. Returning null instead would
+  // make it answer null for every scope alike, and the re-mount case below
+  // turns on that answer changing.
+  useHostBinding: () => AMBIENT_BINDING_STUB,
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   useRateLimitProfileSelection: () => ({
@@ -53,20 +77,31 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   }),
 }));
 
-vi.mock("@/components/layout/header/rate-limit-popover", () => ({
-  RateLimitPopover: (_props: { readonly onClose: () => void }) => (
-    <div data-testid="rate-limit-popover" />
-  ),
-}));
+// The popover's contents are another suite's subject, but WHETHER it is
+// presented is this one's: the stand-in keeps the real `PopoverContent`, which
+// Radix mounts only while the root is open. So the testid below is a readout of
+// the open state itself, not of a component that renders either way.
+vi.mock("@/components/layout/header/rate-limit-popover", async () => {
+  const { PopoverContent } = await import("@/components/ui/popover");
+  return {
+    RateLimitPopover: (_props: { readonly onClose: () => void }) => (
+      <PopoverContent data-testid="rate-limit-popover" />
+    ),
+  };
+});
 
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 
-function renderIcon() {
-  return render(
+function iconTree() {
+  return (
     <TooltipProvider>
       <RateLimitIconButton />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+}
+
+function renderIcon() {
+  return render(iconTree());
 }
 
 // Exact class-token membership, not substring containment - the button's base
@@ -80,6 +115,7 @@ afterEach(() => {
   cleanup();
   bars = [];
   scope = hostScopeFixture({});
+  scopeClient = null;
   hasExplicitPick = false;
   useHeaderRateLimitBarsCalled = false;
   useTitleBarDragStore.setState({ suppressors: new Set() });
@@ -355,6 +391,33 @@ describe("<RateLimitIconButton />", () => {
       for (const track of tracks) {
         expect(track.className).toContain("bg-muted-foreground/35");
       }
+    });
+
+    // The picker that changes this scope lives INSIDE the popover, so a
+    // re-mount here is not a cosmetic flicker: it takes the popover's own
+    // `open` state with it and the surface closes the instant someone chooses a
+    // host in it — the one interaction the picker exists for. Mounting the
+    // scoped `HostRuntimeContext` only when a scoped binding exists did exactly
+    // that: the element type at that position changed the moment a pick
+    // resolved, so React tore the subtree down and built a new one.
+    it("stays open when a pick resolves into its own scoped binding", () => {
+      const { rerender } = renderIcon();
+      fireEvent.click(screen.getByRole("button", { name: "Usage limits" }));
+      expect(screen.getByTestId("rate-limit-popover")).toBeTruthy();
+
+      // Exactly the transition a click in the picker produces: an explicit pick
+      // on another host, resolved far enough to have a client of its own — the
+      // first scope for which `useScopedHostBinding` returns a binding.
+      hasExplicitPick = true;
+      scopeClient = SCOPE_CLIENT_STUB;
+      scope = hostScopeFixture({
+        status: "ready",
+        isViewingActive: false,
+        hostLabel: "Other Machine",
+      });
+      rerender(iconTree());
+
+      expect(screen.queryByTestId("rate-limit-popover")).not.toBeNull();
     });
 
     it("omits the host name from the tooltip while viewing the active host", async () => {

@@ -140,6 +140,24 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
+// This suite is about branch-prefix / draftId edge behavior, not the host
+// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
+// suites use for `useHostScope`) rather than standing up the six hooks it
+// composes.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({ hostId: "host-test", name: "Test host" }),
+        ],
+        activeHostId: "host-test",
+      }),
+  };
+});
+
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => mocks.resolvedWorkspace.current,
 }));

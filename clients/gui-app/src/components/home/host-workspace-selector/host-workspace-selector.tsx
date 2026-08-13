@@ -12,6 +12,11 @@ import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection } from "./host-section";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  findHostOption,
+  unavailableHostOption,
+} from "@/components/settings/host-scope/host-scope-model";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type {
   RepoBranchPrefixState,
@@ -358,13 +363,22 @@ export function ActiveHostWorkspaceControls(
     props.hostScope.kind === "fixed"
       ? props.hostScope.hostClient
       : defaultHostClient;
-  const visibleHostEntries =
+  // The picker's rows come from the merged host list, not from the directory
+  // this component reads for the chip label: a host the account owns but this
+  // client cannot dial belongs in the list (named, with its reason, inert),
+  // where before it was simply absent here and present in Settings.
+  //
+  // A FIXED scope is pinned to one machine — the source agent's — so the list
+  // is that host alone. It resolves out of the same merged list, and only falls
+  // back to a stand-in row when the list has never heard of it.
+  const hostOptions = useHostOptions();
+  const fixedHostOption =
     props.hostScope.kind === "fixed"
-      ? [
-          activeEntry ??
-            fixedUnavailableHostEntry(props.hostScope.hostId, hostLabel),
-        ]
-      : directoryEntries;
+      ? (findHostOption(hostOptions.hosts, props.hostScope.hostId) ??
+        unavailableHostOption(props.hostScope.hostId, hostLabel))
+      : null;
+  const visibleHostOptions =
+    fixedHostOption === null ? hostOptions.hosts : [fixedHostOption];
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
@@ -407,10 +421,17 @@ export function ActiveHostWorkspaceControls(
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
-          entries={visibleHostEntries}
+          hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
-          disabled={disabled}
+          // A FIXED scope cannot change hosts — `handleSelectHost` returns
+          // early there. Saying so on the row instead of swallowing the click
+          // is the same rule the section already applies to a busy submission:
+          // a row that accepts a click and does nothing reads as broken.
+          disabled={disabled || props.hostScope.kind === "fixed"}
+          isLoading={hostOptions.isLoading}
+          listsFailed={hostOptions.listsFailed}
+          onRetryLists={hostOptions.retryLists}
         />
         <section
           aria-label="Workspaces"
@@ -466,20 +487,6 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
-}
-
-function fixedUnavailableHostEntry(
-  hostId: string,
-  hostLabel: string,
-): HostDirectoryEntry {
-  return {
-    hostId,
-    label: hostLabel,
-    kind: "local",
-    websocketUrl: null,
-    version: null,
-    status: "unavailable",
-  };
 }
 
 function HomeWorkspaceRows(props: {

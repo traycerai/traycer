@@ -64,6 +64,7 @@ import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-
 import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   formatUnavailableReason,
@@ -435,9 +436,8 @@ export function RateLimitPopover({
             // portals OUTSIDE this content and every click in it reads as an
             // interaction outside. Without this, opening the picker closed the
             // surface the picker exists to scope, and no host could ever be
-            // chosen.
-            target.closest('[data-testid="settings-host-switcher-list"]') !==
-              null)
+            // chosen. Shared with every other container that embeds it.
+            isHostSwitcherListInteraction(target))
         ) {
           event.preventDefault();
         }
@@ -861,8 +861,13 @@ function RateLimitHostPickerRow({
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
   return (
+    // Full-bleed on purpose: the strip's own edges ARE the card's, so the
+    // picker's list can drop from it at exactly the card's width. Padding here
+    // would inset the trigger, and with it the list anchored to the trigger,
+    // leaving a few pixels of card showing down both sides of the open list —
+    // the nested-panel look this row is meant to avoid.
     <div
-      className="flex shrink-0 items-center gap-2 border-b p-1.5"
+      className="flex shrink-0 items-center border-b"
       data-testid="rate-limit-host-picker-row"
     >
       <HostSwitcher
@@ -870,13 +875,21 @@ function RateLimitHostPickerRow({
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
-        onAddHost={() => {
-          // Adding a host is a Settings verb with its own dialog and its own
-          // failure states; this popover reports usage. Send people to where
-          // that work already lives instead of growing a second copy of it.
-          onClose();
-          openSettings({ section: "host", resetToGeneral: false });
+        // Managing hosts — adding, renaming, updating, removing — is Settings'
+        // job, with its own dialogs and failure states; this popover reports
+        // usage. So the list ends in the same gear the model picker offers for
+        // provider settings: one link to where that work already lives, rather
+        // than a second copy of one verb from it.
+        action={{
+          kind: "manage-hosts",
+          onSelect: () => {
+            onClose();
+            openSettings({ section: "host", resetToGeneral: false });
+          },
         }}
+        surface="panel-header"
+        intent="view"
+        disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}

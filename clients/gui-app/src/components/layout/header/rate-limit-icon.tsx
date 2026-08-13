@@ -17,7 +17,7 @@ import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-s
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
-import { HostRuntimeContext } from "@/lib/host";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -42,24 +42,30 @@ const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
  * machines. Nothing outside this subtree moves — picking a host to WATCH is
  * not picking where new work lands (`stores/rate-limits/rate-limit-popover-store`).
  *
- * `useScopedHostBinding` returns null while the pick is the active host, which
- * is why the provider is conditional: there the ambient binding already IS the
- * scoped one, and re-providing a copy would only detach this subtree from
- * binding updates.
+ * `useScopedHostBinding` returns null while the pick is the active host, or
+ * while it has not resolved to its own client — in both cases the value below
+ * falls back to the AMBIENT binding, which is exactly what this subtree read
+ * before there was a picker at all.
+ *
+ * The provider is rendered unconditionally, and that is load-bearing rather
+ * than tidiness. Mounting it only when a scoped binding exists changes the
+ * element type at this position the moment a pick resolves, so React unmounts
+ * the whole subtree and mounts a fresh one — taking the popover's own `open`
+ * state with it. The popover therefore closed the instant a host was chosen
+ * from the picker inside it, which is to say the control could not be used.
+ * The fallback re-provides the ambient binding VERBATIM (never a copy), so a
+ * subtree that is not scoped still sees ambient binding updates.
  */
 export function RateLimitIconButton(): ReactNode {
   const { scope, hasExplicitPick } = useRateLimitHostScope();
   const scopedBinding = useScopedHostBinding(scope);
-  const trigger = (
-    <ScopedRateLimitIconButton
-      scope={scope}
-      hasExplicitPick={hasExplicitPick}
-    />
-  );
-  if (scopedBinding === null) return trigger;
+  const ambientBinding = useHostBinding();
   return (
-    <HostRuntimeContext.Provider value={scopedBinding}>
-      {trigger}
+    <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
+      <ScopedRateLimitIconButton
+        scope={scope}
+        hasExplicitPick={hasExplicitPick}
+      />
     </HostRuntimeContext.Provider>
   );
 }

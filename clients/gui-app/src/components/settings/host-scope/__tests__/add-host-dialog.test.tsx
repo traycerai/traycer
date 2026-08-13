@@ -232,3 +232,47 @@ describe("<AddHostDialog /> arrival", () => {
     expect(screen.queryByTestId("add-host-arrived")).toBeNull();
   });
 });
+
+/**
+ * The instructions are a contract with a machine nobody in this window can
+ * see, and every line of the previous version was wrong: it printed a
+ * `curl … | sh` installer for a URL that redirects to an HTML docs page, an
+ * `install.ps1` that 404s, and then stopped at `traycer login` — which
+ * authenticates and deliberately provisions nothing (`commands/login.ts`). A
+ * person who followed it exactly ended with no host, and this dialog watched
+ * for an arrival that could not come.
+ *
+ * So these lock the two facts that made it wrong, not the prose around them:
+ * the fictional installers are gone, and the steps end on the command that
+ * actually installs and starts the host.
+ */
+describe("<AddHostDialog /> setup instructions", () => {
+  beforeEach(() => {
+    scopeMocks.scope = { hosts: [], isLoading: false, listsFailed: false };
+    useAddHostDialogStore.getState().openDialog([]);
+  });
+
+  it("ends on `host ensure`, not on `login`", () => {
+    render(<AddHostDialog />);
+
+    expect(screen.getByTestId("add-host-steps")).not.toBeNull();
+    expect(screen.getByText("npm install -g @traycerai/cli")).not.toBeNull();
+    expect(screen.getByText("traycer login")).not.toBeNull();
+    // The step whose absence made the whole dialog unreachable.
+    expect(screen.getByText("traycer host ensure")).not.toBeNull();
+  });
+
+  it("no longer prints the curl installer", () => {
+    render(<AddHostDialog />);
+
+    // Substring, not a word-boundary regex: adjacent nodes concatenate with no
+    // separator in `textContent`, and one negative claim per assertion.
+    expect(screen.queryByText(/curl/i)).toBeNull();
+  });
+
+  it("no longer prints the install.ps1 one-liner", () => {
+    render(<AddHostDialog />);
+
+    expect(screen.queryByText(/install\.ps1/i)).toBeNull();
+  });
+});
