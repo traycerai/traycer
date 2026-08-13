@@ -5,7 +5,7 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   deriveHostHealth,
   type HostHealth,
@@ -94,10 +94,15 @@ export function buildHostScopeOptions(
       name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      connectable: isAdministrableRoute(entry, input.remoteHostsPlanRestricted),
+      connectable: isAdministrableRoute(
+        entry,
+        input.remoteHostsPlanRestricted,
+        input.hasLiveSession(hostId),
+      ),
       planRestricted: isPlanRestrictedRoute(
         entry,
         input.remoteHostsPlanRestricted,
+        input.hasLiveSession(hostId),
       ),
       registered: item !== null,
       platform: item?.platform ?? null,
@@ -127,7 +132,9 @@ export function buildHostScopeOptions(
  * administrable target would produce a picker row that can never load.
  *
  * Dialability is half of that question, not a detail — so this now CALLS the
- * canonical rule (`dialableHostEndpoint`) instead of restating it. It used to
+ * canonical rule (`dialableHostEndpointFor`, with the caller-subscribed
+ * ready-session answer — the ambient form's cache read is a frozen answer in
+ * a memoized model) instead of restating it. It used to
  * restate it as `status === "available"`, which was the same answer only for as
  * long as the two definitions happened to agree; they stopped agreeing when the
  * transport was taught that a failed liveness read still dials, and a
@@ -147,8 +154,10 @@ export function buildHostScopeOptions(
 function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
+  hasLiveSession: boolean,
 ): boolean {
-  if (entry === null || dialableHostEndpoint(entry) === null) return false;
+  if (entry === null || dialableHostEndpointFor(entry, hasLiveSession) === null)
+    return false;
   return !(remoteHostsPlanRestricted && entry.kind === "remote");
 }
 
@@ -179,12 +188,13 @@ function isAdministrableRoute(
 function isPlanRestrictedRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
+  hasLiveSession: boolean,
 ): boolean {
   if (entry === null) return false;
   if (hostUnavailability(entry) === "plan-restricted") return true;
   // The CLIENT-side gate only applies to a route that otherwise exists, so it
   // asks the transport's own question rather than a second copy of it.
-  if (dialableHostEndpoint(entry) === null) return false;
+  if (dialableHostEndpointFor(entry, hasLiveSession) === null) return false;
   return remoteHostsPlanRestricted && entry.kind === "remote";
 }
 

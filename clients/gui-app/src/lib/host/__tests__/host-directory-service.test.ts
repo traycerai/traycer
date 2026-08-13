@@ -3442,6 +3442,53 @@ describe("HostDirectoryService", () => {
       ]);
     });
 
+    it("drops a previous account's retained hosts when the new identity's first read fails", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Account A commits its directory.
+      const aRefresh = directory.refresh();
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+
+      // Direct A -> B switch; B's FIRST read fails. "Retain last-known on
+      // failure" is only safe for the SAME identity - keeping the list here
+      // would show A's machines (and keep A's selection bindable) under B's
+      // signed-in session until some later read happened to succeed.
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      resolve(1, { kind: "failed" });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([]);
+
+      // A later successful read populates B's own list...
+      const bRetry = directory.refresh();
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRetry;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // ...and a same-identity blip keeps its retention semantics: B's next
+      // failure retains B's list, exactly as before.
+      const bBlip = directory.refresh();
+      resolve(3, { kind: "failed" });
+      await bBlip;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
     it("does not let an old-bearer 401 clear the directory under a new identity", async () => {
       let currentAccount: string | null = "account-a";
       const { fetcher, resolve } = deferredFetcher();

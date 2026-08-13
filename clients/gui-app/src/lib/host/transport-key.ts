@@ -56,9 +56,24 @@ const SEPARATOR = String.fromCharCode(0);
 export function hostTransportKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
+  return hostTransportKeyFor(
+    entry,
+    entry !== null && hasReadyRemoteSession(entry.hostId),
+  );
+}
+
+/**
+ * The parametric core of {@link hostTransportKey}, for the same reason
+ * {@link dialableHostEndpointFor} exists: a memoized render path that gates on
+ * this key must subscribe to session readiness and thread the current answer
+ * through, because the ambient cache read above freezes inside a memo.
+ */
+export function hostTransportKeyFor(
+  entry: HostDirectoryEntry | null,
+  hasReadySession: boolean,
+): string | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (isConfirmedTransportRefusal(entry, hasReadyRemoteSession(entry.hostId)))
-    return null;
+  if (isConfirmedTransportRefusal(entry, hasReadySession)) return null;
   return [
     entry.hostId,
     entry.kind,

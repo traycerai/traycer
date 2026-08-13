@@ -1,7 +1,8 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { isRelayFuseRecoveryCandidate } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { useLandingTerminalKill } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
 
@@ -30,14 +31,27 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   //
   // One dial-permission state is deliberately EXCLUDED from the recorded bit:
   // a registry-`offline` host inside the relay-fuse window
-  // (`isRelayFuseRecoveryCandidate`). There `dialableHostEndpoint` is non-null
-  // because a recovery dial is PERMITTED, not because the host is there -
-  // recording that speculative permission as `true` made a close-during-grace
-  // followed by a genuine offline -> connectable recovery a `true -> true`
-  // non-edge, so the kill never re-fired and the tombstoned PTY outlived its
-  // tab until relaunch. `indeterminate` keeps recording `true` (the paragraph
-  // above), because unlike a fuse-window `offline` it may never resolve.
+  // (`isRelayFuseRecoveryCandidate`). There the endpoint is non-null because a
+  // recovery dial is PERMITTED, not because the host is there - recording that
+  // speculative permission as `true` made a close-during-grace followed by a
+  // genuine offline -> connectable recovery a `true -> true` non-edge, so the
+  // kill never re-fired and the tombstoned PTY outlived its tab until
+  // relaunch. `indeterminate` keeps recording `true` (the paragraph above),
+  // because unlike a fuse-window `offline` it may never resolve.
+  //
+  // A READY remote session overrides that exclusion: it is proof the host is
+  // actually attached, not speculation - the recovery dial the fuse window
+  // kept open has SUCCEEDED. If the registry stays `offline` for the rest of
+  // the credential-plane incident, that session is the only evidence of the
+  // recovery there will be, and it is also the very route the kill travels.
+  // The session cache is pull-only, so the subscription below - not the
+  // directory - is what re-runs this effect when a session becomes ready.
   const dialableRef = useRef<ReadonlyMap<string, boolean>>(new Map());
+  const hostIds = useMemo(
+    () => (directory.data ?? []).map((entry) => entry.hostId),
+    [directory.data],
+  );
+  const hasReadySessionFor = useRemoteSessionsPollReadiness(hostIds);
 
   useEffect(() => {
     killRef.current = kill;
@@ -46,11 +60,14 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   useEffect(() => {
     const entries = directory.data ?? [];
     const currentDialable = new Map(
-      entries.map((entry) => [
-        entry.hostId,
-        dialableHostEndpoint(entry) !== null &&
-          !isRelayFuseRecoveryCandidate(entry),
-      ]),
+      entries.map((entry) => {
+        const hasReadySession = hasReadySessionFor(entry.hostId);
+        return [
+          entry.hostId,
+          dialableHostEndpointFor(entry, hasReadySession) !== null &&
+            (hasReadySession || !isRelayFuseRecoveryCandidate(entry)),
+        ];
+      }),
     );
     const previousDialable = dialableRef.current;
     dialableRef.current = currentDialable;
@@ -65,7 +82,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
         killRef.current.mutate(pending);
       }
     }
-  }, [directory.data, pendingKills]);
+  }, [directory.data, pendingKills, hasReadySessionFor]);
 
   return null;
 }

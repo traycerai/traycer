@@ -11,6 +11,7 @@ import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 const mocks = vi.hoisted(() => ({
   entries: [] as readonly HostDirectoryEntry[],
   kill: vi.fn(),
+  readySessionHosts: new Set<string>(),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -21,6 +22,22 @@ vi.mock(
   () => ({
     useLandingTerminalKill: () => ({ mutate: mocks.kill }),
   }),
+);
+// The ready-session evidence the bridge now subscribes to; the poll hook
+// re-reads it on its tick, so tests drive it with fake timers.
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        mocks.readySessionHosts.has(hostId),
+    };
+  },
 );
 
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
@@ -38,6 +55,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   beforeEach(() => {
     mocks.entries = [offlineHost];
     mocks.kill.mockReset();
+    mocks.readySessionHosts = new Set();
     useLandingTerminalStore.getState().resetForTests();
   });
 
@@ -154,5 +172,71 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         sessionId: "session-fuse",
       });
     });
+  });
+
+  it("treats a READY remote session as confirmed recovery while the registry stays offline", () => {
+    // The registry never leaves `offline` for the whole credential-plane
+    // incident, so the directory alone can never provide the recovery edge.
+    // The recovery dial the fuse window kept open SUCCEEDS instead - the
+    // resulting ready session is both the proof of recovery and the route the
+    // kill travels, and the bridge learns about it through its readiness
+    // subscription (the session cache is pull-only and emits nothing).
+    vi.useFakeTimers();
+    try {
+      const remoteItem = (lastSeenAt: string): HostListItem => ({
+        hostId: "host-b",
+        displayName: "Host B",
+        platform: "Ubuntu",
+        kind: "personal",
+        publicKey: "pubkey-b",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatePolicy: "manual",
+        status: {
+          connectivity: "offline",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.0.0",
+          lastSeenAt,
+        },
+      });
+      const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+      mocks.entries = [
+        hostListItemToDirectoryEntry(
+          remoteItem(recentLastSeen),
+          "wss://relay.example/attach",
+        ),
+      ];
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+
+      act(() => {
+        useLandingTerminalStore.getState().addTab({
+          instanceId: "incident-tab",
+          sessionId: "session-incident",
+          hostId: "host-b",
+          cwd: "/workspace/project",
+          name: "project",
+          titleSource: "default",
+        });
+        useLandingTerminalStore
+          .getState()
+          .closeTab("landing-page", "incident-tab");
+      });
+      expect(mocks.kill).not.toHaveBeenCalled();
+
+      // The recovery dial succeeds; the registry row is unchanged.
+      mocks.readySessionHosts = new Set(["host-b"]);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-incident",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

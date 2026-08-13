@@ -338,6 +338,16 @@ export class HostDirectoryService implements IHostDirectoryService {
    * order worth fencing on).
    */
   private lastCommitCredentialGeneration: number | null = null;
+  /**
+   * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
+   * of the retention rule. The `failed` branch keeps the last-known list on
+   * the grounds that a network blip should not blank a directory, but that
+   * grounds only holds when the list describes the SAME account: after a
+   * direct A -> B account switch whose first read under B fails, retaining
+   * would keep A's machines visible - and A's selection bindable - under B's
+   * signed-in session until a later read succeeds.
+   */
+  private lastCommitIdentity: string | null = null;
   private readonly handleVisibilityChange = (): void => {
     if (this.isDocumentHidden()) {
       return;
@@ -869,6 +879,28 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.snapshot();
     }
     if (outcome.kind === "failed") {
+      // Retention is only safe for the SAME identity. The era fence above has
+      // already proven `era.identity` is the CURRENT identity, so a mismatch
+      // here means the retained list was committed by a previous account:
+      // keeping it would show (and keep bindable) A's machines under B's
+      // session until some later read succeeds. Dropping is not a genuine
+      // outcome - it clears the foreign list without claiming the registry
+      // said "empty".
+      if (
+        this.remoteEntries.length > 0 &&
+        this.lastCommitIdentity !== era.identity
+      ) {
+        appLogger.debug(
+          "[host-directory] dropping remote entries committed under a previous identity after a failed refresh",
+          { remoteCount: this.remoteEntries.length },
+        );
+        this.remoteEntries = [];
+        this.lastCommitIdentity = null;
+        this.retireFailoverStateOnAuthoritativeClear(outcome.kind);
+        this.reconcileSelection();
+        this.emitIfSnapshotChanged();
+        return this.snapshot();
+      }
       appLogger.debug(
         "[host-directory] refresh failed, retaining last-known remote entries",
         { remoteCount: this.remoteEntries.length },
@@ -895,6 +927,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.snapshot();
     }
     this.lastCommitCredentialGeneration = era.credentialGeneration;
+    this.lastCommitIdentity = era.identity;
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
     this.hasGenuineRemoteOutcome = true;
     this.retireFailoverStateOnAuthoritativeClear(outcome.kind);
