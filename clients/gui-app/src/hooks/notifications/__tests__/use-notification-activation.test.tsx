@@ -114,7 +114,7 @@ function createTestDirectory(
     findById: (hostId) =>
       entries.find((entry) => entry.hostId === hostId) ?? null,
     refresh: () => Promise.resolve(entries),
-    refreshForIdentity: () => Promise.resolve(entries),
+    refreshForEra: () => Promise.resolve(entries),
     invalidateInFlightRefresh: () => undefined,
     getSelected: () => selected,
     selectById: (hostId) => {

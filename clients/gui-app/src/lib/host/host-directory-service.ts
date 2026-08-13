@@ -1,3 +1,4 @@
+import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import {
   isHostReachable,
   type HostDirectoryEntry,
@@ -99,11 +100,16 @@ export interface HostDirectoryServiceOptions {
    */
   readonly authContextId: (() => string | null) | null;
   /**
-   * Monotonic counter that advances on every credential rotation, including a
-   * same-user one. `null` disables the credential fence — tests only.
+   * Monotonic counter that advances on every credential change, INCLUDING a
+   * same-user rotation. `null` disables the credential fence — tests only.
    *
    * Separate from `authContextId` on purpose: a rotation is invisible to a
    * user-id fence, and only DESTRUCTIVE commits need to see it.
+   *
+   * Must be a real credential counter. Wiring an identity-transition counter
+   * here type-checks and reads plausibly, and leaves the fence permanently
+   * open on exactly the case it was built for — a same-user rotation, the only
+   * way a still-matching user id can produce a stale 401.
    */
   readonly credentialGeneration: (() => number) | null;
   /**
@@ -296,11 +302,11 @@ export class HostDirectoryService implements IHostDirectoryService {
    * which would otherwise stack requests.
    */
   /**
-   * The in-flight refresh, WITH the auth identity it was started for. Joining
-   * is only legal for a caller in that same identity — see `refresh()`.
+   * The in-flight refresh, WITH the credential era it was started for. Joining
+   * is only legal for a caller in that same era — see `refreshForEra`.
    */
   private refreshInFlight: {
-    readonly authContextId: string | null;
+    readonly era: AuthEra;
     readonly request: Promise<readonly HostDirectoryEntry[]>;
   } | null = null;
   private readonly handleVisibilityChange = (): void => {
@@ -442,8 +448,8 @@ export class HostDirectoryService implements IHostDirectoryService {
   /**
    * Refresh the merged directory, coalescing concurrent callers.
    *
-   * IDENTITY-SCOPED, at both points that need it — and needing it at two
-   * points is the lesson. `AuthService.fetchRegisteredHosts` is bearer-keyed,
+   * ERA-SCOPED, at every point that needs it — and needing it at more than one
+   * point is the lesson. `AuthService.fetchRegisteredHosts` is bearer-keyed,
    * but this memo sits ABOVE it and returned before that key was ever
    * consulted: an account switch while A's poll was pending joined B's
    * mandatory refresh to A's promise, and A's hosts were committed into B's
@@ -455,45 +461,61 @@ export class HostDirectoryService implements IHostDirectoryService {
    * the commit is guarded separately, inside `performRefresh`.
    *
    * The invariant, stated once because it keeps being rediscovered one layer
-   * at a time: **an identity guard belongs at every layer that MEMOIZES or
-   * COMMITS, not only at the one that fetches.**
+   * at a time: **an identity guard belongs at every layer that MEMOIZES,
+   * FETCHES or COMMITS — and all of them must be guarding on the SAME value.**
+   * Guarding each layer against its own ambient read is what produced four
+   * consecutive fixes that were individually correct and jointly useless: the
+   * memo asked one source, the commit asked another, and the fetch asked a
+   * third. They now all take the era from one place, `refreshForEra`.
    */
   refresh(): Promise<readonly HostDirectoryEntry[]> {
-    return this.refreshForIdentity(this.authContextId());
+    // An AMBIENT caller — the poll, a focus refetch, picker-open, a local-host
+    // transition. Nothing is mid-transition, so reading both halves of the era
+    // here reads one settled state. A caller reacting to a TRANSITION must not
+    // come through here; see `refreshForEra`.
+    return this.refreshForEra({
+      identity: this.authContextId(),
+      credentialGeneration: this.credentialGeneration(),
+    });
   }
 
   /**
-   * Refresh on behalf of an EXPLICITLY NAMED identity.
+   * Refresh on behalf of an EXPLICITLY NAMED credential era.
    *
-   * The context-change path must use this, not `refresh()`. `setSignedIn()` /
-   * `signOut()` emit the new `RequestContext` BEFORE the profile behind
-   * `authContextId()` updates, so a refresh that reads the accessor from
-   * inside that emission is stamped with the OUTGOING account — and the commit
-   * guard then correctly discards the one refresh whose whole job was to load
-   * the incoming one. The guard was right; it was being fed the wrong key.
+   * The context-change path must use this, not `refresh()`. An era assembled
+   * from the ambient accessors during an auth emission is not one era: the
+   * emission is synchronous, and the fields it names are updated by different
+   * objects, so a refresh built that way gets some of its answer from after
+   * the transition and some from before it. Every round of this bug has been
+   * one more field caught on the wrong side of that line.
    *
-   * Passing the identity the refresh is FOR removes the ordering dependency
-   * instead of documenting it: the caller inside the emission already holds
-   * the new context and does not have to wait for a store to catch up.
+   * The era passed here is captured once, at the emission, from committed
+   * state — and it is then used for ALL FOUR decisions this refresh makes:
+   * whether to join an in-flight request, which credential the fetch may run
+   * under, whether the result may be committed, and whether a clearing result
+   * may be believed. One value for four decisions is the property; they were
+   * previously four reads that could disagree.
    */
-  refreshForIdentity(
-    authContextId: string | null,
-  ): Promise<readonly HostDirectoryEntry[]> {
+  refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
     const inFlight = this.refreshInFlight;
-    if (inFlight !== null && inFlight.authContextId === authContextId) {
+    // Keyed by the WHOLE era, not just the identity: a request issued before a
+    // same-user rotation is answering for a credential this caller no longer
+    // holds, and joining it is how a caller inherits somebody else's 401.
+    if (
+      inFlight !== null &&
+      inFlight.era.identity === era.identity &&
+      inFlight.era.credentialGeneration === era.credentialGeneration
+    ) {
       return inFlight.request;
     }
-    const request = this.performRefresh(
-      authContextId,
-      this.credentialGeneration(),
-    ).finally(() => {
+    const request = this.performRefresh(era).finally(() => {
       // Only clear OUR slot: a request superseded by an identity change must
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
       }
     });
-    this.refreshInFlight = { authContextId, request };
+    this.refreshInFlight = { era, request };
     return request;
   }
 
@@ -753,10 +775,15 @@ export class HostDirectoryService implements IHostDirectoryService {
    * as a successful empty `hosts` result would.
    */
   private async performRefresh(
-    initiatingAuthContextId: string | null,
-    initiatingCredentialGeneration: number,
+    era: AuthEra,
   ): Promise<readonly HostDirectoryEntry[]> {
-    const outcome = await this.fetchRemoteOutcome();
+    // The era goes DOWN to the fetcher, not just into the guards below. A
+    // guard can only decide whether to keep an answer; the fetcher is the
+    // only layer that can decide which credential the question is asked with,
+    // and asking with the wrong one is the failure the guards kept failing to
+    // catch — the answer that comes back is perfectly valid, just for someone
+    // else.
+    const outcome = await this.fetchRemoteOutcome(era);
     // THE COMMIT GUARD. Everything below mutates a long-lived, app-wide object:
     // `remoteEntries`, the selection, the emit every consumer refetches on. A
     // read issued for account A must not write any of it after the user has
@@ -777,7 +804,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     // require the credential that OBSERVED the failure to still be current.
     if (
       outcome.kind === "signed-out" &&
-      this.credentialGeneration() !== initiatingCredentialGeneration
+      this.credentialGeneration() !== era.credentialGeneration
     ) {
       appLogger.debug(
         "[host-directory] ignoring a sign-out clear observed by a superseded credential",
@@ -785,7 +812,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    if (this.authContextId() !== initiatingAuthContextId) {
+    if (this.authContextId() !== era.identity) {
       appLogger.debug(
         "[host-directory] discarding a refresh that resolved after an identity change",
         { outcome: outcome.kind },
@@ -833,10 +860,18 @@ export class HostDirectoryService implements IHostDirectoryService {
    * through `start()`'s await, tear down the whole host runtime with no
    * retry - instead of taking the designed retain-last-known path
    * (T20 / audit P4).
+   *
+   * A fetcher that REFUSES the era — the credential it holds belongs to a
+   * different one — throws, and lands here as `failed`: retain last known,
+   * change nothing. That is the correct shape for a refusal. A refusal to ask
+   * is not an answer about the account's hosts, so it must not clear them,
+   * and the era that superseded this one issues its own refresh regardless.
    */
-  private async fetchRemoteOutcome(): Promise<RemoteHostFetchOutcome> {
+  private async fetchRemoteOutcome(
+    era: AuthEra,
+  ): Promise<RemoteHostFetchOutcome> {
     try {
-      return await this.remoteFetcher();
+      return await this.remoteFetcher(era);
     } catch (error) {
       appLogger.warn("[host-directory] remote fetcher threw", {
         error: describeLogError(error),

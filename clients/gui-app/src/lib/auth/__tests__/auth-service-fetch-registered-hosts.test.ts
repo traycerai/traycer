@@ -158,8 +158,8 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
       return Promise.resolve(new Response(null, { status: 500 }));
     });
 
-    const callA = service.fetchRegisteredHosts();
-    const callB = service.fetchRegisteredHosts();
+    const callA = service.fetchRegisteredHosts(service.currentAuthEra());
+    const callB = service.fetchRegisteredHosts(service.currentAuthEra());
 
     expect(hostsCalls).toBe(1);
     pending.resolve?.(okWithHosts());
@@ -186,10 +186,10 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
       return Promise.resolve(new Response(null, { status: 500 }));
     });
 
-    await service.fetchRegisteredHosts();
+    await service.fetchRegisteredHosts(service.currentAuthEra());
     expect(hostsCalls).toBe(1);
 
-    await service.fetchRegisteredHosts();
+    await service.fetchRegisteredHosts(service.currentAuthEra());
     // A call after the first settled is a genuinely new read, not served from
     // a memo — `directory.refresh()` on picker-open is a correctness path
     // that must be current at that instant.
@@ -217,12 +217,14 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
     // `network-error` outcome, which `performFetchRegisteredHosts` turns back
     // into a thrown `Error` for this caller — but the in-flight slot must
     // still clear once that rejection settles, not stay pinned to it.
-    await expect(service.fetchRegisteredHosts()).rejects.toThrow(
-      "Couldn't reach Traycer to load your hosts.",
-    );
+    await expect(
+      service.fetchRegisteredHosts(service.currentAuthEra()),
+    ).rejects.toThrow("Couldn't reach Traycer to load your hosts.");
     expect(hostsCalls).toBe(1);
 
-    const secondResult = await service.fetchRegisteredHosts();
+    const secondResult = await service.fetchRegisteredHosts(
+      service.currentAuthEra(),
+    );
     expect(hostsCalls).toBe(2);
     expect(secondResult?.hosts).toEqual([]);
   });
@@ -247,9 +249,9 @@ describe("AuthService.fetchRegisteredHosts — in-flight coalescing", () => {
     });
 
     const calls = [
-      service.fetchRegisteredHosts(),
-      service.fetchRegisteredHosts(),
-      service.fetchRegisteredHosts(),
+      service.fetchRegisteredHosts(service.currentAuthEra()),
+      service.fetchRegisteredHosts(service.currentAuthEra()),
+      service.fetchRegisteredHosts(service.currentAuthEra()),
     ];
     expect(hostsCalls).toBe(1);
     pending.resolve?.(okWithHosts());
@@ -344,7 +346,7 @@ describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
     });
 
     // A's background poll is in flight and deliberately left hanging.
-    const callA = service.fetchRegisteredHosts();
+    const callA = service.fetchRegisteredHosts(service.currentAuthEra());
     expect(bearersSeen).toEqual(["Bearer token-a"]);
 
     // The user signs into B in the same app lifetime — same `AuthService`.
@@ -361,7 +363,9 @@ describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
       expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
     });
 
-    const resultB = await service.fetchRegisteredHosts();
+    const resultB = await service.fetchRegisteredHosts(
+      service.currentAuthEra(),
+    );
 
     // B got its OWN request, under its own bearer...
     expect(bearersSeen).toEqual(["Bearer token-a", "Bearer token-b"]);
@@ -376,7 +380,7 @@ describe("AuthService.fetchRegisteredHosts — identity boundary", () => {
 
     // And the slot A's `finally` sees is B's, not its own — a third caller
     // still gets a real read rather than a cleared-then-stale memo.
-    await service.fetchRegisteredHosts();
+    await service.fetchRegisteredHosts(service.currentAuthEra());
     expect(bearersSeen).toEqual([
       "Bearer token-a",
       "Bearer token-b",

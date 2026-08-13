@@ -3,6 +3,7 @@ import type {
   HostListItem,
   HostListResponse,
 } from "@traycer/protocol/host/host-status";
+import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
   fetchRegisteredHostsViaHttp,
@@ -11,6 +12,14 @@ import {
 } from "../remote-fetcher";
 
 const AUTHN = "https://authn.example.test";
+
+/**
+ * The era an ambient caller passes. This fetcher holds no era of its own to
+ * compare against (see `createRemoteHostFetcher` — the desktop composition
+ * checks the era inside `AuthService`, where the bearer lives), so the value
+ * only has to be well-formed.
+ */
+const AMBIENT_ERA: AuthEra = { identity: "user-1", credentialGeneration: 1 };
 
 function onlineItem(): HostListItem {
   return {
@@ -176,7 +185,7 @@ describe("createRemoteHostFetcher", () => {
       getBearerToken: () => null,
       relayBaseUrl: RELAY_BASE_URL,
     });
-    expect(await fetcher()).toEqual({ kind: "signed-out" });
+    expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "signed-out" });
   });
 
   it("maps the envelope to directory entries when ok", async () => {
@@ -185,7 +194,7 @@ describe("createRemoteHostFetcher", () => {
       getBearerToken: () => "jwt",
       relayBaseUrl: RELAY_BASE_URL,
     });
-    const outcome = await fetcher();
+    const outcome = await fetcher(AMBIENT_ERA);
     expect(outcome.kind).toBe("hosts");
     if (outcome.kind === "hosts") {
       expect(outcome.entries).toHaveLength(1);
@@ -200,7 +209,7 @@ describe("createRemoteHostFetcher", () => {
       getBearerToken: () => "jwt",
       relayBaseUrl: RELAY_BASE_URL,
     });
-    expect(await fetcher()).toEqual({ kind: "signed-out" });
+    expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "signed-out" });
   });
 
   it("maps a network-error to failed so a transient blip is distinguishable from signed-out", async () => {
@@ -210,7 +219,7 @@ describe("createRemoteHostFetcher", () => {
       getBearerToken: () => "jwt",
       relayBaseUrl: RELAY_BASE_URL,
     });
-    expect(await fetcher()).toEqual({ kind: "failed" });
+    expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "failed" });
   });
 
   it("maps a REJECTED listHosts call to failed - the injected IPC seam is not throw-free, and a throw must not escape the fetcher contract", async () => {
@@ -219,6 +228,6 @@ describe("createRemoteHostFetcher", () => {
       getBearerToken: () => "jwt",
       relayBaseUrl: RELAY_BASE_URL,
     });
-    expect(await fetcher()).toEqual({ kind: "failed" });
+    expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "failed" });
   });
 });

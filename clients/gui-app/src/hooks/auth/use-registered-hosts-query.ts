@@ -47,7 +47,11 @@ function registeredHostsQueryOptions(
   }
   return queryOptions<HostListResponse | null>({
     queryKey: authQueryKeys.registeredHosts(auth),
-    queryFn: () => auth.fetchRegisteredHosts(),
+    // An ambient reader: this query runs on a poll, on focus, and on mount,
+    // never from inside an auth transition, so the live era IS the era it is
+    // asking about. Read at call time rather than closed over, so a refetch
+    // after a rotation asks under the era it is actually running in.
+    queryFn: () => auth.fetchRegisteredHosts(auth.currentAuthEra()),
     enabled,
     refetchInterval: enabled ? pollMs : false,
     refetchOnWindowFocus: true,

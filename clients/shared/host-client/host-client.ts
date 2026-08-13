@@ -785,7 +785,8 @@ function sameHostTransport(
     isConfirmedTransportRefusal(
       previous,
       hasReadyRemoteSession(previous.hostId),
-    ) === isConfirmedTransportRefusal(next, hasReadyRemoteSession(next.hostId)) &&
+    ) ===
+      isConfirmedTransportRefusal(next, hasReadyRemoteSession(next.hostId)) &&
     remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
 }

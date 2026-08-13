@@ -208,7 +208,7 @@ function fakeDirectory(
     list: () => Promise.resolve(entries),
     findById: (hostId) => byId.get(hostId) ?? null,
     refresh: () => Promise.resolve(entries),
-    refreshForIdentity: () => Promise.resolve(entries),
+    refreshForEra: () => Promise.resolve(entries),
     invalidateInFlightRefresh: () => undefined,
     getSelected: () => entries[0] ?? null,
     selectById: () => undefined,

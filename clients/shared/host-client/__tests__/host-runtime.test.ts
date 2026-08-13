@@ -6,7 +6,10 @@ import {
   defineRpcContract,
   defineVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { DefaultRequestContextProvider } from "../../auth/request-context-provider";
+import {
+  DefaultRequestContextProvider,
+  type AuthEra,
+} from "../../auth/request-context-provider";
 import type {
   HostQueryInvalidationOptions,
   IHostQueryInvalidator,
@@ -79,16 +82,16 @@ class FakeDirectoryService implements IHostDirectoryService {
   entries: HostDirectoryEntry[] = [];
   selected: HostDirectoryEntry | null = null;
   /** Every call that triggers a fetch, through EITHER `refresh()` or
-   * `refreshForIdentity(...)` - the two are one cadence from a caller's
+   * `refreshForEra(...)` - the two are one cadence from a caller's
    * point of view, just keyed differently. */
   readonly refreshCalls = { count: 0 };
-  /** Every identity `refreshForIdentity(...)` was actually called WITH, in
-   * order - what the probes below assert on. */
-  readonly refreshForIdentityCalls: Array<string | null> = [];
+  /** Every era `refreshForEra(...)` was actually called WITH, in order - what
+   * the probes below assert on. */
+  readonly refreshForEraCalls: AuthEra[] = [];
   readonly invalidateInFlightRefreshCalls = { count: 0 };
   /**
    * Per-identity host sets a "fetch" resolves to, keyed by auth context id
-   * (`null` for signed-out). Lets `refreshForIdentity`/`refresh` model a REAL
+   * (`null` for signed-out). Lets `refreshForEra`/`refresh` model a REAL
    * commit instead of a no-op counter: a call stamped with the wrong identity
    * is then observable as the wrong hosts landing in `entries`, not just as a
    * count. Identities with no entry here leave `entries` untouched, so tests
@@ -96,14 +99,13 @@ class FakeDirectoryService implements IHostDirectoryService {
    */
   readonly hostsByIdentity = new Map<string | null, HostDirectoryEntry[]>();
   /**
-   * Models the profile store `HostDirectoryService.authContextId` reads in
-   * production (`AuthService.currentProfile`), which updates AFTER
-   * `RequestContextProvider.onChange` has already fired - see
-   * `host-directory-service.ts`'s `refreshForIdentity` doc. Only the PRE-FIX
-   * `refresh()` path below reads this; `HostRuntime`'s context-change handler
-   * must call `refreshForIdentity` with the identity `onChange` itself
-   * carried, never this. A test that leaves this stale while emitting a new
-   * identity is what makes the emit-order lag real instead of assumed.
+   * Stands in for the ambient accessors `HostDirectoryService.refresh()` reads
+   * in production. A real one can lag an emission it is being read from inside
+   * of, so this is deliberately left STALE across the emissions below: only
+   * the PRE-FIX `refresh()` path reads it, and `HostRuntime`'s context-change
+   * handler must instead thread the era `onChange` itself carried. A test that
+   * updated this atomically with the emission would pass against the bug,
+   * which is the failure mode these probes exist to avoid.
    */
   laggedIdentity: string | null = null;
   private readonly handlers = new Set<
@@ -119,22 +121,20 @@ class FakeDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The PRE-FIX path, kept only so a regression back to calling this from
-   * `HostRuntime`'s context-change handler is detectable: it commits under
-   * `laggedIdentity`, not under whatever identity the emission actually
-   * named.
+   * The AMBIENT path, and the one the context-change handler must not use.
+   * Kept modelled rather than stubbed so a regression back to calling it from
+   * that handler is detectable: it commits under `laggedIdentity`, not under
+   * whatever identity the emission actually named.
    */
   async refresh(): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
     return this.commitForIdentity(this.laggedIdentity);
   }
 
-  async refreshForIdentity(
-    authContextId: string | null,
-  ): Promise<readonly HostDirectoryEntry[]> {
+  async refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
     this.refreshCalls.count += 1;
-    this.refreshForIdentityCalls.push(authContextId);
-    return this.commitForIdentity(authContextId);
+    this.refreshForEraCalls.push(era);
+    return this.commitForIdentity(era.identity);
   }
 
   invalidateInFlightRefresh(): void {
@@ -475,15 +475,20 @@ describe("HostRuntime lifecycle", () => {
   });
 });
 
-describe("HostRuntime context-change refresh is stamped with the identity the emission is FOR", () => {
-  // Both probes model the real defect: `setSignedIn()`/`signOut()` emit the
-  // new `RequestContext` through `onChange` BEFORE the profile store behind
-  // `authContextId()` updates. `directory.laggedIdentity` stands in for that
-  // store and is deliberately left stale across the emission in both tests -
-  // a test that updated it atomically with the emission would prove nothing,
-  // because it could never observe the ordering bug. The runtime must call
-  // `refreshForIdentity` with the identity `onChange` itself carried, not
-  // read this lagged accessor.
+describe("HostRuntime context-change refresh is stamped with the era the emission is FOR", () => {
+  // Both probes model the real defect: an ambient accessor read from inside an
+  // emission can still describe the transition that is being replaced.
+  // `directory.laggedIdentity` stands in for such an accessor and is
+  // deliberately left stale across the emission in both tests - a test that
+  // updated it atomically with the emission would prove nothing, because it
+  // could never observe the ordering bug. The runtime must call
+  // `refreshForEra` with the era `onChange` itself carried, not read the
+  // lagged accessor.
+  //
+  // These probes pin the RUNTIME's half: which value it threads. They cannot
+  // see which credential the fetch then runs under, because this fake has no
+  // credential - that half is pinned against the real `AuthService` in
+  // gui-app's `host-directory-auth-era.test.ts`, at the transport boundary.
 
   it("switching identity mid-session must not let B's directory retain A's hosts, even while the lagged profile accessor still reads A", () => {
     const { runtime, provider, directory } = buildRuntime({
@@ -504,11 +509,19 @@ describe("HostRuntime context-change refresh is stamped with the identity the em
 
     signInProvider(provider, "account-b", "tok-b");
 
-    // The runtime must have called `refreshForIdentity("account-b")` - the
-    // identity `onChange` itself carried - not `refresh()`, which would have
-    // read the still-stale `laggedIdentity` ("account-a") and re-committed
-    // A's hosts into B's directory.
-    expect(directory.refreshForIdentityCalls).toEqual(["account-b"]);
+    // The runtime must have called `refreshForEra` with the era `onChange`
+    // itself carried - not `refresh()`, which would have read the still-stale
+    // `laggedIdentity` ("account-a") and re-committed A's hosts into B's
+    // directory.
+    expect(directory.refreshForEraCalls.map((era) => era.identity)).toEqual([
+      "account-b",
+    ]);
+    // ...and the era carries the generation of the credential that transition
+    // committed, so the same value fences the fetch and the commit. The
+    // provider bumps on every credential change; this is A's sign-in plus B's.
+    expect(
+      directory.refreshForEraCalls.map((era) => era.credentialGeneration),
+    ).toEqual([provider.getCredentialGeneration()]);
     expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
     expect(directory.entries.map((entry) => entry.hostId)).toEqual([
       accountBHostEntry.hostId,
@@ -532,7 +545,9 @@ describe("HostRuntime context-change refresh is stamped with the identity the em
     // `null` IS the incoming identity on sign-out - stamping the refresh
     // with it (rather than the lagged "account-a") is what lets the clearing
     // commit land instead of being discarded by its own identity guard.
-    expect(directory.refreshForIdentityCalls).toEqual([null]);
+    expect(directory.refreshForEraCalls.map((era) => era.identity)).toEqual([
+      null,
+    ]);
     expect(directory.entries).toEqual([]);
   });
 });

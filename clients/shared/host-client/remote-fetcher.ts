@@ -4,6 +4,7 @@ import {
   type HostListResponse,
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
+import type { AuthEra } from "../auth/request-context-provider";
 import type { HostDirectoryEntry } from "./host-directory";
 
 /**
@@ -319,8 +320,17 @@ export function hostListItemToDirectoryEntry(
  * local-only in S1 (feeding unconnectable remote entries into the selectable
  * directory would be a premature connect affordance / auto-bind hazard).
  * Swapped for `createRemoteHostFetcher` when the relay lands (S2).
+ *
+ * The {@link AuthEra} names the credential era the refresh was ISSUED FOR. A
+ * fetcher backed by a real credential must check it against the era of the
+ * bearer it is about to send and refuse rather than send a mismatched one —
+ * the whole point is that "the current bearer" and "the bearer this refresh
+ * is for" are two different questions during an identity transition. A
+ * fetcher that holds no credential (the stub, and test doubles) ignores it.
  */
-export type RemoteHostFetcher = () => Promise<RemoteHostFetchOutcome>;
+export type RemoteHostFetcher = (
+  era: AuthEra,
+) => Promise<RemoteHostFetchOutcome>;
 
 /**
  * Outcome contract every `RemoteHostFetcher` returns, so
@@ -363,6 +373,13 @@ export interface RemoteHostFetcherDeps {
  * `AuthService.fetchRegisteredHosts()`'s choice not to force a sign-out from
  * a background list poll. A `network-error` result maps to `failed` so a
  * transient blip never drops the merged directory (T20 / audit P4).
+ *
+ * The browser/dev shell's fetcher: `getBearerToken` hands back whatever is
+ * current, with no era attached, so this cannot honour the era check the
+ * desktop path performs. It is not on the desktop composition — the GUI wires
+ * `AuthService.fetchRegisteredHosts`, which owns both the bearer and the era
+ * it belongs to and refuses a mismatch. A shell that adopts this fetcher for
+ * a real credential must supply an era-aware credential read.
  */
 export function createRemoteHostFetcher(
   deps: RemoteHostFetcherDeps,
