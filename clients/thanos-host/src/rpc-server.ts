@@ -8,6 +8,7 @@ import { EpicCatalog } from "./catalog";
 import { dispatchRpc } from "./handlers";
 import { acceptBearer } from "./identity";
 import { thanosHostManifest } from "./manifest";
+import { handleStreamMessage } from "./stream-server";
 
 export type StartRpcServerOptions = {
   readonly hostname: string;
@@ -21,6 +22,7 @@ export type ListeningRpcServer = {
 };
 
 type ConnectionState = {
+  readonly route: "rpc" | "stream";
   opened: boolean;
 };
 
@@ -74,19 +76,26 @@ export function startRpcServer(
     port: options.port,
     fetch: (request, upgradeServer) => {
       const url = new URL(request.url);
-      if (url.pathname !== "/rpc") {
-        return new Response("Not Found", { status: 404 });
+      if (url.pathname === "/rpc") {
+        return upgradeWebSocket(upgradeServer, request, {
+          route: "rpc",
+          opened: false,
+        });
       }
-      const upgraded = upgradeServer.upgrade(request, {
-        data: { opened: false },
-      });
-      if (!upgraded) {
-        return new Response("WebSocket upgrade failed", { status: 400 });
+      if (url.pathname === "/stream") {
+        return upgradeWebSocket(upgradeServer, request, {
+          route: "stream",
+          opened: false,
+        });
       }
-      return undefined;
+      return new Response("Not Found", { status: 404 });
     },
     websocket: {
       message: (ws, message) => {
+        if (ws.data.route === "stream") {
+          handleStreamMessage(ws, message);
+          return;
+        }
         handleRpcMessage(ws, message, catalog);
       },
     },
@@ -190,6 +199,18 @@ function sendFatalAndClose(
 
 function sendHostFrame(ws: RpcWebSocket, frame: HostFrame): void {
   ws.send(JSON.stringify(hostFrameSchema.parse(frame)));
+}
+
+function upgradeWebSocket(
+  upgradeServer: BunUpgradeServer,
+  request: Request,
+  data: ConnectionState,
+): Response | undefined {
+  const upgraded = upgradeServer.upgrade(request, { data });
+  if (!upgraded) {
+    return new Response("WebSocket upgrade failed", { status: 400 });
+  }
+  return undefined;
 }
 
 function textFromMessage(
