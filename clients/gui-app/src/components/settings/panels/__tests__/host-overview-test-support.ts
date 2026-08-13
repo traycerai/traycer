@@ -14,7 +14,10 @@ import type {
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
-import type { HostGetInstallationInfoResponse } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostAvailableManifest,
+  HostGetInstallationInfoResponse,
+} from "@traycer/protocol/host/maintenance/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -262,5 +265,48 @@ export function makeInstalledRecord(version: string): HostInstalledRecord {
     signatureVerifiedAt: "2026-08-10T00:00:00Z",
     platform: "darwin",
     arch: "arm64",
+  };
+}
+
+/**
+ * A `host.update.check` manifest carrying one installable version.
+ *
+ * `versions` is what the Overview's list renders, so a suite that stubs the
+ * check with an EMPTY array has no Install row to click — which is how four
+ * install-path tests stopped reaching the RPC they were about the moment the
+ * single "Update to v…" button became a list.
+ *
+ * `platforms` deliberately holds exactly ONE key, matching what a current CLI
+ * emits: `host available --json` projects every entry to
+ * `currentHostPlatformKey()` before printing it, and the client takes a sole
+ * key as the host's own answer rather than re-deriving one.
+ */
+export function updateCheckManifest(version: string): HostAvailableManifest {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-12T00:00:00Z",
+    latest: version,
+    versions: [
+      {
+        version,
+        releasedAt: "2026-08-12T00:00:00Z",
+        releaseNotesUrl: "https://example.invalid/notes",
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          "darwin-arm64": {
+            available: true,
+            unavailableReason: null,
+            url: "https://example.invalid/host.tar.gz",
+            sizeBytes: 1024,
+            sha256: "a".repeat(64),
+            signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+            signatureAlgorithm: "minisign",
+            publicKeyId: "key-1",
+          },
+        },
+      },
+    ],
   };
 }

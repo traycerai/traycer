@@ -53,6 +53,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -432,12 +433,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "externally-managed" as const }),
@@ -461,8 +457,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     );
 
     fireEvent.click(await waitForButton("Check now"));
-    const installButton = await waitForButton("Update to v1.6.0");
-    fireEvent.click(installButton);
+    fireEvent.click(await waitForButton("Install"));
 
     // The whole REGION retires, not just the install button. This test used to
     // assert a disabled install button beside a live "Check now", which is the
@@ -475,7 +470,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
     });
-    expect(screen.queryByTestId("host-overview-update-install")).toBeNull();
+    expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
   });
 });
 

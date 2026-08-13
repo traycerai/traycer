@@ -12,7 +12,6 @@ import {
   deriveUpdatePill,
   formatHostMeta,
   formatLastSeen,
-  isValidHostVersion,
   type HostPresenceView,
   type ViewerReachabilityCheckLike,
 } from "@/components/settings/panels/my-hosts-model";
@@ -342,48 +341,7 @@ describe("formatHostMeta", () => {
   });
 });
 
-describe("isValidHostVersion", () => {
-  it("accepts dotted-numeric versions with 1-3 segments", () => {
-    expect(isValidHostVersion("1")).toBe(true);
-    expect(isValidHostVersion("1.4")).toBe(true);
-    expect(isValidHostVersion("1.4.2")).toBe(true);
-  });
-
-  it("trims surrounding whitespace before matching", () => {
-    expect(isValidHostVersion("  1.4.2  ")).toBe(true);
-  });
-
-  it("rejects non-dotted-numeric or malformed input", () => {
-    expect(isValidHostVersion("")).toBe(false);
-    expect(isValidHostVersion("v1.4.2")).toBe(false);
-    expect(isValidHostVersion("1.4.2.1")).toBe(false);
-    expect(isValidHostVersion("1..4")).toBe(false);
-    expect(isValidHostVersion("latest")).toBe(false);
-    expect(isValidHostVersion("1.4.2-beta")).toBe(false);
-  });
-});
-
 describe("deriveUpdateAffordance", () => {
-  it("shows the Update now input for current/available/required/failed, hides it for pending/updating", () => {
-    const shown: HostUpdateState[] = [
-      "current",
-      "available",
-      "required",
-      "failed",
-    ];
-    const hidden: HostUpdateState[] = ["pending", "updating"];
-    for (const updateState of shown) {
-      expect(
-        deriveUpdateAffordance(statusDto({ updateState })).showUpdateNowInput,
-      ).toBe(true);
-    }
-    for (const updateState of hidden) {
-      expect(
-        deriveUpdateAffordance(statusDto({ updateState })).showUpdateNowInput,
-      ).toBe(false);
-    }
-  });
-
   it("shows no drain-gate copy when not pending", () => {
     const view = deriveUpdateAffordance(
       statusDto({ updateState: "current", busySessionCount: 0 }),

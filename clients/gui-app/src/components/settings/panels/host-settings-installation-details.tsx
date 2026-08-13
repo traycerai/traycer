@@ -22,9 +22,24 @@ export interface InstallationDetailsRecord {
   readonly source: HostInstallSourceTag;
   readonly archiveSha256: string | null;
   readonly signatureVerifiedAt: string | null;
+  /**
+   * Which key verified the archive — or the sentinel that says none did.
+   *
+   * Carried because `signatureVerifiedAt` alone cannot tell the two apart. An
+   * unsigned local-file install stamps it with the install time anyway (the
+   * CLI's `stageLocalSource` does, and `scripts/remote-host-staging.js` follows
+   * it), so reading only that field captioned every hand-installed and every
+   * tree-run host with a green "Verified <date>" — an assertion about a
+   * signature that was never checked, on exactly the hosts least likely to have
+   * one.
+   */
+  readonly signatureKeyId: string;
   readonly platform: string;
   readonly arch: string;
 }
+
+/** The CLI's sentinel for "this install was never signed". */
+const UNSIGNED_SIGNATURE_KEY_ID = "local-file:unsigned";
 
 interface InstallationDetailsDisclosureProps {
   readonly record: InstallationDetailsRecord | null;
@@ -71,13 +86,9 @@ export function InstallationDetailsDisclosure(
           />
           <DetailField
             label="Verification"
-            value={
-              record.signatureVerifiedAt !== null
-                ? `Verified ${formatInstallDate(record.signatureVerifiedAt)}`
-                : "Unverified"
-            }
+            value={describeVerification(record)}
             valueClassName={
-              record.signatureVerifiedAt !== null
+              isSignatureVerified(record)
                 ? "text-emerald-500"
                 : "text-amber-500"
             }
@@ -108,6 +119,26 @@ interface DetailFieldProps {
   readonly value: string;
   readonly valueClassName: string | undefined;
   readonly testId: string | undefined;
+}
+
+function isSignatureVerified(record: InstallationDetailsRecord): boolean {
+  return (
+    record.signatureVerifiedAt !== null &&
+    record.signatureKeyId !== UNSIGNED_SIGNATURE_KEY_ID
+  );
+}
+
+function describeVerification(record: InstallationDetailsRecord): string {
+  if (record.signatureKeyId === UNSIGNED_SIGNATURE_KEY_ID) {
+    // Not "Unverified": nothing failed and nothing is wrong. This build was
+    // installed from a local file or run from a tree, so there was no
+    // signature to check in the first place, and saying so is the difference
+    // between a state and a fault.
+    return "Unsigned local build";
+  }
+  return record.signatureVerifiedAt === null
+    ? "Unverified"
+    : `Verified ${formatInstallDate(record.signatureVerifiedAt)}`;
 }
 
 function DetailField(props: DetailFieldProps) {

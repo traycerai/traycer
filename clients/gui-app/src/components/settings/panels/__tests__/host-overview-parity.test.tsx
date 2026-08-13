@@ -84,7 +84,6 @@ interface OverviewSemanticSnapshot {
   /** Every section/group heading's text, sorted. */
   readonly headingTexts: readonly string[];
   readonly displayedName: string;
-  readonly endpointText: string | null;
   readonly thisComputerTagPresent: boolean;
   readonly recoveryConsolePresent: boolean;
   /**
@@ -93,8 +92,7 @@ interface OverviewSemanticSnapshot {
    * Captured rather than merely excluded, because "excluded" and "unasserted"
    * are not the same thing and the difference is where a regression hides: with
    * these only filtered, deleting the remote row entirely would leave both
-   * variants agreeing on its absence and this suite green. The endpoint text
-   * gets the same treatment one field up, for the same reason.
+   * variants agreeing on its absence and this suite green.
    */
   readonly removalTestIds: readonly string[];
   /**
@@ -151,12 +149,6 @@ const SHARED_ROW_NAME = "stale-registry-label";
  * every one of them explicitly instead of just excluding it.
  */
 const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
-  // The endpoint testid (`host-overview-endpoint`) is present in BOTH — only
-  // its text differs: local shows `ws://… · pid N`, remote shows
-  // `via <relay origin> · …`. Excluding the testid itself would hide a
-  // regression where the row vanishes for one variant; only the text is
-  // legitimately different.
-  "endpointText",
   // Only `host.isLocalMachine` gets the "This computer" tag next to its name.
   "thisComputerTagPresent",
   // The danger zone's removal row sits on a third capability plane the page was
@@ -228,9 +220,15 @@ function accessibleButtonName(button: Element): string {
 /**
  * Renders one variant (local or remote) against a caller-supplied fixture and
  * reduces the DOM to a complete structural snapshot. Never a raw text diff:
- * the endpoint line and the "This computer" tag legitimately differ between
- * the two variants, and a whole-tree diff would fail on those instead of
- * proving the page itself is identical.
+ * the "This computer" tag legitimately differs between the two variants, and a
+ * whole-tree diff would fail on it instead of proving the page itself is
+ * identical.
+ *
+ * The endpoint line used to be the other named exception — `ws://… · pid N`
+ * locally against `via <relay origin>` remotely. It is gone with the meta row
+ * itself, so parity here is now STRICTER than the snapshot it replaced: the two
+ * variants differ on one tag and the danger zone's removal plane, and on
+ * nothing else.
  */
 async function renderOverviewSnapshot(options: {
   readonly hostId: string;
@@ -315,8 +313,6 @@ async function renderOverviewSnapshot(options: {
     .map((testId) => normalizeTestId(testId, options.hostId))
     .sort();
 
-  const endpointText =
-    screen.queryByTestId("host-overview-endpoint")?.textContent ?? null;
   const removalTestIds = Array.from(
     view.container.querySelectorAll("[data-testid]"),
   )
@@ -333,7 +329,7 @@ async function renderOverviewSnapshot(options: {
   // Node-exact subtraction, never global string deletion.
   //
   // An earlier version lifted out the WHOLE danger-zone subtree and deleted the
-  // endpoint/tag text as strings. Both were too blunt, in the precise class of
+  // tag text as a string. Both were too blunt, in the precise class of
   // blind spot this comparison exists to close: the danger zone has one SHARED
   // RPC-backed row (File edit snapshots) whose prose must match, so discarding
   // the subtree would let a future `isLocalMachine` fork there stay green; and
@@ -371,7 +367,6 @@ async function renderOverviewSnapshot(options: {
     buttonNames,
     headingTexts,
     displayedName,
-    endpointText,
     thisComputerTagPresent: screen.queryByText("This computer") !== null,
     recoveryConsolePresent:
       screen.queryByTestId("settings-host-identity") !== null,
@@ -411,7 +406,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(remote.displayedName).toBe("Studio Mac");
   });
 
-  it("differs ONLY on the endpoint text and the 'This computer' tag — both named, both asserted", async () => {
+  it("differs ONLY on the 'This computer' tag — named and asserted", async () => {
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -428,15 +423,17 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       hostVersion: "1.5.0",
     });
 
-    expect(local.endpointText).not.toBeNull();
-    expect(local.endpointText).toContain("ws://127.0.0.1");
-    expect(local.endpointText).toContain("pid 4821");
-    expect(local.endpointText).not.toContain("via ");
-
-    expect(remote.endpointText).not.toBeNull();
-    expect(remote.endpointText).toContain("via ");
-    expect(remote.endpointText).not.toContain("ws://");
-    expect(remote.endpointText).not.toContain("pid ");
+    // The retired meta row, pinned as ABSENT for both. A reader who remembers
+    // `ws://… · pid N` would otherwise assume it moved rather than went, and
+    // the local variant is still rendered against a snapshot that HAS a
+    // loopback URL and a pid — so this is a real assertion, not a tautology.
+    expect(local.bodyTextWithoutLocalOnlyDifferences).not.toContain(
+      "ws://127.0.0.1",
+    );
+    expect(local.bodyTextWithoutLocalOnlyDifferences).not.toContain("pid 4821");
+    expect(remote.bodyTextWithoutLocalOnlyDifferences).not.toContain(
+      "via relay",
+    );
 
     expect(local.thisComputerTagPresent).toBe(true);
     expect(remote.thisComputerTagPresent).toBe(false);
@@ -506,8 +503,6 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
  */
 function localOnlyNodes(root: HTMLElement): readonly Element[] {
   const nodes: Element[] = [];
-  const endpoint = root.querySelector('[data-testid="host-overview-endpoint"]');
-  if (endpoint !== null) nodes.push(endpoint);
 
   // The "This computer" tag, located by WHERE IT LIVES — not by its text.
   //

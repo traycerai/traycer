@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
-import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   customNameFromIdentityDraft,
-  overviewEndpointParts,
   splitDoctorIssuesByVantage,
 } from "@/components/settings/panels/host-overview-model";
 
@@ -36,51 +33,6 @@ describe("splitDoctorIssuesByVantage", () => {
     const split = splitDoctorIssuesByVantage([issue("SERVICE_STOPPED")], []);
     expect(split.actionable.map((i) => i.code)).toEqual(["SERVICE_STOPPED"]);
     expect(split.disprovenByTransport).toEqual([]);
-  });
-});
-
-describe("overviewEndpointParts", () => {
-  const localHost: LocalHostSnapshot = {
-    hostId: "host-a",
-    availability: "available",
-    websocketUrl: "ws://127.0.0.1:8765",
-    version: "1.5.0",
-    pid: 4821,
-    systemHostName: "hardiks-macbook",
-    displayName: "hardiks-macbook",
-  };
-
-  it("shows the loopback URL and pid for a local host", () => {
-    const parts = overviewEndpointParts({
-      host: hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
-      busySessionCount: null,
-      localHost,
-    });
-    // No version here on purpose — the identity line above owns it. Printing
-    // it in both places is what let the card show v1.4.2 (from the registry
-    // row) and v1.5.0 (from the RPC) at the same time.
-    expect(parts).toEqual(["ws://127.0.0.1:8765", "pid 4821"]);
-  });
-
-  it("shows only the relay origin for a remote host, never the full URL", () => {
-    const parts = overviewEndpointParts({
-      host: hostScopeOptionFixture({
-        hostId: "host-b",
-        isLocalMachine: false,
-        entry: {
-          hostId: "host-b",
-          label: "host-b",
-          kind: "remote",
-          websocketUrl: "wss://relay.traycer.ai/rpc/abc123secret",
-          version: "1.5.0",
-          status: "available",
-        },
-      }),
-      busySessionCount: 2,
-      localHost: null,
-    });
-    expect(parts).toEqual(["via relay.traycer.ai", "2 active sessions"]);
-    expect(parts.some((p) => p.includes("abc123secret"))).toBe(false);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -11,14 +11,13 @@ import {
 import {
   HostIdentityCard,
   HostIdRow,
-  ThisWindowCard,
 } from "@/components/settings/host-scope/host-identity-card";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import {
   HostOverviewActions,
-  HostOverviewEndpointRow,
+  HostOverviewNameAction,
   HostOverviewNotice,
   HostOverviewUpdateProgress,
   HostRestartBusyNotice,
@@ -27,7 +26,6 @@ import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-ove
 import {
   customNameFromIdentityDraft,
   describeOverviewDegrade,
-  overviewEndpointParts,
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
@@ -55,7 +53,6 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
-import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 
 /**
  * ONE Overview, for every host.
@@ -86,8 +83,6 @@ import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-
 // eslint-disable-next-line complexity
 export function HostOverviewPanel(props: {
   readonly scope: HostScope;
-  /** This computer's live host process, when the scoped host IS this computer. */
-  readonly localHost: LocalHostSnapshot | null;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
   readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
@@ -154,7 +149,6 @@ export function HostOverviewPanel(props: {
     host,
     identity: identityQuery.data ?? null,
     status: statusQuery.data ?? null,
-    localHost: props.localHost,
   });
   const { identity, displayName } = view;
   const nameDraft = nameDraftOverride ?? view.persistedNameDraft;
@@ -215,6 +209,29 @@ export function HostOverviewPanel(props: {
         // Same two-layer rule as the name: the process's own answer when there
         // is a route, the registry copy when there is not.
         version={view.hostVersion ?? host.version}
+        // What the HOST says about its own work, which is the fact that decides
+        // whether Restart is safe to press. `null` until it answers.
+        sessionCount={view.busySessionCount}
+        nameAction={
+          !usable || editingName ? null : (
+            <HostOverviewNameAction
+              hostName={displayName}
+              // The WRITE capability gates the rename affordance, not the read.
+              // The pencil and "Retry name" both lead to `host.identity.set`,
+              // so a host that can be read but not written must degrade them -
+              // otherwise Save calls a method the handshake already declined.
+              degrade={identitySetDegrade ?? identityDegrade}
+              loaded={identity !== null}
+              failed={identity === null && identityQuery.isError}
+              retrying={identityQuery.isFetching}
+              onRetry={() => {
+                void identityQuery.refetch();
+              }}
+              onEdit={() => setEditingName(true)}
+              buttonRef={editNameRef}
+            />
+          )
+        }
         actions={
           // Withheld entirely when there is no route, rather than rendered and
           // disabled. Every one of these needs a live host to answer, so on an
@@ -222,36 +239,22 @@ export function HostOverviewPanel(props: {
           // already says the host cannot be reached — and "disabled" would
           // wrongly imply a capability verdict rather than a connectivity one.
           // What survives an outage is the account-backed half below: the
-          // update policy and the version pin, which need no route at all.
+          // update policy, which needs no route at all.
           !usable || editingName ? null : (
             <HostOverviewActions
               hostName={displayName}
               restartDegrade={restartDegrade}
               doctorDegrade={doctorDegrade}
-              // The WRITE capability gates the rename controls, not the read.
-              // "Edit name" and "Retry name" both lead to
-              // `host.identity.set`, so a host that can be read but not
-              // written must degrade them - otherwise Save calls a method the
-              // handshake already declined.
-              identityDegrade={identitySetDegrade ?? identityDegrade}
               restartPending={restart.isPending}
               anyPending={anyPending}
-              // Opening a disabled editor is the other half of the same
-              // focus-loss finding: block the TRIGGER while there is no name
-              // data to edit, not just the input.
-              identityLoaded={identity !== null}
-              identityFailed={identity === null && identityQuery.isError}
-              identityRetrying={identityQuery.isFetching}
-              onRetryIdentity={() => {
-                void identityQuery.refetch();
-              }}
-              editNameRef={editNameRef}
+              isActive={host.isActive}
+              connectable={host.connectable}
               onRestart={() => {
                 setRestartBusyCount(null);
                 setRestartConfirmOpen(true);
               }}
               onOpenDoctor={() => setDoctorOpen(true)}
-              onEditName={() => setEditingName(true)}
+              onMakeActive={() => scope.makeActive(host.hostId)}
             />
           )
         }
@@ -294,8 +297,6 @@ export function HostOverviewPanel(props: {
             />
           </div>
         ) : null}
-        <HostOverviewEndpointRow parts={view.endpointParts} />
-        <ThisWindowCard scope={scope} host={host} />
         <HostIdRow
           hostId={host.hostId}
           onCopy={(value) => hostIdCopy.copy(value)}
@@ -306,6 +307,7 @@ export function HostOverviewPanel(props: {
         client={client}
         hostName={displayName}
         installedVersion={view.hostVersion}
+        platformKey={host.platform}
         checkDegrade={updateCheckDegrade}
         installDegrade={updateInstallDegrade}
         busy={anyPending}
@@ -460,7 +462,8 @@ interface OverviewDisplay {
   readonly displayName: string;
   /** What the rename input shows before the user types. */
   readonly persistedNameDraft: string;
-  readonly endpointParts: readonly string[];
+  /** `host.status`'s own session count; `null` until the host answers. */
+  readonly busySessionCount: number | null;
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
 }
@@ -471,28 +474,19 @@ function useOverviewDisplay(input: {
   readonly identity: HostIdentity | null;
   /** The negotiated `host.status` response, as this client's registry sees it. */
   readonly status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null;
-  readonly localHost: LocalHostSnapshot | null;
 }): OverviewDisplay {
-  const { scope, host, identity, status, localHost } = input;
-  const hostVersion = status?.hostVersion ?? null;
-  const busySessionCount = status?.busySessionCount ?? null;
-  const endpointParts = useMemo(
-    () =>
-      host === null
-        ? []
-        : overviewEndpointParts({
-            host,
-            busySessionCount,
-            localHost,
-          }),
-    [host, busySessionCount, localHost],
-  );
+  const { scope, host, identity, status } = input;
   return {
     identity,
     displayName: identity?.effectiveName ?? host?.name ?? scope.hostLabel,
     persistedNameDraft: persistedDraftFromIdentity(identity),
-    endpointParts,
-    hostVersion,
+    // The loopback URL and pid that used to ride alongside this are GONE, and
+    // with them the local/remote fork in the meta line. They were the page's
+    // one legitimate per-kind difference, and what they bought was a monospace
+    // band nobody acts on from Settings; the session count is the half that
+    // answers a question the buttons below actually depend on.
+    busySessionCount: status?.busySessionCount ?? null,
+    hostVersion: status?.hostVersion ?? null,
     updateProgress: status?.updateProgress ?? null,
   };
 }
@@ -500,10 +494,10 @@ function useOverviewDisplay(input: {
 /**
  * ONE Updates card, both halves of a host's update story.
  *
- * The host's own immediate check/apply needs a route and goes away without one;
- * the account registry's policy and version pin do not, and keeping them is the
+ * The host's own check and version list need a route and go away without one;
+ * the account registry's auto-update policy does not, and keeping it is the
  * whole reason this card is not gated as a unit — an unreachable host is a
- * common moment to want exactly those. They are genuinely two mechanisms, but a
+ * common moment to want exactly that. They are genuinely two mechanisms, but a
  * person has one update question, so the copy distinguishes them rather than the
  * layout.
  */
@@ -511,6 +505,8 @@ function HostOverviewUpdatesCard(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
   readonly installedVersion: string | null;
+  /** The registry's `<platform>-<arch>` string, e.g. `linux-x64`. */
+  readonly platformKey: string | null;
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
@@ -531,15 +527,16 @@ function HostOverviewUpdatesCard(props: {
             client={props.client}
             hostName={props.hostName}
             installedVersion={props.installedVersion}
+            platformKey={props.platformKey}
             checkDegrade={props.checkDegrade}
             installDegrade={props.installDegrade}
             busy={props.busy}
           />
         ) : null}
         {registryItem === null ? null : (
-          // Keyed by host: every piece of state inside — an open drain-gate
-          // confirmation, a half-typed version pin — belongs to ONE host, so a
-          // scope change must destroy it rather than re-point it.
+          // Keyed by host: the state inside — an open drain-gate confirmation
+          // — belongs to ONE host, so a scope change must destroy it rather
+          // than re-point it.
           <HostRegistryUpdates key={registryItem.hostId} item={registryItem} />
         )}
       </div>

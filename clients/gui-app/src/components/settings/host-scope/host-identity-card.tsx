@@ -55,11 +55,26 @@ export function HostIdentityCard(props: {
    */
   readonly version: string | null;
   /**
-   * The card's action cluster (Restart / Run doctor / Edit name), or `null` for
-   * a surface with nothing to offer. Was a bespoke `onRename` slot that no
-   * caller ever filled; the Overview needs three buttons here, and hard-coding
-   * a second and third would push presentation decisions into a card whose job
-   * is to state an identity.
+   * The rename affordance, rendered inline against the name itself.
+   *
+   * A pencil beside the thing it edits, rather than a third word in the verb
+   * bar: renaming is the only action here whose object is the name, and a
+   * labelled button sitting beside Restart and Run doctor read as its peer —
+   * three equally-weighted maintenance verbs, one of which was cosmetic.
+   */
+  readonly nameAction: ReactNode;
+  /**
+   * How many sessions the HOST says are open (`host.status`), or `null` when it
+   * has not answered — which is not the same as zero and must not render as it.
+   */
+  readonly sessionCount: number | null;
+  /**
+   * The card's verb bar (Restart / Run doctor / Use in this window), or `null`
+   * for a surface with nothing to offer. Rendered as a footer strip under the
+   * identity rather than opposite it: the header carries a name, a pencil, a
+   * status line and up to two tags, and a right-aligned cluster competing for
+   * that same row wrapped into a ragged two-column block at every settings
+   * width below full screen.
    */
   readonly actions: ReactNode;
   readonly children: ReactNode;
@@ -70,8 +85,7 @@ export function HostIdentityCard(props: {
   const version = formatHostVersion(props.version);
   // One line of provenance, in words a person reads rather than the build
   // target string the registry happens to store. This is the page's ONLY
-  // version, on purpose — the endpoint line below describes the route and the
-  // process, not what they are running.
+  // version, on purpose.
   const facts = [platform, arch, version].filter(
     (part): part is string => part !== null && part.length > 0,
   );
@@ -82,21 +96,28 @@ export function HostIdentityCard(props: {
       data-testid="host-identity-card"
       aria-label={`${props.displayName} overview`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
-            <HostGlyph host={host} className="size-4.5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h2 className="truncate font-semibold text-foreground text-title-sm">
-                {props.displayName}
-              </h2>
-              {host.isLocalMachine ? (
-                <HostTag label="This computer" tone={undefined} />
-              ) : null}
-            </div>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-ui-sm">
+      <div className="flex min-w-0 items-start gap-3 px-5 py-4">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+          <HostGlyph host={host} className="size-4.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 className="min-w-0 truncate font-semibold text-foreground text-title-sm">
+              {props.displayName}
+            </h2>
+            {props.nameAction}
+            {host.isLocalMachine ? (
+              <HostTag label="This computer" tone={undefined} />
+            ) : null}
+            {/* The "Active for this window" ROW is gone — this tag is what
+                replaced it. A full-width bar with its own background said one
+                boolean about the window, permanently, on the page about the
+                host; the fact belongs beside the name, and the consequence it
+                used to spell out now rides the button that changes it. */}
+            {host.isActive ? <HostTag label="Active" tone="accent" /> : null}
+          </div>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="flex items-center gap-1.5 text-ui-sm">
               <HostPresenceDot
                 tone={host.health.tone}
                 animate={host.health.live}
@@ -113,30 +134,79 @@ export function HostIdentityCard(props: {
               >
                 {host.health.label}
               </span>
-              {host.health.detail === null ? null : (
-                <span className="min-w-0 truncate text-muted-foreground">
-                  {host.health.detail}
-                </span>
-              )}
-            </div>
-            {facts.length === 0 ? null : (
-              <p className="mt-1 truncate text-ui-xs text-muted-foreground">
-                {facts.join(" · ")}
-              </p>
+            </span>
+            {host.health.detail === null ? null : (
+              <span className="min-w-0 truncate text-ui-sm text-muted-foreground">
+                {host.health.detail}
+              </span>
             )}
+            {facts.length === 0 ? null : (
+              // Folded up from its own line. The card gained a footer verb bar,
+              // and three stacked lines of identity above it pushed Host ID and
+              // everything below off a short settings pane; the separator is
+              // what keeps a merged line from reading as one run-on phrase.
+              <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+                <span aria-hidden className="mr-2 text-muted-foreground/40">
+                  ·
+                </span>
+                {facts.join(" · ")}
+              </span>
+            )}
+            <ActiveSessionsChip count={props.sessionCount} />
           </div>
         </div>
-        {props.actions === null ? null : (
-          <div
-            className="flex shrink-0 flex-wrap items-center justify-end gap-2"
-            data-testid="host-identity-actions"
-          >
-            {props.actions}
-          </div>
-        )}
       </div>
+      {props.actions === null ? null : (
+        <div
+          className="flex flex-wrap items-center gap-2 border-t border-border/40 bg-muted/10 px-5 py-3"
+          data-testid="host-identity-actions"
+        >
+          {props.actions}
+        </div>
+      )}
       {props.children}
     </section>
+  );
+}
+
+/**
+ * Open sessions, as a state rather than a clause.
+ *
+ * This is what is left of the `via relay.dev.traycer.ai · 1 active session`
+ * meta row. The route half is deliberately gone — a relay origin is not
+ * something anyone acts on from this page, and printing it made a monospace
+ * band out of the one fact that IS actionable: whether work is running on this
+ * host right now, which decides whether Restart is safe to press.
+ *
+ * `null` renders nothing. A host that has not answered `host.status` has not
+ * told us it is idle, and "No sessions" is a claim.
+ */
+function ActiveSessionsChip(props: {
+  readonly count: number | null;
+}): ReactNode {
+  const { count } = props;
+  if (count === null) return null;
+  const live = count > 0;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-ui-xs font-medium",
+        live
+          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
+          : "border-border/60 bg-muted/40 text-muted-foreground",
+      )}
+      data-testid="host-active-sessions"
+      data-count={count}
+    >
+      <HostPresenceDot
+        tone={live ? "live" : "idle"}
+        animate={live}
+        className={undefined}
+      />
+      {live
+        ? `${count} active session${count === 1 ? "" : "s"}`
+        : "No active sessions"}
+    </span>
   );
 }
 
@@ -149,8 +219,15 @@ export function HostIdentityCard(props: {
  * limits and default landing target. Making the swap a labelled button whose
  * copy names what moves — and what deliberately does not — is the whole
  * separation between a lens and a binding.
+ *
+ * The Overview no longer renders this: a full-width row asserting one boolean
+ * about the WINDOW, on the page about a HOST, cost more vertical space than the
+ * fact was worth. There the binding is an `Active` tag beside the name and a
+ * verb in the card's action bar. This survives for the RECOVERY console, whose
+ * subject is a local host with no process to ask — it has no such action bar,
+ * and its own summary card owns the identity line.
  */
-export function ThisWindowCard(props: {
+function ThisWindowCard(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
 }): ReactNode {

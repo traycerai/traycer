@@ -4,7 +4,6 @@ import type {
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
-import { HOST_VERSION_PATTERN } from "@traycer/protocol/host/version";
 
 /**
  * Pure status derivation for the My Hosts list (Remote Host Support §7,
@@ -188,27 +187,19 @@ export function deriveUpdatePill(
 // auto-policy toggle, and the "Apply now — ends N sessions" drain-gate force.
 // -----------------------------------------------------------------------------
 
-/**
- * Validates a user-typed "Update now" target version client-side before
- * submit. Trims surrounding whitespace (a pasted value commonly carries it)
- * before matching. The pattern is shared with authn-v3's server-side check via
- * `@traycer/protocol/host/version`, so a client-accepted value never bounces
- * off the server's 400.
- */
-export function isValidHostVersion(value: string): boolean {
-  return HOST_VERSION_PATTERN.test(value.trim());
-}
+// `isValidHostVersion` and `showUpdateNowInput` lived here and are gone with the
+// free-text "Update to version…" pin they served.
+//
+// Both existed only because that control let someone name a version nothing had
+// confirmed: the regex mirrored authn-v3's server-side check so a typo failed
+// here instead of as a 400, and the flag hid the input while a `desiredVersion`
+// write was already draining toward the host, so a second one could not
+// retarget an update mid-flight. The Overview now lists the versions the host
+// itself reports and installs the one that was clicked, which makes the first
+// unnecessary and moves the second into `HostVersionRows` — where an install in
+// flight freezes every row, not just the one it belongs to.
 
 export interface HostUpdateAffordanceView {
-  /**
-   * Whether to show the "Update now" target-version input + button. Hidden
-   * only while a `desiredVersion` write is already in flight toward the host
-   * (`pending` — approved, draining; `updating` — swap in progress); shown
-   * for `current`/`available`/`required`, and also for `failed` (the failed
-   * swap's `desiredVersion` stays approved, so re-submitting "Update now" is
-   * a legitimate retry, not a redundant action).
-   */
-  readonly showUpdateNowInput: boolean;
   /**
    * "Waiting for N sessions" — populated only when the host is actually
    * gated on open sessions (`updateState === "pending"` AND
@@ -234,13 +225,10 @@ function pluralizeSessions(count: number): string {
 export function deriveUpdateAffordance(
   status: HostStatusDTO,
 ): HostUpdateAffordanceView {
-  const showUpdateNowInput =
-    status.updateState !== "pending" && status.updateState !== "updating";
   const isWaitingOnSessions =
     status.updateState === "pending" && status.busySessionCount > 0;
   const sessionsWord = pluralizeSessions(status.busySessionCount);
   return {
-    showUpdateNowInput,
     waitingForSessionsLabel: isWaitingOnSessions
       ? `Waiting for ${status.busySessionCount} ${sessionsWord}`
       : null,

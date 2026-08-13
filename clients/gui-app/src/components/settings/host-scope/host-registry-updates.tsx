@@ -6,23 +6,12 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
 import {
   deriveUpdateAffordance,
   deriveUpdatePill,
-  isValidHostVersion,
 } from "@/components/settings/panels/my-hosts-model";
 
 type UpdateHostVersionPolicyMutation = UseMutationResult<
@@ -32,11 +21,19 @@ type UpdateHostVersionPolicyMutation = UseMutationResult<
 >;
 
 /**
- * The registry-backed half of a host's update story: the auto-update policy,
- * a target-version pin, and — only while the host is genuinely gated on open
- * sessions — the drain-gate force.
+ * The registry-backed half of a host's update story: the auto-update policy
+ * and — only while the host is genuinely gated on open sessions — the
+ * drain-gate force.
  *
- * These three used to live on a separate "My Hosts" list, one row per host.
+ * The third control, a free-text target-version pin, is gone. Picking a version
+ * now means picking one the HOST says it can install, from the list
+ * `HostOverviewUpdatesRegion` renders off `host.update.check`, and installing it
+ * over `host.update.install`. What that gives up is the pin's one real
+ * advantage — it needed no route, because the host applied it on its own next
+ * check-in — and what it buys is that nobody types a version into a box that
+ * cannot tell them whether it exists.
+ *
+ * These used to live on a separate "My Hosts" list, one row per host.
  * That list was the reason host management had two homes, because a row that
  * can change a host's update policy is a lifecycle surface no matter what it
  * is called. They now render inside the Updates region of the ONE page about
@@ -101,14 +98,6 @@ export function HostRegistryUpdates(props: {
             {pill.label}
           </span>
         )}
-        {/* `deriveUpdateAffordance` withholds this while the host is `pending`
-            or `updating` — draining sessions, or mid-swap. `MyHostsList`
-            honoured that flag; this rendered the control unconditionally and
-            left `showUpdateNowInput` computed and unread, so a second
-            desired-version write could retarget an update already in flight. */}
-        {affordance.showUpdateNowInput ? (
-          <UpdateNowControl hostId={item.hostId} mutation={mutation} />
-        ) : null}
       </div>
       {affordance.applyNowLabel === null ? null : (
         <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
@@ -124,116 +113,6 @@ export function HostRegistryUpdates(props: {
         </div>
       )}
     </>
-  );
-}
-
-/**
- * "Update to version…": a small popover collecting the target version,
- * validated client-side against the same dotted-numeric pattern authn-v3's
- * `PATCH /api/v3/hosts/:hostId` enforces server-side (`isValidHostVersion`).
- * There is no "latest release catalog" surfaced to the client, so the input is
- * a plain text field rather than a version picker.
- */
-function UpdateNowControl(props: {
-  readonly hostId: string;
-  readonly mutation: UpdateHostVersionPolicyMutation;
-}): ReactNode {
-  const { hostId, mutation } = props;
-  // Same arm-time capture as the drain-gate force below. A version draft typed
-  // for host B must never submit against host C because the scope moved while
-  // the popover was open — pinning a version is not destructive, but it is
-  // still a write aimed at a named host.
-  const [armedHostId, setArmedHostId] = useState<string | null>(null);
-  const [version, setVersion] = useState("");
-  const open = armedHostId !== null;
-  const targetMoved = armedHostId !== null && armedHostId !== hostId;
-  const trimmed = version.trim();
-  const showInvalid = trimmed.length > 0 && !isValidHostVersion(trimmed);
-  const canSubmit =
-    trimmed.length > 0 && isValidHostVersion(trimmed) && !targetMoved;
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setArmedHostId(next ? hostId : null);
-        if (!next) setVersion("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={mutation.isPending}
-          data-testid={`host-update-version-trigger-${hostId}`}
-        >
-          Update to version…
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[min(85vw,16rem)]"
-        align="end"
-        data-testid={`host-update-version-popover-${hostId}`}
-      >
-        <PopoverHeader>
-          <PopoverTitle>Update to version</PopoverTitle>
-          <PopoverDescription>
-            Applied on the host&apos;s next check-in (~20s) — no live session
-            required.
-          </PopoverDescription>
-        </PopoverHeader>
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!canSubmit) return;
-            mutation.mutate(
-              {
-                updatePolicy: undefined,
-                desiredVersion: trimmed,
-                force: undefined,
-              },
-              {
-                onSuccess: () => {
-                  setArmedHostId(null);
-                  setVersion("");
-                },
-              },
-            );
-          }}
-        >
-          <Input
-            value={version}
-            onChange={(event) => setVersion(event.target.value)}
-            placeholder="1.4.2"
-            aria-invalid={showInvalid}
-            disabled={mutation.isPending}
-            data-testid={`host-update-version-input-${hostId}`}
-          />
-          {showInvalid ? (
-            <p className="text-ui-xs text-destructive">
-              Use a dotted-numeric version, e.g. 1.4.2.
-            </p>
-          ) : null}
-          <Button
-            type="submit"
-            size="sm"
-            disabled={!canSubmit || mutation.isPending}
-            data-testid={`host-update-version-submit-${hostId}`}
-          >
-            {mutation.isPending ? (
-              <AgentSpinningDots
-                testId={undefined}
-                variant={undefined}
-                className={undefined}
-              />
-            ) : null}
-            Update now
-          </Button>
-        </form>
-      </PopoverContent>
-    </Popover>
   );
 }
 

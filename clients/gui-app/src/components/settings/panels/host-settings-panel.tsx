@@ -148,10 +148,6 @@ function HostSettingsPanelInner() {
     recoveryManagement,
     runnerHost,
     emptyAccountLocalRecovery,
-    // Only ever this computer's snapshot, and only when this computer is the
-    // SUBJECT. Handing it over for a remote row would print a local pid under
-    // another machine's name.
-    localHost: scopedIsLocalMachine ? localHost : null,
     hasLocalBridge: management !== null && scopedIsLocalMachine,
     onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
     localDoctorFixPendingCode: localDoctorFix.isPending
@@ -289,7 +285,6 @@ function renderOverviewBody(input: {
   readonly recoveryManagement: IHostManagement | null;
   readonly runnerHost: IRunnerHost;
   readonly emptyAccountLocalRecovery: boolean;
-  readonly localHost: LocalHostSnapshot | null;
   readonly hasLocalBridge: boolean;
   readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
   readonly localDoctorFixPendingCode: string | null;
@@ -320,7 +315,6 @@ function renderOverviewBody(input: {
   return (
     <HostOverviewPanel
       scope={scope}
-      localHost={input.localHost}
       hasLocalBridge={input.hasLocalBridge}
       onLocalDoctorFix={input.onLocalDoctorFix}
       localDoctorFixPendingCode={input.localDoctorFixPendingCode}

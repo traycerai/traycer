@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from "react";
-import { AlertTriangle, Info } from "lucide-react";
+import { AlertTriangle, Info, Pencil } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -12,10 +12,10 @@ import {
  * The Overview status card's moving parts — the pieces that differ between a
  * host that can do a thing and one that cannot.
  *
- * The card itself is `HostIdentityCard`, unchanged and shared: the whole point
- * of the restructure is that a local host and a remote host are described by
- * the SAME component reading the SAME RPCs, so anything that would have become
- * an `isLocalMachine` branch in the card had to become an input to it instead.
+ * The card itself is `HostIdentityCard`, shared: the whole point of the
+ * restructure is that a local host and a remote host are described by the SAME
+ * component reading the SAME RPCs, so anything that would have become an
+ * `isLocalMachine` branch in the card had to become an input to it instead.
  */
 
 /**
@@ -89,23 +89,82 @@ export function HostOverviewActionButton(props: {
 }
 
 /**
- * `v1.5.0 · ws://127.0.0.1:8765 · pid 4821` for this computer's host;
- * `v1.5.0 · via relay.traycer.ai · 2 active sessions` for one reached over the
- * relay. Same line, same place, sourced from whatever is actually true of each.
+ * The rename affordance: a pencil against the name, not a word in the verb bar.
+ *
+ * Same degrade discipline as the buttons below — `host.identity.set` gates it,
+ * and a host that can be read but not written gets a disabled pencil with the
+ * reason attached rather than an editor that would call a method the handshake
+ * already declined. The `aria-label` is the button's whole accessible name, so
+ * it stays the literal words a person would look for.
  */
-export function HostOverviewEndpointRow(props: {
-  readonly parts: readonly string[];
+export function HostOverviewNameAction(props: {
+  readonly hostName: string;
+  readonly degrade: OverviewDegradeReason | null;
+  /** The identity read has answered, so there is a name to edit. */
+  readonly loaded: boolean;
+  /** The identity read REJECTED — distinct from "has not answered yet". */
+  readonly failed: boolean;
+  readonly retrying: boolean;
+  readonly onRetry: () => void;
+  readonly onEdit: () => void;
+  readonly buttonRef: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
-  if (props.parts.length === 0) return null;
+  const { hostName, degrade, buttonRef } = props;
+  // A FAILED identity read is not a slow one, and conflating them stranded
+  // rename outright: a rejected `host.identity.get` left the trigger
+  // permanently busy with no error text and nothing to click. These reads do
+  // not retry, and focus/reconnect refetches are disabled in production, so
+  // nothing short of a remount ever cleared it. The failed read keeps a
+  // WORDED button — an icon that means "your name failed to load, press to
+  // try again" is not a pictogram anyone owns.
+  if (props.failed) {
+    return (
+      <HostOverviewActionButton
+        label="Retry name"
+        hostName={hostName}
+        variant="ghost"
+        degrade={degrade}
+        pending={props.retrying}
+        busy={false}
+        testId="host-overview-retry-identity"
+        buttonRef={buttonRef}
+        onClick={props.onRetry}
+      />
+    );
+  }
+  const button = (
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+      // Opening a disabled editor is the other half of the same focus-loss
+      // finding: block the TRIGGER while there is no name data to edit.
+      disabled={degrade !== null || !props.loaded}
+      onClick={props.onEdit}
+      aria-label="Edit name"
+      data-testid="host-overview-edit-name"
+      data-degraded={degrade ?? undefined}
+    >
+      <Pencil className="size-3.5" />
+    </Button>
+  );
   return (
-    <div className="border-t border-border/40 px-5 py-2.5">
-      <p
-        className="break-all font-mono text-code-xs text-muted-foreground"
-        data-testid="host-overview-endpoint"
-      >
-        {props.parts.join(" · ")}
-      </p>
-    </div>
+    <TooltipWrapper
+      label={
+        degrade === null
+          ? `Rename ${hostName}`
+          : describeOverviewDegrade(degrade, hostName)
+      }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* A disabled button fires no pointer events, so the tooltip needs a live
+          element to hang off. */}
+      <span className="inline-flex">{button}</span>
+    </TooltipWrapper>
   );
 }
 
@@ -212,31 +271,33 @@ export function HostOverviewNotice(props: {
 }
 
 /**
- * The status card's three verbs: Restart, Run doctor, Edit name.
+ * The status card's verb bar: Restart, Run doctor, and — only when this window
+ * is pointed somewhere else — Use in this window.
  *
  * One component so the cluster's per-button degrade discipline lives in one
  * place — each control asks its OWN method, and none of them is disabled by
  * another's absence. That is the difference this page was restructured for: a
  * host too old for `host.restart` still gets a working doctor and rename.
+ *
+ * The window binding joined this bar from the "Active for this window" row it
+ * used to own. It is not a host RPC and has no degrade reason — it is an
+ * account-side selection this shell makes — so it sits apart from the two
+ * capability-gated verbs and carries its own reachability gate.
  */
 export function HostOverviewActions(props: {
   readonly hostName: string;
   readonly restartDegrade: OverviewDegradeReason | null;
   readonly doctorDegrade: OverviewDegradeReason | null;
-  readonly identityDegrade: OverviewDegradeReason | null;
   readonly restartPending: boolean;
   /** Another Overview mutation holds the page. */
   readonly anyPending: boolean;
-  /** The identity read has answered, so there is a name to edit. */
-  readonly identityLoaded: boolean;
-  /** The identity read REJECTED - distinct from "has not answered yet". */
-  readonly identityFailed: boolean;
-  readonly identityRetrying: boolean;
-  readonly onRetryIdentity: () => void;
-  readonly editNameRef: RefObject<HTMLButtonElement | null>;
+  /** This window already starts new work here, so there is nothing to bind. */
+  readonly isActive: boolean;
+  /** A host with no dialable route cannot become this window's host. */
+  readonly connectable: boolean;
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
-  readonly onEditName: () => void;
+  readonly onMakeActive: () => void;
 }): ReactNode {
   const { hostName } = props;
   return (
@@ -263,39 +324,31 @@ export function HostOverviewActions(props: {
         buttonRef={undefined}
         onClick={props.onOpenDoctor}
       />
-      {/*
-        A FAILED identity read is not a slow one, and conflating them stranded
-        rename outright: `identityLoaded` was `identity !== null`, so a
-        rejected `host.identity.get` left "Edit name" permanently busy with no
-        error text and nothing to click. These reads do not retry, and
-        focus/reconnect refetches are disabled in production, so nothing short
-        of a remount or an unrelated invalidation ever cleared it. The failed
-        read gets its own retry instead.
-      */}
-      {props.identityFailed ? (
-        <HostOverviewActionButton
-          label="Retry name"
-          hostName={hostName}
-          variant="ghost"
-          degrade={props.identityDegrade}
-          pending={props.identityRetrying}
-          busy={false}
-          testId="host-overview-retry-identity"
-          buttonRef={props.editNameRef}
-          onClick={props.onRetryIdentity}
-        />
-      ) : (
-        <HostOverviewActionButton
-          label="Edit name"
-          hostName={hostName}
-          variant="ghost"
-          degrade={props.identityDegrade}
-          pending={false}
-          busy={!props.identityLoaded}
-          testId="host-overview-edit-name"
-          buttonRef={props.editNameRef}
-          onClick={props.onEditName}
-        />
+      {props.isActive ? null : (
+        // The asymmetry has to be said out loud somewhere, and the row that
+        // used to say it is gone. A person who expects this to move their work
+        // would otherwise watch nothing happen and conclude it is broken — so
+        // the sentence rides the control it describes, where it is read at the
+        // moment of deciding rather than skimmed past on load.
+        <TooltipWrapper
+          label="Switching changes where new work starts. Tabs you already have open stay on the host they started on."
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!props.connectable}
+              onClick={props.onMakeActive}
+              data-testid="host-make-active"
+            >
+              Use in this window
+            </Button>
+          </span>
+        </TooltipWrapper>
       )}
     </>
   );

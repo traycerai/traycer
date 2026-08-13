@@ -52,6 +52,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -161,12 +162,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "cli-unavailable" as const }),
@@ -178,14 +174,14 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    fireEvent.click(await waitForButton("Install"));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
     ).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
-      expect(screen.queryByTestId("host-overview-update-install")).toBeNull();
+      expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
     });
   });
 
@@ -198,12 +194,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "externally-managed" as const }),
@@ -215,7 +206,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    fireEvent.click(await waitForButton("Install"));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
@@ -236,12 +227,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "cli-failed" as const }),
@@ -253,7 +239,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    fireEvent.click(await waitForButton("Install"));
 
     expect(
       await screen.findByTestId("host-overview-update-attempt-failed"),
@@ -261,7 +247,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     expect(screen.queryByTestId("host-overview-updates-degraded")).toBeNull();
     expect(screen.getByTestId("host-overview-updates")).toBeTruthy();
     expect(screen.getByTestId("host-overview-update-check")).toBeTruthy();
-    expect(screen.getByTestId("host-overview-update-install")).toBeTruthy();
+    expect(screen.getByTestId("host-overview-version-picker")).toBeTruthy();
   });
 });
 
@@ -434,12 +420,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           armedHostCalls += 1;
           return {
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           };
         },
       },
@@ -452,12 +433,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           otherHostCalls += 1;
           return Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           });
         },
       },
@@ -515,12 +491,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": async () => {
           await gate;
@@ -558,7 +529,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     const view = render(makeUi());
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    fireEvent.click(await waitForButton("Install"));
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
     });

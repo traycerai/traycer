@@ -194,8 +194,11 @@ the whole surface guards against:
   `useReactiveActiveHostId`) - which host this window talks to for ambient
   work: notification indicators, the bell, rate limits, the resource monitor,
   and where newly started work lands. Changed ONLY by a labelled verb that
-  states its consequence ("Use this host in this window"), never as a
-  dropdown side effect. Always wears the accent.
+  states its consequence ("Use in this window", in the Overview card's action
+  bar, with the tabs-stay-put asymmetry on its tooltip), never as a dropdown
+  side effect. Always wears the accent - on the Overview that is the `Active`
+  tag beside the host name, which replaced a full-width row asserting the same
+  boolean.
 
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 host-scoped panel reads. Its status enum is the safety contract, because three
@@ -248,14 +251,16 @@ styles on purpose because its regions sit on three different capability planes:
   scoped host that defaulted to "local" once put this computer's service
   console under a host that no longer exists.
 - **Installation** is pure host RPC, so it mounts the gate itself and the gate
-  says why it is missing. The status card's ACTIONS (Restart / Run doctor /
-  Edit name) and the host's own update check are withheld outright without a
-  route rather than rendered disabled - "disabled" would read as a capability
-  verdict when the fact is connectivity.
-- the **account-backed** half - update policy, version pin, drain-gate force,
-  and Remove from account - needs no route and keeps rendering for a host that
-  cannot be reached, which is a common moment to want exactly those. The danger
-  zone gates its own rows for the same reason.
+  says why it is missing. The status card's ACTIONS (Restart / Run doctor / Use
+  in this window), the rename pencil, and the host's own update check are
+  withheld outright without a route rather than rendered disabled - "disabled"
+  would read as a capability verdict when the fact is connectivity.
+- the **account-backed** half - update policy, drain-gate force, and Remove
+  from account - needs no route and keeps rendering for a host that cannot be
+  reached, which is a common moment to want exactly those. The danger zone
+  gates its own rows for the same reason. The version PIN used to sit here and
+  no longer does: picking a version means picking one the host listed, so it
+  moved to the RPC half and an unreachable host can no longer be pinned.
 
 The recovery console is the one surface still on the CLI bridge, and it is NOT
 gated on reachability: it exists for a host that is down, so gating it on
@@ -1793,20 +1798,44 @@ aria-live="polite"` carrying the equivalent text for
       bounded released-floor read mounted while any answer is a stale `false`, so a
       host upgraded in place under the same id can overturn it.
   - **Status card** = `HostIdentityCard`, the same component the remote path
-    already used, now carrying an actions cluster plus a `displayName` and a
-    `version` the caller decides. Both follow the SAME two-layer rule: the host's
-    own answer (`host.status`'s `hostVersion`) when there is a route, the
-    registry/directory copy when there is not. Version is single-sourced to that
-    identity line on purpose - it used to also appear in the endpoint line from a
-    different source, so one card could show v1.4.2 (the registry row) above
-    v1.5.0 (the RPC) at the same time, which reads as broken rather than stale.
-    The `ws://…`/pid meta line (`host-overview-endpoint`) therefore carries no
-    version, and is the ONE legitimate local/remote difference: local shows the
-    loopback endpoint and pid from the live snapshot, remote shows
-    `via <relay host>` (origin only - the path carries the rendezvous routing
-    key) plus the host's own session count.
-    Reading a local pid file for a remote host would have been the one genuinely
-    wrong answer available.
+    already used, now carrying a `nameAction` slot, a `sessionCount`, a verb bar
+    plus a `displayName` and a `version` the caller decides. Both names follow
+    the SAME two-layer rule: the host's own answer (`host.status`'s
+    `hostVersion`) when there is a route, the registry/directory copy when there
+    is not. Version is single-sourced to that identity line on purpose - it used
+    to also appear in the endpoint line from a different source, so one card
+    could show v1.4.2 (the registry row) above v1.5.0 (the RPC) at the same
+    time, which reads as broken rather than stale.
+    - **Layout.** Name, rename pencil and tags on one line; presence dot, health
+      label, platform/arch/version and the sessions chip on the next; then a
+      footer verb bar; then Host ID. Rename is a pencil ON the name rather than
+      a third word beside Restart and Run doctor - it was the only one of the
+      three whose object is the name, and as a peer button it read as an equally
+      weighted maintenance verb. Its accessible name is still literally
+      `Edit name`. The verb bar is a footer strip rather than a right-aligned
+      header cluster because the header already carries a name, a pencil and up
+      to two tags, and the two competed for one row at every settings width
+      below full screen.
+    - **The `ws://…`/pid meta row (`host-overview-endpoint`) is GONE**, and with
+      it the page's one deliberate local/remote difference. It showed the
+      loopback endpoint and pid locally, `via <relay host>` remotely; neither
+      half is actionable from Settings - the pid names a process this page can
+      only reach through the Restart button beside it, and the relay origin is
+      infrastructure the account picked. What it carried that anyone acts on is
+      the session count, which is now a chip on the identity line straight off
+      `host.status.busySessionCount`: emerald and pulsing above zero, muted at
+      zero, and ABSENT while the host has not answered, because "No active
+      sessions" is a claim and silence is not. `host-overview-parity.test.tsx`
+      is correspondingly stricter - `endpointText` is no longer a named
+      exception, so the two variants now differ on the "This computer" tag and
+      the danger zone's removal plane and nothing else.
+    - **"Active for this window" is no longer a row.** A full-width bar with its
+      own background asserted one boolean about the WINDOW on the page about a
+      HOST. The binding is an `Active` tag beside the name; when this window is
+      pointed elsewhere, `Use in this window` joins the verb bar and carries the
+      asymmetry sentence ("Tabs you already have open stay on the host they
+      started on") as its tooltip, where it is read at the moment of deciding.
+      `ThisWindowCard` survives for the recovery console, which has no verb bar.
   - **Name precedence, in two layers.** Reachable → `host.identity.get`'s
     `effectiveName`; unreachable → the registry `displayName` the scope row
     already carries (`resolveHostName`, whose local-machine special case was
@@ -1829,23 +1858,51 @@ aria-live="polite"` carrying the equivalent text for
     lost ack idempotent instead of a busy refusal. `{outcome:"busy"}` is NOT an
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
-  - **Updates**: one card, both halves. The host's own immediate "Check now" /
-    "Update to v…" (`host.update.*`) sits above the account registry's
-    auto-update policy, version pin and drain-gate force (`HostRegistryUpdates`,
-    keyed by `hostId`, controls capture their target when armed). The RPC half
-    degrades away WHOLE - Check-now included, leaving the cloud pin as the only
-    update control, plus one line saying why - without the methods, without a
-    CLI (`cli-unavailable`, from the check side or the install side), or on an
-    `externally-managed` refusal. The last two are knowable only from an
-    ATTEMPT, so they are discovered rather than negotiated, and once seen they
-    are STICKY for the mounting: both are facts about how the host is set up,
-    not about that attempt, and leaving Check-now behind would keep offering the
-    one action the host has just said can never lead anywhere. `cli-failed` /
-    `invalid-output` are deliberately NOT sticky - one attempt going wrong with
-    the mechanism intact - so the controls stay and an inline
-    `host-overview-update-attempt-failed` notice clears on the next try.
-    Progress after an accepted install comes from `host.status.updateProgress`,
-    not from the install response, because the swap is detached and outlives it.
+  - **Updates**: one card, both halves. The host's own "Check now" and the
+    VERSION LIST it reveals (`host.update.*`) sit above the account registry's
+    auto-update policy and drain-gate force (`HostRegistryUpdates`, keyed by
+    `hostId`, controls capture their target when armed).
+    - **The version list replaced a free-text pin.** `host.update.check` returns
+      the whole manifest, not just `latest`, so the Overview renders the same
+      per-row-Install list the local recovery console has always had - for a
+      remote host too. Rows are `HostVersionRows`, shared with the bridge-backed
+      `AvailableVersionsList`; each surface projects its own payload to
+      `HostVersionRow` rather than one faking the other's shape (the RPC
+      manifest has no `platformKey`/`manifestUrl`, and inventing them was the
+      first attempt). An install in flight freezes EVERY row, which is where the
+      old `showUpdateNowInput` guard went - it existed so a second
+      `desiredVersion` write could not retarget a draining update.
+    - The asset lookup takes a SOLE `platforms` key as authoritative: the host's
+      CLI projects each entry to `currentHostPlatformKey()` before emitting it,
+      so re-deriving a key here would get win32-arm64 wrong (it resolves to the
+      emulated `win32-x64` build, which the registry row does not know). More
+      than one key means an older CLI that emitted the whole map, and only then
+      is the registry's platform string used - a miss reports "no asset" rather
+      than guessing.
+    - **What this gives up, stated:** the pin was applied by the host's own
+      reconciler on its next check-in and so needed no route. Choosing from what
+      the host reports does need one, so an OFFLINE host can no longer be
+      pinned; the auto-update policy beside it still works without a route.
+      `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
+      went with the input it validated.
+    - Check stays a MUTATION, not a query: it spawns a process on the host and
+      reaches the registry, so it runs when someone asks and not because a
+      settings pane mounted.
+    - The RPC half degrades away WHOLE - Check-now and the list with it,
+      leaving the auto-update policy as the only update control, plus one line
+      saying why - without the methods, without a
+      CLI (`cli-unavailable`, from the check side or the install side), or on an
+      `externally-managed` refusal. The last two are knowable only from an
+      ATTEMPT, so they are discovered rather than negotiated, and once seen they
+      are STICKY for the mounting: both are facts about how the host is set up,
+      not about that attempt, and leaving Check-now behind would keep offering
+      the one action the host has just said can never lead anywhere.
+      `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
+      going wrong with the mechanism intact - so the controls stay and an inline
+      `host-overview-update-attempt-failed` notice clears on the next try.
+      Progress after an accepted install comes from `host.status.updateProgress`,
+      not from the install response, because the swap is detached and outlives
+      it.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
@@ -1910,8 +1967,11 @@ aria-live="polite"` carrying the equivalent text for
   available-versions list surfaces the real registry error message with its own
   Retry, independent of the update region's Retry above - the two error/retry
   paths are separate and can both be live at once. `host.registerService` /
-  `host.deregisterService` RPCs and remote parity for the Advanced section are
-  RECORDED SCOPE DROPS, not omissions.
+  `host.deregisterService` RPCs and remote parity for the REST of the Advanced
+  section are RECORDED SCOPE DROPS, not omissions. Its version picker is the one
+  part that has since gained remote parity - not by exposing the bridge, but
+  because the Overview grew the same list over `host.update.check`, so the two
+  now share `HostVersionRows` and differ only in who they ask.
   - The legacy `/settings/service` redirect (so any bookmark, remembered tab
     path, or tray command lands on this same pane) is unchanged. Shells without
     the Traycer CLI (web, mobile) no longer get a reduced page - they render the
