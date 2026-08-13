@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { GithubMentionRow } from "@traycer/protocol/host/mention-schemas";
 
 import {
   buildAttachmentsFromJSONContent,
@@ -7,6 +8,7 @@ import {
   extractPlainTextFromComposerJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
+import { githubMentionToken } from "@/lib/composer/mentions/github-mention-display";
 import type { SlashCommand } from "@/lib/composer/types";
 
 describe("extractPlainTextFromComposerJSONContent blockquote handling", () => {
@@ -645,6 +647,102 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
     // The control: the rule is `> 0`, not `> 1`.
     expect(buildAttachmentsFromJSONContent(githubDoc(1))).toEqual([
       expect.objectContaining({ path: "github-pr:acme/widgets#1" }),
+    ]);
+  });
+});
+
+/**
+ * The fallback `path` a node without its own `path` attribute rebuilds is
+ * built through the SAME folded builder a live picker row uses
+ * (`githubMentionTokenReference`), not a hand-restated copy of the rule. A
+ * hand-written second copy is exactly what let the rebuild diverge from the
+ * row it is supposed to reproduce.
+ */
+describe("GitHub mention attachment path rebuild delegates to the shared token builder", () => {
+  function githubMentionNode(attrs: Record<string, unknown>): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "mention",
+              attrs: {
+                contextType: "github_pull_request",
+                label: "#123",
+                url: "https://ghe.corp/Acme/Widgets/pull/123",
+                ...attrs,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  function pullRequestRow(fields: {
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+  }): GithubMentionRow {
+    return {
+      kind: "pull-request",
+      githubHost: fields.githubHost,
+      owner: fields.owner,
+      repo: fields.repo,
+      number: 123,
+      title: "Something",
+      url: "https://ghe.corp/Acme/Widgets/pull/123",
+      author: null,
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+  }
+
+  it("rebuilds a missing path folded, matching githubMentionToken for the equivalent row", () => {
+    const doc = githubMentionNode({
+      organizationLogin: "Acme",
+      repositoryName: "Widgets",
+      issueNumber: 123,
+      githubHost: "GHE.Corp",
+    });
+
+    const expectedPath = githubMentionToken(
+      pullRequestRow({
+        githubHost: "GHE.Corp",
+        owner: "Acme",
+        repo: "Widgets",
+      }),
+    );
+    expect(expectedPath).toBe("github-pr:ghe.corp/acme/widgets#123");
+
+    expect(buildAttachmentsFromJSONContent(doc)).toEqual([
+      expect.objectContaining({ path: expectedPath }),
+    ]);
+  });
+
+  it("keeps an explicit path attribute verbatim, even mixed-case", () => {
+    // The control: the folded rebuild only runs when the node has no `path`
+    // of its own - an existing chip's identity must not be rewritten under it.
+    const doc = githubMentionNode({
+      organizationLogin: "Acme",
+      repositoryName: "Widgets",
+      issueNumber: 123,
+      githubHost: "GHE.Corp",
+      path: "github-pr:GHE.Corp/Acme/Widgets#123",
+    });
+
+    expect(buildAttachmentsFromJSONContent(doc)).toEqual([
+      expect.objectContaining({
+        path: "github-pr:GHE.Corp/Acme/Widgets#123",
+      }),
     ]);
   });
 });

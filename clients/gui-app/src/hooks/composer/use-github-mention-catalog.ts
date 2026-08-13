@@ -105,6 +105,16 @@ export interface GithubMentionCatalogResult {
   /** Null until the host has answered at all - "scope not yet known". */
   readonly scopeResolved: boolean;
   readonly freshnessAt: number | null;
+  /**
+   * When THIS scope's answer arrived at the client (TanStack's
+   * `dataUpdatedAt`), or null while unanswered. This is the clock for "which
+   * section's resolution is newer": `freshnessAt` is the host's last
+   * successful GitHub reach, and a degraded sweep re-resolves `repositories`
+   * WITHOUT advancing it - compared on `freshnessAt`, a sibling's older
+   * repository set can outrank the resolution that already saw a repository
+   * leave.
+   */
+  readonly answeredAt: number | null;
   readonly sourceStatus: PrSourceStatus;
   readonly notice: PrSourceNotice | null;
   /**
@@ -453,7 +463,13 @@ export function useGithubMentionCatalog(
     : catalogQuery.data;
 
   return {
-    ...catalogFacts(answered),
+    ...catalogFacts(
+      answered,
+      // A placeholder's `dataUpdatedAt` stamps the PREVIOUS scope's answer,
+      // so it is withheld with the data - the null pair is what keeps every
+      // derived fact describing one scope.
+      answered === undefined ? null : catalogQuery.dataUpdatedAt,
+    ),
     isPlaceholder: catalogQuery.isPlaceholderData,
     // `enabled` gates this like the two flags below: a disabled observer can
     // still HOLD an error from when it was live, and a section that is not
@@ -484,6 +500,7 @@ export function useGithubMentionCatalog(
  */
 function catalogFacts(
   data: MentionGithubCatalogResponse | undefined,
+  answeredAt: number | null,
 ): Omit<
   GithubMentionCatalogResult,
   "errored" | "isLoading" | "isChecking" | "isPlaceholder" | "refreshManually"
@@ -494,6 +511,7 @@ function catalogFacts(
       repositories: EMPTY_REPOSITORIES,
       scopeResolved: false,
       freshnessAt: null,
+      answeredAt: null,
       sourceStatus: "cached",
       notice: null,
     };
@@ -503,6 +521,7 @@ function catalogFacts(
     repositories: data.repositories,
     scopeResolved: true,
     freshnessAt: data.freshnessAt,
+    answeredAt,
     sourceStatus: data.sourceStatus,
     notice: data.notice,
   };

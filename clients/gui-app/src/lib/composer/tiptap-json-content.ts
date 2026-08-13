@@ -14,7 +14,8 @@ import type {
   SlashCommandTrigger,
 } from "@/lib/composer/types";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
-import { DEFAULT_GITHUB_MENTION_HOST } from "@/lib/composer/mentions/github-mention-display";
+import { DEFAULT_GITHUB_MENTION_HOST } from "@traycer/protocol/common/github-mention-host";
+import { githubMentionTokenReference } from "@/lib/composer/mentions/github-mention-display";
 
 // Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
 // particular matches far more prose than it should (`$20`, `$PATH`), so what a
@@ -777,14 +778,18 @@ function githubMentionAttachmentFromAttrs(
   const githubHost =
     stringValue(attrs.githubHost) ?? DEFAULT_GITHUB_MENTION_HOST;
   const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
-  // Rebuilt on the SAME rule as `githubMentionToken`, default host omitted, so
-  // a chip restored from its node keeps the identity the picker gave it. Only
-  // reached when the node carries no `path` of its own.
+  // Rebuilt through `githubMentionToken`'s own reference builder, so a chip
+  // restored from its node keeps the identity the picker gave it - the rule
+  // lives in one place instead of being restated here. Only reached when the
+  // node carries no `path` of its own.
   const path =
     stringValue(attrs.path) ??
-    (githubHost === DEFAULT_GITHUB_MENTION_HOST
-      ? `${prefix}:${reference}`
-      : `${prefix}:${githubHost}/${reference}`);
+    `${prefix}:${githubMentionTokenReference({
+      githubHost,
+      owner: organizationLogin,
+      repo: repositoryName,
+      number: issueNumber,
+    })}`;
   return {
     kind: "mention",
     contextType,

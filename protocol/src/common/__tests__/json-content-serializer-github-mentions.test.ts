@@ -219,6 +219,82 @@ describe("GitHub mention serialization", () => {
     },
   );
 
+  // The default-host check goes through `isDefaultGithubMentionHost`, which
+  // FOLDS the compare: a node saved with `GitHub.com` (or any other casing)
+  // is the default host exactly like `github.com`, and must omit the
+  // `[host=]` suffix just as the lowercase spelling does.
+  it.each([
+    [ContextType.GithubPullRequest, "github-pr", 42],
+    [ContextType.GithubIssue, "github-issue", 7],
+  ] as const)(
+    "omits the host suffix for a %s node on a differently-cased default host with no url",
+    (contextType, marker, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            id: `${marker}:acme/widgets#${number}`,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "GitHub.com",
+          },
+          "llm",
+        ),
+      ).toBe(`See @${marker}:acme/widgets#${number} before merging.`);
+    },
+  );
+
+  // The display-form sibling of the case above: the same folded compare must
+  // omit the prefix, not just the LLM form's suffix.
+  it.each([
+    [ContextType.GithubPullRequest, 42],
+    [ContextType.GithubIssue, 7],
+  ] as const)(
+    "keeps the compact reference bare for a differently-cased default host in display form (%s)",
+    (contextType, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "GitHub.com",
+            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+          },
+          "user",
+        ),
+      ).toBe(`See \`acme/widgets#${number}\` before merging.`);
+    },
+  );
+
+  // The control: a non-default host must still qualify both forms, whatever
+  // its own casing, so the fold above cannot be a blanket "never qualify".
+  it.each([
+    [ContextType.GithubPullRequest, "github-pr", 42],
+    [ContextType.GithubIssue, "github-issue", 7],
+  ] as const)(
+    "still appends the host suffix for a %s node on an enterprise host, verbatim casing and all",
+    (contextType, marker, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            id: `${marker}:acme/widgets#${number}`,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            githubHost: "GHE.Corp",
+          },
+          "llm",
+        ),
+      ).toBe(
+        `See @${marker}:acme/widgets#${number} [host=GHE.Corp] before merging.`,
+      );
+    },
+  );
+
   it("does not apply file-style validation markers to either GitHub context", () => {
     const validationResults = new Map([
       ["pr:42", { exists: false }],

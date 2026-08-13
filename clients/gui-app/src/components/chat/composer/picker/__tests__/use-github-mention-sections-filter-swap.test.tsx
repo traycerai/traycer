@@ -134,6 +134,33 @@ function pullRequest(
   };
 }
 
+/** Same shape as `pullRequest`, but for an arbitrary repository. */
+function pullRequestFromRepo(
+  number: number,
+  repo: {
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+  },
+): GithubMentionRow {
+  return {
+    kind: "pull-request",
+    ...repo,
+    number,
+    title: `PR ${number}`,
+    url: `https://${repo.githubHost}/${repo.owner}/${repo.repo}/pull/${number}`,
+    author: { login: "alice", avatarUrl: null },
+    updatedAt: 1_000,
+    buckets: ["recent"],
+    state: "open",
+    isDraft: false,
+    baseRefName: null,
+    headRefName: null,
+    reviewDecision: null,
+    checksRollup: null,
+  };
+}
+
 const PR_STEP: MentionFlowStep = {
   kind: "provider",
   providerId: "pull-requests",
@@ -301,5 +328,28 @@ describe("useGithubMentionSections filter swap", () => {
     mocks.search.isSearching = false;
     rerender({ query: "" });
     expect(result.current.context.pullRequests.rowsHeld).toBe(false);
+  });
+
+  it("reports repositories as null when both catalogs are unresolved, even with rows from two repositories", () => {
+    // Null is ignorance, not an authoritative empty scope: the live search
+    // can put rows on screen before either catalog resolves. Qualifying them
+    // against an empty `[]` would read as "these folders hold no GitHub
+    // repo" when the truth is just "no answer yet" - collapsing two
+    // DIFFERENT repositories' rows onto the same bare `#N` label, which is
+    // the real defect this pins.
+    mocks.pullRequests.scopeResolved = false;
+    mocks.issues.scopeResolved = false;
+    mocks.search.rows = [
+      pullRequestFromRepo(1, REPO),
+      pullRequestFromRepo(2, {
+        githubHost: "github.com",
+        owner: "traycerai",
+        repo: "traycer-internal",
+      }),
+    ];
+
+    const { result } = renderSections("");
+
+    expect(result.current.context.pullRequests.repositories).toBeNull();
   });
 });

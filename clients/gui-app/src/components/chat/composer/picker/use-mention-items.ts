@@ -28,6 +28,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   EMPTY_GITHUB_SECTION_CONTEXT,
+  githubMentionCategoryAvailable,
   isArtifactMentionStep,
   mentionProviderRegistry,
   parseGithubReferenceQuery,
@@ -530,14 +531,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     // Only a reference the GitHub sections could actually resolve earns the
     // exemption. The exemption exists because those sections offer a
     // `Resolve in ...` row for a reference the cache does not hold - but when
-    // the composer has no roots, or the host does not serve the mention
-    // methods, neither section contributes any row at all. Exempting `@#123`
-    // there suppresses the ordinary zero-match close over a picker that is
-    // genuinely empty and can never fill, and it stays open indefinitely.
+    // the category is unavailable, neither section contributes any row at
+    // all. Exempting `@#123` there suppresses the ordinary zero-match close
+    // over a picker that is genuinely empty and can never fill, and it stays
+    // open indefinitely. Availability is the provider's OWN predicate, not a
+    // restated copy of it, so a new availability term cannot strand this gate.
     referenceQuery:
-      github.context.supported &&
-      mentionRoots.length > 0 &&
-      parseGithubReferenceQuery(query) !== null,
+      githubMentionCategoryAvailable(
+        github.context.supported,
+        mentionRoots.length,
+      ) && parseGithubReferenceQuery(query) !== null,
   });
 
   useEffect(() => {

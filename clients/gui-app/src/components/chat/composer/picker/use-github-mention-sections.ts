@@ -177,14 +177,10 @@ export function useGithubMentionSections(
   // then the same PR would insert `repo#4917` when picked from root search and
   // `#4917` when picked inside the section, which is the entry point changing
   // the chip.
-  // Empty until a query answers, and that is safe for the chip label because
-  // the ROWS come from the same answers: while nothing has resolved there are
-  // no rows to pick a chip from, so the two facts cannot disagree the way a
-  // warm row store outliving a garbage-collected repository answer once let
-  // them.
-  const scopeRepositories = scopeResolved
-    ? queryRepositories
-    : EMPTY_REPOSITORIES;
+  const {
+    filter: scopeRepositories,
+    qualification: qualificationRepositories,
+  } = scopeRepositoryFacts(scopeResolved, queryRepositories);
 
   // The row boundary the resolved scope implies, or `null` while no answer
   // exists to imply one. `scopeResolved` already names the freshest RESOLVED
@@ -368,12 +364,12 @@ export function useGithubMentionSections(
       pullRequests: sectionContext(
         openSection === "pull-requests" ? openRows.rows : rootPullRequestRows,
         openSection === "pull-requests" && openRows.held,
-        scopeRepositories,
+        qualificationRepositories,
       ),
       issues: sectionContext(
         openSection === "issues" ? openRows.rows : rootIssueRows,
         openSection === "issues" && openRows.held,
-        scopeRepositories,
+        qualificationRepositories,
       ),
       supported,
       now,
@@ -382,9 +378,9 @@ export function useGithubMentionSections(
       now,
       openRows,
       openSection,
+      qualificationRepositories,
       rootIssueRows,
       rootPullRequestRows,
-      scopeRepositories,
       supported,
     ],
   );
@@ -528,7 +524,7 @@ function sectionActivity(input: {
 function sectionContext(
   rows: ReadonlyArray<GithubMentionRow>,
   rowsHeld: boolean,
-  repositories: ReadonlyArray<GithubMentionRepository>,
+  repositories: ReadonlyArray<GithubMentionRepository> | null,
 ): GithubMentionSectionContext {
   return { rows, rowsHeld, repositories };
 }
@@ -621,6 +617,32 @@ interface HeldRowsResult {
   readonly held: boolean;
 }
 
+/**
+ * The two repository facts one resolved scope answer yields, split by the
+ * question each serves.
+ *
+ * `filter` stays an array and is empty until the scope resolves - safe for
+ * the FILTER surfaces (the Repository group hides, reconciliation is gated on
+ * `scopeResolved`). `qualification` is the collision authority for row and
+ * chip labels, and there "unresolved" must stay `null` rather than masquerade
+ * as an authoritative empty set: rows do not all come from catalog answers -
+ * the live search runs under an unresolved scope whenever no repository is
+ * selected, so a typed query can put rows on screen while no collision answer
+ * exists, and null makes `githubRepositoryQualification` print `owner/repo`
+ * instead of a bare `#123` no answer has proven unambiguous.
+ */
+function scopeRepositoryFacts(
+  scopeResolved: boolean,
+  queryRepositories: ReadonlyArray<GithubMentionRepository>,
+): {
+  readonly filter: ReadonlyArray<GithubMentionRepository>;
+  readonly qualification: ReadonlyArray<GithubMentionRepository> | null;
+} {
+  return scopeResolved
+    ? { filter: queryRepositories, qualification: queryRepositories }
+    : { filter: EMPTY_REPOSITORIES, qualification: null };
+}
+
 /** Identity comparison; the row array is never rebuilt for an unchanged answer. */
 function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
   if (left === null || right === null) return left === right;
@@ -632,11 +654,15 @@ function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
  *
  * Both sections are asked about the same folders, so either answer is valid -
  * the question is only which one can have SEEN a repository added, removed or
- * renamed. `freshnessAt` is the host's own stamp for when it last reached
- * GitHub, so it answers that directly, and position never does: reading
- * pull-requests first unconditionally left the Repository group, the
- * empty-scope copy and the `repo#123` chip label on scope data an Issues
- * refresh had already invalidated.
+ * renamed. `answeredAt` - when the answer REACHED THE CLIENT - answers that
+ * directly, and position never does: reading pull-requests first
+ * unconditionally left the Repository group, the empty-scope copy and the
+ * `repo#123` chip label on scope data an Issues refresh had already
+ * invalidated. `freshnessAt` cannot be the clock here even though it reads
+ * like one: it stamps the host's last successful GitHub reach, and a degraded
+ * sweep re-resolves `repositories` from the folders' remotes WITHOUT
+ * advancing it - compared on `freshnessAt`, the sibling's older, wider
+ * repository set outranked the very resolution that saw a repository leave.
  *
  * Which section is open only breaks the TIE. Preferring the open one outright
  * has the same failure in a different place - refresh Pull requests, step
@@ -645,7 +671,7 @@ function sameHeldRows(left: HeldRows | null, right: HeldRows | null): boolean {
  * `staleTime` covers exactly that window and suppresses the refetch.
  *
  * The unresolved cases come first because an answer that does not exist cannot
- * be compared: `freshnessAt` is null there, and treating null as oldest would
+ * be compared: `answeredAt` is null there, and treating null as oldest would
  * confuse "not yet answered" with "answered long ago".
  */
 function preferredScopeAnswer(
@@ -657,12 +683,12 @@ function preferredScopeAnswer(
   const other = openSection === "issues" ? pullRequests : issues;
   if (!preferred.scopeResolved) return other;
   if (!other.scopeResolved) return preferred;
-  // Freshness decides between two resolved answers, INCLUDING when one of them
-  // is the open section's. Being open earns the tie, not the comparison: the
-  // other query can be sitting on a newer sweep and still not refetch, because
-  // a 60s `staleTime` covers exactly the window in which a user refreshes one
-  // section and steps straight into the other.
-  return (other.freshnessAt ?? 0) > (preferred.freshnessAt ?? 0)
+  // Arrival recency decides between two resolved answers, INCLUDING when one
+  // of them is the open section's. Being open earns the tie, not the
+  // comparison: the other query can be sitting on a newer answer and still
+  // not refetch, because a 60s `staleTime` covers exactly the window in which
+  // a user refreshes one section and steps straight into the other.
+  return (other.answeredAt ?? 0) > (preferred.answeredAt ?? 0)
     ? other
     : preferred;
 }

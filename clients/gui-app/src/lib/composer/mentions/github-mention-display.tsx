@@ -33,6 +33,7 @@ import { formatCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 import { foldGithubIdentitySegment } from "./github-mention-rows";
+import { isDefaultGithubMentionHost } from "@traycer/protocol/common/github-mention-host";
 import { MENU_ICON_CLASS } from "./mention-entry-display";
 
 /**
@@ -140,16 +141,6 @@ export function githubMentionCategoryIcon(
 }
 
 /**
- * The host a bare token implies, and the ONLY one it may omit.
- *
- * Shared with the node-attribute rebuild in `tiptap-json-content.ts`, which
- * defaults a missing `githubHost` to the same value - the two have to agree or
- * a chip restored from an older node gets a different identity than the one
- * that produced it.
- */
-export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
-
-/**
  * `org/repo#123`, the one canonical way to write a reference in prose -
  * host-prefixed when the host is not github.com. The same coordinates on two
  * hosts are two different attachments, and every surface this feeds (the chip
@@ -159,7 +150,11 @@ export const DEFAULT_GITHUB_MENTION_HOST = "github.com";
  */
 export function githubMentionReference(row: GithubMentionRow): string {
   const reference = `${row.owner}/${row.repo}#${row.number}`;
-  return row.githubHost === DEFAULT_GITHUB_MENTION_HOST
+  // The default check FOLDS (one predicate, shared with the token and the
+  // serializer): a row served as `GitHub.com` is the default host, and
+  // printing `GitHub.com/acme/widgets#123` would assert a host qualification
+  // the identity layer says does not exist.
+  return isDefaultGithubMentionHost(row.githubHost)
     ? reference
     : `${row.githubHost}/${reference}`;
 }
@@ -178,9 +173,20 @@ export function githubMentionReference(row: GithubMentionRow): string {
  * short name it had before.
  */
 export function githubRepositoryQualification(
-  row: GithubMentionRow,
-  repositories: ReadonlyArray<GithubMentionRepository>,
+  identity: {
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+  },
+  repositories: ReadonlyArray<GithubMentionRepository> | null,
 ): GithubRepositoryQualification {
+  // Null is ignorance, not an answer: the scope has not resolved, and the live
+  // search can still put rows on screen (it runs whenever no repository is
+  // selected). Under ignorance the safe label is `owner/repo` - a bare `#123`
+  // from one repository beside a `#123` from another is exactly the ambiguity
+  // this function exists to prevent, and no collision answer exists to prove
+  // the short form safe.
+  if (repositories === null) return "owner-repo";
   if (repositories.length <= 1) return "none";
   // Folded per segment: the row is API-cased while the scope's entries carry
   // the remote's user-typed casing, so a verbatim compare under-counts the
@@ -188,13 +194,13 @@ export function githubRepositoryQualification(
   const sharingName = repositories.filter(
     (repository) =>
       foldGithubIdentitySegment(repository.repo) ===
-      foldGithubIdentitySegment(row.repo),
+      foldGithubIdentitySegment(identity.repo),
   );
   if (sharingName.length <= 1) return "repo";
   const sharingOwner = sharingName.filter(
     (repository) =>
       foldGithubIdentitySegment(repository.owner) ===
-      foldGithubIdentitySegment(row.owner),
+      foldGithubIdentitySegment(identity.owner),
   );
   return sharingOwner.length <= 1 ? "owner-repo" : "host-owner-repo";
 }
@@ -222,7 +228,7 @@ export function githubRepositoryQualifiedName(
  */
 export function githubMentionRowTrailing(
   row: GithubMentionRow,
-  repositories: ReadonlyArray<GithubMentionRepository>,
+  repositories: ReadonlyArray<GithubMentionRepository> | null,
   now: number,
 ): string {
   const age = formatCompactRelativeTime(row.updatedAt, now);
@@ -334,11 +340,35 @@ export function githubMentionTokenPrefix(row: GithubMentionRow): string {
  * the segment. `segments.ts` accepts both shapes; its pattern already allows
  * further slashes after the first.
  *
- * The host segment comes from `githubMentionReference`, so the token and
- * every prose surface apply the one omit-the-default rule from one place.
+ * The identity segments are FOLDED, unlike every prose surface: the row key
+ * already treats two spellings of one host/owner/repo as one row, so a live
+ * payload that respells a cached row must not re-identify its attachment -
+ * inserting before and after that replacement minted two paths for one
+ * artifact. The number stays numeric and the prefix is fixed, so folding the
+ * reference folds exactly the segments the row key folds.
  */
 export function githubMentionToken(row: GithubMentionRow): string {
-  return `${githubMentionTokenPrefix(row)}:${githubMentionReference(row)}`;
+  return `${githubMentionTokenPrefix(row)}:${githubMentionTokenReference(row)}`;
+}
+
+/**
+ * The token's reference segment, from whichever record carries the identity -
+ * a row here, node attributes in `tiptap-json-content.ts`'s rebuild. Both
+ * sides MUST produce this through this one function: the rebuild used to
+ * restate the rule by hand, and a hand-written restatement is a second gate
+ * that drifts. The default-host check runs on the FOLDED host, so
+ * `GitHub.com` omits the segment exactly as `github.com` does.
+ */
+export function githubMentionTokenReference(identity: {
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+}): string {
+  const reference = `${foldGithubIdentitySegment(identity.owner)}/${foldGithubIdentitySegment(identity.repo)}#${identity.number}`;
+  return isDefaultGithubMentionHost(identity.githubHost)
+    ? reference
+    : `${foldGithubIdentitySegment(identity.githubHost)}/${reference}`;
 }
 
 /**
@@ -352,7 +382,7 @@ export function githubMentionToken(row: GithubMentionRow): string {
  */
 export function githubMentionAttachmentFromRow(
   row: GithubMentionRow,
-  repositories: ReadonlyArray<GithubMentionRepository>,
+  repositories: ReadonlyArray<GithubMentionRepository> | null,
 ): GithubMentionAttachment {
   const name = githubRepositoryQualifiedName(
     row,

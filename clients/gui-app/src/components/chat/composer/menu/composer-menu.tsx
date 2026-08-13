@@ -439,16 +439,17 @@ function renderPickerItem(
   menuId: string,
   trigger: ComposerSlashTrigger,
 ): RenderedItem {
-  if (item.kind === "mention") {
-    return {
-      id: `${menuId}-item-${index}`,
-      node: <MentionMenuItem entry={item.entry} />,
-      disabledReason: null,
-    };
-  }
   return {
     id: `${menuId}-item-${index}`,
-    node: <SlashMenuItem command={item.command} trigger={trigger} />,
+    node:
+      item.kind === "mention" ? (
+        <MentionMenuItem entry={item.entry} />
+      ) : (
+        <SlashMenuItem command={item.command} trigger={trigger} />
+      ),
+    // One reader for both kinds - the store blocks a disabled row's commit
+    // through this same predicate, and a second hand-written answer here is
+    // how a held mention row rendered as actionable while Enter did nothing.
     disabledReason: pickerItemDisabledReason(item),
   };
 }

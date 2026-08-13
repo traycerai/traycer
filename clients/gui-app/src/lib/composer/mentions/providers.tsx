@@ -32,6 +32,7 @@ import {
   githubMentionEntryId,
   parseGithubReferenceQuery,
 } from "./github-mention-rows";
+import { isDefaultGithubMentionHost } from "@traycer/protocol/common/github-mention-host";
 import {
   NO_STEP_CHROME_CAPABILITY,
   type MentionStepChromeCapability,
@@ -280,14 +281,21 @@ export interface GithubMentionSectionContext {
    */
   readonly rowsHeld: boolean;
   /**
-   * The repositories the host resolved from this scope's folders.
+   * The repositories the host resolved from this scope's folders, or `null`
+   * while no answer exists yet.
    *
    * The list rather than a `singleRepositoryScope` flag, because how a row
    * must name its repository is not a yes/no: one repository prints no name at
    * all, and two repositories that share a name have to print the owner as
    * well. See `githubRepositoryQualification`.
+   *
+   * Null is NOT an empty list: `[]` is the host's authoritative "these folders
+   * hold no GitHub repo", while null means the collision question has no
+   * answer - the live search can put rows on screen before any catalog
+   * resolves, and qualification under that ignorance prints `owner/repo`
+   * rather than trusting a fact nobody has stated.
    */
-  readonly repositories: ReadonlyArray<GithubMentionRepository>;
+  readonly repositories: ReadonlyArray<GithubMentionRepository> | null;
 }
 
 export interface GithubMentionProviderContext {
@@ -314,7 +322,7 @@ export interface GithubMentionProviderContext {
 export const EMPTY_GITHUB_SECTION_CONTEXT: GithubMentionSectionContext = {
   rows: [],
   rowsHeld: false,
-  repositories: [],
+  repositories: null,
 };
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
@@ -965,12 +973,11 @@ class GithubMentionProvider extends ComposerMentionProvider {
     });
   }
 
-  /**
-   * Both conditions the category needs before it may appear at all: folders to
-   * scope it to, and a host that actually serves the two mention methods.
-   */
   private available(context: ComposerMentionProviderContext): boolean {
-    return context.github.supported && context.roots.length > 0;
+    return githubMentionCategoryAvailable(
+      context.github.supported,
+      context.roots.length,
+    );
   }
 
   /**
@@ -1073,7 +1080,7 @@ class GithubMentionProvider extends ComposerMentionProvider {
 function githubRowEntry(args: {
   readonly row: GithubMentionRow;
   readonly section: GithubMentionSection;
-  readonly repositories: ReadonlyArray<GithubMentionRepository>;
+  readonly repositories: ReadonlyArray<GithubMentionRepository> | null;
   readonly now: number;
   readonly disabledReason: string | null;
 }): MentionMenuEntry {
@@ -1103,6 +1110,43 @@ function githubRowEntry(args: {
     },
     preview: githubMentionPreview(row, now),
   };
+}
+
+/**
+ * The string root ranking judges a query by.
+ *
+ * A pasted GitHub URL names one artifact exactly, and the section matcher
+ * admits that row (`referenceMatchesRow` parses URLs) - but no entry field
+ * carries the URL, so the ranker judged the exact row on strings that can
+ * never contain it and let fuzzy matches on unrelated rows outrank it. The
+ * URL rewrites to the `org/repo#123` reference form the row's `description`
+ * leads with - host-prefixed off github.com, with the default-host check on
+ * the FOLDED host, the same rule `referenceMatchesRow` applies to pasted
+ * `https://GitHub.com/...` spellings. The other reference shapes already ARE
+ * the strings rows carry, and prose queries pass through untouched.
+ */
+function rootRankingQuery(query: string): string {
+  const reference = parseGithubReferenceQuery(query);
+  if (reference === null || reference.kind !== "url") return query;
+  const base = `${reference.owner}/${reference.repo}#${reference.number}`;
+  return isDefaultGithubMentionHost(reference.githubHost)
+    ? base
+    : `${reference.githubHost}/${base}`;
+}
+
+/**
+ * Both conditions the GitHub categories need before they may appear at all:
+ * folders to scope them to, and a host that actually serves the two mention
+ * methods. Exported so the zero-match reference exemption in
+ * `use-mention-items.ts` gates on the SAME predicate the provider does - a
+ * hand-written twin there is how `@#123` once pinned the picker open over a
+ * category that contributes no rows.
+ */
+export function githubMentionCategoryAvailable(
+  supported: boolean,
+  rootCount: number,
+): boolean {
+  return supported && rootCount > 0;
 }
 
 /** The GitHub section this step belongs to, or `null` for any other step. */
@@ -1138,7 +1182,8 @@ class MentionProviderRegistry {
             .rootSearchEntries(context)
             .map((entry) => ({ entry, providerId: provider.id })),
         ),
-        context.query,
+        // Sources match on the raw query - only the ranking string rewrites.
+        rootRankingQuery(context.query),
       );
     }
     return {

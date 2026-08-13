@@ -134,4 +134,22 @@ describe("useGithubMentionCatalog placeholder loading", () => {
     await waitFor(() => expect(result.current.scopeResolved).toBe(true));
     expect(result.current.isLoading).toBe(false);
   });
+
+  it("reports answeredAt once the scope has answered, and withholds it while its data is a placeholder", async () => {
+    // `answeredAt` is the clock `preferredScopeAnswer` compares to decide
+    // which section's `repositories` to believe - it must name THIS scope's
+    // arrival, never the previous scope's, or a placeholder pretending to be
+    // fresh would win a tie-break it never earned.
+    answerOnly("/repo-a");
+
+    const { result, rerender } = renderCatalog({ scope: REPO_A });
+    await waitFor(() => expect(result.current.scopeResolved).toBe(true));
+    expect(result.current.answeredAt).not.toBeNull();
+    expect(result.current.isPlaceholder).toBe(false);
+
+    rerender({ scope: { epicId: "epic-1", workspacePaths: ["/repo-b"] } });
+
+    await waitFor(() => expect(result.current.isPlaceholder).toBe(true));
+    expect(result.current.answeredAt).toBeNull();
+  });
 });

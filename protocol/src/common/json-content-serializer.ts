@@ -1,4 +1,5 @@
 import type { JsonContent } from "./registry";
+import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
   File = "file",
@@ -299,7 +300,7 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       // unqualified reference already means, while an enterprise reference
       // with the same coordinates is a different thing and must not read
       // identically to the human this string is for.
-      if (attrs.githubHost && attrs.githubHost !== "github.com") {
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
         return `${attrs.githubHost}/${reference}`;
       }
       return reference;
@@ -436,7 +437,7 @@ function formatMentionForLLMQuery(
       // `githubHost` even when no `url` was ever set. github.com stays bare -
       // it is the default every unqualified reference already means, and
       // qualifying it would churn every serialization that was fine.
-      if (attrs.githubHost && attrs.githubHost !== "github.com") {
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
         return `${reference} [host=${attrs.githubHost}]`;
       }
       return reference;

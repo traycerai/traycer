@@ -11,6 +11,7 @@ import {
   githubMentionReference,
   githubMentionRowTrailing,
   githubMentionToken,
+  githubMentionTokenReference,
   githubRepositoryQualification,
 } from "../github-mention-display";
 
@@ -219,6 +220,30 @@ describe("githubRepositoryQualification", () => {
       githubRepositoryQualification(pullRequest("acme", "api"), scope),
     ).toBe("repo");
   });
+
+  it("treats an unresolved scope as ignorance, not proof of no collision", () => {
+    // Null means the scope has not resolved yet - the live search can still
+    // put rows on screen before any catalog answers. The safe label under
+    // that ignorance is `owner/repo`: a bare `#123` from one repository
+    // beside a `#123` from another is exactly the ambiguity this function
+    // exists to prevent, and no collision answer exists yet to prove the
+    // short form safe.
+    expect(
+      githubRepositoryQualification(pullRequest("acme", "api"), null),
+    ).toBe("owner-repo");
+  });
+
+  it("labels a row from an unresolved scope with the owner-qualified name", () => {
+    expect(
+      githubMentionAttachmentFromRow(pullRequest("acme", "api"), null).label,
+    ).toBe("acme/api#123");
+  });
+
+  it("trails a row from an unresolved scope with the owner-qualified name", () => {
+    expect(
+      githubMentionRowTrailing(pullRequest("acme", "api"), null, 1_000),
+    ).toMatch(/^acme\/api · /);
+  });
 });
 
 describe("githubMentionReference", () => {
@@ -239,6 +264,19 @@ describe("githubMentionReference", () => {
         githubHost: "ghe.example.test",
       }),
     ).toBe("ghe.example.test/acme/api#123");
+  });
+
+  it("folds a differently-cased default host and stays bare", () => {
+    // The default check FOLDS (one predicate, shared with the token and the
+    // serializer): a row served as `GitHub.com` is the default host, and
+    // printing `GitHub.com/acme/api#123` would assert a host qualification
+    // the identity layer says does not exist.
+    expect(
+      githubMentionReference({
+        ...pullRequest("acme", "api"),
+        githubHost: "GitHub.com",
+      }),
+    ).toBe("acme/api#123");
   });
 });
 
@@ -279,5 +317,65 @@ describe("githubMentionToken", () => {
       /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
     expect(pattern.test(githubMentionToken(onHost("github.com")))).toBe(true);
     expect(pattern.test(githubMentionToken(onHost("ghe.acme.dev")))).toBe(true);
+  });
+
+  // The identity segments are FOLDED, unlike every prose surface: a live
+  // payload that respells a cached row's casing must not re-identify its
+  // attachment, or the same artifact mints two different `path`s (and two
+  // insertable copies) depending only on which casing happened to be on
+  // screen when it was picked.
+  it("folds owner/repo casing so two spellings of one artifact produce byte-identical tokens", () => {
+    const canonical = pullRequest("acme", "widgets");
+    const respelled = pullRequest("Acme", "Widgets");
+    expect(githubMentionToken(canonical)).toBe(githubMentionToken(respelled));
+    expect(githubMentionToken(canonical)).toBe("github-pr:acme/widgets#123");
+  });
+
+  it("omits the host segment for a GitHub.com host exactly as it does for github.com", () => {
+    const canonical = onHost("github.com");
+    const cased = onHost("GitHub.com");
+    expect(githubMentionToken(cased)).toBe(githubMentionToken(canonical));
+    expect(githubMentionToken(cased)).toBe("github-pr:acme/api#123");
+  });
+
+  it("folds a non-default host's casing into the token", () => {
+    // The default-host check runs on the FOLDED host, so this must not stop
+    // at recognizing `GHE.Corp` as non-default - the segment it appends has
+    // to be folded too, or two casings of the same enterprise host would
+    // still mint two tokens for the same pull request.
+    expect(githubMentionToken(onHost("GHE.Corp"))).toBe(
+      "github-pr:ghe.corp/acme/api#123",
+    );
+  });
+
+  it("folds identity segments directly, the same way githubMentionToken composes them", () => {
+    expect(
+      githubMentionTokenReference({
+        githubHost: "GitHub.com",
+        owner: "Acme",
+        repo: "Widgets",
+        number: 123,
+      }),
+    ).toBe("acme/widgets#123");
+    expect(
+      githubMentionTokenReference({
+        githubHost: "GHE.Corp",
+        owner: "Acme",
+        repo: "Widgets",
+        number: 123,
+      }),
+    ).toBe("ghe.corp/acme/widgets#123");
+  });
+
+  it("leaves githubMentionReference's casing untouched - the prose form is not folded", () => {
+    // The control: only the durable token identity folds. The prose reference
+    // (chip tooltip, preview subtitle, menu description) still echoes back
+    // whatever casing the row actually carries.
+    expect(
+      githubMentionReference({
+        ...pullRequest("Acme", "Widgets"),
+        githubHost: "GHE.Corp",
+      }),
+    ).toBe("GHE.Corp/Acme/Widgets#123");
   });
 });

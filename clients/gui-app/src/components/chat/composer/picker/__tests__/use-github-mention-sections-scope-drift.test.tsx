@@ -26,6 +26,13 @@ type CatalogResult = {
   }>;
   scopeResolved: boolean;
   freshnessAt: number | null;
+  /**
+   * When THIS scope's answer reached the client (TanStack's `dataUpdatedAt`),
+   * or null while unanswered. `preferredScopeAnswer` compares THIS field, not
+   * `freshnessAt`, to decide which section's `repositories` a tie should
+   * believe - see the scenarios below.
+   */
+  answeredAt: number | null;
   sourceStatus: "ok" | "cached" | "gh-unavailable" | "error" | "partial";
   notice: null;
   errored: boolean;
@@ -41,6 +48,7 @@ const catalogMocks = vi.hoisted(() => {
     repositories: [],
     scopeResolved: false,
     freshnessAt: null,
+    answeredAt: null,
     sourceStatus: "cached",
     notice: null,
     errored: false,
@@ -215,6 +223,7 @@ function staleIssuesUnderWiderScope(): void {
   catalogMocks.issues.repositories = [KEPT_REPO, DEPARTED_REPO];
   catalogMocks.issues.scopeResolved = true;
   catalogMocks.issues.freshnessAt = 1_000;
+  catalogMocks.issues.answeredAt = 1_000;
 }
 
 /** The fresher answer: pull requests re-swept and saw the repo leave. */
@@ -223,6 +232,7 @@ function freshPullRequestsUnderNarrowScope(): void {
   catalogMocks.pullRequests.repositories = [KEPT_REPO];
   catalogMocks.pullRequests.scopeResolved = true;
   catalogMocks.pullRequests.freshnessAt = 2_000;
+  catalogMocks.pullRequests.answeredAt = 2_000;
 }
 
 beforeEach(() => {
@@ -261,18 +271,64 @@ describe("useGithubMentionSections repository scope boundary", () => {
   });
 
   it("keeps every row when the open section's own answer is the freshest", () => {
-    // The control: freshness decides the authority. When the wider answer IS
-    // the freshest resolved one, its repositories are the scope, and nothing
-    // may be filtered against a staler, narrower sibling.
+    // The control: arrival recency decides the authority. When the wider
+    // answer is the one that reached the client MOST RECENTLY, its
+    // repositories are the scope, and nothing may be filtered against a
+    // staler, narrower sibling.
     staleIssuesUnderWiderScope();
     freshPullRequestsUnderNarrowScope();
     catalogMocks.issues.freshnessAt = 3_000;
+    catalogMocks.issues.answeredAt = 3_000;
 
     const { result } = renderIssuesSection();
 
     const rows = result.current.context.issues.rows;
     expect(rows).toContainEqual(KEPT_ISSUE);
     expect(rows).toContainEqual(DEPARTED_ISSUE);
+  });
+
+  it("prefers the open section's own answer when it arrived more recently, even if the sibling's last successful GitHub reach is newer", () => {
+    // The degraded-sweep case: a sweep can re-resolve `repositories` without a
+    // successful GitHub reach, so it advances `answeredAt` (when the answer
+    // reached the client) without advancing `freshnessAt` (the host's last
+    // successful reach). Here the SIBLING has the newer `freshnessAt` but the
+    // OLDER `answeredAt` - `preferredScopeAnswer` must compare arrival time,
+    // not freshness, or the open section's own degraded-but-recent
+    // resolution would lose to a sibling answer that is stale on the clock
+    // that actually decides the tie.
+    catalogMocks.issues.repositories = [KEPT_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 500;
+    catalogMocks.issues.answeredAt = 4_000;
+
+    catalogMocks.pullRequests.repositories = [DEPARTED_REPO];
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 5_000;
+    catalogMocks.pullRequests.answeredAt = 1_000;
+
+    const { result } = renderIssuesSection();
+
+    expect(result.current.context.issues.repositories).toEqual([KEPT_REPO]);
+  });
+
+  it("falls back to the sibling's repositories when IT answered more recently, even with an older freshnessAt", () => {
+    // The control for the case above: swap which side has the newer
+    // `answeredAt` and confirm the sibling wins instead - proving the
+    // assertion above is actually reading `answeredAt`, not a fixed
+    // "the open section always wins" shortcut.
+    catalogMocks.issues.repositories = [KEPT_REPO];
+    catalogMocks.issues.scopeResolved = true;
+    catalogMocks.issues.freshnessAt = 5_000;
+    catalogMocks.issues.answeredAt = 1_000;
+
+    catalogMocks.pullRequests.repositories = [DEPARTED_REPO];
+    catalogMocks.pullRequests.scopeResolved = true;
+    catalogMocks.pullRequests.freshnessAt = 500;
+    catalogMocks.pullRequests.answeredAt = 4_000;
+
+    const { result } = renderIssuesSection();
+
+    expect(result.current.context.issues.repositories).toEqual([DEPARTED_REPO]);
   });
 
   it("surfaces a failed catalog read through the result", () => {

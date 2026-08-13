@@ -428,4 +428,43 @@ describe("GithubMentionFilterPopover", () => {
     );
     expect(stored.repository).toEqual(inScope);
   });
+
+  it("escalates repository radio labels only as far as a collision forces, shared with every row surface", async () => {
+    // `repositoryLabel` now switches on `githubRepositoryQualification`
+    // rather than restating the escalation - this pins the walk still
+    // produces the right label at each step through the popover.
+    const user = userEvent.setup();
+    render(
+      <GithubMentionFilterPopover
+        filter={{
+          section: "pull-requests",
+          epicId: "epic-1",
+          repositories: [
+            { githubHost: "github.com", owner: "acme", repo: "api" },
+            { githubHost: "github.com", owner: "contoso", repo: "api" },
+            { githubHost: "ghe.corp", owner: "acme", repo: "widgets" },
+            { githubHost: "github.com", owner: "acme", repo: "widgets" },
+          ],
+          selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
+        }}
+        onReturnFocus={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+
+    // Two repos share the bare name "api" across different owners: both
+    // escalate to `owner/repo`.
+    expect(await screen.findByRole("radio", { name: "acme/api" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "contoso/api" })).toBeTruthy();
+
+    // "acme/widgets" collides across TWO hosts as well: both escalate all
+    // the way to `owner/repo (host)`.
+    expect(
+      screen.getByRole("radio", { name: "acme/widgets (ghe.corp)" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("radio", { name: "acme/widgets (github.com)" }),
+    ).toBeTruthy();
+  });
 });

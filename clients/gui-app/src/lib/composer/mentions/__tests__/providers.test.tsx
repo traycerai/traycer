@@ -8,6 +8,7 @@ import type {
 import {
   EMPTY_GITHUB_SECTION_CONTEXT,
   GITHUB_MENTION_HELD_ROWS_DISABLED_REASON,
+  githubMentionCategoryAvailable,
   mentionProviderRegistry,
   ROOT_MENTION_STEP,
 } from "../providers";
@@ -1375,5 +1376,226 @@ describe("mention preview payloads", () => {
       secondary: "Fix bug in parser",
       mono: true,
     });
+  });
+});
+
+/**
+ * `rootEntries` ranks a URL-shaped query through `rootRankingQuery`, which
+ * rewrites it to the `owner/repo#123` reference form the row's `description`
+ * actually carries - host-prefixed off github.com, folded the same way
+ * `referenceMatchesRow` folds a pasted `https://GitHub.com/...` spelling. The
+ * raw URL string matches nothing any row carries, so without the rewrite a
+ * coincidental fuzzy hit elsewhere could outrank the exact row the URL names.
+ */
+describe("pasted-URL root ranking", () => {
+  function pullRequestRow(fields: {
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly title: string;
+  }): GithubMentionRow {
+    return {
+      kind: "pull-request",
+      githubHost: fields.githubHost,
+      owner: fields.owner,
+      repo: fields.repo,
+      number: fields.number,
+      title: fields.title,
+      url: `https://${fields.githubHost}/${fields.owner}/${fields.repo}/pull/${fields.number}`,
+      author: null,
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+  }
+
+  /**
+   * A file whose path spells out "github.com" - a coincidental substring
+   * match against the raw pasted URL that could out-rank the exact row if
+   * the ranking query were never rewritten off the URL text.
+   */
+  function competingFileEntry() {
+    return {
+      kind: "file" as const,
+      id: "file:/repo:docs/github.com-integration-notes.md",
+      label: "github.com-integration-notes.md",
+      relPath: "docs/github.com-integration-notes.md",
+      absolutePath: "/repo/docs/github.com-integration-notes.md",
+      workspacePath: "/repo",
+      description: "docs",
+    };
+  }
+
+  it("ranks the row a pasted GitHub URL names first, ahead of a coincidental path match", () => {
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://github.com/acme/widgets/pull/123",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+
+  it("ranks the same row first when the pasted URL's host is cased differently", () => {
+    // `GitHub.com` folds to the default host exactly like `github.com`, so the
+    // rewritten ranking query omits the host segment either way.
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://GitHub.com/acme/widgets/pull/123",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+
+  it("ranks an enterprise-host row first for a pasted URL on that host", () => {
+    // A non-default host is NOT omitted from the rewritten query, so the row
+    // must actually carry that host segment in its description to still win.
+    // The competing file's path echoes the enterprise host's URL text
+    // itself, so it stays a real competitor for the unrewritten raw URL.
+    const row = pullRequestRow({
+      githubHost: "ghe.corp",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Enterprise title",
+    });
+    const competingEnterpriseFileEntry = {
+      kind: "file" as const,
+      id: "file:/repo:docs/ghe.corp-acme-widgets-notes.md",
+      label: "ghe.corp-acme-widgets-notes.md",
+      relPath: "docs/ghe.corp-acme-widgets-notes.md",
+      absolutePath: "/repo/docs/ghe.corp-acme-widgets-notes.md",
+      workspacePath: "/repo",
+      description: "docs",
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://ghe.corp/acme/widgets/pull/123",
+        workspaceEntries: [competingEnterpriseFileEntry],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "ghe.corp", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Enterprise title");
+  });
+
+  it("leaves a non-reference prose query's ranking unaffected", () => {
+    // The control: `parseGithubReferenceQuery` returns null for prose, so
+    // `rootRankingQuery` hands the query straight through and ranking works
+    // exactly as it always has - matching on what the row actually says.
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "some title",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+});
+
+/**
+ * The zero-match reference exemption in `use-mention-items.ts` gates on this
+ * SAME predicate rather than a hand-written twin - a restated copy is how
+ * `@#123` once pinned the picker open over a category that contributes no
+ * rows. Direct unit coverage on both terms, independent of the registry
+ * plumbing above.
+ */
+describe("githubMentionCategoryAvailable", () => {
+  it("is available when the host serves the mention methods and there is at least one root", () => {
+    expect(githubMentionCategoryAvailable(true, 1)).toBe(true);
+  });
+
+  it("is unavailable when the host does not serve the mention methods, even with roots", () => {
+    expect(githubMentionCategoryAvailable(false, 1)).toBe(false);
+  });
+
+  it("is unavailable with no roots to scope to, even on a supporting host", () => {
+    expect(githubMentionCategoryAvailable(true, 0)).toBe(false);
   });
 });

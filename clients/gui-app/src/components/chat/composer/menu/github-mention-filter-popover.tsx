@@ -14,7 +14,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   asIssueMentionFilter,
   asPullRequestMentionFilter,
-  foldGithubIdentitySegment,
+  githubRepositoryQualification,
   isDefaultGithubMentionFilter,
   withGithubMentionRepository,
   type GithubMentionFilter,
@@ -277,23 +277,21 @@ function repositoryLabel(
   repository: GithubMentionRepository,
   all: ReadonlyArray<GithubMentionRepository>,
 ): string {
-  // Folded like every identity comparison in this feature: two folders can
-  // spell the same repository differently in their remotes, and a verbatim
-  // compare would then offer `api` and `Api` as if they named two things.
-  const sameName = all.filter(
-    (candidate) =>
-      foldGithubIdentitySegment(candidate.repo) ===
-      foldGithubIdentitySegment(repository.repo),
-  );
-  if (sameName.length === 1) return repository.repo;
+  // The escalation itself is `githubRepositoryQualification`'s - ONE walk
+  // decides how much of an identity a collision forces, here and on every row
+  // surface, so the two cannot drift. Only the FORMAT diverges, deliberately:
+  // a radio label leads with the name being chosen and parenthesizes the
+  // host, where row surfaces print the `host/owner/repo` path being typed.
   const qualified = `${repository.owner}/${repository.repo}`;
-  const sameOwner = sameName.filter(
-    (candidate) =>
-      foldGithubIdentitySegment(candidate.owner) ===
-      foldGithubIdentitySegment(repository.owner),
-  );
-  if (sameOwner.length === 1) return qualified;
-  return `${qualified} (${repository.githubHost})`;
+  switch (githubRepositoryQualification(repository, all)) {
+    case "none":
+    case "repo":
+      return repository.repo;
+    case "owner-repo":
+      return qualified;
+    case "host-owner-repo":
+      return `${qualified} (${repository.githubHost})`;
+  }
 }
 
 const PULL_REQUEST_STATE_OPTIONS = [
