@@ -2,7 +2,7 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   HostRestartRequestResult,
   MutationOutcome,
@@ -137,7 +137,15 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  const onHostChange = (snapshot: DesktopLocalHostSnapshot | null): void => {
+  bridge.handleInvoke(
+    RunnerHostInvoke.localHostSnapshot,
+    (): Promise<DesktopPublishedHostSnapshot | null> =>
+      Promise.resolve(bridge.options.host.getSnapshot()),
+  );
+
+  const onHostChange = (
+    snapshot: DesktopPublishedHostSnapshot | null,
+  ): void => {
     bridge.fanOut(RunnerHostEvent.localHostChange, snapshot);
   };
   bridge.options.host.on("change", onHostChange);

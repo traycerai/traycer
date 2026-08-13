@@ -49,6 +49,7 @@ const localSnapshot: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 const HOST_PICKER_TEST_TIMEOUT_MS = 30_000;
 

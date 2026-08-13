@@ -82,6 +82,17 @@ export const RunnerHostInvoke = {
   // This is that durable identity, and the renderer needs it precisely when
   // no snapshot exists.
   lastKnownLocalHostId: "runnerHost:host:lastKnownLocalHostId",
+  // PULL for the same snapshot `localHostChange` pushes.
+  //
+  // The push side is edge-triggered onto a renderer-side cache that starts at
+  // `null`, so every delivery hazard between the two processes - a window that
+  // registers after the fan-out, a `webContents` reload that resets the preload
+  // cache, a send dropped while the renderer navigates - is INDISTINGUISHABLE
+  // in the renderer from "this machine has no host", and stays that way until
+  // the main process happens to emit a change. On a steady-state host that
+  // change may never come. This channel removes the whole class: a subscriber
+  // asks for the current value instead of hoping it was told.
+  localHostSnapshot: "runnerHost:host:localHostSnapshot",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).

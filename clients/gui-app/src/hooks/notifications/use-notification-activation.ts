@@ -7,6 +7,7 @@ import {
   type NotificationNavigate,
   type NotificationPayload,
 } from "@/lib/notifications";
+import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 export type NotificationActivationOutcome = "success" | "failure";
 
@@ -55,7 +56,9 @@ function ensureOriginHostSelected(input: {
   }
   if (input.directory === null) return false;
   const origin = input.directory.findById(input.originHostId);
-  if (origin?.status !== "available") return false;
+  // Reachable is the bar for routing a notification home: a busy host still
+  // holds the epic the notification is about.
+  if (origin === null || !isHostReachable(origin.status)) return false;
   input.directory.selectById(origin.hostId);
   return true;
 }

@@ -15,6 +15,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { projectFullState } from "@/stores/epics/open-epic/projection-helpers";
+import { EMPTY_CHATS_SLICE } from "@/stores/epics/open-epic/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -301,7 +302,7 @@ describe("epic-projector", () => {
     void a;
     void c;
 
-    const live = projectFullState(handle.doc, null);
+    const live = projectFullState(handle.doc, null, EMPTY_CHATS_SLICE);
     const state = handle.store.getState();
 
     expect(state.epic).toEqual(live.epic);
@@ -330,13 +331,13 @@ describe("epic-projector", () => {
 
     // Signed in as user-a: their own chat + the unowned chat show; user-b's
     // chat is hidden from every derived slice.
-    const mine = projectFullState(doc, "user-a");
+    const mine = projectFullState(doc, "user-a", EMPTY_CHATS_SLICE);
     expect(mine.chats.allIds.slice().sort()).toEqual(["mine", "orphan"]);
     expect(Object.keys(mine.chats.byId).sort()).toEqual(["mine", "orphan"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["mine", "orphan"]);
 
     // Fail open when the signed-in user is unknown (hydrating): show everything.
-    const anon = projectFullState(doc, null);
+    const anon = projectFullState(doc, null, EMPTY_CHATS_SLICE);
     expect(anon.chats.allIds.slice().sort()).toEqual([
       "mine",
       "orphan",
@@ -358,13 +359,13 @@ describe("epic-projector", () => {
     tuiAgents.set("legacy", makeTerminalAgentEntry("legacy", null, "Legacy"));
     doc.getMap("epic").set("tuiAgents", tuiAgents);
 
-    const mine = projectFullState(doc, "user-a");
+    const mine = projectFullState(doc, "user-a", EMPTY_CHATS_SLICE);
     expect(mine.tuiAgents.allIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(Object.keys(mine.tuiAgents.byId).sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.rootIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(mine.tree.nodeById.theirs).toBeUndefined();
 
-    const anon = projectFullState(doc, null);
+    const anon = projectFullState(doc, null, EMPTY_CHATS_SLICE);
     expect(anon.tuiAgents.allIds.slice().sort()).toEqual([
       "legacy",
       "mine",

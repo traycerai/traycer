@@ -1,4 +1,4 @@
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
   WindowSummary,
@@ -26,7 +26,7 @@ export interface MenuState {
 }
 
 export function toMenuHostPresentation(
-  snapshot: DesktopLocalHostSnapshot | null,
+  snapshot: DesktopPublishedHostSnapshot | null,
 ): MenuHostPresentation {
   if (snapshot === null) {
     return { status: "starting", version: null };

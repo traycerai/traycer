@@ -18,11 +18,26 @@ import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type {
+  DesktopLocalHostSnapshot,
+  DesktopPublishedHostSnapshot,
+} from "../../ipc-contracts/host-types";
 import {
   isCurrentHostWebsocketUrl,
-  isPublishedHostEndpointReachable,
+  readPublishedHostPresence,
+  type PublishedHostPresence,
+  type PublishedProcessIdentityQuery,
 } from "./host-endpoint-reachability";
+import {
+  getPublishedProcessIdentityVerdict,
+  type PublishedProcessIdentityVerdict,
+} from "./process-identity";
+import {
+  foldHostAvailability,
+  needsReprobe,
+  INITIAL_HOST_AVAILABILITY_STATE,
+  type HostAvailabilityState,
+} from "./host-availability-state";
 
 export { isCurrentHostWebsocketUrl } from "./host-endpoint-reachability";
 
@@ -64,12 +79,41 @@ const CLI_START_STOP_TIMEOUT_MS = 60_000;
  * re-probing - the host is either still binding (converges in the next
  * shot or two) or genuinely dead (the health monitor / ensure flows own
  * that; a capped 5s loopback probe is negligible to keep running).
+ *
+ * The ladder now also runs while the published verdict is DEGRADED
+ * (`needsReprobe`), not only while the snapshot is null. A busy host keeps a
+ * non-null snapshot, so keying the ladder off `next === null` alone would have
+ * left the degraded verdict with nothing scheduled to lift it - which is the
+ * 2026-08-11 wedge repeated one state to the left.
  */
 const REACHABILITY_RETRY_INITIAL_MS = 250;
 const REACHABILITY_RETRY_MAX_MS = 5_000;
+/**
+ * How long a non-death process-identity verdict may be reused while the ladder
+ * above keeps re-probing an endpoint that is not answering.
+ *
+ * Deliberately the same 120s, and the same shape, as the health monitor's busy
+ * shield (`ALIVE_RECHECK_INTERVAL_MS` in `host-health-monitor.ts`), because it
+ * is the same cost: each verdict spawns a child process (`ps` on POSIX,
+ * `tasklist` plus `powershell` on Windows). The monitor pays it at a 15s tick;
+ * this ladder runs at 250ms rising to 5s and does not stop while a host stays
+ * wedged, so unthrottled it is ~720 spawns an hour, for an answer that changes
+ * at most once.
+ *
+ * What is NOT throttled, and must not be:
+ *   - a verdict read on a probe that ANSWERED. The identity check is the only
+ *     thing standing between an impostor listener on the host's port and a
+ *     published `available`, so the path where a handshake succeeded always
+ *     asks the OS afresh.
+ *   - a `dead` or `mismatch` verdict. Those are the two that decide DEATH
+ *     (`readPublishedHostPresence` maps them to `absent`), and a positive death
+ *     must never be served from a cache. They are also free to re-read: a dead
+ *     pid loses the liveness probe before any child process is spawned.
+ */
+const IDENTITY_VERDICT_REUSE_MS = 120_000;
 
 export interface HostLifecycleEvents {
-  change: (snapshot: DesktopLocalHostSnapshot | null) => void;
+  change: (snapshot: DesktopPublishedHostSnapshot | null) => void;
   error: (error: HostStartupError) => void;
 }
 
@@ -189,11 +233,28 @@ export class HostLifecycle extends EventEmitter {
   private readonly options: HostLifecycleOptions;
   private readonly readyTimeoutMs: number;
   private watcher: FSWatcher | null = null;
-  private currentSnapshot: DesktopLocalHostSnapshot | null = null;
+  private currentSnapshot: DesktopPublishedHostSnapshot | null = null;
+  /**
+   * Rolling verdict fold (hysteresis + degradation policy). Owned here because
+   * this class owns the only clock that can re-examine it.
+   */
+  private availability: HostAvailabilityState = INITIAL_HOST_AVAILABILITY_STATE;
+  /** Coalesces out-of-band repair reloads onto one in-flight read. */
+  private repairInFlight = false;
   private reloadGeneration = 0;
   private disposed = false;
   private reachabilityRetryTimer: NodeJS.Timeout | null = null;
   private reachabilityRetryDelayMs = REACHABILITY_RETRY_INITIAL_MS;
+  /**
+   * The last non-death identity verdict and when it was read, kept per pid so a
+   * REPLACEMENT host is always judged on its own evidence. See
+   * {@link IDENTITY_VERDICT_REUSE_MS}.
+   */
+  private identityVerdictCache: {
+    readonly pid: number;
+    readonly verdict: PublishedProcessIdentityVerdict;
+    readonly readAt: number;
+  } | null = null;
   /**
    * Epoch ms of the last reported host-provisioning progress event, or 0 when
    * none has been seen. Read only by `waitForReady`, which treats it as the
@@ -210,7 +271,7 @@ export class HostLifecycle extends EventEmitter {
         : HOST_READY_TIMEOUT_MS;
   }
 
-  getSnapshot(): DesktopLocalHostSnapshot | null {
+  getSnapshot(): DesktopPublishedHostSnapshot | null {
     return this.currentSnapshot;
   }
 
@@ -297,7 +358,52 @@ export class HostLifecycle extends EventEmitter {
   notifyRespawning(): void {
     if (this.disposed) return;
     this.currentSnapshot = null;
+    this.availability = INITIAL_HOST_AVAILABILITY_STATE;
     this.emit("change", null);
+    // The replacement host is a different process, so nothing the last one
+    // proved about its identity applies to it.
+    this.identityVerdictCache = null;
+    // Arm the ladder for the same reason `reloadSnapshot` does: this is a
+    // hand-written demotion, so no reload decided anything about re-probing,
+    // and the replacement host may publish the SAME pid.json content the
+    // watcher is edge-triggered on. Leaving it unarmed is a null snapshot with
+    // nothing scheduled to lift it - the shape of the 2026-08-11 wedge.
+    //
+    // Cleared FIRST so the arm starts at the bottom of the ladder: a respawn is
+    // new information, and a pending timer inherited from the outage that
+    // caused it would make the new host's first probe wait up to the 5s cap
+    // before anything looked for it.
+    this.clearReachabilityRetry();
+    this.scheduleReachabilityRetry();
+  }
+
+  /**
+   * Out-of-band evidence that the published endpoint just answered someone
+   * ELSE - the health monitor's own probe, or the controller's status poll.
+   *
+   * The 2026-08-11 incident had successful probes running against this very
+   * endpoint every few seconds for two hours while the renderer was still
+   * being told the host was gone: nothing carried that success back to the one
+   * component that owns the renderer-facing verdict. This is that edge.
+   *
+   * It re-reads rather than trusting the caller's boolean, so a verdict can
+   * only ever be repaired by THIS class's own probe + liveness pair - the
+   * caller's success is a reason to look again, not a substitute for looking.
+   * It is a no-op once the verdict is already `available`, so the steady-state
+   * cost of wiring it into a poll is one field comparison.
+   */
+  noteEndpointAnswered(): void {
+    if (this.disposed) return;
+    if (this.availability.published === "available") return;
+    if (this.repairInFlight) return;
+    this.repairInFlight = true;
+    void this.reloadSnapshot()
+      .catch((error: unknown) => {
+        log.warn("[host] availability repair reload failed", error);
+      })
+      .finally(() => {
+        this.repairInFlight = false;
+      });
   }
 
   /**
@@ -358,7 +464,7 @@ export class HostLifecycle extends EventEmitter {
    * return - the original `respawn()` path got the same guarantee
    * implicitly via its private `waitForReady` + watcher seed.
    */
-  reloadSnapshotFromDisk(): Promise<DesktopLocalHostSnapshot | null> {
+  reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null> {
     return this.reloadSnapshot();
   }
 
@@ -411,11 +517,15 @@ export class HostLifecycle extends EventEmitter {
    * before a value is accepted into `currentSnapshot`; readiness loops always
    * call that probe path before consulting this predicate.
    */
-  private isCompatible(snapshot: DesktopLocalHostSnapshot | null): boolean {
+  private isCompatible(snapshot: DesktopPublishedHostSnapshot | null): boolean {
+    // A `busy` snapshot counts as compatible: the host EXISTS and is bindable,
+    // which is the entire question every caller of this predicate is asking.
+    // Requiring `available` here would put the readiness wait back on the
+    // probe's coin toss - the fragility this ticket exists to remove.
     return snapshot !== null;
   }
 
-  private async reloadSnapshot(): Promise<DesktopLocalHostSnapshot | null> {
+  private async reloadSnapshot(): Promise<DesktopPublishedHostSnapshot | null> {
     if (this.disposed) {
       return this.currentSnapshot;
     }
@@ -424,24 +534,44 @@ export class HostLifecycle extends EventEmitter {
     const readState = await readPidMetadataState(
       this.options.layout.pidMetadataFile,
     );
+    if (readState.kind === "indeterminate") {
+      // A FAILURE TO OBSERVE, not evidence of death. `readPidMetadataState`
+      // separates the two precisely so this branch can exist: a transient
+      // EACCES/EIO, or a read that landed mid-write, says nothing about the
+      // host. Folding it as `absent` would have run it through the one arm with
+      // no hysteresis at all (`host-availability-state.ts`: "absent is POSITIVE
+      // evidence, not a failure to observe") and momentarily published a live
+      // host as dead - and partial writes and I/O errors cluster with exactly
+      // the load that makes a host slow to answer in the first place.
+      //
+      // So the previous verdict is HELD - no fold, no emit - and the ladder is
+      // armed, which is what makes the hold temporary: the next read either
+      // parses (and decides normally) or confirms ENOENT (and folds absent
+      // then). Only the winning reload may arm; a superseded one must not move
+      // shared state.
+      if (!this.disposed && generation === this.reloadGeneration) {
+        this.scheduleReachabilityRetry();
+      }
+      return this.currentSnapshot;
+    }
     const raw = readState.kind === "parsed" ? readState.snapshot : null;
     const startIdentity =
       readState.kind === "parsed" ? readState.startIdentity : null;
-    // Filter an unreachable / wrong-shaped host out of what the renderer sees,
-    // so the host gate treats it as not-ready and fires `ensureHost`. A
-    // reachable host is surfaced regardless of its version stamp - the renderer
-    // negotiates protocol compatibility over the WS handshake and prompts for a
-    // restart only if the running host is genuinely incompatible.
-    const next = await this.toReachableSnapshot(raw, startIdentity);
-    // Superseded by a newer reload (or disposed): skip the emit so we never
-    // clobber newer state, but still RETURN what THIS read derived. A caller
-    // awaiting us - the host-busy surfacing in host-ensure-ipc - must judge
-    // off this freshly-derived value, not a `getSnapshot()` that a concurrent
-    // winning reload may not have assigned yet (which would falsely read null
-    // and route a busy host to a restart).
+    const presence = await this.readPresence(raw, startIdentity);
+    // Superseded by a newer reload (or disposed): skip BOTH the fold and the
+    // emit so we never clobber newer state, but still RETURN what THIS read
+    // derived. A caller awaiting us - the host-busy surfacing in
+    // host-ensure-ipc - must judge off this freshly-derived value, not a
+    // `getSnapshot()` that a concurrent winning reload may not have assigned
+    // yet (which would falsely read null and route a busy host to a restart).
+    // The fold is skipped rather than applied-and-discarded because it is
+    // ORDER-DEPENDENT: letting a losing read advance the hysteresis counter
+    // would let two racing reloads demote on what is really one failure.
     if (this.disposed || generation !== this.reloadGeneration) {
-      return next;
+      return raw === null ? null : unfoldedSnapshot(raw, presence);
     }
+    this.availability = foldHostAvailability(this.availability, presence);
+    const next = await this.toPublishedSnapshot(raw, this.availability);
     const prev = this.currentSnapshot;
     if (!snapshotEquals(prev, next)) {
       if (next === null && raw !== null) {
@@ -453,23 +583,86 @@ export class HostLifecycle extends EventEmitter {
             running: raw.version,
           },
         );
+      } else if (next !== null && prev?.availability !== next.availability) {
+        log.info("[host] local host availability changed", {
+          hostId: next.hostId,
+          pid: next.pid,
+          from: prev?.availability ?? null,
+          to: next.availability,
+        });
       }
       this.currentSnapshot = next;
       this.emit("change", next);
     }
-    // Retry-until-reachable: the file is PRESENT (a named-but-unreachable host,
-    // or an indeterminate read we can't yet trust) but did not resolve to a
-    // reachable snapshot. The watcher won't fire again until the FILE changes,
-    // so without a timer this state is terminal for the session. Clear the
-    // ladder only on a CONFIRMED-absent file (a deliberate stop) - never on a
-    // partial/transient read, which was the hole that let the wedge persist.
-    if (readState.kind !== "absent" && next === null) {
+    // Retry-until-reachable. Two states need the ladder, and only one of them
+    // used to:
+    //   - no snapshot while the file PARSED (a named-but-unreachable host), and
+    //   - a DEGRADED verdict, which now includes both the published `busy`
+    //     state and the hysteresis hold that is still publishing `available`.
+    // The watcher won't fire again until the FILE changes, so without a timer
+    // either state is terminal for the session. The ladder is cleared only on a
+    // CONFIRMED-absent file (a deliberate stop) with nothing degraded - a read
+    // that failed rather than answered never gets here at all, having already
+    // held and re-armed above.
+    if (
+      needsReprobe(this.availability) ||
+      (readState.kind === "parsed" && next === null)
+    ) {
       this.scheduleReachabilityRetry();
     } else {
       this.clearReachabilityRetry();
     }
     return next;
   }
+
+  /**
+   * The presence question, asked once per reload. Split out so the fold above
+   * reads as policy and this reads as evidence-gathering.
+   */
+  private readPresence(
+    raw: DesktopLocalHostSnapshot | null,
+    startIdentity: ProcessStartIdentity | null,
+  ): Promise<PublishedHostPresence> {
+    if (raw === null) return Promise.resolve("absent");
+    const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
+    return readPublishedHostPresence(
+      raw.websocketUrl,
+      raw.pid,
+      startIdentity,
+      probe,
+      this.readIdentityVerdict,
+    );
+  }
+
+  /**
+   * The identity verdict, re-read at most once per
+   * {@link IDENTITY_VERDICT_REUSE_MS} while the endpoint is silent. A bound
+   * method rather than a closure per call so the cache is per lifecycle, which
+   * is also the scope the ladder runs at.
+   */
+  private readonly readIdentityVerdict = async (
+    query: PublishedProcessIdentityQuery,
+  ): Promise<PublishedProcessIdentityVerdict> => {
+    const cached = this.identityVerdictCache;
+    if (
+      !query.answered &&
+      cached !== null &&
+      cached.pid === query.pid &&
+      Date.now() - cached.readAt < IDENTITY_VERDICT_REUSE_MS
+    ) {
+      return cached.verdict;
+    }
+    const verdict = await getPublishedProcessIdentityVerdict(
+      query.pid,
+      query.startIdentity,
+    );
+    // Death verdicts are not retained - see IDENTITY_VERDICT_REUSE_MS.
+    this.identityVerdictCache =
+      verdict === "dead" || verdict === "mismatch"
+        ? null
+        : { pid: query.pid, verdict, readAt: Date.now() };
+    return verdict;
+  };
 
   private scheduleReachabilityRetry(): void {
     if (this.disposed || this.reachabilityRetryTimer !== null) {
@@ -505,25 +698,23 @@ export class HostLifecycle extends EventEmitter {
     }
   }
 
-  private async toReachableSnapshot(
+  /**
+   * Projects the folded verdict onto the renderer-facing snapshot. `null`
+   * published verdict means "no host to bind to" and is the ONLY way this
+   * class reports a dead host - a live-but-silent one comes back as `busy`
+   * with its real `websocketUrl` intact, because the renderer's per-request
+   * dials to that URL keep succeeding and taking it away is what cost the user
+   * their session on 2026-08-11.
+   */
+  private async toPublishedSnapshot(
     raw: DesktopLocalHostSnapshot | null,
-    startIdentity: ProcessStartIdentity | null,
-  ): Promise<DesktopLocalHostSnapshot | null> {
-    if (raw === null) {
+    availability: HostAvailabilityState,
+  ): Promise<DesktopPublishedHostSnapshot | null> {
+    if (raw === null || availability.published === null) {
       return null;
     }
-    const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
-    if (
-      !(await isPublishedHostEndpointReachable(
-        raw.websocketUrl,
-        raw.pid,
-        startIdentity,
-        probe,
-      ))
-    ) {
-      return null;
-    }
-    return withConfiguredHostName(this.options.layout, raw);
+    const named = await withConfiguredHostName(this.options.layout, raw);
+    return { ...named, availability: availability.published };
   }
 
   private installWatcher(): void {
@@ -857,8 +1048,8 @@ async function safeReadLogTail(
 }
 
 function snapshotEquals(
-  a: DesktopLocalHostSnapshot | null,
-  b: DesktopLocalHostSnapshot | null,
+  a: DesktopPublishedHostSnapshot | null,
+  b: DesktopPublishedHostSnapshot | null,
 ): boolean {
   if (a === null || b === null) {
     return a === b;
@@ -869,8 +1060,27 @@ function snapshotEquals(
     a.version === b.version &&
     a.pid === b.pid &&
     a.systemHostName === b.systemHostName &&
-    a.displayName === b.displayName
+    a.displayName === b.displayName &&
+    // Availability is part of the identity of an emitted snapshot: an
+    // available -> busy -> available round trip has to reach the renderer, or
+    // the degraded badge would appear and never clear.
+    a.availability === b.availability
   );
+}
+
+/**
+ * The snapshot a SUPERSEDED reload returns to its own awaiting caller, derived
+ * straight from that read's presence with no hysteresis applied. It is never
+ * published; the winning reload owns what the renderer sees. Callers of
+ * `reloadSnapshotFromDisk` only ask "is there a host on disk right now", which
+ * this answers honestly without letting a losing read move shared state.
+ */
+function unfoldedSnapshot(
+  raw: DesktopLocalHostSnapshot,
+  presence: PublishedHostPresence,
+): DesktopPublishedHostSnapshot | null {
+  if (presence === "absent") return null;
+  return { ...raw, availability: presence };
 }
 
 export function sleep(ms: number): Promise<void> {

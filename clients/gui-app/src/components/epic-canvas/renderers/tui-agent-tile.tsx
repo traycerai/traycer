@@ -140,6 +140,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -155,6 +156,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);
@@ -165,6 +167,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -180,6 +183,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);

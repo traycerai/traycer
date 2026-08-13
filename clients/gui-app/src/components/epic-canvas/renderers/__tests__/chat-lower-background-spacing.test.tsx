@@ -73,6 +73,9 @@ import {
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
 const CHAT_ID = "chat-1";
+// The host this tile is bound to: `TabHostProvider` below, the installed chat
+// session, and the surfaces' own `hostId` all have to name the same one.
+const HOST_ID = "host-1";
 
 const RESTORE_CONTEXT: ChatRestoreContextValue = {
   accessRole: "owner",
@@ -115,6 +118,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
     epicId: EPIC_ID,
     viewTabId: TAB_ID,
     chatId: CHAT_ID,
+    hostId: HOST_ID,
     runtime: { snapshotLoaded: true },
     access: { isViewer: false, canAct: true, readOnlyNotice: null },
     turn: {
@@ -182,7 +186,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
 function renderInChatTile(node: ReactNode): void {
   render(
     <EpicSessionContext.Provider value={epicHandle}>
-      <TabHostProvider hostId="host-1">
+      <TabHostProvider hostId={HOST_ID}>
         <TooltipProvider>{node}</TooltipProvider>
       </TabHostProvider>
     </EpicSessionContext.Provider>,
@@ -199,6 +203,7 @@ function composerTopSpacing(): string | null {
 
 beforeEach(() => {
   chatSession = installManagedCommandChatSession({
+    hostId: HOST_ID,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
   });

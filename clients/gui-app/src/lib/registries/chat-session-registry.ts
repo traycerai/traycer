@@ -223,9 +223,7 @@ export function useChatSessionHandle(
     };
 
     const next = registry.acquire(
-      epicId,
-      chatId,
-      scopeKey,
+      { epicId, chatId, hostId, scopeKey },
       (factoryEpicId, factoryChatId) =>
         createChatSessionStore({
           hostId,
@@ -242,7 +240,7 @@ export function useChatSessionHandle(
     setHandle(next);
 
     return () => {
-      registry.releaseHandle(epicId, chatId, next);
+      registry.releaseHandle(epicId, chatId, hostId, next);
     };
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never
@@ -266,17 +264,30 @@ export function useChatSessionHandle(
   return handle;
 }
 
+/**
+ * Peek an already-open session WITHOUT taking a lease.
+ *
+ * `hostId` is part of the session's identity (see `ChatSessionRegistry`), so
+ * every caller has to name the host it means rather than inheriting whichever
+ * host happens to be active: a tab-scoped surface passes its bound
+ * `useTabHostId()`, a row-scoped surface passes the row's own owner host.
+ * `null` means "this surface has no host for that chat yet" (an epic-projection
+ * row that predates the field, or an id that resolves to nothing) and reads as
+ * no session - never as "look it up on some other host", which is exactly the
+ * substitution that would hand back a different machine's transcript.
+ */
 export function useExistingChatSessionHandle(
   epicId: string,
   chatId: string,
+  hostId: string | null,
 ): ChatSessionStoreHandle | null {
   const subscribe = useCallback(
     (listener: () => void) => registry.subscribe(listener),
     [],
   );
   const getSnapshot = useCallback(
-    () => registry.peek(epicId, chatId),
-    [chatId, epicId],
+    () => (hostId === null ? null : registry.peek(epicId, chatId, hostId)),
+    [chatId, epicId, hostId],
   );
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
@@ -296,8 +307,9 @@ export function useExistingChatSessionHandle(
 export function useExistingChatSessionFatalClose(
   epicId: string,
   chatId: string,
+  hostId: string,
 ): FatalErrorDetails | null {
-  const handle = useExistingChatSessionHandle(epicId, chatId);
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
   const subscribe = useCallback(
     (listener: () => void) =>
       handle === null ? () => undefined : handle.store.subscribe(listener),

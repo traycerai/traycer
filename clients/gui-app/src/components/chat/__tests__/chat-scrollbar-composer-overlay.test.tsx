@@ -300,6 +300,11 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       const notice = screen.getByText(
         /Read-only viewer\. The agent owner can send prompts/,
       );
+      // The read-only state carries a visual marker, not just the sentence -
+      // the same lock glyph the sidebar row and tab strip use.
+      expect(
+        notice.closest(".rounded-md")?.querySelector("svg.lucide-lock"),
+      ).not.toBeNull();
       const centered = notice.closest(".max-w-3xl");
       expect(centered).not.toBeNull();
       const shell = centered?.parentElement;
@@ -528,6 +533,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     epicId: "epic-1",
     viewTabId: "tab-1",
     chatId: "chat-1",
+    hostId: "host-1",
     runtime,
     access,
     turn,

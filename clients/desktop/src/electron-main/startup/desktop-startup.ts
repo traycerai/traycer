@@ -519,7 +519,19 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const hostController = new HostController({
     environment: config.environment,
     hostLifecycle: host,
-    reachabilityProbe: canReachHostWebsocketUrl,
+    // Wrapped, not passed raw: the controller re-probes this endpoint on every
+    // status read (the renderer polls it continuously), and until int #48 every
+    // one of those successes was discarded. On 2026-08-11 that meant probes
+    // against a healthy host succeeded for two hours while the renderer was
+    // still being told the host was gone - the evidence existed, nothing
+    // carried it to the component that owns the verdict. This is the single
+    // seam where all of the controller's probes cross back; a success repairs a
+    // degraded verdict and is a field comparison once it is already repaired.
+    reachabilityProbe: async (websocketUrl: string): Promise<boolean> => {
+      const answered = await canReachHostWebsocketUrl(websocketUrl);
+      if (answered) host.noteEndpointAnswered();
+      return answered;
+    },
     desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
     desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
   });

@@ -30,6 +30,9 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
 }));
+const cloudChatListTestState = vi.hoisted(() => ({
+  knownChatIds: new Set<string>(),
+}));
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -166,10 +169,56 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
+// The tile's record gate consults `epic.listCloudChats` for a chat with no
+// local doc record (chat-sync-v2 ticket 49 - post-sweep that is the ordinary
+// state of a healthy owned chat, so the published row is the only local
+// evidence left that it exists). Driven from test state at the hook boundary
+// so a test can put this suite's chat in or out of the cloud list; `data` is
+// always DEFINED so "not cloud-known" is a settled answer rather than a
+// pending one.
+//
+// Rows are built as WHOLE `CloudChatSummary` values: the consumer reads
+// `isOwnedByViewer` as well as `identity`, and an enumerating factory answers
+// `undefined` for whatever it forgot - which a boolean predicate reads as
+// "not the viewer's", silently re-closing the gate this exists to open. The
+// return annotation is the gate: the next field the row gains fails
+// `compile` here instead of quietly turning these tests red in CI.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatList: () => ({
+    data: {
+      chats: [...cloudChatListTestState.knownChatIds].map(
+        (chatId): CloudChatSummary => ({
+          identity: { taskId: EPIC_ID, chatId, ownerUserId: "owner-1" },
+          ownerHostId: "host-test",
+          createdAt: 1,
+          visibility: "task",
+          title: null,
+          isTitleEditedByUser: false,
+          parentChatId: null,
+          isArchived: false,
+          runSettingsSummary: null,
+          metadataUpdatedAt: 1,
+          headSha256: null,
+          publishedAt: null,
+          throughRecordSeq: null,
+          isOwnedByViewer: true,
+        }),
+      ),
+    },
+    isError: false,
+    isPending: false,
+    isFetching: false,
+  }),
+}));
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -938,6 +987,7 @@ describe("<ChatTile />", () => {
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
+    cloudChatListTestState.knownChatIds.clear();
   });
 
   afterEach(() => {
@@ -963,9 +1013,12 @@ describe("<ChatTile />", () => {
 
   it("does not open chat.subscribe until the chat record is in the projection", async () => {
     // Re-install the epic session with NO chat seeded so the tile's gate
-    // (`chatRecord !== null`) stays closed. This is the local-first
-    // subscribe-first race regression: the renderer must not open the epic via
-    // `chat.subscribe` before the create has seeded the chat.
+    // stays closed. This is the local-first subscribe-first race regression:
+    // the renderer must not open the epic via `chat.subscribe` before the
+    // create has landed. `cloudChatListTestState` is empty here, which is
+    // what a create in flight looks like - the owning host publishes long
+    // after `epic.createChat` returns, so no cloud row can vouch for it yet
+    // (chat-sync-v2 ticket 49).
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -976,6 +1029,51 @@ describe("<ChatTile />", () => {
 
     renderChatTile();
     // Flush the epic snapshot (fired via setTimeout(0)) + effects.
+    await advanceLegendListTime(0);
+
+    expect(chatStreamSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+  });
+
+  it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
+    // The post-migration steady state of a HEALTHY chat: publication proven,
+    // so `ChatDocEntrySweep` deleted the doc entry (ticket 20) and creation
+    // never re-projects one (ticket 19). The record gate used to refuse this
+    // shape forever, which is why every swept chat opened as the locked
+    // published copy on its own connected host.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+
+    renderChatTile();
+
+    await waitFor(() => {
+      expect(chatHarness.streamCreations()).toBe(1);
+    });
+    await waitForChatTileLoaded();
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+  });
+
+  it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
+    // Identity is the taskId + ownerUserId + chatId TRIPLE. `chatId` is
+    // host-minted and the list carries every task-visible row, so an id-only
+    // match would open a collaborator's transcript under this tab.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    vi.spyOn(
+      await import("@/lib/chats/unified-chat-list"),
+      "cloudRowIsViewersOwn",
+    ).mockReturnValue(false);
+    const chatStreamSpy = vi.fn(() => {
+      throw new Error("chat.subscribe must not open for another owner's row");
+    });
+    __setChatStreamClientFactoryForTests(chatStreamSpy);
+
+    renderChatTile();
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();

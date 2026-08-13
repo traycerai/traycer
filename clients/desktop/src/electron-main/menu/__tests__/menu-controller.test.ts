@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
   MenuCommandId,
@@ -67,21 +67,22 @@ import log from "electron-log";
 import { MenuController } from "../menu-controller";
 
 class FakeHost extends EventEmitter implements IpcHostLifecycle {
-  private snapshot: DesktopLocalHostSnapshot | null = null;
+  private snapshot: DesktopPublishedHostSnapshot | null = null;
   respawnCalls = 0;
   notifyRespawningCalls = 0;
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
+  noteEndpointAnsweredCalls = 0;
   readonly pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
   readonly identityEnrollmentFile =
     "/tmp/fake-traycer-host/identity/enrollment.json";
   isDisposed = false;
 
-  getSnapshot(): DesktopLocalHostSnapshot | null {
+  getSnapshot(): DesktopPublishedHostSnapshot | null {
     return this.snapshot;
   }
 
-  setSnapshot(snapshot: DesktopLocalHostSnapshot | null): void {
+  setSnapshot(snapshot: DesktopPublishedHostSnapshot | null): void {
     this.snapshot = snapshot;
     this.emit("change", snapshot);
   }
@@ -94,12 +95,15 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
     this.snapshot = null;
     this.emit("change", null);
   }
-  async reloadSnapshotFromDisk(): Promise<DesktopLocalHostSnapshot | null> {
+  async reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null> {
     this.reloadSnapshotCalls += 1;
     return this.getSnapshot();
   }
   ensureWatcherInstalled(): void {
     this.ensureWatcherCalls += 1;
+  }
+  noteEndpointAnswered(): void {
+    this.noteEndpointAnsweredCalls += 1;
   }
   async installService(): Promise<void> {}
   async uninstallService(_purge: boolean): Promise<void> {}
@@ -436,6 +440,7 @@ describe("MenuController", () => {
       pid: 123,
       systemHostName: "host-a",
       displayName: "host-a",
+      availability: "available",
     });
     authSession.set({
       status: "signed-in",

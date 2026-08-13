@@ -81,6 +81,7 @@ const validSnapshot: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 
 const localEntry: HostDirectoryEntry = {

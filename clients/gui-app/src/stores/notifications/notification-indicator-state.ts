@@ -485,3 +485,35 @@ function mergePendingForkChats(
   }
   return { epics: response.epics, chats };
 }
+
+/**
+ * Two indicator responses folded into one, flag by flag.
+ *
+ * Used to combine per-HOST reads of one surface: chat ids on a canvas tab strip
+ * can belong to different hosts, each answered by its own `indicatorState` call,
+ * and the surface below reads a single chatId-keyed map. A spread-merge would
+ * make the last answer win for an id two hosts both reported on - `chatId` is
+ * host-minted and not unique across hosts, so that is a reachable state - and
+ * silently extinguish a real pending flag. The host's own aggregate is
+ * `MAX(CASE WHEN ...)`, so OR is the same rule applied one level up.
+ */
+export function mergeIndicatorStateResponses(
+  base: HostNotificationsIndicatorStateResponse,
+  next: HostNotificationsIndicatorStateResponse,
+): HostNotificationsIndicatorStateResponse {
+  return {
+    epics: mergeIndicatorRecords(base.epics, next.epics),
+    chats: mergeIndicatorRecords(base.chats, next.chats),
+  };
+}
+
+function mergeIndicatorRecords(
+  base: Readonly<Record<string, HostNotificationsIndicatorState>>,
+  next: Readonly<Record<string, HostNotificationsIndicatorState>>,
+): Record<string, HostNotificationsIndicatorState> {
+  const merged: Record<string, HostNotificationsIndicatorState> = { ...base };
+  for (const [id, state] of Object.entries(next)) {
+    merged[id] = mergeIndicatorFlags(merged[id], state);
+  }
+  return merged;
+}

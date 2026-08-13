@@ -5,6 +5,7 @@ import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-sessio
 
 const useInitialChatHandoffMock = vi.hoisted(() => vi.fn());
 const useEpicRouteSynchronizationMock = vi.hoisted(() => vi.fn());
+const useEpicSyncChatRecordsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/epic-canvas/hooks/use-initial-chat-handoff", () => ({
   useInitialChatHandoff: useInitialChatHandoffMock,
@@ -16,6 +17,14 @@ vi.mock(
     useEpicRouteSynchronization: useEpicRouteSynchronizationMock,
   }),
 );
+
+// Both exports, not just the hook this component calls: a factory that lists
+// only what today's importer uses answers `undefined` for the rest, and the
+// next importer of this module gets a silent no-op instead of a failure.
+vi.mock("@/hooks/chats/use-epic-chat-records", () => ({
+  useEpicSyncChatRecords: useEpicSyncChatRecordsMock,
+  invalidateEpicChatRecords: () => undefined,
+}));
 
 vi.mock("@/providers/epic-session-gate", () => ({
   EpicSessionGate: (props: { readonly children: ReactNode }) => props.children,
@@ -57,6 +66,7 @@ describe("<EpicRouteSessionBody />", () => {
     cleanup();
     useInitialChatHandoffMock.mockReset();
     useEpicRouteSynchronizationMock.mockReset();
+    useEpicSyncChatRecordsMock.mockReset();
   });
 
   it("keeps visual state mounted but suppresses route-global effects when inactive", () => {
@@ -65,6 +75,10 @@ describe("<EpicRouteSessionBody />", () => {
     expect(screen.getByTestId("epic-shell").dataset.active).toBe("false");
     expect(useInitialChatHandoffMock).toHaveBeenCalledWith("epic-a", "tab-a");
     expect(useEpicRouteSynchronizationMock).not.toHaveBeenCalled();
+    // Session-scoped, NOT route-active-scoped: the chat record channel backs
+    // the sidebar tree and every open tile of a background epic, which would
+    // lose their swept chats again if it stopped while another tab is in front.
+    expect(useEpicSyncChatRecordsMock).toHaveBeenCalledWith("epic-a");
     expect(screen.queryByTestId("epic-migration-modal")).toBeNull();
   });
 

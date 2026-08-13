@@ -31,6 +31,14 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 
 /**
+ * How long a `pending` handoff may sit with no projected chat before the
+ * eager-opened tab is treated as an orphan. Generous on purpose: the create is
+ * local-first (the chat normally projects in well under a second), so this only
+ * ever fires when nothing was created at all.
+ */
+const CHAT_PROJECTION_DEADLINE_MS = 60_000;
+
+/**
  * Drives the landing-page → epic-canvas chat-handoff lifecycle and is the
  * sole owner of the canvas-store `pendingCreateArtifactIds` mark for handoff
  * chats. The mark suppresses the deleted-body branch in
@@ -101,9 +109,73 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
   const handoffChatId = handoff?.chatId ?? null;
   const handoffStatus = handoff?.status ?? null;
   const handoffPlacement = handoff?.placement ?? ACTIVE_TILE_PLACEMENT;
+  const handoffCreatedAt = handoff?.createdAt ?? 0;
   const projectedChatId = projectedChat?.id ?? null;
   const projectedChatTitle = projectedChat?.title ?? null;
   const adoptableChatId = adoptableChat?.id ?? null;
+
+  // Bounded wait for the folded chat to exist at all. The tab is eager-opened
+  // around the pre-minted chat id and `pendingCreateArtifactIds` exempts it
+  // from the record-liveness sweep for as long as this handoff is non-terminal
+  // - so a create that produced NO chat (a host that dropped the folded seed,
+  // or a create that failed after this tab was opened) leaves a permanent
+  // blank tab around an id that exists on no host and in no cloud row. A ready
+  // epic (own snapshot, live connection, non-viewer) whose projection still has
+  // no chat after the deadline is that case: give up, which releases the
+  // pending-create mark below and lets the sweep close the tab. Armed only for
+  // `pending`: every later status implies the chat already projected, except
+  // the `markInitialTurnStarted` jump to `sending`, where the host confirmed
+  // the chat exists. Measured from `createdAt` (persisted) so a reload does not
+  // restart the clock. Sibling of `new-chat.ts`'s CHAT_PROJECTION_WAIT_MS,
+  // which bounds the same question for the in-Epic create-then-open flow.
+  useEffect(() => {
+    if (handoffChatId === null) return;
+    if (handoffStatus !== "pending") return;
+    if (projectedChatId !== null) return;
+    if (!epicReady(snapshotLoaded, connectionStatus, permissionRole)) return;
+    const timeoutId = window.setTimeout(
+      () => {
+        // The deadline belongs to the handoff that ARMED it. `markFailed` is
+        // scope-keyed, and a second create can REPLACE the handoff under this
+        // same {host,user,epic} scope in the gap between the store write and
+        // this effect's cleanup (the timer is a macrotask; React's cleanup
+        // lands on commit) - so re-read the scope and fail only the exact
+        // still-pending handoff this timer was armed for, never a
+        // replacement's fresh one.
+        const current = selectInitialChatHandoff(
+          useInitialChatHandoffStore.getState(),
+          scope,
+        );
+        if (
+          current === null ||
+          current.chatId !== handoffChatId ||
+          current.createdAt !== handoffCreatedAt ||
+          current.status !== "pending"
+        ) {
+          return;
+        }
+        useInitialChatHandoffStore
+          .getState()
+          .markFailed(scope, "The agent was never created.");
+      },
+      Math.max(
+        CHAT_PROJECTION_DEADLINE_MS - (Date.now() - handoffCreatedAt),
+        0,
+      ),
+    );
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    connectionStatus,
+    handoffChatId,
+    handoffCreatedAt,
+    handoffStatus,
+    permissionRole,
+    projectedChatId,
+    scope,
+    snapshotLoaded,
+  ]);
 
   // Advance the handoff out of `pending` once the folded chat projects (the
   // common path) or a single user-owned root-level GUI chat exists (reload /
@@ -254,18 +326,23 @@ interface CanvasHandoffTransitionInput {
 }
 
 function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
-  if (input.handoffChatId === null) return;
-
   // Clobber cleanup: a second in-epic create can register a fresh handoff under
   // this same {host,user,epic} scope before the first chat projects. The chatId
   // we previously marked is then no longer this handoff's chat - release its
   // pending-create mark so a healthy abandoned chat doesn't keep a stale
   // "suppress remote-deleted" mark forever.
+  //
+  // Runs BEFORE the no-handoff bail: the handoff can also VANISH from this
+  // scope (consumed elsewhere, signed-out user, active-host swap moving the
+  // {host,user,epic} key out from under this hook), and bailing first left the
+  // mark set with nobody able to clear it - the exempt-from-the-sweep tab that
+  // outlives every other trace of the create.
   const previouslyMarked = input.markedChatIdRef.current;
   if (previouslyMarked !== null && previouslyMarked !== input.handoffChatId) {
     input.unmarkArtifactPendingCreate(previouslyMarked);
     input.markedChatIdRef.current = null;
   }
+  if (input.handoffChatId === null) return;
 
   if (isHandoffTerminal(input.handoffStatus)) {
     input.unmarkArtifactPendingCreate(input.handoffChatId);

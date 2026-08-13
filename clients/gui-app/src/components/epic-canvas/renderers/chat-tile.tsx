@@ -116,6 +116,8 @@ import {
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
   useGuiHarnessCatalog,
@@ -277,11 +279,22 @@ function reasoningLabelEntry(
 export function ChatTile(props: ChatTileProps) {
   const { node, viewTabId, isActive } = props;
   const epicId = useOpenEpicId();
-  // Gate the host `chat.subscribe` on the chat record existing in the epic
-  // projection (mirrors the terminal tile's `enabled: agent !== null`). The
-  // create seeds the chat into the epic doc, so the record arrives in the epic
-  // snapshot; until then we render the loading skeleton and never open the epic
-  // ahead of the create - closing the local-first subscribe-first race.
+  // Gate the host `chat.subscribe` on this tile having some EVIDENCE that the
+  // chat exists (mirrors the terminal tile's `enabled: agent !== null`). The
+  // gate exists for exactly one race - a chat created here, subscribed to
+  // before the create landed - so the bar is evidence of existence, not
+  // evidence of a doc record.
+  //
+  // The doc record used to be the whole gate, on the premise that "the create
+  // seeds the chat into the epic doc". That premise died with ticket 19
+  // (creation no longer projects) and ticket 20 (`ChatDocEntrySweep` deletes
+  // every entry whose publication it has proven), which together made "no doc
+  // record" the ORDINARY steady state of a healthy owned chat. Left as-is,
+  // this gate refused `chat.subscribe` for every migrated chat on its own
+  // connected host - the second, independent half of ticket 49's
+  // permanently-read-only defect (the first is `tab-group-view.tsx`'s
+  // substitution arm, which cannot even observe a `CHAT_NOT_VISIBLE`
+  // terminate until this gate lets the open through).
   const chatRecord = useChatById(node.id);
   const tabHostId = useTabHostId();
   // A CROSS-HOST live open (a connected peer host's chat, opened from the
@@ -302,10 +315,45 @@ export function ChatTile(props: ChatTileProps) {
     const activeHostId = hostBinding?.hostClient.getActiveHostId() ?? null;
     return activeHostId !== null && activeHostId !== tabHostId;
   });
+  // The record-less same-host case (ticket 49): a published cloud row is
+  // existence evidence too, and it is the ONLY evidence a swept chat has
+  // left locally. Consulted only when the two gates above have already
+  // refused, so the ordinary live path costs nothing extra.
+  //
+  // This cannot reopen the create race it replaces evidence for. A chat is
+  // published by its owning host well AFTER `epic.createChat` returns, so a
+  // create in flight is cloud-UNKNOWN by construction and stays gated - the
+  // suppression for that window remains the canvas's
+  // `pendingCreateArtifactIds` (`tab-group-view.tsx`) and the handoff
+  // driver's own readiness deadline, neither of which this touches.
+  //
+  // `useTabHostClient` rather than the app-wide client: this is a tab, and
+  // the tab's bound host is the one whose registry would have to hold the
+  // chat. For a same-host tab that resolves to the same host id the canvas's
+  // `useCloudChatList` already keyed its copy of `epic.listCloudChats` under,
+  // so the two share one cache entry and one request.
+  const tabHostClientForRecordEvidence = useTabHostClient();
+  const wantsCloudRecordEvidence = chatRecord === null && !isCrossHostOpen;
+  const cloudChatsForRecordEvidence = useCloudChatList({
+    client: tabHostClientForRecordEvidence,
+    taskId: epicId,
+    enabled: wantsCloudRecordEvidence,
+  });
+  // The OWNER is half the identity, not a refinement of the id: `chatId` is
+  // host-minted and the list deliberately carries every task-visible row
+  // including collaborators'. A local chat ref is the viewer's own by
+  // construction, so an id-only match could open a collaborator's chat under
+  // this tab. Same rule `tab-group-view.tsx`'s arm applies to the same list.
+  const isCloudKnown =
+    wantsCloudRecordEvidence &&
+    (cloudChatsForRecordEvidence.data?.chats.some(
+      (chat) => chat.identity.chatId === node.id && cloudRowIsViewersOwn(chat),
+    ) ??
+      false);
   const handle = useChatSessionHandle(
     node.id,
     tabHostId,
-    chatRecord !== null || isCrossHostOpen,
+    chatRecord !== null || isCrossHostOpen || isCloudKnown,
   );
   const reachability = useHostReachability(tabHostId);
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
@@ -388,6 +436,15 @@ interface ChatDeadTileBannerContainerProps {
   readonly hostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
+  /**
+   * The source chat's owner, when the mounting surface already carries it
+   * (the published tile's ref does). Bypasses the cloud-list lookup below,
+   * which a host with swept registry facts (post-restart) can fail to
+   * answer. `""` is treated as absent, not forwarded: the wire field is
+   * `z.string().min(1).nullable()`, so an empty owner would turn a clone
+   * that should degrade to settings-only into an outright failure.
+   */
+  readonly sourceOwnerUserId?: string;
 }
 
 export function ChatDeadTileBannerContainer(
@@ -395,14 +452,22 @@ export function ChatDeadTileBannerContainer(
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
   const bannerBinding = useHostBinding();
+  const providedOwnerUserId =
+    props.sourceOwnerUserId !== undefined && props.sourceOwnerUserId.length > 0
+      ? props.sourceOwnerUserId
+      : null;
   // Ticket 37: both banner render sites (this tile's unreachable-host arm and
   // the canvas substitution) resolve the source owner through the one hook, so
   // a chat with no local record still carries its history across the clone.
-  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+  // A surface that already knows the owner (the published tile's ref names
+  // it) passes it instead, and a `null` chatId keeps the hook's cloud query
+  // disabled - no lookup runs for an answer the caller already had.
+  const lookedUpOwnerUserId = useCloneSourceOwnerUserId({
     client: bannerBinding?.hostClient ?? null,
     epicId: props.epicId,
-    chatId: props.chatId,
+    chatId: providedOwnerUserId === null ? props.chatId : null,
   });
+  const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
@@ -980,6 +1045,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                       epicId={view.currentEpicId}
                       viewTabId={view.viewTabId}
                       chatId={view.node.id}
+                      hostId={hostId}
                       runtime={view.lower.runtime}
                       access={view.lower.access}
                       turn={view.lower.turn}

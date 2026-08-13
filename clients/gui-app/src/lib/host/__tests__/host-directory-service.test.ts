@@ -44,6 +44,7 @@ const localSnapshot: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 
 const localSnapshotNewEndpoint: LocalHostSnapshot = {
@@ -192,6 +193,7 @@ describe("HostDirectoryService", () => {
     const renamedSnapshot: LocalHostSnapshot = {
       ...localSnapshot,
       displayName: "Design Studio",
+      availability: "available",
     };
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
@@ -2549,6 +2551,146 @@ describe("HostDirectoryService", () => {
           description: `${rememberedRemoteHostEntry.label} is available again.`,
         },
       );
+    });
+  });
+});
+
+/**
+ * Boot-ordering convergence (int #48).
+ *
+ * The 2026-08-11 lock was not reproducible on demand: one launch of the same
+ * install came up locked and STAYED locked through a renderer reload, the next
+ * came up clean. That is the signature of a startup race whose bad outcome
+ * LATCHES - and the latch here is an ask that happens exactly once.
+ *
+ * `start()` asks the shell for this machine's durable host id a single time.
+ * The ask crosses an IPC boundary with `retry: false`, its answer is cacheable
+ * for a minute, and on a fresh profile there is no persisted fallback - so
+ * `null` is an ordinary outcome, and it used to be permanent for the life of
+ * the app instance. A null id means `snapshot()` cannot recognise the
+ * registry's twin of this machine, so the twin is published verbatim:
+ * `kind: "remote"`, relay URL, and whatever its presence lease says. Right
+ * after the host was down - precisely when this path runs - that lease reads
+ * expired, and the row for the user's own working machine is a remote host
+ * marked unavailable. Every chat it owns locks to a published copy, and
+ * nothing re-asks.
+ *
+ * These tests pin CONVERGENCE rather than ordering: whichever input is late,
+ * the directory has to arrive at the truth on its own.
+ */
+describe("HostDirectoryService boot-ordering convergence", () => {
+  const LOCAL_HOST_ID = "desktop-pid-123";
+
+  /** The registry's view of THIS machine while its host is down. */
+  const expiredOwnTwin: HostDirectoryEntry = {
+    hostId: LOCAL_HOST_ID,
+    label: "hardiks-macbook",
+    kind: "remote",
+    websocketUrl: "wss://relay.traycer.invalid/attach",
+    version: "1.2.3",
+    status: "unavailable",
+  };
+
+  it("re-asks for this machine's id when the first ask came back null, and stops claiming its own host is a dead remote", async () => {
+    // The shell cannot answer yet (host still booting, or the IPC query
+    // resolved null and cached it).
+    let shellHostId: string | null = null;
+    const directory = makeDirectory({
+      runnerHost: makeHost(null),
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: () => Promise.resolve(shellHostId),
+    });
+
+    await directory.start();
+
+    // The latched state: our own machine, presented as an unavailable REMOTE
+    // row. Both of `useHostReachability`'s protections miss this shape - the
+    // directory is not empty, and the row is not a local one - so it reports
+    // `unreachable` and locks the user's chats.
+    const beforeReseed = await directory.list();
+    expect(beforeReseed).toHaveLength(1);
+    expect(beforeReseed[0].kind).toBe("remote");
+    expect(beforeReseed[0].status).toBe("unavailable");
+
+    // The shell can answer now. Nothing else about the world changed - no new
+    // snapshot, no registry change - so only a re-ask can converge this.
+    shellHostId = LOCAL_HOST_ID;
+    await directory.refresh();
+
+    const afterReseed = await directory.list();
+    expect(afterReseed).toHaveLength(1);
+    // Recognised as this machine: non-dialable (so nothing can reach for the
+    // relay against our own host) and LOCAL, which is the shape
+    // `useHostReachability` reads as "not published yet" rather than "dead",
+    // and which keeps the local provisioning lifecycle armed.
+    expect(afterReseed[0].kind).toBe("local");
+    expect(afterReseed[0].websocketUrl).toBeNull();
+  });
+
+  it("stops re-asking once the id is known", async () => {
+    const seeder = vi.fn(() => Promise.resolve(LOCAL_HOST_ID));
+    const directory = makeDirectory({
+      runnerHost: makeHost(null),
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: seeder,
+    });
+
+    await directory.start();
+    const asksAfterStart = seeder.mock.calls.length;
+    await directory.refresh();
+    await directory.refresh();
+
+    // Self-retiring: the repair costs one ask, not one per poll forever.
+    expect(seeder.mock.calls.length).toBe(asksAfterStart);
+  });
+
+  it("converges to the live local host whenever its snapshot finally arrives", async () => {
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: () => Promise.resolve(LOCAL_HOST_ID),
+    });
+
+    await directory.start();
+    expect((await directory.list())[0].websocketUrl).toBeNull();
+
+    // Late arrival - the case the whole ticket is about. The local arm must
+    // win over the registry twin and the row must become dialable.
+    host.setLocalHost(localSnapshot);
+
+    const converged = await directory.list();
+    expect(converged).toHaveLength(1);
+    expect(converged[0]).toMatchObject({
+      hostId: LOCAL_HOST_ID,
+      kind: "local",
+      status: "available",
+      websocketUrl: localSnapshot.websocketUrl,
+    });
+  });
+
+  it("carries a busy shell verdict through as a reachable local entry", async () => {
+    // A host that lost a probe is still the host: dialable URL, `busy` status.
+    // Publishing it as anything else is what put the registry twin - and its
+    // hardcoded `unavailable` - in front of the user in the first place.
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [] }),
+      localHostIdSeeder: () => Promise.resolve(LOCAL_HOST_ID),
+    });
+    await directory.start();
+
+    host.setLocalHost({ ...localSnapshot, availability: "busy" });
+
+    expect((await directory.list())[0]).toMatchObject({
+      kind: "local",
+      status: "busy",
+      websocketUrl: localSnapshot.websocketUrl,
     });
   });
 });

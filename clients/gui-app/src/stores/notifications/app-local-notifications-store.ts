@@ -114,7 +114,7 @@ export interface AppLocalNotificationsState {
   activateIdentity: (userId: string) => void;
   deactivateIdentity: () => void;
   /** Discards the current identity's rows while keeping that identity active
-   * for new local arrivals. Cloud-only mode must have no local shadow feed. */
+   * for new renderer-local arrivals. */
   reset: () => void;
   upsert: (entry: AppLocalNotificationInput) => void;
   upsertReplacing: (entry: AppLocalNotificationInput) => void;
@@ -846,6 +846,7 @@ export function emitTerminalClosedNotification(input: {
 export function emitTerminalCrashedNotification(input: {
   readonly instanceId: string;
   readonly hostId: string;
+  readonly terminalName: string;
   readonly target: TerminalNotificationTarget;
   readonly cause: "exit" | "recovery-exhausted";
 }): void {
@@ -863,8 +864,8 @@ export function emitTerminalCrashedNotification(input: {
     sourceRef: input.instanceId,
     payload: input.target,
     message: isRecoveryExhausted
-      ? "Terminal connection could not be recovered."
-      : "Terminal exited unexpectedly.",
+      ? `${input.terminalName} could not be reconnected.`
+      : `${input.terminalName} exited unexpectedly.`,
     detail: isRecoveryExhausted
       ? "Reconnect manually to try again."
       : "The terminal process ended with an error.",

@@ -44,6 +44,7 @@ const REMOTE_HOST_ID = "remote-host-x";
 
 const localSnapshot: LocalHostSnapshot = {
   hostId: LOCAL_HOST_ID,
+  availability: "available",
   websocketUrl: "ws://127.0.0.1:4917/rpc",
   version: "1.2.3",
   pid: 4242,
@@ -225,9 +226,18 @@ function activeDirectory(): HostDirectoryService {
  * point of these tests is that intent survives it anyway.
  */
 function breakStorageWrites(): void {
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+  const throwQuota = (): void => {
     throw new DOMException("QuotaExceededError", "QuotaExceededError");
-  });
+  };
+  // Two storage implementations exist across Node versions: real jsdom
+  // Storage (methods live on Storage.prototype), and - when jsdom's
+  // localStorage is unusable at setup, as under Node >= 26.5 - the suite
+  // shim from test-browser-apis.ts, a plain object whose `setItem` is an OWN
+  // property that a prototype spy never sees. Break whichever one is live.
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(throwQuota);
+  if (Object.prototype.hasOwnProperty.call(window.localStorage, "setItem")) {
+    vi.spyOn(window.localStorage, "setItem").mockImplementation(throwQuota);
+  }
 }
 
 /**

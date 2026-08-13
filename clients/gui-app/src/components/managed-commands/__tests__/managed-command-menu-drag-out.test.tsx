@@ -245,6 +245,7 @@ beforeEach(() => {
     onAuthError: null,
   });
   chatSession = installManagedCommandChatSession({
+    hostId: HOST_ID,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
   });

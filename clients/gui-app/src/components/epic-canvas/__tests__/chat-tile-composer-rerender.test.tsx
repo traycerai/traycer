@@ -226,6 +226,7 @@ function props(
     epicId: "epic-1",
     viewTabId: "tab-1",
     chatId: "chat-1",
+    hostId: "host-1",
     runtime: RUNTIME,
     access: ACCESS,
     turn,

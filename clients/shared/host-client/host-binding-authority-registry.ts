@@ -1,5 +1,5 @@
 import type { HostRequestAuthority } from "../host-transport/host-messenger";
-import type { HostDirectoryEntry } from "./host-directory";
+import { isHostReachable, type HostDirectoryEntry } from "./host-directory";
 
 /** Immutable binding portion of a request authority, shared per host id. */
 export interface HostBindingAuthority {
@@ -20,7 +20,16 @@ interface HostTransportSnapshot {
   readonly kind: HostDirectoryEntry["kind"];
   readonly websocketUrl: string | null;
   readonly version: string | null;
-  readonly status: HostDirectoryEntry["status"];
+  /**
+   * Dialability, not the raw `status`. A binding is renewed whenever any field
+   * here changes, and renewing ABORTS the previous generation's in-flight
+   * requests - so folding in the raw status would make an available <-> busy
+   * flicker (a probe result, not a transport change) cancel live work and
+   * throw `StaleHostBindingAuthorityError` at routed callers holding a
+   * still-perfectly-good entry. Reachability is the part that actually
+   * describes the transport.
+   */
+  readonly reachable: boolean;
 }
 
 /** A routed entry no longer describes the directory's current transport. */
@@ -99,7 +108,7 @@ function snapshot(entry: HostDirectoryEntry): HostTransportSnapshot {
     kind: entry.kind,
     websocketUrl: entry.websocketUrl,
     version: entry.version,
-    status: entry.status,
+    reachable: isHostReachable(entry.status),
   };
 }
 
@@ -119,6 +128,6 @@ function sameSnapshot(
     left.kind === right.kind &&
     left.websocketUrl === right.websocketUrl &&
     left.version === right.version &&
-    left.status === right.status
+    left.reachable === right.reachable
   );
 }

@@ -185,7 +185,20 @@ describe("host binding survives restart", () => {
     expect(result.current.hostLabel).toBe(SOURCE_HOST);
   });
 
-  it("useHostReachability reports `unreachable` when the source host is in the list but offline", () => {
+  it("useHostReachability reports `host-starting` for this machine's not-yet-published local row", () => {
+    // This exact shape - `kind: "local"` with no `websocketUrl` - is produced
+    // by one thing only: `HostDirectoryService.snapshot()` standing the
+    // registry's twin of THIS machine in for a local snapshot that has not
+    // arrived. It used to assert `unreachable`, and int #48 is why that had to
+    // change: the substitution fires for boot, for a restart, and for a host
+    // merely busy enough to lose a probe, so a verdict of "dead" locked every
+    // chat on a demonstrably healthy machine to its published copy.
+    //
+    // `host-starting` is the same answer the empty-directory arm has given
+    // since 2026-07-14 for the same unknowable state; the twin just makes the
+    // directory non-empty so that arm cannot see it. This does not weaken the
+    // 2026-08-08 protection either - with no `websocketUrl` there is nothing
+    // to dial, so no tile can spin against a corpse.
     directoryEntries.current = [
       {
         hostId: SOURCE_HOST,
@@ -199,8 +212,28 @@ describe("host binding survives restart", () => {
 
     const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
 
-    expect(result.current.status).toBe("unreachable");
+    expect(result.current.status).toBe("host-starting");
     expect(result.current.hostLabel).toBe("Local");
+  });
+
+  it("useHostReachability still reports `unreachable` for a dialable host marked unavailable", () => {
+    // The 2026-08-08 guard proper: a host the directory can still describe -
+    // it has an endpoint - and explicitly marks unavailable is high-confidence
+    // evidence of death, and must keep locking.
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Local",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5001/rpc",
+        version: "1.0.0",
+        status: "unavailable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("unreachable");
   });
 
   it("useHostReachability reports `reachable` when the bound host is back online", () => {

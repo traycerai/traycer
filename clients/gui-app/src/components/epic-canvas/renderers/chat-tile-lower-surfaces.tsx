@@ -1,4 +1,5 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Lock } from "lucide-react";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -54,6 +55,13 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly chatId: string;
+  /**
+   * The tile's bound host. A prop rather than a `useTabHostId()` read so this
+   * surface stays renderable on its own (several suites mount it directly),
+   * and so the host it resolves chat-session state under is visible at the
+   * boundary like `epicId` and `chatId` already are.
+   */
+  readonly hostId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
   readonly turn: ChatLowerTurnState;
@@ -279,11 +287,14 @@ export function ChatLowerInteractionSurfaces(
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
   // Read here rather than inside the dock: the same count decides the dock's
-  // Background section and the spacing of everything below it.
-  const runningManagedCommandCount = useRunningManagedCommandsForChat(
-    props.epicId,
-    props.chatId,
-  ).length;
+  // Background section and the spacing of everything below it. Scoped to the
+  // tile's bound host - that is the host the tile opened the session under,
+  // and a same-id chat on another machine is a different agent.
+  const runningManagedCommandCount = useRunningManagedCommandsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  }).length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,
@@ -639,9 +650,14 @@ function ComposerSlotShell(props: {
 
 function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
   return (
-    <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      {props.notice ??
-        "Read-only viewer. The agent owner can send prompts and manage this queue."}
+    <div className="flex items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
+      {/* The same lock the sidebar row and tab strip mark read-only chats
+          with, aligned to the first line of a notice that can wrap. */}
+      <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1">
+        {props.notice ??
+          "Read-only viewer. The agent owner can send prompts and manage this queue."}
+      </span>
     </div>
   );
 }

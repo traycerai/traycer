@@ -287,6 +287,7 @@ import {
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
+  epicListChatRecordsV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -427,6 +428,7 @@ import {
   epicCommunicationGraphSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV10,
 } from "@traycer/protocol/host/epic/communication-graph";
+import { hostChatRecordsSubscribeV10 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -5943,6 +5945,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49). Optional and
+  // host-LOCAL for the same reason as the two above: it answers out of this
+  // host's own chat registry, which is the only place those rows exist. A
+  // client talking to a host without it runs doc-only - the record table it
+  // already had before the single-write pivot - so the degrade arm needs no
+  // surface of its own, only the absence of the union.
+  "epic.listChatRecords": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListChatRecordsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "editor.openPaths": {
     1: {
       latestMinor: 0,
@@ -7663,6 +7684,26 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: hostCommunicationGraphCloudFeedSubscribeV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: the chat-RECORD delta push,
+  // freshness counterpart of the `epic.listChatRecords` read. HOST-SCOPED on
+  // purpose - one subscription covers every epic that host has open plus its
+  // own-row changes, which exist outside any epic subscription's lifetime, so
+  // frames name their epic and the client filters. A host that predates it
+  // never advertises it and the client's subscription degrades to
+  // `unsupported`, whose contract is simply that the 20s
+  // `epic.listChatRecords` poll remains the record table's only refresh -
+  // latency, never missing rows. Never add it to the unary released floor -
+  // that list is fail-closed on the name set.
+  "host.chatRecords.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostChatRecordsSubscribeV10,
         },
       },
     },
