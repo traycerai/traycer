@@ -84,9 +84,31 @@ describe("indicatorRequests", () => {
 
     const requests = indicatorRequests(epicIds, chatIds);
 
-    expect(requests).toHaveLength(4);
-    expect(requests.every((request) => request.epicIds.length > 0)).toBe(true);
-    expect(requests.every((request) => request.chatIds.length > 0)).toBe(true);
+    const sortedEpicIds = [...epicIds].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const sortedChatIds = [...chatIds].sort((left, right) =>
+      left.localeCompare(right),
+    );
+
+    expect(requests).toEqual([
+      {
+        epicIds: sortedEpicIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+        chatIds: sortedChatIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      },
+      {
+        epicIds: sortedEpicIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+        chatIds: sortedChatIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      },
+      {
+        epicIds: sortedEpicIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+        chatIds: sortedChatIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      },
+      {
+        epicIds: sortedEpicIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+        chatIds: sortedChatIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      },
+    ]);
   });
 });
 

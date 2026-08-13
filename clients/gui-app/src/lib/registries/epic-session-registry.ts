@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useMemo,
+  useRef,
   useSyncExternalStore,
 } from "react";
 import {
@@ -89,10 +90,6 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
 }
 
 const EMPTY_LIVE_CHAT_IDS: ReadonlyArray<string> = [];
-const liveChatSnapshotCache = new Map<
-  string,
-  { readonly signature: string; readonly chatIds: ReadonlyArray<string> }
->();
 
 /**
  * The chat ids that still exist in the currently-live sessions for a set of
@@ -108,10 +105,10 @@ export function useLiveChatIdsForEpics(
       [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
     [epicIds],
   );
-  const cacheKey = useMemo(
-    () => JSON.stringify(canonicalEpicIds),
-    [canonicalEpicIds],
-  );
+  const snapshotCache = useRef<{
+    readonly signature: string;
+    readonly chatIds: ReadonlyArray<string>;
+  } | null>(null);
   const subscribe = useCallback(
     (listener: () => void): (() => void) => {
       let storeUnsubscribers: Array<() => void> = [];
@@ -142,11 +139,11 @@ export function useLiveChatIdsForEpics(
       left.localeCompare(right),
     );
     const signature = JSON.stringify(snapshot);
-    const cached = liveChatSnapshotCache.get(cacheKey);
+    const cached = snapshotCache.current;
     if (cached?.signature === signature) return cached.chatIds;
-    liveChatSnapshotCache.set(cacheKey, { signature, chatIds: snapshot });
+    snapshotCache.current = { signature, chatIds: snapshot };
     return snapshot;
-  }, [cacheKey, canonicalEpicIds]);
+  }, [canonicalEpicIds]);
   return useSyncExternalStore(
     subscribe,
     getSnapshot,
