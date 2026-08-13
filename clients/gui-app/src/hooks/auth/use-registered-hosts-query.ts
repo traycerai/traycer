@@ -32,6 +32,7 @@ const REGISTERED_HOSTS_POLL_MS = 60_000;
 
 function registeredHostsQueryOptions(
   auth: AuthService | null,
+  userId: string | null,
   enabled: boolean,
   pollMs: number | false,
 ) {
@@ -46,12 +47,28 @@ function registeredHostsQueryOptions(
     });
   }
   return queryOptions<HostListResponse | null>({
-    queryKey: authQueryKeys.registeredHosts(auth),
+    queryKey: authQueryKeys.registeredHosts(auth, userId),
     // An ambient reader: this query runs on a poll, on focus, and on mount,
     // never from inside an auth transition, so the live era IS the era it is
     // asking about. Read at call time rather than closed over, so a refetch
     // after a rotation asks under the era it is actually running in.
-    queryFn: () => auth.fetchRegisteredHosts(auth.currentAuthEra()),
+    queryFn: async () => {
+      const era = auth.currentAuthEra();
+      const response = await auth.fetchRegisteredHosts(era);
+      if (response === null && era.identity !== null) {
+        // Same classification `buildDefaultRemoteFetcher` applies for the
+        // directory: a refresh issued for a signed-in era can only read
+        // `null` as the registry 401-ing a bearer that is still current — a
+        // transient failure, not an answer. Committing it as data would
+        // replace the cached host list with "no hosts", stripping registry
+        // metadata (platform, update controls) from every scope reader until
+        // a later poll succeeds. Throw so TanStack keeps the last successful
+        // data and retries. A signed-out era's `null` stays data: that is the
+        // authoritative empty state the panels render.
+        throw new Error("Host registry refused a still-current credential.");
+      }
+      return response;
+    },
     enabled,
     refetchInterval: enabled ? pollMs : false,
     refetchOnWindowFocus: true,
@@ -77,7 +94,8 @@ export function useRegisteredHosts(): UseQueryResult<HostListResponse | null> {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
-  return useQuery(registeredHostsQueryOptions(auth, signedIn, false));
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  return useQuery(registeredHostsQueryOptions(auth, userId, signedIn, false));
 }
 
 /**
@@ -100,7 +118,13 @@ export function useRegisteredHostsPollLiveness(): void {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   useQuery(
-    registeredHostsQueryOptions(auth, signedIn, REGISTERED_HOSTS_POLL_MS),
+    registeredHostsQueryOptions(
+      auth,
+      userId,
+      signedIn,
+      REGISTERED_HOSTS_POLL_MS,
+    ),
   );
 }
