@@ -29,6 +29,7 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import {
   commGraphAgentIdsAsOfCursor,
+  commGraphCreationCursorByAgentId,
   commGraphCursorMatchesEvent,
   commGraphEventKey,
   commGraphEventsAsOfCursor,
@@ -70,9 +71,13 @@ export function useCommGraphTimelineProjection(
     () => commGraphEventsAsOfCursor(events, cursor),
     [cursor, events],
   );
+  const creationCursorByAgentId = useMemo(
+    () => commGraphCreationCursorByAgentId(events),
+    [events],
+  );
   const visibleAgentIds = useMemo(
-    () => commGraphAgentIdsAsOfCursor(agents, cursor),
-    [agents, cursor],
+    () => commGraphAgentIdsAsOfCursor(agents, cursor, creationCursorByAgentId),
+    [agents, creationCursorByAgentId, cursor],
   );
 
   // WHAT arrived is decided by the subscription layer (it owns the per-host

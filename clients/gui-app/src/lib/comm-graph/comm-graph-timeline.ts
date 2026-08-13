@@ -124,8 +124,31 @@ export function commGraphUpperBoundIndex(
 }
 
 /**
- * Agent ids that exist as of the cursor - an agent appears on the canvas at its
- * `createdAt`, so a replay does not show agents that had not been created yet.
+ * The first captured creation row for each agent. The timeline array is already
+ * in its canonical total order, so keeping the first row makes the map an exact
+ * event-position boundary even when multiple rows share a millisecond.
+ */
+export function commGraphCreationCursorByAgentId(
+  events: ReadonlyArray<CommGraphEvent>,
+): ReadonlyMap<string, CommGraphTimeCursor> {
+  const creationCursorByAgentId = new Map<string, CommGraphTimeCursor>();
+  for (const event of events) {
+    if (event.kind !== "agent_created") continue;
+    if (event.receiverAgentId === null) continue;
+    if (creationCursorByAgentId.has(event.receiverAgentId)) continue;
+    creationCursorByAgentId.set(
+      event.receiverAgentId,
+      commGraphCursorForEvent(event),
+    );
+  }
+  return creationCursorByAgentId;
+}
+
+/**
+ * Agent ids that exist as of the cursor. A captured `agent_created` row is the
+ * authoritative reveal boundary because the cursor names an ordered event, not
+ * merely a millisecond. Older histories may have no such row, so those agents
+ * retain the `createdAt` fallback instead of disappearing from playback.
  *
  * Only the RENDERED set is narrowed; the layout keeps working from the full
  * agent list so positions do not jump around as playback reveals nodes.
@@ -133,11 +156,19 @@ export function commGraphUpperBoundIndex(
 export function commGraphAgentIdsAsOfCursor(
   agents: ReadonlyArray<{ readonly id: string; readonly createdAt: number }>,
   cursor: CommGraphTimeCursor | null,
+  creationCursorByAgentId: ReadonlyMap<string, CommGraphTimeCursor>,
 ): ReadonlySet<string> {
   if (cursor === null) return new Set(agents.map((agent) => agent.id));
   const visible = new Set<string>();
   for (const agent of agents) {
-    if (agent.createdAt <= cursor.timestamp) visible.add(agent.id);
+    const creationCursor = creationCursorByAgentId.get(agent.id);
+    if (
+      creationCursor === undefined
+        ? agent.createdAt <= cursor.timestamp
+        : compareCommGraphSortKeys(creationCursor, cursor) <= 0
+    ) {
+      visible.add(agent.id);
+    }
   }
   return visible;
 }
