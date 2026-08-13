@@ -56,6 +56,13 @@ function MyAgentsSharingSectionBody(props: {
   );
   const isOn = deriveChatSharingDefaultOn(ownChats);
   const privateCount = countOwnPrivateChats(ownChats);
+  // The confirm copy counts the chats about to become visible, and the
+  // mutation always sends `applyToExisting: true`. Until the list has
+  // actually ANSWERED, that count is a guess of zero — the copy would claim
+  // "future chats only" while the request exposes every existing private
+  // chat. A loading, failed, or disabled list therefore keeps the switch
+  // inert; `isSuccess` is the only state whose count is evidence.
+  const canArm = cloudChats.isSuccess;
 
   const confirm = sharingDefaultConfirmCopy(pendingDirection, privateCount);
 
@@ -94,9 +101,9 @@ function MyAgentsSharingSectionBody(props: {
         <Switch
           id="epic-sharing-my-agents-switch"
           checked={isOn}
-          disabled={sharingInFlight}
+          disabled={sharingInFlight || !canArm}
           onCheckedChange={(checked) => {
-            if (sharingInFlight) return;
+            if (sharingInFlight || !canArm) return;
             setPendingDirection(checked ? "task" : "private");
           }}
           data-testid="epic-sharing-my-agents-switch"

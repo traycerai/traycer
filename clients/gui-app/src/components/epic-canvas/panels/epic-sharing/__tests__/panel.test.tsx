@@ -57,6 +57,7 @@ interface TestState {
     readonly visibility: "private" | "task";
     readonly isOwnedByViewer: boolean;
   }>;
+  cloudChatListSuccess: boolean;
 }
 
 const testState = vi.hoisted<TestState>(() => ({
@@ -76,6 +77,7 @@ const testState = vi.hoisted<TestState>(() => ({
   sharingInFlight: false,
   setSharingDefault: { mutate: vi.fn(), isPending: false },
   ownCloudChats: [],
+  cloudChatListSuccess: true,
 }));
 
 vi.mock("sonner", () => ({
@@ -135,12 +137,20 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
     >();
   return {
     ...actual,
-    useCloudChatList: () => ({
-      data: { chats: testState.ownCloudChats },
-      isEnabled: true,
-      isSuccess: true,
-      isError: false,
-    }),
+    useCloudChatList: () =>
+      testState.cloudChatListSuccess
+        ? {
+            data: { chats: testState.ownCloudChats },
+            isEnabled: true,
+            isSuccess: true,
+            isError: false,
+          }
+        : {
+            data: undefined,
+            isEnabled: true,
+            isSuccess: false,
+            isError: false,
+          },
     useCloudChatViewerId: () => "user-1",
   };
 });
@@ -245,6 +255,7 @@ function resetTestState(): void {
   testState.sharingInFlight = false;
   testState.setSharingDefault = { mutate: vi.fn(), isPending: false };
   testState.ownCloudChats = [];
+  testState.cloudChatListSuccess = true;
 }
 
 function renderSharingPanel(): void {
@@ -529,6 +540,24 @@ describe("<SharingPanel /> My agents", () => {
   it("hides the section when the host does not advertise the RPC", () => {
     renderSharingPanel();
     expect(screen.queryByTestId("epic-sharing-my-agents-section")).toBeNull();
+  });
+
+  it("keeps the switch inert until the cloud chat list has answered", () => {
+    // The confirm copy counts the chats about to be exposed and the request
+    // always applies to existing rows - so an unanswered list must not be
+    // able to arm the toggle with a count of zero.
+    testState.sharingDefaultSupported = true;
+    testState.cloudChatListSuccess = false;
+    testState.ownCloudChats = [
+      { visibility: "private", isOwnedByViewer: true },
+    ];
+
+    renderSharingPanel();
+
+    const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
   });
 
   it("shows the section to a viewer and derives on from any task-visible own row", () => {

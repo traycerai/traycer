@@ -623,7 +623,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
-  const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, null);
+  // Epic-session-bound like every other sharing fact in this tree: the
+  // shared-with-task glyph must reflect the tab's owning host, not whichever
+  // host the app is active on.
+  const sessionHostClient = useEpicSessionHostClient();
+  const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
+    client: sessionHostClient,
+    poll: undefined,
+    staleTime: undefined,
+  });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
   const originRootIds = useMemo(
     () => applyVisibleFilter(allRootIds, originVisibleIds),
@@ -737,7 +745,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // hook is shipped and is not this ticket. The redirect map is host-LOCAL
   // (only the epic's host knows C1→C2), so reading it from the active host
   // would make "Make private" mutate the wrong lineage after a fork.
-  const sessionHostClient = useEpicSessionHostClient();
   const sharingCloudChats = useCloudChatList({
     client: sessionHostClient,
     taskId: epicId,
