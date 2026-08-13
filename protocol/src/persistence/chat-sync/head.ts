@@ -52,12 +52,17 @@ import { z } from "zod";
  *
  * ## Part addresses are content addresses
  *
- * A part is named by `(sha256, byteLength)` and by nothing else. There is no
- * key, no storage generation, no per-part seq: the key layout is derived from
+ * The tenant envelope names a part by `(sha256, byteLength)` and by nothing
+ * else. There is no key, no storage generation: the key layout is derived from
  * the hash under a `(task, tenant kind)` prefix and is a versioned spec readers
  * never parse. That is what makes a publish a hash-diff against the previous
  * head - unchanged cohorts keep their addresses and are not re-uploaded - and
  * what makes retries converge on the same object with no session state.
+ *
+ * The payload's message / event cohort entries carry the same address plus
+ * the seq range they cover (`firstSeq` / `lastSeq`). That cut plan is
+ * chat-domain data and MUST NOT leak into the envelope - the sync layer
+ * interprets nothing but the address. `hostPrivate` stays address-only.
  *
  * ## Graduation
  *
@@ -80,14 +85,92 @@ import { z } from "zod";
  * last-write-wins.
  */
 
-// ---- Part addresses ---------------------------------------------------- //
+// ---- Part addresses and the cut plan ----------------------------------- //
 
-export const chatHeadPartSchema = z.object({
+/**
+ * The tenant-envelope address: content hash and length, nothing else.
+ *
+ * This is the only shape the sync server reads. Domain fields (seq ranges,
+ * CDC params) stay on the payload.
+ */
+export const chatHeadAddressPartSchema = z.object({
   /** Lowercase hex SHA-256 of the part's canonical bytes. Its whole address. */
   sha256: sha256HexSchema,
   byteLength: z.number().int().nonnegative(),
 });
+export type ChatHeadAddressPart = z.infer<typeof chatHeadAddressPartSchema>;
+
+/**
+ * A head-named part as the payload carries it.
+ *
+ * 1.1 extends the address with an optional seq range so a publisher can
+ * plan the next cut from the predecessor head. Both bounds are present
+ * together or absent together (`refineChatHeadPartRanges`). 1.0 heads omit
+ * them; the 1.1 writer requires them on message / event cohorts.
+ */
+export const chatHeadPartSchema = chatHeadAddressPartSchema.extend({
+  firstSeq: z.number().int().nonnegative().optional(),
+  lastSeq: z.number().int().nonnegative().optional(),
+});
 export type ChatHeadPart = z.infer<typeof chatHeadPartSchema>;
+
+/** Writer-side cohort: the 1.1 cut plan is required. */
+export const chatHeadCohortPartSchema = chatHeadAddressPartSchema
+  .extend({
+    firstSeq: z.number().int().nonnegative(),
+    lastSeq: z.number().int().nonnegative(),
+  })
+  .superRefine((part, ctx) => {
+    if (part.firstSeq > part.lastSeq) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["firstSeq"],
+        message: `firstSeq ${part.firstSeq} cannot exceed lastSeq ${part.lastSeq}`,
+      });
+    }
+  });
+export type ChatHeadCohortPart = z.infer<typeof chatHeadCohortPartSchema>;
+
+/** Algorithm id recorded in the head so a cut is reproducible forever. */
+export const CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1 = "fastcdc-gear-v1" as const;
+
+/**
+ * Content-defined-chunking parameters the writer used to cut this head.
+ *
+ * `mask` is the unsigned integer AND-mask of the rolling hash: a record
+ * boundary is a cut candidate when `(hash & mask) === 0`. `min` / `target`
+ * / `max` are cohort sizes in bytes; `min <= target <= max`.
+ */
+export const chatHeadCdcParamsSchema = z
+  .object({
+    algorithm: z.literal(CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1),
+    mask: z.number().int().nonnegative(),
+    target: z.number().int().positive(),
+    min: z.number().int().positive(),
+    max: z.number().int().positive(),
+  })
+  .superRefine((cdc, ctx) => {
+    if (cdc.min > cdc.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["min"],
+        message: `cdc.min ${cdc.min} cannot exceed cdc.target ${cdc.target}`,
+      });
+    }
+    if (cdc.target > cdc.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: `cdc.target ${cdc.target} cannot exceed cdc.max ${cdc.max}`,
+      });
+    }
+  });
+export type ChatHeadCdcParams = z.infer<typeof chatHeadCdcParamsSchema>;
+
+/** Address projection used when deriving the tenant envelope. */
+export function chatHeadPartAddress(part: ChatHeadPart): ChatHeadAddressPart {
+  return { sha256: part.sha256, byteLength: part.byteLength };
+}
 
 // ---- The record -------------------------------------------------------- //
 
@@ -139,6 +222,13 @@ export const chatHeadRecordShape = {
    * existed parses as "no restriction".
    */
   minReaderVersion: schemaVersionSchema.nullable().default(null),
+  /**
+   * CDC parameters that produced this head's cut plan.
+   *
+   * Optional on the shared / reader shape so a 1.0 head still parses. The
+   * 1.1 writer requires it (`chatHeadWriterRecordShape`).
+   */
+  cdc: chatHeadCdcParamsSchema.optional(),
   core: chatHeadCoreSchema,
   /**
    * Message-cohort shards, in transcript order. Assembly concatenates them in
@@ -155,7 +245,19 @@ export const chatHeadRecordShape = {
   /** Opaque host state, inline. `null` once it has graduated. */
   hostPrivate: chatSyncHostPrivateSchema.nullable(),
   /** The graduated host-private part, or `null` while it is inline. */
-  hostPrivateShard: chatHeadPartSchema.nullable(),
+  hostPrivateShard: chatHeadAddressPartSchema.nullable(),
+} as const;
+
+/**
+ * Writer shape for the registered 1.1 contract: CDC params and per-cohort
+ * seq ranges are required. The reader shape above stays additive so a 1.0
+ * head still opens.
+ */
+export const chatHeadWriterRecordShape = {
+  ...chatHeadRecordShape,
+  cdc: chatHeadCdcParamsSchema,
+  messageShards: z.array(chatHeadCohortPartSchema),
+  eventShards: z.array(chatHeadCohortPartSchema),
 } as const;
 
 /**
@@ -294,6 +396,64 @@ export function refineMinReaderVersion(
   }
 }
 
+/**
+ * Seq ranges on a part are paired, ordered, and never appear on hostPrivate.
+ *
+ * A 1.0 head omits them; a 1.1 writer requires them on message / event
+ * cohorts via `chatHeadCohortPartSchema`. Either way a lone bound or a
+ * reversed range is corrupt, and a host-private part is not a seq-ranged
+ * cohort.
+ */
+export function refineChatHeadPartRanges(
+  head: {
+    readonly messageShards: readonly ChatHeadPart[];
+    readonly eventShards: readonly ChatHeadPart[];
+    readonly hostPrivateShard: ChatHeadPart | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const check = (part: ChatHeadPart, path: (string | number)[]): void => {
+    const firstSeq = part.firstSeq;
+    const lastSeq = part.lastSeq;
+    const hasFirst = firstSeq !== undefined;
+    const hasLast = lastSeq !== undefined;
+    if (hasFirst !== hasLast) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: "firstSeq and lastSeq must be paired on a cohort part",
+      });
+      return;
+    }
+    if (firstSeq !== undefined && lastSeq !== undefined && firstSeq > lastSeq) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, "firstSeq"],
+        message: `firstSeq ${firstSeq} cannot exceed lastSeq ${lastSeq}`,
+      });
+    }
+  };
+
+  head.messageShards.forEach((part, index) =>
+    check(part, ["messageShards", index]),
+  );
+  head.eventShards.forEach((part, index) =>
+    check(part, ["eventShards", index]),
+  );
+
+  const hostPrivate = head.hostPrivateShard;
+  if (
+    hostPrivate !== null &&
+    (hostPrivate.firstSeq !== undefined || hostPrivate.lastSeq !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["hostPrivateShard"],
+      message: "A hostPrivate shard is not a seq-ranged cohort",
+    });
+  }
+}
+
 function refineChatHead(
   head: {
     readonly schemaVersion: SchemaVersion;
@@ -309,6 +469,7 @@ function refineChatHead(
   refineMinReaderVersion(head, ctx);
   refineChatHeadSections(head, ctx);
   refineChatHeadPartUniqueness(head, ctx);
+  refineChatHeadPartRanges(head, ctx);
 }
 
 /**
@@ -318,7 +479,7 @@ function refineChatHead(
  */
 export const chatHeadSchema = withResidualCapture(
   "head",
-  chatHeadRecordShape,
+  chatHeadWriterRecordShape,
 ).superRefine(refineChatHead);
 
 /**
@@ -333,7 +494,7 @@ export const chatHeadReaderSchema = reprojectResidualCapture({
 
 /** The persisted shape: declared fields, no `residual`, unmodeled keys open. */
 export const chatHeadStorageSchema = storageProjection({
-  ...chatHeadRecordShape,
+  ...chatHeadWriterRecordShape,
   core: chatHeadCoreStorageSchema,
   hostPrivate: chatSyncHostPrivateStorageSchema.nullable(),
 });
@@ -348,6 +509,7 @@ export type ChatHeadRecord = {
   readonly throughRecordSeq: number;
   readonly capturedAt: number;
   readonly minReaderVersion: SchemaVersion | null;
+  readonly cdc?: ChatHeadCdcParams;
   readonly core: ChatHeadCore;
   // Array element types match what Zod infers from the registered schema
   // exactly, not a `readonly` narrowing of it: `chat-sync-record-shape.test.ts`
@@ -377,7 +539,7 @@ export type ChatHeadRecord = {
  * hash the result of this function.
  */
 export function encodeChatHead(record: ChatHeadRecord): JsonObject {
-  const { core, events, hostPrivate, residual, ...declared } = record;
+  const { core, events, hostPrivate, residual, cdc, ...declared } = record;
 
   return canonicalizeJsonObject(
     mergeResidual(
@@ -387,12 +549,13 @@ export function encodeChatHead(record: ChatHeadRecord): JsonObject {
           major: CHAT_SYNC_SCHEMA_VERSION.major,
           minor: record.schemaVersion.minor,
         },
-        messageShards: record.messageShards.map((part) => ({ ...part })),
-        eventShards: record.eventShards.map((part) => ({ ...part })),
+        ...(cdc === undefined ? {} : { cdc: encodeCdc(cdc) }),
+        messageShards: record.messageShards.map(encodeChatHeadPart),
+        eventShards: record.eventShards.map(encodeChatHeadPart),
         hostPrivateShard:
           record.hostPrivateShard === null
             ? null
-            : { ...record.hostPrivateShard },
+            : chatHeadPartAddress(record.hostPrivateShard),
         core: encodeCore(core),
         events: events === null ? null : events.map((event) => event.raw),
         hostPrivate:
@@ -401,6 +564,27 @@ export function encodeChatHead(record: ChatHeadRecord): JsonObject {
       residual,
     ),
   );
+}
+
+function encodeCdc(cdc: ChatHeadCdcParams): JsonObject {
+  return {
+    algorithm: cdc.algorithm,
+    mask: cdc.mask,
+    target: cdc.target,
+    min: cdc.min,
+    max: cdc.max,
+  };
+}
+
+function encodeChatHeadPart(part: ChatHeadPart): JsonObject {
+  const encoded: JsonObject = chatHeadPartAddress(part);
+  if (part.firstSeq !== undefined) {
+    encoded.firstSeq = part.firstSeq;
+  }
+  if (part.lastSeq !== undefined) {
+    encoded.lastSeq = part.lastSeq;
+  }
+  return encoded;
 }
 
 function encodeCore(core: ChatHeadCore): JsonObject {
@@ -445,6 +629,18 @@ export function listChatHeadParts(head: {
     ...head.eventShards,
     ...(head.hostPrivateShard === null ? [] : [head.hostPrivateShard]),
   ];
+}
+
+/**
+ * Envelope projection of `listChatHeadParts`: addresses only, in the same
+ * order. This is what the sync layer sees.
+ */
+export function listChatHeadPartAddresses(head: {
+  readonly messageShards: readonly ChatHeadPart[];
+  readonly eventShards: readonly ChatHeadPart[];
+  readonly hostPrivateShard: ChatHeadPart | null;
+}): readonly ChatHeadAddressPart[] {
+  return listChatHeadParts(head).map(chatHeadPartAddress);
 }
 
 // ---- The head DOCUMENT: tenant envelope + opaque payload ---------------- //
@@ -509,7 +705,7 @@ export function encodeChatHeadDocument(record: ChatHeadRecord): JsonObject {
   // a hand-built record's residual bag unable to survive into the document.
   return canonicalizeJsonObject(
     mergeResidual(
-      { parts: listChatHeadParts(record).map((part) => ({ ...part })) },
+      { parts: listChatHeadPartAddresses(record).map((part) => ({ ...part })) },
       encodeChatHead(record),
     ),
   );
@@ -632,7 +828,7 @@ export function decodeChatHeadDocument(
     );
   }
 
-  const derived = listChatHeadParts(record.data);
+  const derived = listChatHeadPartAddresses(record.data);
   const mismatch = describeEnvelopeMismatch(declared.data, derived);
   if (mismatch !== null) {
     return corruptDocument("parts-envelope-mismatch", mismatch);
@@ -641,7 +837,7 @@ export function decodeChatHeadDocument(
   return { status: "ok", record: record.data };
 }
 
-const chatHeadPartsEnvelopeSchema = z.array(chatHeadPartSchema);
+const chatHeadPartsEnvelopeSchema = z.array(chatHeadAddressPartSchema);
 
 /**
  * Every own key of the document except the envelope, rebuilt with

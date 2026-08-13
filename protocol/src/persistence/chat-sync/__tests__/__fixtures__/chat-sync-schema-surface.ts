@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 0
+              "const": 1
             }
           },
           "required": [
@@ -67,6 +67,42 @@ export const chatSyncSchemaSurfaceBaseline = {
             {
               "type": "null"
             }
+          ]
+        },
+        "cdc": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string",
+              "const": "fastcdc-gear-v1"
+            },
+            "mask": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "target": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "min": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "max": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "algorithm",
+            "mask",
+            "target",
+            "min",
+            "max"
           ]
         },
         "core": {
@@ -248,11 +284,23 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "firstSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
               "sha256",
-              "byteLength"
+              "byteLength",
+              "firstSeq",
+              "lastSeq"
             ]
           }
         },
@@ -280,11 +328,23 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "firstSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
               "sha256",
-              "byteLength"
+              "byteLength",
+              "firstSeq",
+              "lastSeq"
             ]
           }
         },
@@ -342,6 +402,7 @@ export const chatSyncSchemaSurfaceBaseline = {
         "parentHeadSha256",
         "throughRecordSeq",
         "capturedAt",
+        "cdc",
         "core",
         "messageShards",
         "events",
@@ -364,7 +425,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 0
+              "const": 1
             }
           },
           "required": [
@@ -419,6 +480,43 @@ export const chatSyncSchemaSurfaceBaseline = {
               "type": "null"
             }
           ]
+        },
+        "cdc": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string",
+              "const": "fastcdc-gear-v1"
+            },
+            "mask": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "target": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "min": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "max": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "algorithm",
+            "mask",
+            "target",
+            "min",
+            "max"
+          ],
+          "additionalProperties": false
         },
         "core": {
           "type": "object",
@@ -607,11 +705,23 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "firstSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
               "sha256",
-              "byteLength"
+              "byteLength",
+              "firstSeq",
+              "lastSeq"
             ],
             "additionalProperties": false
           }
@@ -933,11 +1043,23 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "firstSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
               "sha256",
-              "byteLength"
+              "byteLength",
+              "firstSeq",
+              "lastSeq"
             ],
             "additionalProperties": false
           }
@@ -1001,6 +1123,7 @@ export const chatSyncSchemaSurfaceBaseline = {
         "throughRecordSeq",
         "capturedAt",
         "minReaderVersion",
+        "cdc",
         "core",
         "messageShards",
         "events",
@@ -1026,7 +1149,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 0
+              "const": 1
             }
           },
           "required": [
@@ -1101,7 +1224,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 0
+              "const": 1
             }
           },
           "required": [

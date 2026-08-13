@@ -14,6 +14,7 @@ import {
   type JsonObject,
 } from "@traycer/protocol/persistence/chat-sync/json";
 import { serializeChatShard } from "@traycer/protocol/persistence/chat-sync/shard";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   persistenceRecordRegistry,
   type ChatHead,
@@ -48,6 +49,15 @@ const chatShardSchema = getRecordSchema(
 );
 
 export const CHAT_ID = "chat-1";
+
+/** Valid 1.1 CDC params for fixtures; sizes are host choices, not protocol defaults. */
+export const FIXTURE_CDC = {
+  algorithm: "fastcdc-gear-v1",
+  mask: 65_535,
+  target: 65_536,
+  min: 16_384,
+  max: 262_144,
+} as const;
 
 export const textBlock: JsonObject = {
   blockId: "b-text",
@@ -194,7 +204,10 @@ export function persistedShard(fields: {
   readonly hostPrivate: JsonObject | null;
 }): JsonObject {
   return {
-    schemaVersion: { major: 1, minor: 0 },
+    schemaVersion: {
+      major: CHAT_SYNC_SCHEMA_VERSION.major,
+      minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+    },
     chatId: CHAT_ID,
     section: fields.section,
     messages: [...fields.messages],
@@ -331,18 +344,24 @@ export function publishChat(options: {
 }): PublishedChat {
   const bytesByPart = new Map<string, string>();
 
-  const messageShards = [FIRST_COHORT, SECOND_COHORT].map((cohort) => {
+  const messageShards = [FIRST_COHORT, SECOND_COHORT].map((cohort, index) => {
     const published = publishShard(messageShard(cohort));
     bytesByPart.set(published.part.sha256, published.bytes);
-    return published.part;
+    const firstSeq = index === 0 ? 1 : 3;
+    const lastSeq = index === 0 ? 2 : 3;
+    return { ...published.part, firstSeq, lastSeq };
   });
 
   const eventShards: ChatHeadPart[] = [];
   if (options.graduate.events) {
-    for (const cohort of [[knownEvent], [unknownEvent]]) {
+    for (const [index, cohort] of [[knownEvent], [unknownEvent]].entries()) {
       const published = publishShard(eventShard(cohort));
       bytesByPart.set(published.part.sha256, published.bytes);
-      eventShards.push(published.part);
+      eventShards.push({
+        ...published.part,
+        firstSeq: 4 + index,
+        lastSeq: 4 + index,
+      });
     }
   }
 
@@ -354,11 +373,18 @@ export function publishChat(options: {
   }
 
   const wireHead: JsonObject = {
-    schemaVersion: { major: 1, minor: 0 },
+    schemaVersion: {
+      major: CHAT_SYNC_SCHEMA_VERSION.major,
+      minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+    },
     parentHeadSha256: options.parentHeadSha256,
     throughRecordSeq: 42,
     capturedAt: 1_700_000_000_000,
-    minReaderVersion: null,
+    minReaderVersion: {
+      major: CHAT_SYNC_SCHEMA_VERSION.major,
+      minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+    },
+    cdc: { ...FIXTURE_CDC },
     core: {
       chatId: CHAT_ID,
       parentChatId: null,

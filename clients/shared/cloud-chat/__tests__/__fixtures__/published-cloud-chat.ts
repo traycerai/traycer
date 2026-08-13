@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/persistence/chat-sync/json";
 import { serializeChatShard } from "@traycer/protocol/persistence/chat-sync/shard";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import type {
   CloudChatIdentity,
   CloudChatSummary,
@@ -217,7 +218,7 @@ export type PublishedPart = {
  */
 function publishShard(wire: JsonObject, minor: number): Promise<PublishedPart> {
   const text =
-    minor === 0
+    minor === CHAT_SYNC_SCHEMA_VERSION.minor
       ? serializeChatShard(chatShardSchema.parse(wire))
       : canonicalJsonStringify(wire);
   const bytes = utf8Bytes(text);
@@ -242,10 +243,10 @@ export type PublishOptions = {
   /**
    * The minor this publication claims, on the head AND on every shard.
    *
-   * `0` is this build's own contract. Anything higher publishes as a FUTURE
-   * writer - which is the only way to reach the passthrough end to end, and the
-   * only way to state a `minReaderVersion` at all (a minimum may never exceed
-   * the head's own version, so a 1.0 head cannot carry one).
+   * `CHAT_SYNC_SCHEMA_VERSION.minor` is this build's own contract. Anything
+   * higher publishes as a FUTURE writer - which is the only way to reach the
+   * passthrough end to end, and the only way to state a `minReaderVersion`
+   * ahead of this contract.
    */
   readonly payloadMinor: number;
   /** The reader minimum the head states, or `null` for the ordinary case. */
@@ -299,7 +300,7 @@ const RUN_SETTINGS: JsonObject = {
 
 export const DEFAULT_PUBLISH: PublishOptions = {
   cohorts: [FIRST_COHORT, SECOND_COHORT],
-  payloadMinor: 0,
+  payloadMinor: CHAT_SYNC_SCHEMA_VERSION.minor,
   minReaderVersion: null,
   parentHeadSha256: null,
   withFutureFields: false,
@@ -326,6 +327,13 @@ export async function publishCloudChat(
     throughRecordSeq: 42,
     capturedAt: 1_700_000_000_000,
     minReaderVersion: options.minReaderVersion,
+    cdc: {
+      algorithm: "fastcdc-gear-v1",
+      mask: 65_535,
+      target: 65_536,
+      min: 16_384,
+      max: 262_144,
+    },
     ...future("head", "head-level"),
     core: {
       chatId: CHAT_ID,
@@ -347,7 +355,11 @@ export async function publishCloudChat(
         : null,
       ...future("core", "core-level"),
     },
-    messageShards: parts.map((part) => ({ ...part.address })),
+    messageShards: parts.map((part, index) => ({
+      ...part.address,
+      firstSeq: index + 1,
+      lastSeq: index + 1,
+    })),
     events: [knownEvent],
     eventShards: [],
     hostPrivate: {
@@ -361,7 +373,7 @@ export async function publishCloudChat(
   // registered writer schema, a future one through the reader schema, because
   // the writer's version literal is pinned on purpose.
   const head: ChatHeadRecord =
-    payloadMinor === 0
+    payloadMinor === CHAT_SYNC_SCHEMA_VERSION.minor
       ? chatHeadSchema.parse(wireHead)
       : chatHeadReaderSchema.parse(wireHead);
   // The protocol's own document codec, always - including for a future-minor
@@ -397,7 +409,10 @@ export function withForgedPartsEnvelope(
   const parsed: JsonObject = JSON.parse(document);
   return canonicalJsonStringify({
     ...parsed,
-    parts: parts.map((part) => ({ ...part })),
+    parts: parts.map((part) => ({
+      sha256: part.sha256,
+      byteLength: part.byteLength,
+    })),
   });
 }
 
