@@ -23,20 +23,61 @@
  *    served from that origin, so `'self'` covers its own assets and `ws:`
  *    covers HMR / local host WebSockets.
  *
+ * That last note covers the renderer's OWN assets and its WebSockets, but not
+ * a plain-`http:` fetch to a DIFFERENT loopback origin. In dev the renderer
+ * mints remote-host attach grants against local authn-v3, whose port
+ * `dev-desktop.js` derives from the run's slot - so the request matches none
+ * of `'self'` (other origin), `ws:`/`wss:` (not a WebSocket) or `https:`
+ * (not TLS), and the browser blocks it. `devConnectSrcExtras` re-admits
+ * exactly that origin, and only when this process was started by the dev
+ * orchestrator.
+ *
+ * Both layers derive the policy from `process.env` through this one module.
+ * They run in DIFFERENT processes (electron-main and the Vite dev server), so
+ * the dev extras must come from an env var the orchestrator exports to both -
+ * if only one side saw it, the intersection would silently block the very
+ * request this exists to allow.
+ *
  * Intentionally restrictive - extend deliberately when a new remote origin is
  * genuinely required.
  */
-export const CSP_DIRECTIVES = [
-  "default-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-  "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  "connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-] as const;
+const DEV_AUTHN_BASE_URL_ENV = "TRAYCER_DEV_AUTHN_BASE_URL";
+
+/**
+ * Extra `connect-src` sources for a `make dev-desktop` / `make dev-remote`
+ * run: the local authn-v3 origin, which is plain http on a slot-derived
+ * loopback port. Empty for packaged builds, where authn is https and already
+ * covered - so the shipped policy is byte-for-byte what it was.
+ */
+export function devConnectSrcExtras(env: NodeJS.ProcessEnv): string {
+  const raw = env[DEV_AUTHN_BASE_URL_ENV];
+  if (raw === undefined || raw.length === 0) return "";
+  let origin: string;
+  try {
+    origin = new URL(raw).origin;
+  } catch {
+    return "";
+  }
+  return ` ${origin}`;
+}
+
+export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
+  return [
+    "default-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173${devConnectSrcExtras(
+      env,
+    )}`,
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ];
+}
+
+export const CSP_DIRECTIVES = buildCspDirectives(process.env);
 
 export const CONTENT_SECURITY_POLICY = CSP_DIRECTIVES.join("; ");
