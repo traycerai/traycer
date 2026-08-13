@@ -321,6 +321,7 @@ function ExistingWorktreeList(props: {
     const items = list.querySelectorAll<HTMLElement>(
       '[data-slot="dropdown-menu-item"]:not([data-disabled])',
     );
+    if (items.length === 0) return;
     const item =
       edge === "first" ? items.item(0) : items.item(items.length - 1);
     allowOpenFocusRecoveryRef.current = false;

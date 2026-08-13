@@ -97,6 +97,13 @@ describe("FolderLocationControl keyboard navigation", () => {
     const search = await screen.findByRole("textbox", {
       name: "Search worktrees",
     });
+    search.focus();
+    fireEvent.change(search, { target: { value: "no matching worktree" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(search);
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(search);
+
     fireEvent.change(search, { target: { value: "feature" } });
     const first = screen.getByTestId("folder-location-import-/wt/feature-0");
     const second = screen.getByTestId("folder-location-import-/wt/feature-1");
