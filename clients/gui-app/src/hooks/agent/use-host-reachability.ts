@@ -186,8 +186,13 @@ const REMOTE_SESSION_READINESS_POLL_MS = 1_000;
  * some unrelated directory emit happened by. With no store to subscribe to,
  * the subscription is a bounded poll; `useSyncExternalStore` turns it into a
  * proper snapshot the memo can key on.
+ *
+ * Exported for every surface whose render reads session readiness: any
+ * component that calls `hasReadyRemoteSession` (directly or through a
+ * predicate like `hostSelectRowRefused`) without subscribing here has the
+ * same frozen-answer bug this hook was written for.
  */
-function useRemoteSessionPollReadiness(hostId: string): boolean {
+export function useRemoteSessionPollReadiness(hostId: string): boolean {
   const subscribe = useCallback((onStoreChange: () => void) => {
     const timer = setInterval(onStoreChange, REMOTE_SESSION_READINESS_POLL_MS);
     return () => {

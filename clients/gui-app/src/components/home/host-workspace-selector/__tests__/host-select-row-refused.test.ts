@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   hostListItemToDirectoryEntry,
   RELAY_FUSE_MAX_ATTACH_MS,
@@ -7,26 +7,6 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
-
-// The helper reads live-session evidence through the real
-// `hasReadyRemoteSession`; unmocked, no test here could exercise the
-// "ready session outranks the cloud verdict" direction at all.
-const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
-vi.mock(
-  "@traycer-clients/shared/host-transport/remote/index",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@traycer-clients/shared/host-transport/remote/index")
-      >();
-    return {
-      ...actual,
-      hasReadyRemoteSession: (hostId: string) =>
-        readySessionHosts.value.has(hostId),
-    };
-  },
-);
-
 import { hostSelectRowRefused } from "../host-select-row-refused";
 
 const HOST_ID = "remote-host-1";
@@ -65,51 +45,46 @@ function staleLastSeen(): string {
   return new Date(Date.now() - RELAY_FUSE_MAX_ATTACH_MS - 60_000).toISOString();
 }
 
-afterEach(() => {
-  readySessionHosts.value = new Set();
-});
-
 describe("hostSelectRowRefused", () => {
   it("keeps an offline host inside the relay-fuse window selectable (the recovery dial the transport would attempt)", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("offline", recentLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("offline", recentLastSeen()), false, false),
     ).toBe(false);
   });
 
   it("keeps a cloud-offline host with a READY live session in this client selectable", () => {
-    readySessionHosts.value.add(HOST_ID);
     expect(
-      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false, true),
     ).toBe(false);
   });
 
   it("still refuses a genuinely offline host - past the fuse window, no session", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("offline", staleLastSeen()), false, false),
     ).toBe(true);
   });
 
   it("refuses a plan-restricted (local-only) host", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("local-only", recentLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("local-only", recentLastSeen()), false, false),
     ).toBe(true);
   });
 
   it("keeps an indeterminate (unknown liveness) host selectable - a failed read is not a fact about the host", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("unknown", recentLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("unknown", recentLastSeen()), false, false),
     ).toBe(false);
   });
 
   it("keeps a connectable host selectable", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), false),
+      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), false, false),
     ).toBe(false);
   });
 
   it("refuses every remote row under the account-level plan gate, even a connectable one", () => {
     expect(
-      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), true),
+      hostSelectRowRefused(mappedEntry("connectable", recentLastSeen()), true, false),
     ).toBe(true);
   });
 });

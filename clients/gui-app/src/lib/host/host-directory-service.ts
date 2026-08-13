@@ -326,6 +326,18 @@ export class HostDirectoryService implements IHostDirectoryService {
     readonly era: AuthEra;
     readonly request: Promise<readonly HostDirectoryEntry[]>;
   } | null = null;
+  /**
+   * The credential generation of the most recent COMMITTED outcome - the
+   * ordering half of the commit guard. The era fences answer "may this
+   * credential's observation be believed at all"; this watermark answers "has
+   * a NEWER credential's observation already landed". Without it, commits are
+   * last-write-wins across generations: a `hosts` read issued before a
+   * same-user rotation, resolving after the post-rotation refresh has already
+   * committed, would overwrite the newer list with the older one (the
+   * generation counter only ever grows, which is what makes this a total
+   * order worth fencing on).
+   */
+  private lastCommitCredentialGeneration: number | null = null;
   private readonly handleVisibilityChange = (): void => {
     if (this.isDocumentHidden()) {
       return;
@@ -836,6 +848,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // Constructive commits stay fenced by user (a rotation mid-flight still
     // describes the right account's hosts); destructive ones additionally
     // require the credential that OBSERVED the failure to still be current.
+    // Constructive commits are additionally ORDERED by the generation
+    // watermark further down - believable is not the same as allowed to
+    // overwrite something newer.
     if (
       outcome.kind === "signed-out" &&
       this.credentialGeneration() !== era.credentialGeneration
@@ -860,6 +875,26 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
+    // The ORDERING fence, completing the era fences above. A constructive
+    // read issued under a superseded credential is still ALLOWED to commit -
+    // it describes the right account's hosts, and discarding it outright
+    // would trade a valid answer for a stale directory until the next poll.
+    // What it must not do is land ON TOP of a commit a newer credential
+    // already made: the reorder (old read resolving after the post-rotation
+    // refresh committed) would silently replace the newer list with the
+    // older one - resurrecting stale connectivity, or dropping a host
+    // registered between the two reads - until the next poll happened by.
+    if (
+      this.lastCommitCredentialGeneration !== null &&
+      era.credentialGeneration < this.lastCommitCredentialGeneration
+    ) {
+      appLogger.debug(
+        "[host-directory] discarding a stale-generation result that resolved after a newer commit",
+        { outcome: outcome.kind },
+      );
+      return this.snapshot();
+    }
+    this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
     this.hasGenuineRemoteOutcome = true;
     this.retireFailoverStateOnAuthoritativeClear(outcome.kind);

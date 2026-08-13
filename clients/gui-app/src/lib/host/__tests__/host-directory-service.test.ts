@@ -3596,7 +3596,7 @@ describe("HostDirectoryService", () => {
       await Promise.all([oldEraRefresh, newEraRefresh]);
     });
 
-    it("still commits a constructive (hosts) outcome that resolves after a mid-flight rotation - only destructive commits are credential-fenced", async () => {
+    it("still commits a constructive (hosts) outcome that resolves after a mid-flight rotation, when nothing newer has landed - a valid answer beats a stale directory", async () => {
       const provider = signedInProvider();
       const { fetcher, resolve } = deferredFetcher();
       const directory = makeDirectory({
@@ -3611,7 +3611,8 @@ describe("HostDirectoryService", () => {
       // by `invalidateInFlightRefresh()` here - this is the case the asymmetry
       // is about: a rotation happens while this refresh is in flight, but it
       // still describes the right account's hosts, so it must not be fenced
-      // the way a `signed-out` clear is.
+      // the way a `signed-out` clear is. (The ordering watermark does not bite
+      // either: no newer-generation commit has landed for it to be beneath.)
       const inFlight = directory.refresh();
       provider.rotateCurrentBearer({
         userId: "account-a",
@@ -3622,6 +3623,57 @@ describe("HostDirectoryService", () => {
 
       expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
         accountAHostEntry.hostId,
+      ]);
+    });
+
+    it("discards a constructive (hosts) outcome that resolves AFTER a newer credential's refresh already committed - reordered reads must not overwrite the newer list", async () => {
+      const provider = signedInProvider();
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // The old bearer's poll goes in flight and stalls (a slow response is
+      // all the reorder needs).
+      const oldBearerPoll = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // Same-user rotation through the real provider, with the runtime's
+      // rotation hook dropping the in-flight memo - the same sequence the
+      // destructive-fence test drives.
+      directory.invalidateInFlightRefresh();
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+
+      // The post-rotation refresh races ahead and commits FIRST, and its list
+      // is genuinely newer: a second host registered between the two reads.
+      const newBearerPoll = directory.refresh();
+      expect(callCount()).toBe(2);
+      resolve(1, {
+        kind: "hosts",
+        entries: [accountAHostEntry, accountBHostEntry],
+      });
+      await newBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+        accountBHostEntry.hostId,
+      ]);
+
+      // NOW the old bearer's read resolves - constructive, same user, but a
+      // snapshot from before the newer commit. An identity-only fence lets it
+      // through, silently dropping the newly registered host until the next
+      // poll. The ordering watermark must discard it instead.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await oldBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+        accountBHostEntry.hostId,
       ]);
     });
   });
