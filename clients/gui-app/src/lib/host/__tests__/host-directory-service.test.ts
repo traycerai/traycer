@@ -3227,7 +3227,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     kind: "remote",
     websocketUrl: "wss://relay.traycer.invalid/attach",
     version: "1.2.3",
-    status: "unavailable",
+    transportDialability: "not-dialable",
   };
 
   it("re-asks for this machine's id when the first ask came back null, and stops claiming its own host is a dead remote", async () => {
@@ -3235,6 +3235,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     // resolved null and cached it).
     let shellHostId: string | null = null;
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: makeHost(null),
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -3250,7 +3252,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     const beforeReseed = await directory.list();
     expect(beforeReseed).toHaveLength(1);
     expect(beforeReseed[0].kind).toBe("remote");
-    expect(beforeReseed[0].status).toBe("unavailable");
+    expect(beforeReseed[0].transportDialability).toBe("not-dialable");
 
     // The shell can answer now. Nothing else about the world changed - no new
     // snapshot, no registry change - so only a re-ask can converge this.
@@ -3270,6 +3272,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
   it("stops re-asking once the id is known", async () => {
     const seeder = vi.fn(() => Promise.resolve(LOCAL_HOST_ID));
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: makeHost(null),
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -3288,6 +3292,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
   it("converges to the live local host whenever its snapshot finally arrives", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -3306,17 +3312,26 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     expect(converged[0]).toMatchObject({
       hostId: LOCAL_HOST_ID,
       kind: "local",
-      status: "available",
+      transportDialability: "dialable",
       websocketUrl: localSnapshot.websocketUrl,
     });
   });
 
-  it("carries a busy shell verdict through as a reachable local entry", async () => {
-    // A host that lost a probe is still the host: dialable URL, `busy` status.
-    // Publishing it as anything else is what put the registry twin - and its
-    // hardcoded `unavailable` - in front of the user in the first place.
+  it("projects a busy shell verdict into a DIALABLE local entry", async () => {
+    // A host that lost a probe is still the host: dialable URL, `busy`
+    // availability. Publishing it as anything else is what put the registry
+    // twin - and its hardcoded `unavailable` - in front of the user in the
+    // first place.
+    //
+    // The entry no longer carries the shell's three-valued availability; it
+    // carries the projection (`toLocalEntry`), which is the one seam where a
+    // `HostAvailability` becomes a `HostTransportDialability`. Pinning it here
+    // is what keeps `busy` from ever reaching a consumer as death: every
+    // downstream reason (`hostUnavailability`) derives from this field.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [] }),
@@ -3328,7 +3343,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
 
     expect((await directory.list())[0]).toMatchObject({
       kind: "local",
-      status: "busy",
+      transportDialability: "dialable",
       websocketUrl: localSnapshot.websocketUrl,
     });
   });

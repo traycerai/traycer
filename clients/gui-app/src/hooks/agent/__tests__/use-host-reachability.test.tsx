@@ -23,7 +23,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:55300/rpc",
     version: "1.0.0",
-    status: "available",
+    transportDialability: "dialable",
     ...overrides,
   };
 }
@@ -43,7 +43,15 @@ describe("useHostReachability", () => {
     // websocketUrl, the tab can still dial it, and the lock/clone CTA follow
     // from "unreachable" alone. On 2026-08-11 reading this as unreachable
     // locked every chat on a healthy machine read-only for two hours.
-    list.value = { data: [entry({ status: "busy" })], fetchStatus: "idle" };
+    //
+    // `busy` reaches this hook as `dialable` — the directory service projects
+    // it there (`toLocalEntry`), and that projection is pinned in
+    // `host-directory-service.test.ts`. This end of the composition asserts
+    // what the hook does with the value it actually receives.
+    list.value = {
+      data: [entry({ transportDialability: "dialable" })],
+      fetchStatus: "idle",
+    };
     expect(statusFor("host-a")).toBe("reachable");
   });
 
@@ -71,7 +79,7 @@ describe("useHostReachability", () => {
         entry({
           hostId: "host-a",
           kind: "remote",
-          status: "unavailable",
+          transportDialability: "not-dialable",
           websocketUrl: "wss://relay.example/attach",
         }),
       ],
@@ -103,7 +111,7 @@ describe("useHostReachability", () => {
           hostId: "host-a",
           kind: "local",
           websocketUrl: null,
-          status: "unavailable",
+          transportDialability: "not-dialable",
         }),
       ],
       fetchStatus: "idle",
@@ -120,7 +128,7 @@ describe("useHostReachability", () => {
           hostId: "host-a",
           kind: "remote",
           websocketUrl: null,
-          status: "unavailable",
+          transportDialability: "not-dialable",
         }),
       ],
       fetchStatus: "idle",

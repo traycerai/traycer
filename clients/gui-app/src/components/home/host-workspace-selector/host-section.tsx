@@ -6,7 +6,6 @@ import {
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { cn } from "@/lib/utils";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 const HOST_KIND_ICONS: Record<HostDirectoryEntry["kind"], LucideIcon> = {
   remote: Globe,
