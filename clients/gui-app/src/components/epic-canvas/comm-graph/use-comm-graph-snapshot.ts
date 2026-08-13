@@ -55,7 +55,10 @@ import {
   dialableHostEndpoint,
   hostTransportKey,
 } from "@/lib/host/transport-key";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostUnavailability,
+  isRemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { reconcileCommGraphCloudAuthorityCursor } from "@/stores/epics/comm-graph-timeline-store";
 
@@ -154,7 +157,13 @@ export function useCommGraphSnapshot(
             hostTransportKey(entry) ??
               [
                 entry.hostId,
-                entry.status,
+                // Derivation, not the coarse bit. This arm runs only when the
+                // transport refuses the entry, so the coarse bit is constant
+                // here and carries no information; the REASON does. A relay
+                // that goes `plan-restricted` → confirmed `offline` must clear
+                // the dial/compatibility verdict it retained under the other
+                // reason, and comparing the coarse bit would not notice.
+                hostUnavailability(entry) ?? "",
                 entry.version ?? "",
                 entry.websocketUrl ?? "",
               ].join("\u0000"),

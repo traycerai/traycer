@@ -1,7 +1,11 @@
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isHostReachable,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
+  hostUnavailability,
   isConfirmedHostDeath,
   isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
@@ -57,14 +61,16 @@ const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
  * (D7).
  *
  * Two, not one. A presence lease lapses on its own schedule and the registry
- * is polled every ~15s; one read that arrives inside a lease gap - or a single
+ * is polled every ~60s; one read that arrives inside a lease gap - or a single
  * slow relay round-trip - is a blip, and re-homing the window on it would move
- * the user off a host that was never actually gone.
+ * the user off a host that was never actually gone. Two reads at that cadence
+ * is up to ~2 minutes of confirmation, which is the price of not moving someone
+ * off a working machine.
  *
  * ONE constant on purpose: an undamped recovery is the same defect as an
  * undamped death, just pointed the other way. A host that flaps
  * dialable/non-dialable would oscillate the binding at poll cadence - a toast
- * and a full app-wide query-scope invalidation every ~15s - if coming back
+ * and a full app-wide query-scope invalidation every ~60s - if coming back
  * were cheaper to believe than going away. Both streaks are advanced only by
  * GENUINE fetcher outcomes: a `failed` refresh returns before either is
  * touched, so it neither advances nor resets them.
@@ -672,7 +678,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     // this read's row - so the dialability test below runs on what the
     // registry just said, not on the object bound one poll ago.
     this.reconcileSelectionDialability();
-    // Emit only when the merged snapshot actually changed. The 15s registry
+    // Emit only when the merged snapshot actually changed. The 60s registry
     // poll lands here on every tick; an unconditional emit made every
     // `onChange` consumer (17 query call sites) re-render/refetch app-wide
     // each tick even when nothing changed.
@@ -991,7 +997,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       if (fresh !== null) {
         // Value equality, not identity: a remote-registry refresh rebuilds
         // every entry object each poll, so an identity compare would re-fire
-        // the selection listeners every ~15s with an unchanged host.
+        // the selection listeners every ~60s with an unchanged host.
         if (!hostDirectoryEntriesEqual(fresh, this.selected)) {
           this.selected = fresh;
           appLogger.debug(
@@ -1239,7 +1245,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     // Clamped, because the streak is a STATE MARKER ("confirmed dead") and not
-    // a census. Left uncapped it gained one per 15s poll for as long as a host
+    // a census. Left uncapped it gained one per 60s poll for as long as a host
     // stayed dead with nothing to fail over to, so the `reads:` value below
     // grew into the thousands and stopped meaning "reads before we act" -
     // which is the only thing anyone reading that line wants from it.
@@ -1495,7 +1501,7 @@ function removePersistedHostSelection(): void {
  * reimplemented rather than imported across that boundary). Remote/local
  * entries are freshly allocated on every fetch/IPC snapshot even when
  * nothing observable changed, so a bound remote selection would otherwise
- * reassign and fan out to every `onSelectionChange` handler on every 15s
+ * reassign and fan out to every `onSelectionChange` handler on every 60s
  * poll tick for no reason.
  */
 function hostDirectoryEntriesEqual(
@@ -1508,7 +1514,11 @@ function hostDirectoryEntriesEqual(
     a.kind === b.kind &&
     a.websocketUrl === b.websocketUrl &&
     a.version === b.version &&
-    a.status === b.status &&
+    // The DERIVED verdict, not the coarse bit. Same reason as
+    // `useHostDirectoryEntry`'s twin: a host moving from `indeterminate` to a
+    // confirmed `offline` is not-dialable on both sides, and swallowing that
+    // emit would freeze every surface reading the reason at "we don't know".
+    hostUnavailability(a) === hostUnavailability(b) &&
     remotePublicKeyOf(a) === remotePublicKeyOf(b)
   );
 }
@@ -1541,25 +1551,32 @@ function hostDirectorySnapshotsEqual(
  * The registry's label/version are kept: they are this machine's, and they are
  * the freshest description available while the host is down.
  *
- * `status` is forced to `unavailable` rather than carried over from the twin's
- * presence lease. It is the truth about DIALABILITY - nothing can reach this
- * entry - and status transitions are an event other surfaces subscribe to: the
- * landing-terminal tombstone recovery bridge fires its pending kill on a
- * not-available -> available edge. Copying the lease's `available` would make
+ * `transportDialability` is forced to `not-dialable` rather than carried over
+ * from the twin's presence lease. It is the truth about DIALABILITY - nothing
+ * can reach this entry - and dialability transitions are an event other
+ * surfaces subscribe to: the landing-terminal tombstone recovery bridge fires
+ * its pending kill on a `not-dialable -> dialable` edge. Copying the lease's
+ * `dialable` would make
  * it fire at boot against an entry with no `websocketUrl` (the mutation
  * rejects), and then see no edge when the real host publishes - stranding the
  * tombstone and leaving the host terminal alive.
  *
- * What that `unavailable` must NOT be read as is "this machine's host is
- * dead". It is produced whenever the local snapshot is merely ABSENT, which
- * covers boot, a restart, and a host busy enough to lose a probe - and on
- * 2026-08-11 it was the row that locked a healthy machine's chats read-only,
- * freshly derived on every relaunch because the registry twin arrives from the
- * cloud before the local snapshot arrives from the shell. `useHostReachability`
- * therefore recognises this entry by its shape (`kind: "local"` with no
- * `websocketUrl` - nothing else in the directory can produce that pair) and
- * reports `host-starting`, the same verdict the empty directory has produced
- * since 2026-07-14 for the same "not published yet" reason.
+ * Written coarsely on purpose: this is a FABRICATED local entry, not a verdict
+ * the cloud reached about a machine, so there is no reason to derive. The
+ * derivation reads it back as `offline`, which is what "this machine's own host
+ * process is down" means - and the comment on `hostUnavailability` says exactly
+ * that locality is decided by a direct read of the process, never by a relay.
+ *
+ * What that `offline` must NOT be read as is "this machine's host is dead". It
+ * is produced whenever the local snapshot is merely ABSENT, which covers boot,
+ * a restart, and a host busy enough to lose a probe - and on 2026-08-11 it was
+ * the row that locked a healthy machine's chats read-only, freshly derived on
+ * every relaunch because the registry twin arrives from the cloud before the
+ * local snapshot arrives from the shell. `useHostReachability` therefore
+ * recognises this entry by its shape (`kind: "local"` with no `websocketUrl` -
+ * nothing else in the directory can produce that pair) and reports
+ * `host-starting`, the same verdict the empty directory has produced since
+ * 2026-07-14 for the same "not published yet" reason.
  */
 function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
   return {
@@ -1568,10 +1585,16 @@ function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
     kind: "local",
     websocketUrl: null,
     version: twin.version,
-    status: "unavailable",
+    transportDialability: "not-dialable",
   };
 }
 
+/**
+ * The local host, read DIRECTLY from the running process rather than from any
+ * relay verdict — so the coarse bit is written, not derived. A local snapshot
+ * exists only when this machine's host is up and serving, which is the whole
+ * evidence needed for "dialable".
+ */
 function toLocalEntry(
   snapshot: LocalHostSnapshot | null,
 ): HostDirectoryEntry | null {
@@ -1584,12 +1607,19 @@ function toLocalEntry(
     kind: "local",
     websocketUrl: snapshot.websocketUrl,
     version: snapshot.version,
-    // Straight from the shell, never assumed. This used to hardcode
-    // `"available"`, which was true only because the shell dropped the whole
-    // snapshot the moment a probe failed - so the renderer's two states were
-    // "available" and "no entry at all". That is the vocabulary that turned a
-    // busy host into a dead one on 2026-08-11; the shell now says which, and
-    // this carries it verbatim.
-    status: snapshot.availability,
+    // Projected from the shell, never assumed. This is the ONE place a
+    // `HostAvailability` becomes a `HostTransportDialability`, and it is the
+    // seam that keeps `busy` from ever reading as death downstream: the shell
+    // used to drop the whole snapshot the moment a probe failed, so the
+    // renderer's only two states were "available" and "no entry at all", which
+    // is the vocabulary that turned a busy host into a dead one on 2026-08-11.
+    //
+    // A live snapshot is `available | busy` today, so this is total in
+    // practice - written as a projection rather than a hardcoded "dialable" so
+    // that widening `LiveHostAvailability` produces the right entry instead of
+    // a silent false claim.
+    transportDialability: isHostReachable(snapshot.availability)
+      ? "dialable"
+      : "not-dialable",
   };
 }

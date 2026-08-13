@@ -8,8 +8,11 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
-import { isHostReachable, type HostDirectoryEntry } from "./host-directory";
-import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
+import type { HostDirectoryEntry } from "./host-directory";
+import {
+  isConfirmedTransportRefusal,
+  isRemoteHostDirectoryEntry,
+} from "./remote-fetcher";
 import {
   HostBindingAuthorityRegistry,
   StaleHostBindingAuthorityError,
@@ -754,6 +757,17 @@ function sameHostId(
  * leaving every `onChange` subscriber (the app-wide stream provider, the
  * reactive active-host-id projection, the epic session mount) permanently
  * pinned to the stale key with no signal that anything changed.
+ *
+ * The coarse dialability bit is NOT compared, and that is a decision rather
+ * than an omission. `bind()` reacts to a `false` here by cancelling every
+ * in-flight host-scoped query, aborting the binding generation and refetching
+ * the active ones — the right response to the route moving, and a gratuitous
+ * storm otherwise. A failed liveness read flips the bit without moving
+ * anything, so comparing it made one degraded cloud read invalidate the whole
+ * host scope. What is compared instead is the directory positively REFUSING
+ * the route (`isConfirmedTransportRefusal`), which is the same gate
+ * `hostTransportKey` dials on: the sweep now fires exactly when a re-dial
+ * would be refused.
  */
 function sameHostTransport(
   previous: HostDirectoryEntry | null,
@@ -767,7 +781,8 @@ function sameHostTransport(
     previous.kind === next.kind &&
     previous.websocketUrl === next.websocketUrl &&
     previous.version === next.version &&
-    isHostReachable(previous.status) === isHostReachable(next.status) &&
+    isConfirmedTransportRefusal(previous) ===
+      isConfirmedTransportRefusal(next) &&
     remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
 }

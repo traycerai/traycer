@@ -1485,7 +1485,7 @@ export class AuthService {
    *
    *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
    *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
-   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              refresh keeps the bearer fresh and the ~60s poll
    *                              recovers on the next tick — no forced sign-out
    *                              from a background list poll).
    *   - `network-error`        → throws so TanStack Query surfaces a retriable
@@ -1530,13 +1530,32 @@ export class AuthService {
     try {
       return await request;
     } finally {
-      // Cleared whether it resolved or threw: a failed read must not pin a
-      // rejected promise that every later caller re-awaits. Guarded so a
-      // request superseded by an identity change does not clear the NEWER
-      // slot when it finally settles.
-      if (this.registeredHostsInFlight?.request === request) {
-        this.registeredHostsInFlight = null;
-      }
+      this.releaseRegisteredHostsSlot(request);
+    }
+  }
+
+  /**
+   * Clears the in-flight slot, but only if it is still OURS.
+   *
+   * Called whether the request resolved or threw: a failed read must not pin a
+   * rejected promise that every later caller re-awaits. Guarded because a
+   * request superseded by an identity change must not clear the NEWER slot
+   * when it finally settles — the superseding caller has its own request in
+   * there, and clearing it would drop the coalescing for everyone waiting on
+   * it.
+   *
+   * A separate method rather than an inline `finally` body on purpose: inside
+   * `fetchRegisteredHosts`, TypeScript still has the slot narrowed to the
+   * object assigned a few lines above and reports the null check as
+   * unnecessary. It is not — reentrancy across the `await` is exactly what it
+   * guards — and narrowing that is wrong about concurrency is not a reason to
+   * delete a live guard.
+   */
+  private releaseRegisteredHostsSlot(
+    request: Promise<HostListResponse | null>,
+  ): void {
+    if (this.registeredHostsInFlight?.request === request) {
+      this.registeredHostsInFlight = null;
     }
   }
 

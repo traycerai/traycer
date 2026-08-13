@@ -81,7 +81,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     // same-URL event by construction, so this stays identical across A/B.
     websocketUrl: RELAY_URL,
     version: "1.0.0",
-    status: "available",
+    transportDialability: "dialable",
     publicKey,
     remoteStatus: {
       connectivity: "connectable",

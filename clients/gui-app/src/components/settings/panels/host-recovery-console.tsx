@@ -607,6 +607,7 @@ export function HostRecoveryConsole(
                 // therefore no live session count to state. The drain notice
                 // and its "ends N sessions" force correctly withhold.
                 liveBusySessionCount={null}
+                settledBusySessionCount={null}
               />
             )}
           </div>

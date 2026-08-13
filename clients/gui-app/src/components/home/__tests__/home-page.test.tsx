@@ -56,7 +56,7 @@ const homeMocks = vi.hoisted(() => ({
     kind: "local",
     websocketUrl: "ws://127.0.0.1:4917/rpc",
     version: "0.0.0-test",
-    status: "available",
+    transportDialability: "dialable",
   })),
   composerCommits: [] as ComposerCommit[],
   nextInstanceId: 0,
@@ -266,7 +266,7 @@ describe("<HomePage />", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
-      status: "available",
+      transportDialability: "dialable",
     });
     homeMocks.composerCommits.length = 0;
     homeMocks.nextInstanceId = 0;

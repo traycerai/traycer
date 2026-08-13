@@ -377,7 +377,15 @@ export function ChatTile(props: ChatTileProps) {
           chatId={node.id}
           sourceHostId={tabHostId}
           hostLabel={reachability.hostLabel}
-          reason="host-offline"
+          // The hook's reason, not a constant. This used to hard-code
+          // `host-offline` for every unreachable result, which is how a
+          // `plan-restricted` host — running fine, just with no remote route on
+          // this account's plan — was reported to its owner as being off.
+          reason={
+            reachability.unavailability === "plan-restricted"
+              ? "host-plan-restricted"
+              : "host-offline"
+          }
           testId={`chat-dead-tile-${node.id}`}
         />
       );

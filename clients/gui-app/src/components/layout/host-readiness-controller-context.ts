@@ -2,8 +2,8 @@ import { createContext, use } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import type { AuthStatus } from "@/stores/auth/auth-store";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
@@ -211,16 +211,21 @@ export function useSurfaceReadiness(
   return useHostReadinessController().readinessFor(scope, tabHostId);
 }
 
+/**
+ * Delegated to `dialableHostEndpoint` rather than answered here, because this
+ * predicate decides whether a surface renders at all (`unavailable-host`) and
+ * the transport decides whether the socket opens. Two independent spellings of
+ * "dialable" is how those two came apart: this one refused anything the
+ * directory did not call `available`, so a failed liveness read blanked working
+ * panels into a dead-end card while the stream one layer down was happily
+ * connected to the same host.
+ *
+ * Coarse is the right SHAPE here — a surface either has a route or it does not,
+ * and there is no per-reason copy to render behind this boolean. It just has to
+ * be the same coarse answer the dial gives.
+ */
 export function isHostDialable(entry: HostDirectoryEntry | undefined): boolean {
-  return (
-    entry !== undefined &&
-    // Dialability is `isHostReachable`, not `=== "available"`. A busy host has
-    // the same pid and the same `websocketUrl`; the renderer's per-request
-    // dials to it keep completing. Gating readiness on the probe result is
-    // what let one timed-out probe take a whole session down (int #48).
-    isHostReachable(entry.status) &&
-    entry.websocketUrl !== null
-  );
+  return entry !== undefined && dialableHostEndpoint(entry) !== null;
 }
 
 export function resolveSurfaceReadiness(args: {

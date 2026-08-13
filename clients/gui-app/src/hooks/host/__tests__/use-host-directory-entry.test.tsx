@@ -110,7 +110,7 @@ describe("useHostDirectoryEntry", () => {
       kind: "remote",
       websocketUrl: "wss://relay.test/attach",
       version: "1.2.3",
-      status: "available",
+      transportDialability: "dialable",
       publicKey: "pubkey-a",
       remoteStatus: {
         connectivity: "connectable",

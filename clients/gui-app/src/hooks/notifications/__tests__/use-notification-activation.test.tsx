@@ -896,7 +896,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     bindingState.current = {
       hostClient: client,
       directory: createTestDirectory(
-        [{ ...hostB, status: "unavailable" }],
+        [{ ...hostB, transportDialability: "not-dialable" }],
         () => undefined,
       ),
     };

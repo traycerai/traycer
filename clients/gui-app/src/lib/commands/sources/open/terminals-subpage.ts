@@ -16,6 +16,7 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import {
   useWorktreeListBindingsForEpic,
@@ -47,7 +48,6 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 function terminalWorkspaceLeaf(
   ctx: CommandContext,
@@ -65,11 +65,11 @@ function terminalWorkspaceLeaf(
     run: () => {
       if (hasLaunched) return;
       const liveEntry = hostClient.resolveHostById(target.hostId);
-      if (
-        liveEntry === null ||
-        !isHostReachable(liveEntry.status) ||
-        liveEntry.websocketUrl === null
-      ) {
+      // Coarse, through the canonical rule: this is the launch gate for a
+      // terminal on a named host — a pure "can we dial it" with nothing to
+      // explain to anyone, and it must give the same answer the tile's own
+      // dial will give a moment later.
+      if (liveEntry === null || dialableHostEndpoint(liveEntry) === null) {
         return;
       }
       hasLaunched = true;
@@ -328,11 +328,14 @@ function useNewTerminalWorkspaceItems(
             hostClient,
           );
     const otherHosts = (directory.data ?? [])
+      // Coarse, through the canonical rule: a palette row here leads to a
+      // launch, so it is offered exactly when the launch gate above would
+      // accept it. That deliberately keeps an `indeterminate` host listed —
+      // the picker's stated rule — rather than hiding a machine because one
+      // liveness read came back blind.
       .filter(
         (entry) =>
-          entry.hostId !== activeHostId &&
-          isHostReachable(entry.status) &&
-          entry.websocketUrl !== null,
+          entry.hostId !== activeHostId && dialableHostEndpoint(entry) !== null,
       )
       .map((entry) => {
         const label = entry.label.length > 0 ? entry.label : entry.hostId;

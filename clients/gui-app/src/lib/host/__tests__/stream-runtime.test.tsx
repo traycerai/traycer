@@ -145,7 +145,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     // same-URL event by construction, so this stays identical across A/B.
     websocketUrl: RELAY_URL,
     version: "1.0.0",
-    status: "available",
+    transportDialability: "dialable",
     publicKey,
     remoteStatus: {
       connectivity: "connectable",
@@ -313,7 +313,7 @@ describe("HostStreamProvider", () => {
       hostClient.bind({
         ...mockLocalHostEntry,
         websocketUrl: "ws://127.0.0.1:4918/rpc",
-        status: "available",
+        transportDialability: "dialable",
       });
     });
 
@@ -450,7 +450,7 @@ describe("HostStreamProvider", () => {
       hostClient.bind({
         ...mockLocalHostEntry,
         websocketUrl: "ws://127.0.0.1:4918/rpc",
-        status: "available",
+        transportDialability: "dialable",
       });
     });
 

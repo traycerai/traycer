@@ -13,6 +13,7 @@ import {
   formatLastSeen,
   isValidHostVersion,
   liveBusySessionCount,
+  settledBusySessionCount,
   type HostPresenceView,
   type LiveBusySessionCountOptions,
   type ViewerReachabilityCheckLike,
@@ -487,7 +488,13 @@ describe("liveBusySessionCount", () => {
     ).toBeNull();
   });
 
-  it("does NOT demote a stale value that is actively refetching — the fresh answer is in flight", () => {
+  it("keeps RENDERING a stale value that is actively refetching — a panel does not blank for a round trip", () => {
+    // Deliberately paired with the `settledBusySessionCount` test of the same
+    // inputs below. This function used to be the only answer, and pinning this
+    // case here alone read as "the retained number is trustworthy again",
+    // which is what let the drain force re-arm from it. It is not that claim:
+    // it is a display decision, and the destructive path reads the other
+    // function.
     expect(
       liveBusySessionCount(
         options({ reportedCount: 1, isStale: true, fetchStatus: "fetching" }),
@@ -506,5 +513,68 @@ describe("liveBusySessionCount", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+/**
+ * The destructive read, and specifically where it DIVERGES from the display
+ * one. Same options object in both suites on purpose: the pair is the
+ * assertion.
+ */
+describe("settledBusySessionCount", () => {
+  function options(
+    overrides: Partial<LiveBusySessionCountOptions>,
+  ): LiveBusySessionCountOptions {
+    return {
+      reportedCount: 2,
+      isError: false,
+      fetchStatus: "idle",
+      isStale: false,
+      ...overrides,
+    };
+  }
+
+  it("passes the reported count through on a settled, fresh read", () => {
+    expect(settledBusySessionCount(options({ reportedCount: 4 }))).toBe(4);
+  });
+
+  it("passes a reported zero through unchanged", () => {
+    expect(settledBusySessionCount(options({ reportedCount: 0 }))).toBe(0);
+  });
+
+  it("refuses the stale-while-refetching value the display read still shows", () => {
+    // THE split. `liveBusySessionCount` returns 1 for these exact inputs (see
+    // the suite above). Arming a force from that number is what let a panel
+    // promise "ends 2 sessions" and end five: the confirm-time equality guard
+    // compares the retained value against the armed value, which is the same
+    // retained value, so it agrees with itself and permits the force.
+    const refetching = options({
+      reportedCount: 1,
+      isStale: true,
+      fetchStatus: "fetching",
+    });
+    expect(liveBusySessionCount(refetching)).toBe(1);
+    expect(settledBusySessionCount(refetching)).toBeNull();
+  });
+
+  it("refuses a fresh value while a background refetch is in flight", () => {
+    // Not stale, but not settled either. The window is one host RPC over an
+    // already-open connection; refusing to arm inside it costs a moment, and
+    // arming inside it costs sessions.
+    expect(
+      settledBusySessionCount(
+        options({ reportedCount: 3, isStale: false, fetchStatus: "fetching" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("refuses everything the display read refuses", () => {
+    for (const overrides of [
+      { isError: true },
+      { fetchStatus: "paused" } as const,
+      { isStale: true, fetchStatus: "idle" } as const,
+    ]) {
+      expect(settledBusySessionCount(options(overrides))).toBeNull();
+    }
   });
 });

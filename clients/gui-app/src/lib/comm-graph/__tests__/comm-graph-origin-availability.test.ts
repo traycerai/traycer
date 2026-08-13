@@ -20,14 +20,16 @@ const EVENT = {
   originRefId: null,
 } satisfies CommGraphEvent;
 
-function entry(status: "available" | "unavailable"): HostDirectoryEntry {
+function entry(
+  transportDialability: "dialable" | "not-dialable",
+): HostDirectoryEntry {
   return {
     hostId: "origin-a",
     label: "Origin A",
     kind: "remote",
     websocketUrl: "wss://origin-a.example/stream",
     version: "1.0.0",
-    status,
+    transportDialability,
   };
 }
 
@@ -35,7 +37,7 @@ describe("isCommGraphOriginAvailable", () => {
   it("disables only the source jump when the canonical origin host is offline", () => {
     expect(
       isCommGraphOriginAvailable(
-        { findById: () => entry("unavailable") },
+        { findById: () => entry("not-dialable") },
         EVENT,
       ),
     ).toBe(false);
@@ -49,7 +51,7 @@ describe("isCommGraphOriginAvailable", () => {
 
   it("allows the source jump when the origin is dialable", () => {
     expect(
-      isCommGraphOriginAvailable({ findById: () => entry("available") }, EVENT),
+      isCommGraphOriginAvailable({ findById: () => entry("dialable") }, EVENT),
     ).toBe(true);
   });
 });

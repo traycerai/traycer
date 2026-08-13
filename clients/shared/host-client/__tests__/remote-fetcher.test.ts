@@ -130,34 +130,34 @@ describe("hostListItemToDirectoryEntry", () => {
     const entry = hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL);
     expect(entry.kind).toBe("remote");
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
-    expect(entry.status).toBe("available");
+    expect(entry.transportDialability).toBe("dialable");
     expect(entry.version).toBe("1.4.2");
     expect(entry.label).toBe("prod-devbox");
     expect(entry.remoteStatus.connectivity).toBe("connectable");
   });
 
-  it("reads unavailable when the host is not connectable", () => {
+  it("reads not-dialable when the host is not connectable", () => {
     const item: HostListItem = {
       ...onlineItem(),
       status: { ...onlineItem().status, connectivity: "offline" },
     };
     const entry = hostListItemToDirectoryEntry(item, RELAY_BASE_URL);
-    expect(entry.status).toBe("unavailable");
+    expect(entry.transportDialability).toBe("not-dialable");
     // `websocketUrl` is the relay's fixed attach endpoint, carried through
     // regardless of dialability — production rejects this entry as
-    // unconnectable via `status`/`hostUnavailability`, not via the URL.
+    // unconnectable via `hostUnavailability`, not via the URL.
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
   });
 
-  it("reads unavailable for local-only and unknown connectivity alike", () => {
+  it("reads not-dialable for local-only and unknown connectivity alike", () => {
     for (const connectivity of ["local-only", "unknown"] as const) {
       const item: HostListItem = {
         ...onlineItem(),
         status: { ...onlineItem().status, connectivity },
       };
-      expect(hostListItemToDirectoryEntry(item, RELAY_BASE_URL).status).toBe(
-        "unavailable",
-      );
+      expect(
+        hostListItemToDirectoryEntry(item, RELAY_BASE_URL).transportDialability,
+      ).toBe("not-dialable");
     }
   });
 

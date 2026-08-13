@@ -6,7 +6,14 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostConnectivity,
+  HostListItem,
+} from "@traycer/protocol/host/host-status";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
@@ -92,7 +99,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     // same-URL event by construction, so this stays identical across A/B.
     websocketUrl: RELAY_URL,
     version: "1.0.0",
-    status: "available",
+    transportDialability: "dialable",
     publicKey,
     remoteStatus: {
       connectivity: "connectable",
@@ -246,5 +253,124 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()).toHaveLength(2);
     expect(tracked.records()[0].closeCount).toBe(1);
     expect(tracked.records()[1].closeCount).toBe(0);
+  });
+});
+
+/**
+ * The P0's actual user-visible failure, composed end to end.
+ *
+ * The isolated tests all passed while this was broken, which is the point of
+ * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
+ * `hostTransportKey` refused anything non-dialable, THIS registry released the
+ * handle on the changed key, and `chat-tile` rendered `ChatTileLoading`
+ * forever — while `useHostReachability` one layer up had just decided the same
+ * host was reachable. Every layer was individually defensible.
+ *
+ * So the entry is built by the REAL mapper from a REAL registry row, and the
+ * only thing that changes between the two renders is the cloud's connectivity
+ * verdict. A synthetic literal would not do: it carries no `remoteStatus`, so
+ * `hostUnavailability` falls to "offline" and the case under test cannot be
+ * reached.
+ */
+describe("a live chat session survives a degraded liveness read", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  function mappedEntry(connectivity: HostConnectivity): HostDirectoryEntry {
+    const item: HostListItem = {
+      hostId: REMOTE_HOST_ID,
+      displayName: REMOTE_HOST_ID,
+      platform: "Ubuntu",
+      kind: "personal",
+      publicKey: "pubkey-a",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity,
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.0.0",
+        lastSeenAt: "2026-08-01T00:00:00.000Z",
+      },
+    };
+    return hostListItemToDirectoryEntry(item, RELAY_URL);
+  }
+
+  it("keeps the same handle and never closes the transport when connectivity goes `unknown`", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-unknown-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+    expect(tracked.records()).toHaveLength(1);
+
+    // Redis liveness reads go degraded on the cloud side. Nothing about this
+    // machine, this socket, or this chat changed.
+    hostEntryRef.value = mappedEntry("unknown");
+    rerender();
+
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("still releases the handle when the cloud CONFIRMS the host is offline", async () => {
+    // The other direction, so the test above cannot pass by the registry
+    // having simply stopped reacting to the directory at all.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-offline-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+
+    // The handle is released. The transport itself is not asserted here: the
+    // registry lingers it deliberately, so a close count is a statement about
+    // the eviction timer rather than about this decision.
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
   });
 });

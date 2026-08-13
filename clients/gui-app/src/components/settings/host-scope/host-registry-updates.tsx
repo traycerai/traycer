@@ -64,8 +64,16 @@ export function HostRegistryUpdates(props: {
    * Open sessions blocking the drain, from `host.status` over the live
    * connection. `null` when this client has no live read of the host — NOT
    * zero.
+   *
+   * The DISPLAY read. It drives the labels and nothing else.
    */
   readonly liveBusySessionCount: number | null;
+  /**
+   * The same count from a SETTLED read — nothing in flight, not aged out.
+   * Drives the drain force's arm/confirm path, which needs a number it can
+   * stand behind rather than one that is merely the best available.
+   */
+  readonly settledBusySessionCount: number | null;
 }): ReactNode {
   const { item } = props;
   const mutation = useUpdateHostVersionPolicy(item.hostId);
@@ -146,7 +154,7 @@ export function HostRegistryUpdates(props: {
             hostId={item.hostId}
             label={affordance.applyNowLabel}
             mutation={mutation}
-            liveBusySessionCount={props.liveBusySessionCount}
+            settledBusySessionCount={props.settledBusySessionCount}
           />
         </div>
       )}
@@ -275,8 +283,13 @@ function ApplyNowControl(props: {
   readonly hostId: string;
   readonly label: string;
   readonly mutation: UpdateHostVersionPolicyMutation;
-  /** The count the label is promising, live at this render. */
-  readonly liveBusySessionCount: number | null;
+  /**
+   * The count this control may stand behind: `null` unless the `host.status`
+   * read is settled. Deliberately NOT the count in `label` — the label may
+   * render a retained number through a refetch, and arming a force from a
+   * number that is merely retained is the whole failure this split closes.
+   */
+  readonly settledBusySessionCount: number | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
   // The TARGET is captured when the dialog is armed, not read when it is
@@ -296,26 +309,28 @@ function ApplyNowControl(props: {
   // time against what was ARMED is what makes "ends 2 sessions" a promise
   // rather than an estimate.
   //
-  // Of the two ways the number can move, only ONE reaches this guard today.
-  // A changed count (2 → 3) does. A LOST count does not: `deriveUpdateAffordance`
-  // nulls `applyNowLabel` the moment the live read goes away, and
-  // `HostRegistryUpdates` gates this whole control on that label — so losing the
-  // source unmounts the trigger, this component and any open dialog with it,
-  // which is a stronger outcome than refusing at confirm time. The `null` arms
-  // below are therefore SECOND-LINE and currently unreachable through the
-  // composed tree. They stay because the thing they protect is destructive and
-  // the gate above them is a rendering decision two files away: if that gate is
-  // ever relaxed so an armed dialog outlives its label, this is what keeps the
-  // promise honest. Do not read their presence as evidence that path is live.
+  // Both ways the number can move now reach this guard, and the `null` arm is
+  // the one that changed. A changed count (2 → 3) always did.
+  //
+  // A LOST count used to be unreachable here: `deriveUpdateAffordance` nulls
+  // `applyNowLabel` the moment the DISPLAY read goes away, and
+  // `HostRegistryUpdates` gates this whole control on that label, so losing the
+  // source unmounted the trigger and any open dialog with it. That is still
+  // true of a genuinely lost read. It is NOT true of the case this control now
+  // reads instead: a settled count is also lost for the duration of every
+  // refetch, while the label keeps rendering the retained number and this stays
+  // mounted. So the `null` arms below are live, load-bearing, and the reason
+  // this component takes a different number from the one on its own button.
   const [armedCount, setArmedCount] = useState<number | null>(null);
   const open = armedHostId !== null;
   const targetMoved = armedHostId !== null && armedHostId !== hostId;
-  // `null` covers both "the live source is gone" and "it never reported",
-  // which are the same answer here: we can no longer stand behind the number.
+  // `null` covers "the live source is gone", "it never reported", and "a
+  // replacement read is in flight" — the same answer in all three: we cannot
+  // currently stand behind the number.
   const countMoved =
     open &&
-    (props.liveBusySessionCount === null ||
-      props.liveBusySessionCount !== armedCount);
+    (props.settledBusySessionCount === null ||
+      props.settledBusySessionCount !== armedCount);
   const refuse = targetMoved || countMoved;
 
   return (
@@ -326,9 +341,14 @@ function ApplyNowControl(props: {
         size="sm"
         onClick={() => {
           setArmedHostId(hostId);
-          setArmedCount(props.liveBusySessionCount);
+          setArmedCount(props.settledBusySessionCount);
         }}
-        disabled={mutation.isPending}
+        // Arming is refused, not merely refused at confirm time, while the
+        // count is unsettled. The dialog would open naming a number it would
+        // then decline to act on, which is a worse experience than a briefly
+        // inert button — and the window is one host RPC over an already-open
+        // connection.
+        disabled={mutation.isPending || props.settledBusySessionCount === null}
         data-testid={`host-apply-now-trigger-${hostId}`}
       >
         {label}
@@ -343,6 +363,7 @@ function ApplyNowControl(props: {
           targetMoved,
           countMoved,
           armedCount,
+          currentCount: props.settledBusySessionCount,
         })}
         cascadeSummary={null}
         actionLabel="Apply now"
@@ -371,18 +392,27 @@ function ApplyNowControl(props: {
  * why it did not happen. The count case is the subtler one: nothing looks
  * broken, the number on the button simply stopped being something we can
  * stand behind.
+ *
+ * Which is why the "cannot see it" branch keys off `currentCount`, not
+ * `armedCount`. Those two used to be the same question, back when losing the
+ * read unmounted the whole control — the only way to reach the refusal was for
+ * a number to have moved to another number. Now a refetch withdraws the count
+ * without withdrawing the control, so the dialog can be armed at 2 and then be
+ * unable to see anything; branching on `armedCount` there produced "it is no
+ * longer 2" about a number that had not changed at all.
  */
 function describeApplyNowConfirmation(input: {
   readonly targetMoved: boolean;
   readonly countMoved: boolean;
   readonly armedCount: number | null;
+  readonly currentCount: number | null;
 }): string {
   if (input.targetMoved) {
     return "The host this was aimed at is no longer the one selected. Close this and try again on the host you mean.";
   }
   if (input.countMoved) {
-    return input.armedCount === null
-      ? "We can't currently see how many sessions are open on this host, so we can't say what applying now would end. Close this and try again once the host is reachable."
+    return input.currentCount === null || input.armedCount === null
+      ? "We can't currently see how many sessions are open on this host, so we can't say what applying now would end. Close this and try again once the count is back."
       : `The number of open sessions changed since you opened this — it is no longer ${input.armedCount}. Close this and try again so you can see what applying now would end.`;
   }
   return "This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back.";

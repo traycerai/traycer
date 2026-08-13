@@ -351,6 +351,12 @@ export function useHostStreamClientBindingFor(
     // role in transport construction (`buildHostStreamClient` only reads
     // `hostId`/`websocketUrl`/`publicKey`); it is a placeholder purely to
     // satisfy `isRemoteHostDirectoryEntry`'s shape check.
+    //
+    // `transportDialability` is written coarsely here for the same reason: this
+    // is a FABRICATED entry describing an endpoint this effect has already
+    // decided to dial, not a directory row carrying a verdict about a machine.
+    // The gate that decides whether to dial at all ran above this, against the
+    // real entry.
     const memoizedTarget =
       endpointKind === "remote" && endpointPublicKey !== null
         ? ({
@@ -359,7 +365,7 @@ export function useHostStreamClientBindingFor(
             kind: "remote",
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
             publicKey: endpointPublicKey,
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
           } satisfies RemoteHostDirectoryEntry)
@@ -369,7 +375,7 @@ export function useHostStreamClientBindingFor(
             kind: endpointKind,
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
           } satisfies HostDirectoryEntry);
 
     const client = buildHostStreamClient({

@@ -127,11 +127,13 @@ export function isRemoteHostDirectoryEntry(
 }
 
 /**
- * WHY a directory entry cannot be dialed — the distinction `status` erases.
+ * WHY a directory entry cannot be dialed — the distinction the coarse bit
+ * erases.
  *
- * `HostAvailability` answers one question ("can this client dial it?") and that
- * is the right question for the transport. It is the wrong question for the UI,
- * because three very different situations collapse into `unavailable`:
+ * `HostTransportDialability` answers one question ("can this client dial it?")
+ * and that is the right question for the transport. It is the wrong question
+ * for the UI, because three very different situations collapse into
+ * `not-dialable`:
  *
  *  - `offline`         — the host is positively not attached. Saying so is
  *                        honest, and this is the only one that may render as
@@ -152,7 +154,8 @@ export function isRemoteHostDirectoryEntry(
  * legitimately treat two of these the same — but it has to say so against the
  * named verdict, not by never learning the difference.
  */
-export type HostUnavailability = "offline" | "plan-restricted" | "indeterminate";
+export type HostUnavailability =
+  "offline" | "plan-restricted" | "indeterminate";
 
 /**
  * The reason an entry is not dialable, or `null` when it is.
@@ -181,12 +184,39 @@ export function hostUnavailability(
     case "offline":
       return "offline";
     case "connectable":
-      // Unreachable in practice (`connectable` is exactly what makes `status`
-      // `available` above). Reported as indeterminate rather than offline so a
+      // Unreachable in practice (`connectable` is exactly what makes an entry
+      // `dialable` above). Reported as indeterminate rather than offline so a
       // future mapper change that breaks that correspondence degrades into
       // "we don't know" instead of into a false death claim.
       return "indeterminate";
   }
+}
+
+/**
+ * Whether the directory is POSITIVELY refusing this route, as opposed to
+ * failing to answer.
+ *
+ * Two refusals are real and permanent-until-something-changes: the host is
+ * confirmed detached (`offline`), or the account's plan has no remote route to
+ * it (`plan-restricted` — correct to refuse, since no relay attach exists to
+ * dial; the UI's job is to say "Local only" rather than "offline", which is
+ * `useHostReachability`'s reason field, not this).
+ *
+ * `indeterminate` is not a refusal — it is the absence of an answer, and the
+ * transport's response to an absent answer is to try.
+ *
+ * Lives here rather than beside the GUI's `hostTransportKey` because it is now
+ * asked by more than one gate, and the gates MUST agree. `host-client`'s rebind
+ * sweep and the binding-authority registry ask it to decide whether a directory
+ * re-emit changed the route enough to cancel in-flight work; `transport-key`
+ * asks it to decide whether to dial. When those disagreed, the socket survived
+ * a verdict flip while everything riding on it was cancelled underneath.
+ */
+export function isConfirmedTransportRefusal(
+  entry: HostDirectoryEntry,
+): boolean {
+  const unavailability = hostUnavailability(entry);
+  return unavailability === "offline" || unavailability === "plan-restricted";
 }
 
 /**
@@ -220,15 +250,16 @@ export function isConfirmedHostDeath(
  * CS-minted attach grant, never by this URL. `version` shows the last-reported
  * app version.
  *
- * `status` answers exactly one question — can this client dial the host right
- * now — so it is `available` if and only if the relay holds a live attachment
- * for it (`connectivity === "connectable"`). Every other connectivity value is
- * a DIFFERENT reason for the same dialing answer, and the directory must not
- * distinguish them: `local-only` (the plan gate refuses the attach), `unknown`
- * (we could not read liveness) and `offline` all mean the dial would not
- * arrive. The honest per-reason copy is the derivation layer's job — the
- * `local-only` upgrade prompt and the "status unknown" wording both live in
- * `deriveHostPresence`, where there is room to say why.
+ * `transportDialability` answers exactly one question — can this client dial
+ * the host right now — so it is `dialable` if and only if the relay holds a
+ * live attachment for it (`connectivity === "connectable"`). Every other
+ * connectivity value is a DIFFERENT reason for the same dialing answer, and
+ * the directory must not distinguish them: `local-only` (the plan gate refuses
+ * the attach), `unknown` (we could not read liveness) and `offline` all mean
+ * the dial would not arrive. The honest per-reason copy is the derivation
+ * layer's job — {@link hostUnavailability} keeps the reason, and the
+ * `local-only` upgrade prompt and the "status unknown" wording branch on it
+ * where there is room to say why.
  *
  * `unknown` is the one that would be tempting to admit, and must not be: a
  * blind liveness read is not evidence of reachability, and letting it through

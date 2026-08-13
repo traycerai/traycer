@@ -158,7 +158,7 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://relay.invalid/attach",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
   remoteStatus: {
     connectivity: "connectable",
     viewerReachability: "ok",
@@ -176,7 +176,7 @@ const localEntry: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: "ws://127.0.0.1:1/",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const bearer = {

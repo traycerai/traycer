@@ -72,11 +72,19 @@ export function useHostReachability(hostId: string): HostReachability {
     // rendered every chat as "Bound host is offline" + Clone CTA (and
     // terminals as "permanently closed") from exactly this window.
     if (list.data.length === 0) {
-      return { status: "host-starting", hostLabel: hostId, unavailability: null };
+      return {
+        status: "host-starting",
+        hostLabel: hostId,
+        unavailability: null,
+      };
     }
     const entry = list.data.find((e) => e.hostId === hostId);
     if (entry === undefined) {
-      return { status: "unreachable", hostLabel: hostId, unavailability: "offline" };
+      return {
+        status: "unreachable",
+        hostLabel: hostId,
+        unavailability: "offline",
+      };
     }
     // The same "not published yet" state as the empty-directory arm above,
     // wearing a different shape. When this machine's local snapshot is absent,

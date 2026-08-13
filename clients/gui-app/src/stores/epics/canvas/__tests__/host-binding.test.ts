@@ -175,7 +175,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: "ws://127.0.0.1:5002/rpc",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 
@@ -206,7 +206,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.0.0",
-        status: "unavailable",
+        transportDialability: "not-dialable",
       },
     ];
 
@@ -244,7 +244,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: "ws://127.0.0.1:5001/rpc",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 
@@ -274,7 +274,7 @@ describe("host binding survives restart", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "1.0.0",
-        status: "unavailable",
+        transportDialability: "not-dialable",
       },
     ];
 
@@ -292,7 +292,7 @@ describe("host binding survives restart", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 

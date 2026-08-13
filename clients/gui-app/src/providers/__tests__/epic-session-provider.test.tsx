@@ -302,7 +302,7 @@ function ownerIdentityRemoteTarget(
     kind: "remote",
     websocketUrl: OWNER_IDENTITY_RELAY_URL,
     version: "1.0.0",
-    status: "available",
+    transportDialability: "dialable",
     publicKey,
     remoteStatus: {
       connectivity: "connectable",

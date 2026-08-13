@@ -236,10 +236,10 @@ describe("HostClient", () => {
     invalidator.options.length = 0;
     events.length = 0;
 
-    const sameIdOffline = {
+    const sameIdOffline: HostDirectoryEntry = {
       ...mockLocalHostEntry,
       websocketUrl: null,
-      status: "unavailable" as const,
+      transportDialability: "not-dialable",
     };
     client.bind(sameIdOffline);
 
@@ -319,7 +319,7 @@ describe("HostClient", () => {
       // a same-URL event by construction, so this must stay identical.
       websocketUrl: "wss://mock-remote.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
       publicKey,
       remoteStatus: {
         connectivity: "connectable",

@@ -264,7 +264,7 @@ async function renderOverviewSnapshot(options: {
             kind: "remote",
             websocketUrl: "wss://relay.traycer.ai/rpc/abc123",
             version: "1.5.0",
-            status: "available",
+            transportDialability: "dialable",
           },
     }),
     hostId: options.hostId,

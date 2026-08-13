@@ -14,7 +14,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:9/stream",
     version: "1.2.3",
-    status: "available",
+    transportDialability: "dialable",
     ...overrides,
   };
 }
@@ -28,7 +28,7 @@ function remoteEntry(
     kind: "remote",
     websocketUrl: "wss://relay.test/attach",
     version: "1.2.3",
-    status: "available",
+    transportDialability: "dialable",
     publicKey: "pubkey-a",
     remoteStatus: {
       connectivity: "connectable",
@@ -42,6 +42,30 @@ function remoteEntry(
   };
 }
 
+/**
+ * A remote entry whose relay verdict is the only thing that varies.
+ *
+ * `transportDialability` is derived exactly as the mapper derives it, so these
+ * fixtures are the shapes production actually produces rather than shapes that
+ * merely satisfy the type.
+ */
+function remoteWithConnectivity(
+  connectivity: "connectable" | "unknown" | "offline" | "local-only",
+): RemoteHostDirectoryEntry {
+  return remoteEntry({
+    transportDialability:
+      connectivity === "connectable" ? "dialable" : "not-dialable",
+    remoteStatus: {
+      connectivity,
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  });
+}
+
 describe("dialableHostEndpoint", () => {
   it("returns the endpoint for an available, dialable entry", () => {
     expect(dialableHostEndpoint(entry({}))).toEqual({
@@ -53,7 +77,9 @@ describe("dialableHostEndpoint", () => {
   it("returns null when not dialable or not available", () => {
     expect(dialableHostEndpoint(null)).toBeNull();
     expect(dialableHostEndpoint(entry({ websocketUrl: null }))).toBeNull();
-    expect(dialableHostEndpoint(entry({ status: "unavailable" }))).toBeNull();
+    expect(
+      dialableHostEndpoint(entry({ transportDialability: "not-dialable" })),
+    ).toBeNull();
   });
 
   it("agrees with hostTransportKey on dialability", () => {
@@ -65,6 +91,56 @@ describe("dialableHostEndpoint", () => {
     expect(dialableHostEndpoint(dialable)).not.toBeNull();
     expect(hostTransportKey(undialable)).toBeNull();
     expect(dialableHostEndpoint(undialable)).toBeNull();
+  });
+});
+
+/**
+ * The gate both halves of the transport share: WHICH not-dialable reasons
+ * actually refuse a dial.
+ *
+ * This is the layer the round-2 repair got wrong. Refusing everything the
+ * directory did not call `available` folded in `indeterminate` — a failed
+ * liveness read on the cloud side — and the null key made the session
+ * registries release a live handle, so one degraded Redis read replaced an
+ * active chat with a tile that loads forever.
+ */
+describe("the transport's refusal gate", () => {
+  it("dials a host whose liveness read came back blind (`unknown` ⇒ indeterminate)", () => {
+    const blind = remoteWithConnectivity("unknown");
+    expect(hostTransportKey(blind)).not.toBeNull();
+    expect(dialableHostEndpoint(blind)).not.toBeNull();
+  });
+
+  it("refuses a confirmed-offline host", () => {
+    const dead = remoteWithConnectivity("offline");
+    expect(hostTransportKey(dead)).toBeNull();
+    expect(dialableHostEndpoint(dead)).toBeNull();
+  });
+
+  it("refuses a plan-restricted host — there is no relay attach to dial", () => {
+    // Correct to refuse, and NOT the same as offline: the machine is running.
+    // Saying so is `useHostReachability`'s reason field, not this layer's job.
+    const localOnly = remoteWithConnectivity("local-only");
+    expect(hostTransportKey(localOnly)).toBeNull();
+    expect(dialableHostEndpoint(localOnly)).toBeNull();
+  });
+
+  it("keeps the key UNCHANGED across a dialable → indeterminate flip", () => {
+    // The anti-churn property, and the one without which the P0 survives the
+    // rest of this suite: every caller memoizes its client on this key, so a
+    // key that merely CHANGES tears the socket down just as surely as a key
+    // that goes null. The verdict is a gate, not an identity — the host's
+    // address did not move.
+    const before = hostTransportKey(remoteWithConnectivity("connectable"));
+    const after = hostTransportKey(remoteWithConnectivity("unknown"));
+    expect(before).not.toBeNull();
+    expect(after).toBe(before);
+  });
+
+  it("keeps the endpoint unchanged across the same flip", () => {
+    expect(dialableHostEndpoint(remoteWithConnectivity("unknown"))).toEqual(
+      dialableHostEndpoint(remoteWithConnectivity("connectable")),
+    );
   });
 });
 

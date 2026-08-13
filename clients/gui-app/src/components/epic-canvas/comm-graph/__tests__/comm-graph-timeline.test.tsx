@@ -22,7 +22,7 @@ const hostDirectoryMock = vi.hoisted(() => ({
     kind: "remote" as const,
     websocketUrl: `wss://${hostId}.example/stream`,
     version: "1.0.0",
-    status: "available" as const,
+    transportDialability: "dialable" as const,
   }),
   onChange: () => ({ dispose: () => undefined }),
 }));

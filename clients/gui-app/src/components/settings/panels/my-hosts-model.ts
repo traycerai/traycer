@@ -213,7 +213,7 @@ export interface LiveBusySessionCountOptions {
 }
 
 /**
- * The drain count, but only when it is actually a LIVE reading.
+ * The drain count to SHOW, when it is a plausibly live reading.
  *
  * TanStack retains the last successful `data` after a refetch error, which is
  * the right default for almost everything and exactly wrong here. `host.status`
@@ -227,10 +227,17 @@ export interface LiveBusySessionCountOptions {
  *
  *   - the last read ERRORED (retained ≠ current);
  *   - fetching is PAUSED (offline; nothing will correct it);
- *   - the value has gone STALE (the poll stopped keeping it current).
+ *   - the value has gone STALE with nothing in flight to correct it.
  *
  * The staleness check is the one that catches the quiet case, where nothing
  * failed loudly and the data simply stopped being refreshed.
+ *
+ * Stale WHILE a replacement is in flight keeps rendering the retained number,
+ * and that is a display decision only. It is not a claim the number is current —
+ * "the fresh answer is in flight" does not make the old one fresh — it is a
+ * choice not to blank a panel for the length of a round trip. Nothing
+ * destructive may be armed from it; see {@link settledBusySessionCount}, which
+ * is what the force reads.
  */
 export function liveBusySessionCount(
   options: LiveBusySessionCountOptions,
@@ -242,6 +249,36 @@ export function liveBusySessionCount(
     return null;
   }
   return options.reportedCount;
+}
+
+/**
+ * The drain count a DESTRUCTIVE action may stand behind: the same read, settled.
+ *
+ * The split exists because one number was doing two jobs with opposite failure
+ * costs. Showing a slightly-behind count while its replacement is in flight
+ * costs a moment of imprecision on a label. ARMING a force from that same count
+ * costs sessions: the panel shows 2, a focus refetch begins while the host is
+ * actually at 5, the person arms and confirms inside the round trip, and the
+ * confirm-time equality guard compares the retained 2 against the armed 2,
+ * agrees with itself, and ends all five while promising two. The guard cannot
+ * catch it — it is comparing a value to itself.
+ *
+ * So this one additionally requires the read to be SETTLED: nothing in flight
+ * (`fetchStatus === "idle"`) and not aged out (`!isStale`). Anything else is a
+ * value we cannot currently stand behind, and the destructive path treats
+ * "cannot stand behind" the way it already treats a lost source — it refuses.
+ *
+ * The cost is that arming is unavailable for the duration of each poll's round
+ * trip. That is a host RPC over an already-open connection, and refusing for
+ * that window is much cheaper than being wrong once.
+ */
+export function settledBusySessionCount(
+  options: LiveBusySessionCountOptions,
+): number | null {
+  if (options.fetchStatus !== "idle" || options.isStale) {
+    return null;
+  }
+  return liveBusySessionCount(options);
 }
 
 export interface DeriveUpdateAffordanceOptions {

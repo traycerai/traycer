@@ -45,7 +45,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     kind: "local",
     websocketUrl: "ws://127.0.0.1:1/rpc",
     version: null,
-    status: "available",
+    transportDialability: "dialable",
   }),
 }));
 

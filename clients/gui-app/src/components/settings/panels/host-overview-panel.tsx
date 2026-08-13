@@ -31,7 +31,10 @@ import {
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
-import { liveBusySessionCount } from "@/components/settings/panels/my-hosts-model";
+import {
+  liveBusySessionCount,
+  settledBusySessionCount,
+} from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import {
   managedInstallation,
@@ -320,6 +323,7 @@ export function HostOverviewPanel(props: {
         usable={usable}
         registryItem={registryItem}
         liveBusySessionCount={view.busySessionCount}
+        settledBusySessionCount={view.settledBusySessionCount}
       />
 
       <HostOverviewInstallationCard
@@ -475,8 +479,19 @@ interface OverviewDisplay {
   /**
    * Live open-session count from `host.status`, or `null` when this client has
    * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   *
+   * The DISPLAY read: it survives a refetch of stale data so the row does not
+   * blank for a round trip.
    */
   readonly busySessionCount: number | null;
+  /**
+   * The same count, but only when the read is SETTLED — what the drain force
+   * may be armed and confirmed against. Diverges from `busySessionCount`
+   * exactly while a fetch is in flight, which is the window in which the
+   * confirm-time equality guard would otherwise compare a retained number to
+   * itself and wave through a force sized to a count nobody was shown.
+   */
+  readonly settledBusySessionCount: number | null;
 }
 
 function useOverviewDisplay(input: {
@@ -495,6 +510,9 @@ function useOverviewDisplay(input: {
 }): OverviewDisplay {
   const { scope, host, identity, status, statusHealth, localHost } = input;
   const hostVersion = status?.hostVersion ?? null;
+  // Spelled out at each call rather than hoisted into a shared object: a named
+  // object in scope makes `busySessionCount` look mutable to the React
+  // Compiler, which then refuses to preserve the memo below it.
   const busySessionCount = liveBusySessionCount({
     reportedCount: status?.busySessionCount ?? null,
     isError: statusHealth.isError,
@@ -520,6 +538,12 @@ function useOverviewDisplay(input: {
     hostVersion,
     updateProgress: status?.updateProgress ?? null,
     busySessionCount,
+    settledBusySessionCount: settledBusySessionCount({
+      reportedCount: status?.busySessionCount ?? null,
+      isError: statusHealth.isError,
+      fetchStatus: statusHealth.fetchStatus,
+      isStale: statusHealth.isStale,
+    }),
   };
 }
 
@@ -544,6 +568,8 @@ function HostOverviewUpdatesCard(props: {
   readonly registryItem: HostListItem | null;
   /** `host.status`'s live session count; `null` when there is no live read. */
   readonly liveBusySessionCount: number | null;
+  /** The same count when the read is settled — the drain force's arm gate. */
+  readonly settledBusySessionCount: number | null;
 }): ReactNode {
   const { registryItem } = props;
   return (
@@ -572,6 +598,7 @@ function HostOverviewUpdatesCard(props: {
             key={registryItem.hostId}
             item={registryItem}
             liveBusySessionCount={props.liveBusySessionCount}
+            settledBusySessionCount={props.settledBusySessionCount}
           />
         )}
       </div>

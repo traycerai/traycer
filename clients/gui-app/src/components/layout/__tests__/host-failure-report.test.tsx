@@ -68,7 +68,9 @@ function reportedMessage(
     includeRetainedProgress: false,
   });
   if (!isValidElement<ReportIssueActionProps>(element)) {
-    throw new Error("expected hostFailureReportIssueAction to return an element");
+    throw new Error(
+      "expected hostFailureReportIssueAction to return an element",
+    );
   }
   const { context } = element.props;
   if (typeof context === "function" || isReportIssueDraftContext(context)) {

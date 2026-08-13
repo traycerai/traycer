@@ -1,10 +1,11 @@
 /**
  * Composition coverage: `settingsHostOptionLabel` fed REAL entries from
  * `hostListItemToDirectoryEntry` — not synthetic `HostDirectoryEntry`
- * literals asserting `status` directly. The mapper collapses every
- * non-connectable `connectivity` into `status: "unavailable"`; this pins
- * that the label's per-reason branching (`hostUnavailability`) actually
- * survives that collapse for each connectivity value the mapper produces.
+ * literals asserting the coarse bit directly. The mapper collapses every
+ * non-connectable `connectivity` into `transportDialability: "not-dialable"`;
+ * this pins that the label's per-reason branching (`hostUnavailability`)
+ * actually survives that collapse for each connectivity value the mapper
+ * produces.
  */
 import { describe, expect, it } from "vitest";
 import type {
@@ -43,8 +44,9 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
       RELAY_BASE_URL,
     );
     // Sanity: this is exactly the collapsed shape the mapper produces —
-    // the coarse bit the six consumers used to read directly.
-    expect(entry.status).toBe("unavailable");
+    // the coarse bit the six consumers used to read directly, which is why it
+    // is now named for what it answers rather than for what it looked like.
+    expect(entry.transportDialability).toBe("not-dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox");
   });
 
@@ -53,7 +55,7 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
       listItem("local-only"),
       RELAY_BASE_URL,
     );
-    expect(entry.status).toBe("unavailable");
+    expect(entry.transportDialability).toBe("not-dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (local only)");
   });
 
@@ -62,7 +64,7 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
       listItem("offline"),
       RELAY_BASE_URL,
     );
-    expect(entry.status).toBe("unavailable");
+    expect(entry.transportDialability).toBe("not-dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (offline)");
   });
 
@@ -71,7 +73,7 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
       listItem("connectable"),
       RELAY_BASE_URL,
     );
-    expect(entry.status).toBe("available");
+    expect(entry.transportDialability).toBe("dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox");
   });
 });

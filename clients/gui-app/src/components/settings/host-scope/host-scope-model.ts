@@ -5,12 +5,12 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import {
   deriveHostHealth,
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
 import type { ViewerReachabilityCheckLike } from "@/components/settings/panels/my-hosts-model";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -126,15 +126,17 @@ export function buildHostScopeOptions(
  * `buildTransientHostClient` returns null for it, so offering it as an
  * administrable target would produce a picker row that can never load.
  *
- * `status` is half of that question, not a detail. The repository's canonical
- * dialability rule lives in `dialableHostEndpoint` / `hostTransportKey`, and
- * BOTH refuse an entry that is not `available` even when it still carries a
- * URL — a stale address left behind by a host that went away.
- * `buildTransientHostClient` does not re-check it, so a URL-only test handed
- * back a live-looking client whose every call hangs: the scope read `ready`,
- * panels mounted, and the Add-host dialog announced a machine as connected and
- * ready to run agents. Asking the same question the transport asks is what
- * keeps this model from disagreeing with the layer that actually dials.
+ * Dialability is half of that question, not a detail — so this now CALLS the
+ * canonical rule (`dialableHostEndpoint`) instead of restating it. It used to
+ * restate it as `status === "available"`, which was the same answer only for as
+ * long as the two definitions happened to agree; they stopped agreeing when the
+ * transport was taught that a failed liveness read still dials, and a
+ * hand-copied predicate cannot be told that.
+ *
+ * The URL check matters on its own: `buildTransientHostClient` does not
+ * re-check it, so a URL-only test handed back a live-looking client whose every
+ * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
+ * announced a machine as connected and ready to run agents.
  *
  * The plan gate is the same kind of claim. A remote host on a plan without
  * remote hosts advertises a relay URL the server refuses to attach
@@ -146,11 +148,7 @@ function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
 ): boolean {
-  if (entry === null || entry.websocketUrl === null) return false;
-  // Reachable, not "answering this instant": a busy host is still the host
-  // this route administers, and disabling its settings for the duration of an
-  // epic open would be the same false-death read this ticket removes.
-  if (!isHostReachable(entry.status)) return false;
+  if (entry === null || dialableHostEndpoint(entry) === null) return false;
   return !(remoteHostsPlanRestricted && entry.kind === "remote");
 }
 
@@ -171,9 +169,9 @@ function isAdministrableRoute(
  *     the host never attaches to a relay at all, because the owner's plan does
  *     not include remote hosts.
  *
- * The old body demanded `status === "available"`, which the second case can
- * never satisfy: a `local-only` host is exactly the one the mapper marks
- * unavailable. So a free-tier user's own host came back non-connectable AND
+ * The old body demanded a dialable entry, which the second case can never
+ * satisfy: a `local-only` host is exactly the one the mapper marks
+ * not-dialable. So a free-tier user's own host came back non-connectable AND
  * non-plan-restricted, and every surface downstream fell through to its
  * generic connection-failure copy — the upgrade path invisible precisely to
  * the person who needed it.
@@ -184,8 +182,9 @@ function isPlanRestrictedRoute(
 ): boolean {
   if (entry === null) return false;
   if (hostUnavailability(entry) === "plan-restricted") return true;
-  if (entry.websocketUrl === null) return false;
-  if (!isHostReachable(entry.status)) return false;
+  // The CLIENT-side gate only applies to a route that otherwise exists, so it
+  // asks the transport's own question rather than a second copy of it.
+  if (dialableHostEndpoint(entry) === null) return false;
   return remoteHostsPlanRestricted && entry.kind === "remote";
 }
 

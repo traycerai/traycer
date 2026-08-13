@@ -31,7 +31,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
     kind: "remote",
     websocketUrl: "wss://relay.example/host-a",
     version: "1.4.2",
-    status: "available",
+    transportDialability: "dialable",
     ...overrides,
   };
 }
@@ -95,7 +95,9 @@ describe("buildHostScopeOptions connectable", () => {
     // mounted host-RPC panels against a machine nothing could dial. The client
     // builder does not re-check status, so nothing downstream would have
     // caught it.
-    expect(connectableFor(entry({ status: "unavailable" }))).toBe(false);
+    expect(
+      connectableFor(entry({ transportDialability: "not-dialable" })),
+    ).toBe(false);
   });
 
   it("refuses an entry with no URL", () => {
@@ -105,15 +107,15 @@ describe("buildHostScopeOptions connectable", () => {
   it("agrees with the canonical transport rule on every combination", () => {
     // Pinned to the real helper rather than restated: if dialability changes,
     // this fails instead of quietly letting the two definitions drift.
-    for (const status of ["available", "unavailable"] as const) {
+    for (const transportDialability of ["dialable", "not-dialable"] as const) {
       for (const websocketUrl of ["wss://relay.example/host-a", null]) {
-        const candidate = entry({ status, websocketUrl });
+        const candidate = entry({ transportDialability, websocketUrl });
         expect({
-          status,
+          transportDialability,
           websocketUrl,
           connectable: connectableFor(candidate),
         }).toEqual({
-          status,
+          transportDialability,
           websocketUrl,
           connectable: dialableHostEndpoint(candidate) !== null,
         });
@@ -179,7 +181,7 @@ describe("buildHostScopeOptions planRestricted", () => {
     ).toBe(false);
     expect(
       buildOne({
-        entry: entry({ kind: "remote", status: "unavailable" }),
+        entry: entry({ kind: "remote", transportDialability: "not-dialable" }),
         item: null,
         localHostId: null,
         remoteHostsPlanRestricted: true,
@@ -378,7 +380,7 @@ describe("transientClientEntry", () => {
     const host = hostScopeOptionFixture({
       hostId: "host-a",
       connectable: false,
-      entry: entry({ status: "unavailable" }),
+      entry: entry({ transportDialability: "not-dialable" }),
     });
     expect(transientClientEntry(host, false)).toBeNull();
   });

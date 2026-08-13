@@ -26,7 +26,7 @@ const offlineHost: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: null,
   version: "1.0.0",
-  status: "unavailable",
+  transportDialability: "not-dialable",
 };
 
 describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
@@ -56,7 +56,11 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
 
     mocks.entries = [
-      { ...offlineHost, websocketUrl: "ws://host-b/rpc", status: "available" },
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
     ];
     view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
 

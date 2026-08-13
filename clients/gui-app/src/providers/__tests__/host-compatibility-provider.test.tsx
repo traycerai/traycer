@@ -667,7 +667,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4918/rpc",
       version: "1.2.3",
-      status: "available",
+      transportDialability: "dialable",
     };
     const hostA: HostDirectoryEntry = {
       hostId: localSnapshot.hostId,
@@ -675,7 +675,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
       kind: "local",
       websocketUrl: localSnapshot.websocketUrl,
       version: localSnapshot.version,
-      status: "available",
+      transportDialability: "dialable",
     };
     recordNegotiatedHostMethods(hostB.hostId, [
       "host.status",

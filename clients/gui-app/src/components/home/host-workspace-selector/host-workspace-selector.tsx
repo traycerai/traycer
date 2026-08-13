@@ -469,6 +469,15 @@ export function ActiveHostWorkspaceControls(
   );
 }
 
+/**
+ * A row for a host the directory does not (yet) contain, so the picker can name
+ * the scope it is pinned to instead of showing an empty list.
+ *
+ * Coarse construction is correct: this is a FABRICATED entry with no route
+ * (`websocketUrl: null`), not a verdict about a machine. There is nothing to
+ * derive a reason from — the derivation reads it back as `offline`, which is
+ * what "not in your directory" honestly means.
+ */
 function fixedUnavailableHostEntry(
   hostId: string,
   hostLabel: string,
@@ -479,7 +488,7 @@ function fixedUnavailableHostEntry(
     kind: "local",
     websocketUrl: null,
     version: null,
-    status: "unavailable",
+    transportDialability: "not-dialable",
   };
 }
 
@@ -1169,6 +1178,8 @@ function hostSelectOptions(
   ) {
     return entries;
   }
+  // Same fabricated-row rule as `fixedUnavailableHostEntry`: no route exists to
+  // ask about, so the coarse bit is written directly rather than derived.
   return [
     {
       hostId: activeHostId,
@@ -1176,7 +1187,7 @@ function hostSelectOptions(
       kind: "local",
       websocketUrl: null,
       version: null,
-      status: "unavailable",
+      transportDialability: "not-dialable",
     },
     ...entries,
   ];

@@ -1,6 +1,6 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
-  hostUnavailability,
+  isConfirmedTransportRefusal,
   isRemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
@@ -42,6 +42,11 @@ const SEPARATOR = String.fromCharCode(0);
  * identity: including it meant a `dialable` → `indeterminate` flip changed the
  * key and churned a transport whose address never moved.
  *
+ * `isConfirmedTransportRefusal` lives in `remote-fetcher.ts` rather than here
+ * because `host-client`'s rebind sweep and the binding-authority registry ask
+ * the same question about the same entry, and a second copy of it is how the
+ * layers drift back apart.
+ *
  * Shared by the app-wide `HostStreamProvider` (via
  * `readHostTransportKey(client.getActiveHost())`) and the per-tab
  * `useHostStreamClientFor`, so both streams compute the same notion of "same
@@ -58,24 +63,6 @@ export function hostTransportKey(
     entry.version ?? "",
     entry.websocketUrl,
   ].join(SEPARATOR);
-}
-
-/**
- * Whether the directory is POSITIVELY refusing this route, as opposed to
- * failing to answer.
- *
- * Two refusals are real and permanent-until-something-changes: the host is
- * confirmed detached (`offline`), or the account's plan has no remote route to
- * it (`plan-restricted` — correct to refuse, since no relay attach exists to
- * dial; the UI's job is to say "Local only" rather than "offline", which is
- * `useHostReachability`'s reason field, not this).
- *
- * `indeterminate` is not a refusal — it is the absence of an answer, and the
- * transport's response to an absent answer is to try.
- */
-function isConfirmedTransportRefusal(entry: HostDirectoryEntry): boolean {
-  const unavailability = hostUnavailability(entry);
-  return unavailability === "offline" || unavailability === "plan-restricted";
 }
 
 /**

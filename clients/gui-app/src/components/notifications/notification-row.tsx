@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
-  isHostReachable,
-  type HostAvailability,
-} from "@traycer-clients/shared/host-client/host-directory";
-import {
   Bell,
   Check,
   CheckCircle2,
@@ -21,6 +17,11 @@ import {
   notificationFeedTone,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hostUnavailability,
+  type HostUnavailability,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
@@ -52,21 +53,34 @@ interface NotificationRowProps {
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
 
-function isOriginUnavailable(input: {
+/**
+ * Whether an origin-host-bound row must stop offering its action.
+ *
+ * DERIVATION, not the coarse bit, and the difference is the whole point of this
+ * function existing. It used to disable the row for anything the directory did
+ * not call `available`, which folded a failed liveness read in with a host that
+ * is genuinely gone: an approval prompt on a perfectly healthy machine went
+ * grey and un-actionable because one Redis read on the cloud side came back
+ * blind. `indeterminate` therefore does NOT disable — the activation path dials
+ * and fails on its own evidence, which is recoverable, where a disabled row is
+ * a dead end the user cannot argue with.
+ *
+ * A CONFIRMED refusal still disables, because for those the action really has
+ * nowhere to go: `offline` (the host is detached) and `plan-restricted` (no
+ * remote route exists to it on this account's plan).
+ */
+function originRefusal(input: {
   readonly row: MergedNotificationRow;
-  readonly originStatus: HostAvailability | undefined;
-}): boolean {
+  readonly originEntry: HostDirectoryEntry | null;
+}): HostUnavailability | null {
   const requiresOriginHost =
     input.row.payload !== null &&
     notificationPayloadRequiresOriginHost(input.row.payload);
-  if (!requiresOriginHost) return false;
-  if (input.row.originHostId === null) return true;
-  // A busy host is reachable (int #48): the row must not grey out an
-  // approval whose origin is merely slow. Absent directory entry stays
-  // fail-closed.
-  return (
-    input.originStatus === undefined || !isHostReachable(input.originStatus)
-  );
+  if (!requiresOriginHost) return null;
+  if (input.row.originHostId === null) return "offline";
+  if (input.originEntry === null) return "offline";
+  const unavailability = hostUnavailability(input.originEntry);
+  return unavailability === "indeterminate" ? null : unavailability;
 }
 
 /**
@@ -134,10 +148,8 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasPayload: row.payload !== null,
   });
   const isRead = row.readAt !== null;
-  const originUnavailable = isOriginUnavailable({
-    row,
-    originStatus: originHost?.status,
-  });
+  const originUnavailability = originRefusal({ row, originEntry: originHost });
+  const originUnavailable = originUnavailability !== null;
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
@@ -208,7 +220,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         displayBody={packPresentation.displayBody}
         isRead={isRead}
         isNavigable={packPresentation.isNavigable}
-        originUnavailable={originUnavailable}
+        originUnavailability={originUnavailability}
         packRemote={packPresentation.packRemote}
         remoteHostLabel={packPresentation.remoteHostLabel}
         onActivate={props.onActivate}
@@ -266,7 +278,7 @@ function NotificationRowMain(props: {
   readonly displayBody: string;
   readonly isRead: boolean;
   readonly isNavigable: boolean;
-  readonly originUnavailable: boolean;
+  readonly originUnavailability: HostUnavailability | null;
   readonly packRemote: boolean;
   readonly remoteHostLabel: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
@@ -279,7 +291,7 @@ function NotificationRowMain(props: {
     />
   );
 
-  if (props.isNavigable && !props.originUnavailable) {
+  if (props.isNavigable && props.originUnavailability === null) {
     return (
       <button
         type="button"
@@ -299,14 +311,16 @@ function NotificationRowMain(props: {
   return (
     <div className="min-w-0 flex-1">
       {body}
-      {props.originUnavailable ? (
+      {props.originUnavailability === null ? null : (
         <span
           data-testid="notification-origin-unavailable"
           className="block text-ui-xs text-muted-foreground"
         >
-          The originating host is unavailable.
+          {props.originUnavailability === "plan-restricted"
+            ? "The originating host is local only on your current plan."
+            : "The originating host is unavailable."}
         </span>
-      ) : null}
+      )}
       {props.packRemote ? (
         <span
           data-testid="notification-pack-remote-hint"

@@ -91,7 +91,7 @@ const ORIGIN_HOST: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://build-box.traycer.invalid/rpc",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const WORKTREE_SETTINGS_ROUTE: NotificationPayload = {

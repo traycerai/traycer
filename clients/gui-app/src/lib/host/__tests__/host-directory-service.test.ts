@@ -63,7 +63,7 @@ const rememberedRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://remembered-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const secondRemoteHostEntry: HostDirectoryEntry = {
@@ -72,7 +72,7 @@ const secondRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://second-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 /** A third dialable remote, for the case where BOTH failover ends vanish. */
@@ -82,7 +82,7 @@ const thirdRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://third-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 function makeHost(localHost: LocalHostSnapshot | null): MockRunnerHost {
@@ -233,7 +233,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://relay.traycer.invalid/attach",
       version: localSnapshot.version,
-      status: "available",
+      transportDialability: "dialable",
     };
     const remoteFetcher: RemoteHostFetcher = () =>
       Promise.resolve({
@@ -310,7 +310,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://mock-remote-2.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const directory = makeDirectory({
       runnerHost: host,
@@ -1188,7 +1188,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://mock-remote-2.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemote] },
@@ -1433,7 +1433,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://relay.traycer.invalid/attach",
       version: "1.2.2",
-      status: "available",
+      transportDialability: "dialable",
     };
 
     it("presents the machine's own registry twin as a non-dialable local entry", async () => {
@@ -1463,11 +1463,11 @@ describe("HostDirectoryService", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.2.2",
-        // Not the twin's presence lease: `unavailable` is the truth, and it is
-        // what leaves an `unavailable -> available` edge for status-transition
+        // Not the twin's presence lease: `not-dialable` is the truth, and it
+        // is what leaves a `not-dialable -> dialable` edge for dialability
         // subscribers (e.g. landing-terminal tombstone recovery) when the real
         // host finally publishes.
-        status: "unavailable",
+        transportDialability: "not-dialable",
       });
       expect(entries[1]).toEqual(secondRemoteHostEntry);
     });
@@ -1905,7 +1905,7 @@ describe("HostDirectoryService", () => {
       return {
         ...entry,
         websocketUrl: null,
-        status: "unavailable",
+        transportDialability: "not-dialable",
       };
     }
 
@@ -1952,7 +1952,7 @@ describe("HostDirectoryService", () => {
         kind: "remote",
         websocketUrl: "wss://dead-other.traycer.invalid/rpc",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       });
       let remotes: readonly HostDirectoryEntry[] = [
         rememberedRemoteHostEntry,
@@ -2149,7 +2149,7 @@ describe("HostDirectoryService", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       };
       const directory = makeDirectory({
         runnerHost: makeHost(null),
@@ -2315,7 +2315,11 @@ describe("HostDirectoryService", () => {
           "Remembered Real",
           "connectable",
         );
-        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
           runnerHost: makeHost(null),
@@ -2350,7 +2354,11 @@ describe("HostDirectoryService", () => {
           "Remembered Real",
           "connectable",
         );
-        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
           runnerHost: makeHost(null),
@@ -2378,7 +2386,11 @@ describe("HostDirectoryService", () => {
           "Remembered Real",
           "connectable",
         );
-        const second = realRemoteEntry("second-real", "Second Real", "connectable");
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
         let remotes: readonly HostDirectoryEntry[] = [remembered, second];
         const directory = makeDirectory({
           runnerHost: makeHost(null),
