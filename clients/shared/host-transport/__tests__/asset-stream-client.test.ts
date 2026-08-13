@@ -393,7 +393,7 @@ describe("AssetStreamClient", () => {
     expect(recorded.failures).toHaveLength(0);
   });
 
-  it("resets partial assembly when the transport reconnects", () => {
+  it("resets partial assembly and resumes on a same-identity reconnect", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
     const { factory, sockets } = makeFactory();
@@ -423,6 +423,86 @@ describe("AssetStreamClient", () => {
       throw new Error("asset stream did not reconnect");
     }
     completeHandshake(reconnectedSocket, undefined);
+    fireAssetHeader(reconnectedSocket, 3);
+    reconnectedSocket.fireText({
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 3,
+    });
+    reconnectedSocket.fireBinary(new Uint8Array([4, 5, 6]));
+    reconnectedSocket.fireText({
+      kind: "assetComplete",
+      hasBinaryPayload: false,
+    });
+
+    expect(recorded.headers).toHaveLength(1);
+    expect(recorded.failures).toHaveLength(0);
+    expect(recorded.ready).toHaveLength(1);
+    expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([4, 5, 6]);
+    expect(closedCount(reconnectedSocket)).toBe(1);
+    asset.close();
+    vi.useRealTimers();
+  });
+
+  it("fails when a reconnect reports a changed identity", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const { callbacks, recorded } = recordingCallbacks();
+    const asset = new AssetStreamClient({
+      wsStreamClient: client,
+      method: "workspace.streamAsset",
+      params: WORKSPACE_PARAMS,
+      callbacks,
+    });
+
+    completeHandshake(sockets[0], undefined);
+    fireAssetHeader(sockets[0], 3);
+    sockets[0].fireClose(1006, "abnormal", false);
+
+    vi.advanceTimersByTime(10);
+    const reconnectedSocket = sockets[1];
+    if (reconnectedSocket === undefined) {
+      throw new Error("asset stream did not reconnect");
+    }
+    completeHandshake(reconnectedSocket, undefined);
+    fireAssetHeader(reconnectedSocket, 2);
+
+    expectFatal(
+      recorded,
+      reconnectedSocket,
+      "assetHeader arrived more than once",
+    );
+    expect(recorded.headers).toHaveLength(1);
+    expect(recorded.ready).toHaveLength(0);
+    asset.close();
+    vi.useRealTimers();
+  });
+
+  it("accepts the first header after reconnecting before any header arrives", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const { callbacks, recorded } = recordingCallbacks();
+    const asset = new AssetStreamClient({
+      wsStreamClient: client,
+      method: "workspace.streamAsset",
+      params: WORKSPACE_PARAMS,
+      callbacks,
+    });
+
+    completeHandshake(sockets[0], undefined);
+    sockets[0].fireClose(1006, "abnormal", false);
+
+    vi.advanceTimersByTime(10);
+    const reconnectedSocket = sockets[1];
+    if (reconnectedSocket === undefined) {
+      throw new Error("asset stream did not reconnect");
+    }
+    completeHandshake(reconnectedSocket, undefined);
     fireAssetHeader(reconnectedSocket, 2);
     reconnectedSocket.fireText({
       kind: "assetChunk",
@@ -436,7 +516,7 @@ describe("AssetStreamClient", () => {
       hasBinaryPayload: false,
     });
 
-    expect(recorded.headers).toHaveLength(2);
+    expect(recorded.headers).toHaveLength(1);
     expect(recorded.failures).toHaveLength(0);
     expect(recorded.ready).toHaveLength(1);
     expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([4, 5]);

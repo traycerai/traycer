@@ -569,6 +569,62 @@ describe("useImageAsset", () => {
     third.unmount();
   });
 
+  it("resumes a same-identity reconnect without leaking its cache lease", async () => {
+    const { result, unmount } = renderHook(() =>
+      useImageAsset(WORKSPACE_REQUEST),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "reconnect-identity", 3);
+      session.emitFrame(
+        {
+          kind: "assetChunk",
+          hasBinaryPayload: true,
+          index: 0,
+          byteLength: 1,
+        },
+        new Uint8Array([1]),
+      );
+      session.emitStatus("reconnecting", null);
+      emitHeader(session, "reconnect-identity", 3);
+      emitBytes(session, [4, 5, 6]);
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("ready");
+    expect(result.current.url).toBe("blob:image/1");
+    expect(imageBlobCache.size()).toBe(1);
+
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(imageBlobCache.size()).toBe(0);
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
+  });
+
+  it("falls back when a reconnect reports a changed identity", async () => {
+    const { result, unmount } = renderHook(() =>
+      useImageAsset(WORKSPACE_REQUEST),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "reconnect-old-identity", 3);
+      session.emitStatus("reconnecting", null);
+      emitHeader(session, "reconnect-new-identity", 2);
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe("This image could not be loaded.");
+    expect(imageBlobCache.size()).toBe(0);
+    unmount();
+  });
+
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
       useImageAsset(WORKSPACE_REQUEST),
