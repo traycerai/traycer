@@ -34,7 +34,9 @@ function installRecord(
   };
 }
 
-function renderOpenVerification(record: InstallationDetailsRecord): HTMLElement {
+function renderOpenVerification(
+  record: InstallationDetailsRecord,
+): HTMLElement {
   render(
     <InstallationDetailsDisclosure
       record={record}
