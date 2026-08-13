@@ -13,7 +13,8 @@ import { Switch } from "@/components/ui/switch";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { useChatSharingDefaultSupported } from "@/hooks/epic/use-chat-sharing-support";
 import { useEpicSetChatSharingDefault } from "@/hooks/epic/use-epic-chat-visibility-mutations";
-import { useHostClient } from "@/lib/host/runtime";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useChatSharingInFlight } from "@/lib/chats/chat-sharing-inflight";
 import {
   countOwnPrivateChats,
   deriveChatSharingDefaultOn,
@@ -36,13 +37,14 @@ export function MyAgentsSharingSection(props: {
 function MyAgentsSharingSectionBody(props: {
   readonly epicId: string;
 }): ReactNode {
-  const appHostClient = useHostClient();
+  const sessionHostClient = useEpicSessionHostClient();
   const cloudChats = useCloudChatList({
-    client: appHostClient,
+    client: sessionHostClient,
     taskId: props.epicId,
     enabled: props.epicId.length > 0,
   });
   const setSharingDefault = useEpicSetChatSharingDefault();
+  const sharingInFlight = useChatSharingInFlight(props.epicId);
   const [pendingDirection, setPendingDirection] =
     useState<PendingDirection | null>(null);
 
@@ -73,9 +75,9 @@ function MyAgentsSharingSectionBody(props: {
         <Switch
           id="epic-sharing-my-agents-switch"
           checked={isOn}
-          disabled={setSharingDefault.isPending}
+          disabled={sharingInFlight}
           onCheckedChange={(checked) => {
-            if (setSharingDefault.isPending) return;
+            if (sharingInFlight) return;
             setPendingDirection(checked ? "task" : "private");
           }}
           data-testid="epic-sharing-my-agents-switch"
@@ -87,7 +89,7 @@ function MyAgentsSharingSectionBody(props: {
       <SharingDefaultConfirmDialog
         open={confirm !== null}
         onOpenChange={(open) => {
-          if (!open && !setSharingDefault.isPending) {
+          if (!open && !sharingInFlight) {
             setPendingDirection(null);
           }
         }}
@@ -95,9 +97,9 @@ function MyAgentsSharingSectionBody(props: {
         description={confirm?.description ?? ""}
         actionLabel={confirm?.actionLabel ?? ""}
         destructive={confirm?.destructive ?? false}
-        isPending={setSharingDefault.isPending}
+        isPending={sharingInFlight}
         onConfirm={() => {
-          if (pendingDirection === null) return;
+          if (pendingDirection === null || sharingInFlight) return;
           setSharingDefault.mutate(
             {
               taskId: props.epicId,

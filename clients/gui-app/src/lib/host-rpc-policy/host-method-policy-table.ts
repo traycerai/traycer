@@ -707,10 +707,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Visibility mutations. Optional host capability; hide-the-affordance on
-  // older hosts. fifo: a share flip is a user-initiated write, and two
-  // in-flight flips of the same chat (or a master toggle overlapping a
-  // per-chat override) must not race at the transport.
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
   "epic.setCloudChatVisibility": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

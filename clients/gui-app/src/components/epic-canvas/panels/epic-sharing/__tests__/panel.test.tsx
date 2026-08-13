@@ -48,6 +48,7 @@ interface TestState {
     readonly refetch: Mock;
   };
   sharingDefaultSupported: boolean;
+  sharingInFlight: boolean;
   setSharingDefault: {
     readonly mutate: Mock;
     isPending: boolean;
@@ -72,6 +73,7 @@ const testState = vi.hoisted<TestState>(() => ({
   sendInvites: { mutateAsync: vi.fn(), isPending: false },
   collaboratorsQuery: { isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() },
   sharingDefaultSupported: false,
+  sharingInFlight: false,
   setSharingDefault: { mutate: vi.fn(), isPending: false },
   ownCloudChats: [],
 }));
@@ -142,8 +144,21 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 });
 
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  useHostClient: () => ({ getActiveHostId: () => "active-host" }),
 }));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => ({ getActiveHostId: () => "epic-host" }),
+}));
+
+vi.mock("@/lib/chats/chat-sharing-inflight", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/chats/chat-sharing-inflight")>();
+  return {
+    ...actual,
+    useChatSharingInFlight: () => testState.sharingInFlight,
+  };
+});
 
 import { SharingPanel } from "../panel";
 import { parseInviteIdentifier, validateInviteInput } from "@/lib/epic-invites";
@@ -225,6 +240,7 @@ function resetTestState(): void {
     refetch: vi.fn(),
   };
   testState.sharingDefaultSupported = false;
+  testState.sharingInFlight = false;
   testState.setSharingDefault = { mutate: vi.fn(), isPending: false };
   testState.ownCloudChats = [];
 }
@@ -572,5 +588,21 @@ describe("<SharingPanel /> My agents", () => {
     expect(
       screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
     ).not.toContain("will be able to view and clone");
+  });
+
+  it("disables the master toggle while any sharing write is in flight", () => {
+    testState.sharingDefaultSupported = true;
+    testState.sharingInFlight = true;
+    testState.ownCloudChats = [{ visibility: "private", isOwnedByViewer: true }];
+
+    renderSharingPanel();
+
+    expect(
+      screen.getByTestId("epic-sharing-my-agents-switch").hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
   });
 });

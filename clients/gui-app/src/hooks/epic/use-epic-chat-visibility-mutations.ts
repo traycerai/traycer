@@ -12,6 +12,11 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
+  beginChatSharingInFlight,
+  CHAT_SHARING_IN_FLIGHT_MESSAGE,
+  endChatSharingInFlight,
+} from "@/lib/chats/chat-sharing-inflight";
+import {
   applyOwnCloudChatVisibility,
   invalidateCloudChatViewerScope,
   reconcileCloudChatSummary,
@@ -60,11 +65,16 @@ export function useEpicSetCloudChatVisibility(): UseMutationResult<
     method: "epic.setCloudChatVisibility",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: epicMutationKeys.setCloudChatVisibility(),
-      onMutate: () => ({
-        hostId: client?.getActiveHostId() ?? null,
-        viewerUserId,
-      }),
+      mutationKey: epicMutationKeys.chatSharing(viewerUserId),
+      onMutate: (variables) => {
+        if (!beginChatSharingInFlight(variables.taskId, viewerUserId)) {
+          throw new Error(CHAT_SHARING_IN_FLIGHT_MESSAGE);
+        }
+        return {
+          hostId: client?.getActiveHostId() ?? null,
+          viewerUserId,
+        };
+      },
       onSuccess: (data, _variables, ctx) => {
         reconcileCloudChatSummary(queryClient, {
           hostId: ctx.hostId,
@@ -78,7 +88,14 @@ export function useEpicSetCloudChatVisibility(): UseMutationResult<
         );
       },
       onError: (error) => {
+        if (error.message === CHAT_SHARING_IN_FLIGHT_MESSAGE) return;
         toastFromHostError(error, "Couldn't update sharing.");
+      },
+      onSettled: (_data, _error, variables, ctx) => {
+        // onMutate threw (second write refused) → ctx is undefined and we
+        // must not release the in-flight write that still owns the gate.
+        if (ctx === undefined) return;
+        endChatSharingInFlight(variables.taskId, ctx.viewerUserId);
       },
     },
   });
@@ -114,11 +131,16 @@ export function useEpicSetChatSharingDefault(): UseMutationResult<
     method: "epic.setChatSharingDefault",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: epicMutationKeys.setChatSharingDefault(),
-      onMutate: () => ({
-        hostId: client?.getActiveHostId() ?? null,
-        viewerUserId,
-      }),
+      mutationKey: epicMutationKeys.chatSharing(viewerUserId),
+      onMutate: (variables) => {
+        if (!beginChatSharingInFlight(variables.taskId, viewerUserId)) {
+          throw new Error(CHAT_SHARING_IN_FLIGHT_MESSAGE);
+        }
+        return {
+          hostId: client?.getActiveHostId() ?? null,
+          viewerUserId,
+        };
+      },
       onSuccess: (_data, variables, ctx) => {
         if (variables.applyToExisting) {
           applyOwnCloudChatVisibility(queryClient, {
@@ -135,7 +157,12 @@ export function useEpicSetChatSharingDefault(): UseMutationResult<
         );
       },
       onError: (error) => {
+        if (error.message === CHAT_SHARING_IN_FLIGHT_MESSAGE) return;
         toastFromHostError(error, "Couldn't update sharing.");
+      },
+      onSettled: (_data, _error, variables, ctx) => {
+        if (ctx === undefined) return;
+        endChatSharingInFlight(variables.taskId, ctx.viewerUserId);
       },
     },
   });

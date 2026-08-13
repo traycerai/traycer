@@ -8,7 +8,7 @@ vi.mock("sonner", () => ({
 
 const epicSessionHostClient = vi.hoisted(() => ({
   request: vi.fn(),
-  getActiveHostId: () => "host-test",
+  getActiveHostId: () => "epic-host",
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
@@ -61,6 +61,14 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
 import {
+  indexOwnCloudChatsByLocalId,
+} from "@/lib/chats/unified-chat-list";
+import {
+  CHAT_SHARING_IN_FLIGHT_MESSAGE,
+  isChatSharingInFlight,
+  resetChatSharingInFlightForTests,
+} from "@/lib/chats/chat-sharing-inflight";
+import {
   useEpicSetChatSharingDefault,
   useEpicSetCloudChatVisibility,
 } from "@/hooks/epic/use-epic-chat-visibility-mutations";
@@ -71,7 +79,7 @@ const CHAT: CloudChatSummary = {
     chatId: "chat-1",
     ownerUserId: "viewer-1",
   },
-  ownerHostId: "host-test",
+  ownerHostId: "epic-host",
   createdAt: 1,
   visibility: "task",
   title: "Walkthrough",
@@ -118,8 +126,21 @@ function getCapturedMutation(method: string): CapturedMutationArgs {
   return mutation;
 }
 
+const VISIBILITY_VARS = {
+  taskId: "task-1",
+  chatId: "chat-1",
+  visibility: "task" as const,
+};
+
+const DEFAULT_VARS = {
+  taskId: "task-1",
+  defaultVisibility: "task" as const,
+  applyToExisting: true,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetChatSharingInFlightForTests();
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
@@ -129,7 +150,7 @@ describe("useEpicSetCloudChatVisibility", () => {
   it("reconciles the returned row and invalidates the viewer-scoped cloud-chat keys", () => {
     const { wrapper, queryClient } = makeWrapperWithClient();
     const listKey = cloudChatListQueryKey({
-      hostId: "host-test",
+      hostId: "epic-host",
       viewerUserId: "viewer-1",
       taskId: "task-1",
     });
@@ -141,29 +162,121 @@ describe("useEpicSetCloudChatVisibility", () => {
       .mockResolvedValue();
 
     renderHook(() => useEpicSetCloudChatVisibility(), { wrapper });
-    const opts = getCapturedMutation("epic.setCloudChatVisibility").options as {
-      onMutate: () => {
+    const mutation = getCapturedMutation("epic.setCloudChatVisibility");
+    expect(mutation.client).toBe(epicSessionHostClient);
+    const opts = mutation.options as {
+      onMutate: (variables: typeof VISIBILITY_VARS) => {
         readonly hostId: string | null;
         readonly viewerUserId: string;
       };
       onSuccess: (
         data: { readonly chat: CloudChatSummary },
-        variables: unknown,
+        variables: typeof VISIBILITY_VARS,
         ctx: { readonly hostId: string | null; readonly viewerUserId: string },
         mutationContext: MutationFunctionContext,
       ) => void;
+      onSettled: (
+        data: unknown,
+        error: unknown,
+        variables: typeof VISIBILITY_VARS,
+        ctx: { readonly hostId: string | null; readonly viewerUserId: string },
+      ) => void;
     };
 
-    const ctx = opts.onMutate();
-    expect(ctx).toEqual({ hostId: "host-test", viewerUserId: "viewer-1" });
-    opts.onSuccess({ chat: CHAT }, {}, ctx, {
+    const ctx = opts.onMutate(VISIBILITY_VARS);
+    expect(ctx).toEqual({ hostId: "epic-host", viewerUserId: "viewer-1" });
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(true);
+    opts.onSuccess({ chat: CHAT }, VISIBILITY_VARS, ctx, {
       client: queryClient,
       meta: undefined,
     });
+    opts.onSettled({ chat: CHAT }, null, VISIBILITY_VARS, ctx);
 
     expect(queryClient.getQueryData(listKey)).toEqual({ chats: [CHAT] });
     expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: cloudChatQueryKeys.scope("host-test", "viewer-1"),
+      queryKey: cloudChatQueryKeys.scope("epic-host", "viewer-1"),
+    });
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(false);
+  });
+
+  it("mutates the redirected cloud lineage and patches the session-host cache", () => {
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const localId = "chat-c1";
+    const publishedId = "chat-c2";
+    const clone: CloudChatSummary = {
+      ...CHAT,
+      identity: { ...CHAT.identity, chatId: publishedId },
+    };
+    const incumbent: CloudChatSummary = {
+      ...CHAT,
+      identity: { ...CHAT.identity, chatId: localId },
+    };
+    const sessionListKey = cloudChatListQueryKey({
+      hostId: "epic-host",
+      viewerUserId: "viewer-1",
+      taskId: "task-1",
+    });
+    const activeHostListKey = cloudChatListQueryKey({
+      hostId: "active-host",
+      viewerUserId: "viewer-1",
+      taskId: "task-1",
+    });
+    queryClient.setQueryData(sessionListKey, {
+      chats: [incumbent, clone],
+    });
+    queryClient.setQueryData(activeHostListKey, {
+      chats: [incumbent, clone],
+    });
+
+    const folded = indexOwnCloudChatsByLocalId({
+      chats: [incumbent, clone],
+      localChatIds: [localId],
+      publicationChatIdByChatId: new Map([[localId, publishedId]]),
+    });
+    const target = folded.get(localId);
+    expect(target?.identity.chatId).toBe(publishedId);
+
+    renderHook(() => useEpicSetCloudChatVisibility(), { wrapper });
+    const mutation = getCapturedMutation("epic.setCloudChatVisibility");
+    expect(mutation.client).toBe(epicSessionHostClient);
+    const variables = {
+      taskId: "task-1",
+      chatId: target?.identity.chatId ?? "",
+      visibility: "private" as const,
+    };
+    const opts = mutation.options as {
+      onMutate: (next: typeof variables) => {
+        readonly hostId: string | null;
+        readonly viewerUserId: string;
+      };
+      onSuccess: (
+        data: { readonly chat: CloudChatSummary },
+        next: typeof variables,
+        ctx: { readonly hostId: string | null; readonly viewerUserId: string },
+        mutationContext: MutationFunctionContext,
+      ) => void;
+      onSettled: (
+        data: unknown,
+        error: unknown,
+        next: typeof variables,
+        ctx: { readonly hostId: string | null; readonly viewerUserId: string },
+      ) => void;
+    };
+    expect(variables.chatId).toBe(publishedId);
+    const ctx = opts.onMutate(variables);
+    expect(ctx.hostId).toBe("epic-host");
+    const updated = { ...clone, visibility: "private" as const };
+    opts.onSuccess({ chat: updated }, variables, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
+    opts.onSettled({ chat: updated }, null, variables, ctx);
+
+    expect(queryClient.getQueryData(sessionListKey)).toEqual({
+      chats: [incumbent, updated],
+    });
+    expect(queryClient.getQueryData(activeHostListKey)).toEqual({
+      chats: [incumbent, clone],
     });
   });
 
@@ -183,7 +296,7 @@ describe("useEpicSetChatSharingDefault", () => {
   it("applies the written visibility to every own row and invalidates the viewer scope", () => {
     const { wrapper, queryClient } = makeWrapperWithClient();
     const listKey = cloudChatListQueryKey({
-      hostId: "host-test",
+      hostId: "epic-host",
       viewerUserId: "viewer-1",
       taskId: "task-1",
     });
@@ -195,38 +308,87 @@ describe("useEpicSetChatSharingDefault", () => {
       .mockResolvedValue();
 
     renderHook(() => useEpicSetChatSharingDefault(), { wrapper });
-    const opts = getCapturedMutation("epic.setChatSharingDefault").options as {
-      onMutate: () => {
+    const mutation = getCapturedMutation("epic.setChatSharingDefault");
+    expect(mutation.client).toBe(epicSessionHostClient);
+    const opts = mutation.options as {
+      onMutate: (variables: typeof DEFAULT_VARS) => {
         readonly hostId: string | null;
         readonly viewerUserId: string;
       };
       onSuccess: (
         data: { readonly updatedCount: number },
-        variables: {
-          readonly taskId: string;
-          readonly defaultVisibility: "private" | "task";
-          readonly applyToExisting: boolean;
-        },
+        variables: typeof DEFAULT_VARS,
         ctx: { readonly hostId: string | null; readonly viewerUserId: string },
         mutationContext: MutationFunctionContext,
       ) => void;
+      onSettled: (
+        data: unknown,
+        error: unknown,
+        variables: typeof DEFAULT_VARS,
+        ctx: { readonly hostId: string | null; readonly viewerUserId: string },
+      ) => void;
     };
 
-    const ctx = opts.onMutate();
-    opts.onSuccess(
-      { updatedCount: 1 },
-      {
-        taskId: "task-1",
-        defaultVisibility: "task",
-        applyToExisting: true,
-      },
-      ctx,
-      { client: queryClient, meta: undefined },
-    );
+    const ctx = opts.onMutate(DEFAULT_VARS);
+    expect(ctx).toEqual({ hostId: "epic-host", viewerUserId: "viewer-1" });
+    opts.onSuccess({ updatedCount: 1 }, DEFAULT_VARS, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
+    opts.onSettled({ updatedCount: 1 }, null, DEFAULT_VARS, ctx);
 
     expect(queryClient.getQueryData(listKey)).toEqual({ chats: [CHAT] });
     expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: cloudChatQueryKeys.scope("host-test", "viewer-1"),
+      queryKey: cloudChatQueryKeys.scope("epic-host", "viewer-1"),
     });
+  });
+
+  it("shares one in-flight gate across the master toggle and a per-chat flip", () => {
+    const { wrapper } = makeWrapperWithClient();
+    renderHook(() => useEpicSetChatSharingDefault(), { wrapper });
+    renderHook(() => useEpicSetCloudChatVisibility(), { wrapper });
+
+    const defaultOpts = getCapturedMutation("epic.setChatSharingDefault")
+      .options as {
+      onMutate: (variables: typeof DEFAULT_VARS) => unknown;
+      onError: (error: HostRpcError) => void;
+      onSettled: (
+        data: unknown,
+        error: unknown,
+        variables: typeof DEFAULT_VARS,
+        ctx: unknown,
+      ) => void;
+    };
+    const visibilityOpts = getCapturedMutation("epic.setCloudChatVisibility")
+      .options as {
+      onMutate: (variables: typeof VISIBILITY_VARS) => unknown;
+      onError: (error: HostRpcError) => void;
+      onSettled: (
+        data: unknown,
+        error: unknown,
+        variables: typeof VISIBILITY_VARS,
+        ctx: unknown,
+      ) => void;
+    };
+
+    const ctx = defaultOpts.onMutate(DEFAULT_VARS);
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(true);
+    expect(() => visibilityOpts.onMutate(VISIBILITY_VARS)).toThrow(
+      CHAT_SHARING_IN_FLIGHT_MESSAGE,
+    );
+    visibilityOpts.onError(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: CHAT_SHARING_IN_FLIGHT_MESSAGE,
+        requestId: "test",
+        method: "epic.setCloudChatVisibility",
+        fatalDetails: null,
+      }),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    visibilityOpts.onSettled(undefined, null, VISIBILITY_VARS, undefined);
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(true);
+    defaultOpts.onSettled({ updatedCount: 0 }, null, DEFAULT_VARS, ctx);
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(false);
   });
 });

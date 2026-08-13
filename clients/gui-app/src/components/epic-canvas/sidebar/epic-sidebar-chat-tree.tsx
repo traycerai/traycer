@@ -20,6 +20,8 @@ import {
 import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import { useCloudChatVisibilitySupported } from "@/hooks/epic/use-chat-sharing-support";
 import { useEpicSetCloudChatVisibility } from "@/hooks/epic/use-epic-chat-visibility-mutations";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useChatSharingInFlight } from "@/lib/chats/chat-sharing-inflight";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import {
   useEpicDeleteTuiAgent,
@@ -730,16 +732,33 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [cloudChats.data, localChatIds, publicationTargets.data],
   );
+  // Sharing fold, mutations, and cache keys all address the Epic session
+  // host. The v2 rendered list above stays on the app-wide client — that
+  // hook is shipped and is not this ticket. The redirect map is host-LOCAL
+  // (only the epic's host knows C1→C2), so reading it from the active host
+  // would make "Make private" mutate the wrong lineage after a fork.
+  const sessionHostClient = useEpicSessionHostClient();
+  const sharingCloudChats = useCloudChatList({
+    client: sessionHostClient,
+    taskId: epicId,
+    enabled: epicId.length > 0,
+  });
+  const sharingPublicationTargets = useChatPublicationTargets({
+    client: sessionHostClient,
+    epicId,
+    chatIds: localChatIds,
+    enabled: epicId.length > 0,
+  });
   const ownCloudChatByLocalId = useMemo(
     () =>
       indexOwnCloudChatsByLocalId({
-        chats: cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
+        chats: sharingCloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
         localChatIds,
         publicationChatIdByChatId: publicationTargetMap(
-          publicationTargets.data,
+          sharingPublicationTargets.data,
         ),
       }),
-    [cloudChats.data, localChatIds, publicationTargets.data],
+    [localChatIds, sharingCloudChats.data, sharingPublicationTargets.data],
   );
   const chatSharingValue = useMemo<SidebarChatSharingValue>(
     () => ({
@@ -1672,7 +1691,7 @@ function ChatNodeShellBody(
     });
   }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
   const { decision } = props;
-  const sharing = useChatRowSharing(nodeId, artifactType, canMutate);
+  const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const rowMenuEntries = chatRowMenuEntries({
     nodeId,
     canMutate,
@@ -3136,6 +3155,7 @@ function sharingMenuEntries(
 }
 
 function useChatRowSharing(
+  epicId: string,
   nodeId: string,
   artifactType: EpicNodeKind,
   canMutate: boolean,
@@ -3146,6 +3166,7 @@ function useChatRowSharing(
 } {
   const sharing = useContext(SidebarChatSharingContext);
   const setVisibility = useEpicSetCloudChatVisibility();
+  const sharingInFlight = useChatSharingInFlight(epicId);
   const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId);
   const visibility = cloudChat?.visibility ?? null;
   return {
@@ -3154,12 +3175,13 @@ function useChatRowSharing(
       isChat: artifactType === "chat",
       canMutate,
       visibility,
-      pending: setVisibility.isPending,
+      pending: sharingInFlight,
     }),
     onToggle: () => {
       if (
         !canMutate ||
         !sharing.visibilitySupported ||
+        sharingInFlight ||
         cloudChat === undefined
       ) {
         return;

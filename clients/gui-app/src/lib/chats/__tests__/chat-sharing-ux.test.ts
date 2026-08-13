@@ -84,6 +84,23 @@ describe("decideChatSharingMenuEntry", () => {
     });
   });
 
+  it("disables every entry while a sharing write is in flight", () => {
+    expect(
+      decideChatSharingMenuEntry({
+        supported: true,
+        isChat: true,
+        canMutate: true,
+        visibility: "task",
+        pending: true,
+      }),
+    ).toEqual({
+      kind: "entry",
+      action: "make-private",
+      disabled: true,
+      disabledTooltip: null,
+    });
+  });
+
   it("greys the entry out without a tooltip when the viewer cannot mutate", () => {
     expect(
       decideChatSharingMenuEntry({

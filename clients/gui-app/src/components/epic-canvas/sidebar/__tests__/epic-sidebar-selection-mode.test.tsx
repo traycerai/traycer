@@ -489,30 +489,36 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
  * either way. The fold and the interleave they feed are asserted without a
  * renderer in `unified-chat-list.test.ts`.
  */
-vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
-  useCloudChatList: () => ({
-    data: undefined,
-    isError: false,
-    isPending: true,
-    isFetching: false,
-    // DISABLED, which is what this harness would really produce: it mounts no
-    // host client and no signed-in viewer, and the real hook gates on both. It
-    // matters to the assertions below - the panel's empty state waits for the
-    // list to have answered, and "it will never run" is an answer, while a
-    // request still in flight is not.
-    isEnabled: false,
-  }),
-  useCloudChatPayload: () => ({ data: undefined, isError: false }),
-  // The real predicate rather than a constant, so the stub above actually
-  // decides: a hard-coded `true` here would hide the difference between "this
-  // query will never run" and "its answer has not arrived yet", which is the one
-  // distinction the panel's empty state depends on.
-  isCloudChatListSettled: (query: {
-    readonly isEnabled: boolean;
-    readonly isSuccess: boolean;
-    readonly isError: boolean;
-  }) => !query.isEnabled || query.isSuccess || query.isError,
-}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/chats/use-cloud-chat-queries")>();
+  return {
+    ...actual,
+    useCloudChatList: () => ({
+      data: undefined,
+      isError: false,
+      isPending: true,
+      isFetching: false,
+      // DISABLED, which is what this harness would really produce: it mounts no
+      // host client and no signed-in viewer, and the real hook gates on both. It
+      // matters to the assertions below - the panel's empty state waits for the
+      // list to have answered, and "it will never run" is an answer, while a
+      // request still in flight is not.
+      isEnabled: false,
+    }),
+    useCloudChatPayload: () => ({ data: undefined, isError: false }),
+    useCloudChatViewerId: () => "",
+    // The real predicate rather than a constant, so the stub above actually
+    // decides: a hard-coded `true` here would hide the difference between "this
+    // query will never run" and "its answer has not arrived yet", which is the
+    // one distinction the panel's empty state depends on.
+    isCloudChatListSettled: (query: {
+      readonly isEnabled: boolean;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+    }) => !query.isEnabled || query.isSuccess || query.isError,
+  };
+});
 
 // The fold's mapping. Stubbed alongside the list rather than left real for the
 // same reason, and to `undefined` deliberately: that is the shape an older host
