@@ -294,6 +294,9 @@ function changedFile(args: {
   readonly stage?: GitChangedFile["stage"];
   readonly isBinary?: boolean;
   readonly previousPath?: string | null;
+  readonly insertions?: number;
+  readonly deletions?: number;
+  readonly sizeBytes?: number;
   readonly stagedOid?: string | null;
   readonly worktreeOid?: string | null;
 }): GitChangedFile {
@@ -302,10 +305,10 @@ function changedFile(args: {
     previousPath: args.previousPath ?? null,
     status: args.status ?? "modified",
     stage: args.stage ?? "unstaged",
-    insertions: 1,
-    deletions: 1,
+    insertions: args.insertions ?? 1,
+    deletions: args.deletions ?? 1,
     isBinary: args.isBinary ?? false,
-    sizeBytes: 12,
+    sizeBytes: args.sizeBytes ?? 12,
     stagedOid: args.stagedOid ?? null,
     worktreeOid: args.worktreeOid ?? "worktree-1",
   };
@@ -487,6 +490,45 @@ describe("<GitDiffTile /> image routing", () => {
     expect(changedRevisionSides[1]).not.toBe(initialSides[1]);
     expect(changedRevisionSides[0]?.getAttribute("data-status")).toBe("header");
     expect(changedRevisionSides[1]?.getAttribute("data-status")).toBe("header");
+  });
+
+  // Deliberate residual: when degraded mode leaves both OIDs null, a content
+  // swap that preserves insertions, deletions, and sizeBytes at the same
+  // headSha remains unobservable and is intentionally not asserted here.
+  it("remounts a degraded git image when fallback stats change", () => {
+    const initial = changedFile({
+      path: "assets/degraded.png",
+      isBinary: true,
+      stage: "staged",
+      stagedOid: null,
+      worktreeOid: null,
+      insertions: 1,
+      deletions: 1,
+      sizeBytes: 12,
+    });
+    const rendered = renderTile(initial);
+    const initialSides = screen.getAllByTestId("image-preview-side");
+    expect(initialSides).toHaveLength(2);
+
+    rerenderTile(
+      rendered,
+      changedFile({
+        path: "assets/degraded.png",
+        isBinary: true,
+        stage: "staged",
+        stagedOid: null,
+        worktreeOid: null,
+        insertions: 2,
+        deletions: 1,
+        sizeBytes: 13,
+      }),
+      "head-1",
+    );
+
+    const changedRevisionSides = screen.getAllByTestId("image-preview-side");
+    expect(changedRevisionSides).toHaveLength(2);
+    expect(changedRevisionSides[0]).not.toBe(initialSides[0]);
+    expect(changedRevisionSides[1]).not.toBe(initialSides[1]);
   });
 
   it("keeps non-image binary files on BinaryPlaceholder", () => {
