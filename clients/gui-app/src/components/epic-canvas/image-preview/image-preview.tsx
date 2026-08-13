@@ -741,6 +741,7 @@ export function ImagePreview(props: ImagePreviewProps) {
                 size="icon-sm"
                 disabled={zoomDisabled}
                 onClick={handleCopy}
+                aria-label={copyButtonLabel(copyFeedback)}
               >
                 {copyButtonIcon(copyFeedback)}
               </Button>

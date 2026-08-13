@@ -13,6 +13,7 @@
 .image-preview-checkerboard {
   --image-preview-checker: color-mix(in oklab, var(--muted) 45%, transparent);
   background-color: var(--canvas);
+
   background-image:
     linear-gradient(45deg, var(--image-preview-checker) 25%, transparent 25%),
     linear-gradient(-45deg, var(--image-preview-checker) 25%, transparent 25%),

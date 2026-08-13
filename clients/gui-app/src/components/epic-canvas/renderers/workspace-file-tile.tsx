@@ -7,6 +7,7 @@ import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import {
   createReportIssueContext,
   type ReportIssueContext,
@@ -239,7 +240,7 @@ function WorkspaceImageFileTile(props: {
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
       editorId: defaultEditor ?? "vscode",
-      paths: [`${node.workspacePath.replace(/\/$/, "")}/${node.filePath}`],
+      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
     });
   }, [
     defaultEditor,

@@ -404,9 +404,8 @@ export function useImageAsset(
     readonly state: ImageAssetState;
   } | null>(null);
 
-  // Lets `reportDecodeFailure` - a STABLE callback that outlives any single
-  // effect invocation - reach the CURRENT fetch cycle's cache key and act
-  // safely regardless of mount state. `isMountedRef`/`requestKeyRef` are
+  // Lets `reportDecodeFailure` reach the CURRENT fetch cycle's cache key and
+  // act safely regardless of mount state. `isMountedRef`/`requestKeyRef` are
   // shared across invocations by design (React guarantees the OLD effect's
   // cleanup runs before the NEW one's setup, so they always reflect the
   // LATEST invocation once its setup has run); `cacheKeyRef` likewise, but
@@ -417,7 +416,27 @@ export function useImageAsset(
   const cacheKeyRef = useRef<string | null>(null);
   const requestKeyRef = useRef<string | null>(null);
 
+  // Tracks the LATEST `resolved`, read (not closed over) inside
+  // `reportDecodeFailure` below to detect a STALE call. Mirrors
+  // `latestRequestRef` above: a bare effect, not a render-time write
+  // (`react-hooks/refs` forbids mutating a ref during render).
+  const resolvedRef = useRef(resolved);
+  useEffect(() => {
+    resolvedRef.current = resolved;
+  });
+
+  // Recreated per `resolved` transition (CodeRabbit finding) - a decode
+  // error is reported by a specific `<img>`, but this callback has no
+  // parameter carrying which `url` failed, so it must instead close over
+  // whatever `resolved` WAS when the render that handed this exact closure
+  // to that `<img>` ran. If `resolvedRef.current` no longer points at that
+  // SAME object by the time the (possibly late/async) decode-error event
+  // fires, a NEWER request has since resolved - discarding `cacheKeyRef`'s
+  // CURRENT entry or overwriting `resolved` with `fallback` would clobber
+  // that newer, perfectly valid ready state instead of the stale one that
+  // actually failed to decode.
   const reportDecodeFailure = useCallback((): void => {
+    if (resolved === null || resolvedRef.current !== resolved) return;
     const cacheKey = cacheKeyRef.current;
     if (cacheKey !== null) {
       imageBlobCache.discard(cacheKey);
@@ -436,7 +455,7 @@ export function useImageAsset(
         servedFromCache: false,
       },
     });
-  }, []);
+  }, [resolved]);
 
   useEffect(() => {
     const normalizedRequest = latestRequestRef.current;

@@ -356,8 +356,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     handleFit();
   }, [isFitted, handleActualSize, handleFit]);
 
-  const zoomDisabled =
-    oldAsset.status !== "ready" && newAsset.status !== "ready";
+  const zoomDisabled = !oldActive && !newActive;
   // Disable when EITHER ACTIVE side is at ITS OWN boundary - each side's
   // `minScale` already reflects its own fit floor, so this stays correct
   // even when the two sides' floors differ; a non-image or failed side never

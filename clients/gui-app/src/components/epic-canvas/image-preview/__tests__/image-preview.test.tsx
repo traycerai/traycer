@@ -45,6 +45,7 @@ function renderPreview(
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("<ImagePreview />", () => {

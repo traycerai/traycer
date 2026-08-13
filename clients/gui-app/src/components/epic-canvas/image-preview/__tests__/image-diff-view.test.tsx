@@ -28,12 +28,29 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
     if (!state.requests.includes(request)) {
       state.requests.push(request);
     }
-    const side = request?.method === "git" ? request.side : "new";
     // Forces THIS call site's own re-render when `reportDecodeFailure` fires
     // (the real hook transitions synchronously from a callback, not a prop
     // change) - `state.old`/`state.new` stay the module-level source of
     // truth so a test's own direct mutations still work exactly as before.
     const [, forceRender] = useState(0);
+    // A `null` request (a non-image side) never falls back to `"new"` - the
+    // real hook always reports `"loading"` for a null request (its
+    // `requestKey`/`resolved.key` comparison can never match), so a test
+    // exercising a Deleted/non-image side must see that too, not silently
+    // read the OTHER side's `"ready"` state (CodeRabbit finding: this hid
+    // a raw-status check that should have gated on `oldActive`/`newActive`).
+    if (request === null) {
+      return {
+        status: "loading",
+        url: null,
+        meta: null,
+        reason: null,
+        totalBytes: null,
+        servedFromCache: false,
+        reportDecodeFailure: () => {},
+      };
+    }
+    const side = request.method === "git" ? request.side : "new";
     const reportDecodeFailure = () => {
       const fallback: ImageAssetState = {
         status: "fallback",
