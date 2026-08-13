@@ -13,6 +13,12 @@ import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import { NO_HIGHLIGHT } from "@/lib/git/path-highlight";
 import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
+import {
+  gitImageDiffRevisionKey,
+  gitImageDiffRouting,
+  gitImageDiffSides,
+} from "@/lib/git/git-diff-tile";
+import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
@@ -143,14 +149,50 @@ interface BundleFileSectionBodyProps {
 
 function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
+  // `.svg` is never `isBinary` to git (image-preview decision log, decision
+  // #5) but still has no searchable diff text once it routes to the image
+  // view, so it shares the same "binary" find-coverage state as a true
+  // binary image - see `gitImageDiffRouting` for the routing decision
+  // itself, shared with the single-file diff tile.
+  const { routeToImageDiff } = gitImageDiffRouting(props.file);
   useEffect(() => {
-    if (!props.file.isBinary) return;
+    if (!props.file.isBinary && !routeToImageDiff) return;
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "binary",
     );
-  }, [bundleFindRegistration, props.bundleFindFileId, props.file.isBinary]);
+  }, [
+    bundleFindRegistration,
+    props.bundleFindFileId,
+    props.file.isBinary,
+    routeToImageDiff,
+  ]);
 
+  if (routeToImageDiff) {
+    const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
+    // `ImageDiffView` owns its own bounded height in `compact` mode (Codex
+    // re-review, #3773048701 / #3773298843) - it needs both sides' decoded
+    // dimensions to size itself snugly, which only it has access to (this
+    // bundle row never fetches the asset itself), so there is no wrapper
+    // height to apply here.
+    return (
+      <ImageDiffView
+        key={revisionKey}
+        revisionKey={revisionKey}
+        runningDir={props.node.diff.runningDir}
+        filePath={props.file.path}
+        previousPath={props.file.previousPath}
+        oldStage={sides.oldStage}
+        newStage={sides.newStage}
+        fileName={props.file.path}
+        conflicted={sides.conflicted}
+        compact
+        onOpenExternally={null}
+        openExternallyOpening={false}
+      />
+    );
+  }
   if (props.file.isBinary) {
     return <BundleBinaryPlaceholder file={props.file} />;
   }

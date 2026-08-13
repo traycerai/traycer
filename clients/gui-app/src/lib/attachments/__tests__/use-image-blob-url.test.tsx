@@ -1,7 +1,10 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
+import {
+  imageBlobCache,
+  type ImageBlobLease,
+} from "@/lib/attachments/image-blob-cache";
 import {
   IMAGE_FETCH_MAX_ATTEMPTS,
   IMAGE_FETCH_RETRY_BASE_MS,
@@ -9,6 +12,10 @@ import {
   IMAGE_UNAVAILABLE_GRACE_MS,
   useImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
+
+function makeLease(promise: Promise<string>): ImageBlobLease {
+  return { promise, release: vi.fn() };
+}
 
 describe("useImageBlobUrlState", () => {
   beforeEach(() => {
@@ -26,10 +33,8 @@ describe("useImageBlobUrlState", () => {
     const pendingUrl = new Promise<string>((resolve) => {
       resolveFetch = resolve;
     });
-    vi.spyOn(imageBlobCache, "acquire").mockReturnValue(pendingUrl);
-    const release = vi
-      .spyOn(imageBlobCache, "release")
-      .mockImplementation(() => {});
+    const lease = makeLease(pendingUrl);
+    vi.spyOn(imageBlobCache, "acquire").mockReturnValue(lease);
     const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
 
     const { result, unmount } = renderHook(() =>
@@ -58,15 +63,16 @@ describe("useImageBlobUrlState", () => {
     });
 
     unmount();
-    expect(release).toHaveBeenCalledWith("late-hash");
+    expect(lease.release).toHaveBeenCalled();
   });
 
   it("re-acquires after a rejected fetch without requiring a remount", async () => {
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockRejectedValueOnce(new Error("store disposed"))
-      .mockResolvedValueOnce("blob:retried-image");
-    vi.spyOn(imageBlobCache, "release").mockImplementation(() => {});
+      .mockReturnValueOnce(
+        makeLease(Promise.reject(new Error("store disposed"))),
+      )
+      .mockReturnValueOnce(makeLease(Promise.resolve("blob:retried-image")));
     const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
 
     const { result } = renderHook(() =>
@@ -97,8 +103,9 @@ describe("useImageBlobUrlState", () => {
   it("stops scheduling acquisitions after the retry budget is exhausted", async () => {
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockRejectedValue(new Error("store disposed"));
-    vi.spyOn(imageBlobCache, "release").mockImplementation(() => {});
+      .mockImplementation(() =>
+        makeLease(Promise.reject(new Error("store disposed"))),
+      );
     const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
 
     const { result } = renderHook(() =>
@@ -129,8 +136,9 @@ describe("useImageBlobUrlState", () => {
   it("cancels a scheduled retry when unmounted", async () => {
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
-      .mockRejectedValue(new Error("store disposed"));
-    vi.spyOn(imageBlobCache, "release").mockImplementation(() => {});
+      .mockImplementation(() =>
+        makeLease(Promise.reject(new Error("store disposed"))),
+      );
     const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
 
     const { unmount } = renderHook(() =>
@@ -163,11 +171,12 @@ describe("useImageBlobUrlState", () => {
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
       .mockImplementation((_hash, _mediaType, fetcher) =>
-        fetcher === recoveredFetcher
-          ? Promise.resolve("blob:rearmed-image")
-          : Promise.reject(new Error("store disposed")),
+        makeLease(
+          fetcher === recoveredFetcher
+            ? Promise.resolve("blob:rearmed-image")
+            : Promise.reject(new Error("store disposed")),
+        ),
       );
-    vi.spyOn(imageBlobCache, "release").mockImplementation(() => {});
 
     const { result, rerender } = renderHook(
       ({ fetcher }) =>

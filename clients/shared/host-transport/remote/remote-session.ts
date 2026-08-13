@@ -94,6 +94,27 @@ import type { AttachGrantProvider } from "./grant-client";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 
 /**
+ * Streaming methods that ride the credit-gated `BULK` mux queue instead of
+ * the default `INTERACTIVE` class. Every other stream method stays
+ * interactive - keystrokes, terminal/chat output, and status polls must
+ * preempt bulk traffic. Today this is only the two asset-fetch streams: a
+ * 20 MiB image must not starve interactive traffic sharing the same
+ * connection. A simple per-method lookup rather than a negotiated QoS
+ * scheme, matching the tech plan's "minimal method-to-QoS policy" - grow
+ * this set, don't build a config system, if a third bulk method shows up.
+ */
+const BULK_QOS_STREAM_METHODS: ReadonlySet<string> = new Set([
+  "workspace.streamAsset",
+  "git.streamFileAsset",
+]);
+
+function qosForStreamMethod(method: string): QosClassValue {
+  return BULK_QOS_STREAM_METHODS.has(method)
+    ? QosClass.BULK
+    : QosClass.INTERACTIVE;
+}
+
+/**
  * The client's persistent, E2E, multiplexed remote session (Architecture §3).
  * ONE long-lived relay socket carries a Noise-NK channel over which unary RPC +
  * N subscribe streams are multiplexed. It is the single owner of everything the
@@ -743,7 +764,10 @@ export class RemoteSession<
     });
   }
 
-  /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
+  /**
+   * Opens a logical subscribe stream (interactive class by default, bulk
+   * for the methods in `qosForStreamMethod`; see §3 QoS note).
+   */
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
@@ -770,7 +794,7 @@ export class RemoteSession<
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
-      qos: QosClass.INTERACTIVE,
+      qos: qosForStreamMethod(method),
       port: this,
     });
     this.subscriptions.set(streamId, stream);

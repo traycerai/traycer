@@ -1,4 +1,5 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
@@ -6,11 +7,14 @@ import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import {
   createReportIssueContext,
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ExternalLinkIcon } from "lucide-react";
+import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -53,6 +57,19 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useQueryClient } from "@tanstack/react-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  isImageAssetPath,
+  isSvgAssetPath,
+} from "@/lib/assets/image-extension-allowlist";
+import { useImageAsset } from "@/hooks/assets/use-image-asset";
+import {
+  DEFAULT_ANIMATION_MS,
+  ImagePreview,
+} from "@/components/epic-canvas/image-preview/image-preview";
+import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
@@ -111,7 +128,7 @@ export function WorkspaceFileTile(props: {
     );
   }
   return (
-    <WorkspaceFileTileLive
+    <WorkspaceFileTileRouter
       node={node}
       viewTabId={props.viewTabId}
       isActive={props.isActive}
@@ -120,11 +137,236 @@ export function WorkspaceFileTile(props: {
   );
 }
 
+/**
+ * Extension gate BEFORE any RPC (image-preview decision log, decision #6):
+ * a non-image extension takes the untouched text path below unconditionally.
+ * `.svg` is the one format with a source view - it defaults to image with a
+ * per-tile, non-persisted toggle back to `WorkspaceFileTileLive`'s existing
+ * (fully-functional, including editing) text path, matching decision #5.
+ */
+function WorkspaceFileTileRouter(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly isActive: boolean;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+}) {
+  const { node } = props;
+  const isImage = isImageAssetPath(node.filePath);
+  const isSvg = isSvgAssetPath(node.filePath);
+  const [viewAsSource, setViewAsSource] = useState(false);
+
+  if (!isImage) {
+    return (
+      <WorkspaceFileTileLive
+        node={node}
+        viewTabId={props.viewTabId}
+        isActive={props.isActive}
+        revealTarget={props.revealTarget}
+        svgToggle={null}
+      />
+    );
+  }
+
+  if (isSvg && viewAsSource) {
+    return (
+      <WorkspaceFileTileLive
+        node={node}
+        viewTabId={props.viewTabId}
+        isActive={props.isActive}
+        revealTarget={props.revealTarget}
+        svgToggle={
+          <SvgViewToggleButton
+            switchTo="image"
+            onClick={() => setViewAsSource(false)}
+          />
+        }
+      />
+    );
+  }
+
+  return (
+    <WorkspaceImageFileTile
+      node={node}
+      viewTabId={props.viewTabId}
+      revealTarget={props.revealTarget}
+      svgToggle={
+        isSvg ? (
+          <SvgViewToggleButton
+            switchTo="source"
+            onClick={() => setViewAsSource(true)}
+          />
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * Image mode for a workspace file tile: fetches over `useImageAsset` (never
+ * `workspace.readFile`) and renders `ImagePreview`, or the shared
+ * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
+ * WHY the fetch fell back (image-preview decision log, decision #14).
+ * Editing/drafts/markdown/find never mount here.
+ */
+function WorkspaceImageFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+  readonly svgToggle: ReactNode;
+}) {
+  const { node, revealTarget } = props;
+  const assetState = useImageAsset({
+    method: "workspace",
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+  });
+  // Magic-valid, header-parseable bytes can still fail to decode in the
+  // browser (pre-landing review, P1) - `<img onError>` has no other signal
+  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // cache entry AND transitions the hook's own state to `fallback`, so this
+  // tile renders straight from `assetState.status` like every other
+  // failure - no local decode-failed flag to track or reset.
+  const handleDecodeError = assetState.reportDecodeFailure;
+  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  const editorOpen = useEditorOpen("file");
+  const {
+    active: openExternallyFeedbackActive,
+    trigger: triggerOpenExternallyFeedback,
+  } = useEditorOpenFeedback();
+  const openExternallyOpening =
+    editorOpen.isPending || openExternallyFeedbackActive;
+  const handleOpenExternally = useCallback(() => {
+    if (openExternallyOpening) return;
+    triggerOpenExternallyFeedback();
+    editorOpen.mutate({
+      editorId: defaultEditor ?? "vscode",
+      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
+    });
+  }, [
+    defaultEditor,
+    editorOpen,
+    node.filePath,
+    node.workspacePath,
+    openExternallyOpening,
+    triggerOpenExternallyFeedback,
+  ]);
+
+  // No line-goto in image mode - a reveal target aimed at this file can never
+  // be consumed here, so evict it immediately rather than stranding it on the
+  // channel (mirrors `isSettledUnconsumableWorkspaceFile` below, CL-5).
+  useEffect(() => {
+    if (revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [revealTarget, props.viewTabId, node.id]);
+
+  if (assetState.status === "fallback") {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceImageFileToolbar
+          filePath={node.filePath}
+          svgToggle={props.svgToggle}
+          openExternally={null}
+        />
+        <div className="min-h-0 flex-1">
+          <BinaryPlaceholder
+            fileName={node.name}
+            sizeBytes={assetState.totalBytes}
+            reason={assetState.reason}
+            onOpenExternally={handleOpenExternally}
+            openExternallyOpening={openExternallyOpening}
+            compact={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+      <WorkspaceImageFileToolbar
+        filePath={node.filePath}
+        svgToggle={props.svgToggle}
+        openExternally={{
+          onOpenExternally: handleOpenExternally,
+          opening: openExternallyOpening,
+        }}
+      />
+      <div className="min-h-0 flex-1">
+        <ImagePreview
+          status={assetState.status}
+          url={assetState.url}
+          meta={assetState.meta}
+          servedFromCache={assetState.servedFromCache}
+          fileName={node.name}
+          compact={false}
+          gesturesEnabled
+          animationMs={DEFAULT_ANIMATION_MS}
+          transformRef={null}
+          onTransformChange={null}
+          doubleClickOverride={null}
+          onDecodeError={handleDecodeError}
+        />
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceImageFileToolbar(props: {
+  readonly filePath: string;
+  readonly svgToggle: ReactNode;
+  readonly openExternally: {
+    readonly onOpenExternally: () => void;
+    readonly opening: boolean;
+  } | null;
+}) {
+  return (
+    <div
+      className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
+      data-testid="workspace-file-toolbar"
+    >
+      <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+        {props.filePath}
+      </StartTruncatedText>
+      {props.svgToggle}
+      {props.openExternally !== null ? (
+        <TooltipWrapper
+          label="Open externally"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={props.openExternally.opening}
+            onClick={props.openExternally.onOpenExternally}
+            aria-label="Open externally"
+          >
+            {props.openExternally.opening ? (
+              <AgentSpinningDots
+                className="size-4"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : (
+              <ExternalLinkIcon className="size-4" />
+            )}
+          </Button>
+        </TooltipWrapper>
+      ) : null}
+    </div>
+  );
+}
+
 function WorkspaceFileTileLive(props: {
   readonly node: WorkspaceFileRef;
   readonly viewTabId: string;
   readonly isActive: boolean;
   readonly revealTarget: WorkspaceFileRevealTarget | null;
+  /** Non-null only when `node` is an SVG reached via its image-mode toggle; `null` renders nothing (byte-identical text path for every other file). */
+  readonly svgToggle: ReactNode;
 }) {
   const { node, revealTarget } = props;
   const tabHostId = useTabHostId();
@@ -430,6 +672,7 @@ function WorkspaceFileTileLive(props: {
           viewMode={effectiveViewMode}
           editing={editing}
           onViewModeChange={setViewMode}
+          svgToggle={props.svgToggle}
           status={
             <FileAutosaveStatus
               appearance="pill"
@@ -489,6 +732,7 @@ function WorkspaceFileToolbar(props: {
   readonly editing: boolean;
   readonly onViewModeChange: (mode: WorkspaceFileViewMode) => void;
   readonly status: ReactNode;
+  readonly svgToggle: ReactNode;
 }) {
   return (
     <div
@@ -511,6 +755,7 @@ function WorkspaceFileToolbar(props: {
           onModeChange={props.onViewModeChange}
         />
       ) : null}
+      {props.svgToggle}
     </div>
   );
 }
