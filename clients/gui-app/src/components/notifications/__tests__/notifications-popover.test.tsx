@@ -55,7 +55,6 @@ import type {
   HostNotificationEntry,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -442,7 +441,8 @@ function applyHostSnapshot(
     attention: {
       entries: entries.filter(
         (entry) =>
-          entry.severity === "needs_action" || entry.severity === "failure",
+          entry.readAt === null &&
+          (entry.severity === "needs_action" || entry.severity === "failure"),
       ),
       nextCursor: null,
     },
@@ -524,9 +524,6 @@ function defaultHostRequest(method: string): Promise<unknown> {
   if (method === "host.notifications.markRead") {
     return Promise.resolve({ ok: true });
   }
-  if (method === "host.notifications.resolve") {
-    return Promise.resolve({ ok: true });
-  }
   if (method === "host.notifications.markAllRead") {
     return Promise.resolve({ ok: true });
   }
@@ -543,21 +540,6 @@ function startOfLocalDay(timestamp: number): number {
   const date = new Date(timestamp);
   date.setHours(0, 0, 0, 0);
   return date.getTime();
-}
-
-function unsupportedResolveError(): HostRpcError {
-  return new HostRpcError({
-    code: "E_HOST_UNSUPPORTED",
-    message: "host.notifications.resolve is not supported",
-    requestId: "req-unsupported-resolve",
-    method: "host.notifications.resolve",
-    fatalDetails: {
-      code: "E_HOST_UNSUPPORTED",
-      reason: "Method not advertised by this host",
-      incompatibleMethods: null,
-      upgradeGuidance: null,
-    },
-  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -577,44 +559,6 @@ function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
     throw new Error("expected host.notifications.markAllRead params");
   }
   return { beforeUpdatedAt };
-}
-
-function resolveCallOccurrences(): ReadonlyArray<{
-  readonly id: string;
-  readonly updatedAt: number;
-  readonly sourceRef: string | null;
-}> {
-  const call = hostRequestMock.mock.calls.find(
-    (entry) => entry[0] === "host.notifications.resolve",
-  );
-  const params: unknown = call === undefined ? undefined : call[1];
-  if (!isRecord(params)) {
-    throw new Error("expected host.notifications.resolve params");
-  }
-  const occurrences = params["occurrences"];
-  if (!Array.isArray(occurrences)) {
-    throw new Error("expected host.notifications.resolve params");
-  }
-  return occurrences.map((raw: unknown) => {
-    if (!isRecord(raw)) {
-      throw new Error("expected resolve occurrence token");
-    }
-    const id = raw["id"];
-    const updatedAt = raw["updatedAt"];
-    const sourceRef = raw["sourceRef"];
-    if (
-      typeof id !== "string" ||
-      typeof updatedAt !== "number" ||
-      (sourceRef !== null && typeof sourceRef !== "string")
-    ) {
-      throw new Error("expected resolve occurrence token");
-    }
-    return {
-      id,
-      updatedAt,
-      sourceRef: sourceRef === null ? null : sourceRef,
-    };
-  });
 }
 
 describe("NotificationsPopover", () => {
@@ -1908,7 +1852,7 @@ describe("NotificationsPopover", () => {
     trackSpy.mockRestore();
   });
 
-  it("keeps an unresolved approval in Attention after successful activation", async () => {
+  it("moves an activated approval to Recent without resolving it", async () => {
     bindHostClient();
     applyHostSnapshot([hostPrompt("prompt-keep", 100, null)], {
       unreadCount: 1,
@@ -1939,9 +1883,10 @@ describe("NotificationsPopover", () => {
       expect(onNavigate).toHaveBeenCalledTimes(1);
     });
 
-    // Success acknowledges the row but does not resolve the prompt; Attention
-    // membership is driven by resolvedAt, not readAt.
-    expect(screen.getByText("Needs attention")).not.toBeNull();
+    // Success acknowledges the notification without resolving the prompt.
+    await waitFor(() => {
+      expect(screen.queryByText("Needs attention")).toBeNull();
+    });
     const stillThere = screen
       .getAllByTestId("notification-entry")
       .find((entry) => entry.dataset.notificationId === "host:prompt-keep");
@@ -1956,7 +1901,7 @@ describe("NotificationsPopover", () => {
         hostFailure("fail-unread", 100, null),
         hostDone("recent-read", 90, 40),
       ],
-      { unreadCount: 2, attentionCount: 3 },
+      { unreadCount: 2, attentionCount: 2 },
     );
     const captured: TargetCapture = {
       epicId: null,
@@ -1984,28 +1929,19 @@ describe("NotificationsPopover", () => {
     // Read rows do not reuse the unread-state tick for another disposition.
     expect(readPrompt.dataset.notificationRead).toBe("true");
     expect(
-      within(readPrompt).queryByRole("button", { name: "Dismiss" }),
-    ).toBeNull();
-    expect(
       within(readPrompt).queryByRole("button", { name: "Mark as read" }),
     ).toBeNull();
 
     expect(
-      within(unreadPrompt).getByTestId("notification-dismiss"),
+      within(unreadPrompt).getByTestId("notification-mark-read"),
     ).not.toBeNull();
-    expect(
-      within(unreadPrompt).queryByTestId("notification-mark-read"),
-    ).toBeNull();
 
-    // Failure-tier Attention still uses mark-read, never Dismiss.
     expect(
       within(failure).getByTestId("notification-mark-read"),
     ).not.toBeNull();
-    expect(within(failure).queryByTestId("notification-dismiss")).toBeNull();
 
     // Read Recent rows show no trailing control (regression guard).
     expect(recentRead.dataset.notificationRead).toBe("true");
-    expect(within(recentRead).queryByTestId("notification-dismiss")).toBeNull();
     expect(
       within(recentRead).queryByTestId("notification-mark-read"),
     ).toBeNull();
@@ -2014,7 +1950,7 @@ describe("NotificationsPopover", () => {
     ).toBeNull();
   });
 
-  it("Dismiss resolves without activating and moves the row to Recent as read", async () => {
+  it("mark-read acknowledges a prompt without activating or resolving it", async () => {
     bindHostClient();
     applyHostSnapshot(
       [hostPrompt("prompt-dismiss", 100, null), hostDone("done", 90, null)],
@@ -2040,22 +1976,14 @@ describe("NotificationsPopover", () => {
       throw new Error("expected blocking attention row");
     }
 
-    fireEvent.click(within(attentionRow).getByTestId("notification-dismiss"));
+    fireEvent.click(within(attentionRow).getByTestId("notification-mark-read"));
 
     // Sibling control - never activates / navigates the row.
     expect(onNavigate).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(hostRequestMock).toHaveBeenCalledWith(
-        "host.notifications.resolve",
-        {
-          occurrences: [
-            {
-              id: "prompt-dismiss",
-              updatedAt: 100,
-              sourceRef: "prompt-dismiss",
-            },
-          ],
-        },
+        "host.notifications.markRead",
+        { kind: "ids", ids: ["prompt-dismiss"] },
       );
     });
     expect(
@@ -2072,27 +2000,6 @@ describe("NotificationsPopover", () => {
       ],
     ]);
 
-    // No optimistic client write: the row stays in Attention until the host's
-    // authoritative readStateChanged frame arrives.
-    expect(screen.queryByText("Needs attention")).not.toBeNull();
-    const stillPending =
-      useHostNotificationsStore.getState().byId["prompt-dismiss"];
-    expect(
-      "resolvedAt" in stillPending ? stillPending.resolvedAt : null,
-    ).toBeNull();
-
-    const resolvedAt = 999;
-    act(() => {
-      useHostNotificationsStore
-        .getState()
-        .applyReadStateFrame(["prompt-dismiss"], {
-          readAt: resolvedAt,
-          resolvedAt,
-          removedIds: [],
-          summary: { unreadCount: 1, attentionCount: 0 },
-        });
-    });
-
     await waitFor(() => {
       expect(screen.queryByText("Needs attention")).toBeNull();
     });
@@ -2100,23 +2007,22 @@ describe("NotificationsPopover", () => {
       .getAllByTestId("notification-entry")
       .find((entry) => entry.dataset.notificationId === "host:prompt-dismiss");
     if (live === undefined) {
-      throw new Error("expected dismissed row in Recent");
+      throw new Error("expected acknowledged row in Recent");
     }
     expect(live.dataset.notificationRead).toBe("true");
     expect(
       within(live).getByTestId("notification-relocation-highlight"),
     ).not.toBeNull();
-    expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
-    const dismissed =
+    const acknowledged =
       useHostNotificationsStore.getState().byId["prompt-dismiss"];
-    expect(dismissed.readAt).toBe(resolvedAt);
-    expect("resolvedAt" in dismissed ? dismissed.resolvedAt : null).toBe(
-      resolvedAt,
-    );
+    expect(acknowledged.readAt).toBeTypeOf("number");
+    expect(
+      "resolvedAt" in acknowledged ? acknowledged.resolvedAt : null,
+    ).toBeNull();
     trackSpy.mockRestore();
   });
 
-  it("Mark all read also resolves loaded blocking Attention rows without optimistic removal", async () => {
+  it("Mark all read acknowledges prompts without resolving them", async () => {
     bindHostClient();
     applyHostSnapshot(
       [
@@ -2124,7 +2030,7 @@ describe("NotificationsPopover", () => {
         hostPrompt("prompt-b", 150, 40),
         hostDone("done-unread", 100, null),
       ],
-      { unreadCount: 2, attentionCount: 2 },
+      { unreadCount: 2, attentionCount: 1 },
     );
 
     const captured: TargetCapture = {
@@ -2141,35 +2047,6 @@ describe("NotificationsPopover", () => {
 
     await waitFor(() => {
       expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
-      expect(
-        [...resolveCallOccurrences()].sort((a, b) => a.id.localeCompare(b.id)),
-      ).toEqual([
-        { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
-        { id: "prompt-b", updatedAt: 150, sourceRef: "prompt-b" },
-      ]);
-    });
-
-    // No optimistic write: rows stay in Attention until the host frame.
-    expect(screen.getByText("Needs attention")).not.toBeNull();
-    expect(
-      screen
-        .getAllByTestId("notification-entry")
-        .filter((entry) =>
-          ["host:prompt-a", "host:prompt-b"].includes(
-            entry.dataset.notificationId ?? "",
-          ),
-        ),
-    ).toHaveLength(2);
-
-    act(() => {
-      useHostNotificationsStore
-        .getState()
-        .applyReadStateFrame(["prompt-a", "prompt-b"], {
-          readAt: 999,
-          resolvedAt: 999,
-          removedIds: [],
-          summary: { unreadCount: 0, attentionCount: 0 },
-        });
     });
 
     await waitFor(() => {
@@ -2185,6 +2062,15 @@ describe("NotificationsPopover", () => {
         )
         .every((entry) => entry.dataset.notificationRead === "true"),
     ).toBe(true);
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+    for (const id of ["prompt-a", "prompt-b"]) {
+      const prompt = useHostNotificationsStore.getState().byId[id];
+      expect("resolvedAt" in prompt ? prompt.resolvedAt : null).toBeNull();
+    }
   });
 
   it("Mark all read does not call resolve when no loaded blocking Attention rows exist", async () => {
@@ -2215,86 +2101,10 @@ describe("NotificationsPopover", () => {
     ).toBe(false);
   });
 
-  it("Mark all read still applies when resolve degrades as E_HOST_UNSUPPORTED", async () => {
-    bindHostClient();
-    useAppLocalNotificationsStore.getState().activateIdentity("user-popover");
-    applyHostSnapshot(
-      [
-        hostPrompt("prompt-old-host", 200, null),
-        hostDone("done-unread", 100, null),
-      ],
-      { unreadCount: 2, attentionCount: 1 },
-    );
-    hostRequestMock.mockImplementation((method: string) => {
-      if (method === "host.notifications.resolve") {
-        return Promise.reject(unsupportedResolveError());
-      }
-      return defaultHostRequest(method);
-    });
-
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, () => undefined);
-    renderRouter(router);
-
-    expect(await screen.findByText("Needs attention")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
-
-    await waitFor(() => {
-      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
-      expect(resolveCallOccurrences()).toEqual([
-        {
-          id: "prompt-old-host",
-          updatedAt: 200,
-          sourceRef: "prompt-old-host",
-        },
-      ]);
-    });
-
-    await waitFor(() => {
-      expect(
-        useHostNotificationsStore.getState().byId["done-unread"].readAt,
-      ).toBeTypeOf("number");
-    });
-    await waitFor(() => {
-      expect(toastFromHostError).toHaveBeenCalledTimes(1);
-    });
-    expect(toastFromHostError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "E_HOST_UNSUPPORTED",
-        method: "host.notifications.resolve",
-      }),
-      "Couldn't dismiss the notifications.",
-    );
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    expect(toast.error).toHaveBeenCalledWith(
-      "This needs a newer Traycer host. Update the host to continue.",
-      {
-        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
-        cancel: null,
-      },
-    );
-    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
-    expect(screen.getByText("Needs attention")).not.toBeNull();
-    expect(
-      screen
-        .getAllByTestId("notification-entry")
-        .some(
-          (entry) => entry.dataset.notificationId === "host:prompt-old-host",
-        ),
-    ).toBe(true);
-  });
-
-  it("enables Mark all read when only loaded Attention remains with an active host, disables when neither unread nor Attention", async () => {
-    // Read-but-unresolved needs_action: unreadCount 0, still dismissable while
-    // a host is active (loaded host Attention counts toward enablement).
+  it("disables Mark all read when only a read unresolved prompt remains", async () => {
     applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
       unreadCount: 0,
-      attentionCount: 1,
+      attentionCount: 0,
     });
 
     const captured: TargetCapture = {
@@ -2306,62 +2116,15 @@ describe("NotificationsPopover", () => {
     const { router } = buildRouterWithCapture(captured, () => undefined);
     renderRouter(router);
 
-    expect(await screen.findByText("Needs attention")).not.toBeNull();
-    expect(markAllReadButton().disabled).toBe(false);
-
-    cleanup();
-    __resetHostNotificationsStoreForTests();
-    useHostNotificationsStore.getState().applySnapshot({
-      attention: { entries: [], nextCursor: null },
-      recent: { entries: [], nextCursor: null },
-      summary: { unreadCount: 0, attentionCount: 0 },
-    });
-
-    const empty: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const emptyRouter = buildRouterWithCapture(empty, () => undefined);
-    renderRouter(emptyRouter.router);
-
-    await screen.findByTestId("notifications-empty");
-    expect(markAllReadButton().disabled).toBe(true);
-  });
-
-  it("disables Mark all read on disconnect when only retained host Attention remains", async () => {
-    // Retain a read-but-unresolved host needs_action row, then disconnect:
-    // binding kept, active host id null, summary unknown. Host Attention must
-    // not keep the double-tick enabled into unbound-rejecting RPCs.
-    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
-      unreadCount: 0,
-      attentionCount: 1,
-    });
-    simulateHostDisconnect();
-
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, () => undefined);
-    renderRouter(router);
-
-    expect(await screen.findByText("Needs attention")).not.toBeNull();
-    expect(
-      screen
-        .getAllByTestId("notification-entry")
-        .some((entry) => entry.dataset.notificationId === "host:prompt-read"),
-    ).toBe(true);
+    expect(await screen.findByText("Recent activity")).not.toBeNull();
+    expect(screen.queryByText("Needs attention")).toBeNull();
     expect(markAllReadButton().disabled).toBe(true);
   });
 
   it("enables Mark all read on disconnect when a local unread row remains actionable", async () => {
     applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
       unreadCount: 0,
-      attentionCount: 1,
+      attentionCount: 0,
     });
     seedUnreadAppLocal("local-during-disconnect");
     simulateHostDisconnect();
@@ -2391,7 +2154,7 @@ describe("NotificationsPopover", () => {
   it("Mark all read during disconnect skips host mutations, marks local rows, and raises no error toasts", async () => {
     applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
       unreadCount: 0,
-      attentionCount: 1,
+      attentionCount: 0,
     });
     seedUnreadAppLocal("local-mark-all-disconnect");
     simulateHostDisconnect();
@@ -2430,62 +2193,9 @@ describe("NotificationsPopover", () => {
     ).toBe(false);
     expect(toastFromHostError).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
-    // Retained host Attention stays unresolved - no host half ran.
+    // The read prompt remains unresolved; notification consumption never
+    // mutates chat workflow state.
     const retained = useHostNotificationsStore.getState().byId["prompt-read"];
     expect("resolvedAt" in retained ? retained.resolvedAt : null).toBeNull();
-  });
-
-  it("reconnect restores Mark all read enablement for retained host Attention and host mutations fire on click", async () => {
-    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
-      unreadCount: 0,
-      attentionCount: 1,
-    });
-    simulateHostDisconnect();
-
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const first = buildRouterWithCapture(captured, () => undefined);
-    renderRouter(first.router);
-
-    expect(await screen.findByText("Needs attention")).not.toBeNull();
-    expect(markAllReadButton().disabled).toBe(true);
-
-    // Reconnect: active host id returns, binding reports a real id, retained
-    // byId rows stay. Summary may still be landing; enablement only needs the
-    // active host + loaded host Attention.
-    cleanup();
-    activeHostIdRef.value = mockLocalHostEntry.hostId;
-    bindHostClient();
-
-    const second = buildRouterWithCapture(
-      {
-        epicId: null,
-        tabId: null,
-        focusArtifactId: null,
-        focusThreadId: null,
-      },
-      () => undefined,
-    );
-    renderRouter(second.router);
-
-    expect(await screen.findByText("Needs attention")).not.toBeNull();
-    expect(markAllReadButton().disabled).toBe(false);
-
-    fireEvent.click(markAllReadButton());
-
-    await waitFor(() => {
-      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
-      expect(resolveCallOccurrences()).toEqual([
-        {
-          id: "prompt-read",
-          updatedAt: 110,
-          sourceRef: "prompt-read",
-        },
-      ]);
-    });
   });
 });

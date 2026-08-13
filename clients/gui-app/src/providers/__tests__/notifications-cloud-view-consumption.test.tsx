@@ -411,7 +411,7 @@ describe("cloud-mode view consumption", () => {
     expect(calls.hostMarkRead).toEqual([]);
   });
 
-  it("leaves a pending approval or interview unread when the chat is visited", async () => {
+  it("marks a pending approval or interview read when the chat is visited", async () => {
     renderProvider();
     applyCloudSnapshot(
       [
@@ -433,11 +433,15 @@ describe("cloud-mode view consumption", () => {
     focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
 
     await waitFor(() => {
-      expect(calls.cloudMarkRead).toEqual(["entry-done"]);
+      expect(calls.cloudMarkRead).toEqual([
+        "entry-done",
+        "entry-approval",
+        "entry-interview",
+      ]);
     });
-    // Looking at a chat must never silently answer what it is asking you.
-    expect(readAtFor("entry-approval")).toBeNull();
-    expect(readAtFor("entry-interview")).toBeNull();
+    // Reading the prompt never resolves the underlying workflow.
+    expect(readAtFor("entry-approval")).not.toBeNull();
+    expect(readAtFor("entry-interview")).not.toBeNull();
   });
 
   it("marks only epic-level rows when an epic is visited, never its chats'", async () => {

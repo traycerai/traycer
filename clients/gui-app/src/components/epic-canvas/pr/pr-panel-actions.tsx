@@ -79,7 +79,9 @@ function PrPanelActionsLive(props: {
       {subscription.data === null ? null : (
         <PrStalenessHint observedAt={observedAt} />
       )}
-      {notice === null ? null : <PrSourceNoticeHint notice={notice} />}
+      {notice === null ? null : (
+        <PrSourceNoticeHint subject="pull-requests" notice={notice} />
+      )}
       <Button
         type="button"
         variant="ghost"

@@ -107,8 +107,11 @@ function defaultSummaryFor(
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
-    attentionCount: entries.filter((item) => item.severity === "needs_action")
-      .length,
+    attentionCount: entries.filter(
+      (item) =>
+        item.readAt === null &&
+        (item.severity === "needs_action" || item.severity === "failure"),
+    ).length,
   };
 }
 
@@ -122,7 +125,8 @@ function applySimpleSnapshot(input: {
     attention: {
       entries: input.entries.filter(
         (item) =>
-          item.severity === "needs_action" || item.severity === "failure",
+          item.readAt === null &&
+          (item.severity === "needs_action" || item.severity === "failure"),
       ),
       nextCursor: input.attentionNext,
     },

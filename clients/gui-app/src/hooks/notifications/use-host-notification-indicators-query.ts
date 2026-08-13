@@ -52,8 +52,10 @@ export interface HostNotificationIndicatorsQuery {
 
 /**
  * One surface-level indicator observer. The visible ids are canonicalized and
- * paired into cap-sized requests, so normal surfaces issue one RPC and very
- * large surfaces grow only by 500-id pages rather than one observer per row.
+ * split into cap-sized requests, so normal surfaces issue one RPC and very
+ * large surfaces grow by bounded pages rather than one observer per row.
+ * Epic chunks are crossed with chat chunks because every task aggregate must
+ * receive the complete live-chat whitelist.
  */
 export function useHostNotificationIndicators(
   args: UseHostNotificationIndicatorsArgs,
@@ -100,11 +102,24 @@ export function indicatorRequests(
 ): ReadonlyArray<HostNotificationsIndicatorStateRequest> {
   const epicChunks = chunkIds(epicIds);
   const chatChunks = chunkIds(chatIds);
-  const count = Math.max(epicChunks.length, chatChunks.length);
-  return Array.from({ length: count }, (_value, index) => ({
-    epicIds: [...(epicChunks[index] ?? [])],
-    chatIds: [...(chatChunks[index] ?? [])],
-  }));
+  if (epicChunks.length === 0) {
+    return chatChunks.map((chatChunk) => ({
+      epicIds: [],
+      chatIds: [...chatChunk],
+    }));
+  }
+  if (chatChunks.length === 0) {
+    return epicChunks.map((epicChunk) => ({
+      epicIds: [...epicChunk],
+      chatIds: [],
+    }));
+  }
+  return epicChunks.flatMap((epicChunk) =>
+    chatChunks.map((chatChunk) => ({
+      epicIds: [...epicChunk],
+      chatIds: [...chatChunk],
+    })),
+  );
 }
 
 function chunkIds(
@@ -139,11 +154,33 @@ function mergeIndicatorResponses(
   if (responses.length === 0) return EMPTY_INDICATOR_STATE;
   return responses.reduce<HostNotificationsIndicatorStateResponse>(
     (combined, response) => ({
-      epics: { ...combined.epics, ...response.epics },
-      chats: { ...combined.chats, ...response.chats },
+      epics: mergeEntityIndicatorStates(combined.epics, response.epics),
+      chats: mergeEntityIndicatorStates(combined.chats, response.chats),
     }),
     EMPTY_INDICATOR_STATE,
   );
+}
+
+function mergeEntityIndicatorStates(
+  left: HostNotificationsIndicatorStateResponse["epics"],
+  right: HostNotificationsIndicatorStateResponse["epics"],
+): HostNotificationsIndicatorStateResponse["epics"] {
+  const merged = { ...left };
+  for (const [entityId, state] of Object.entries(right)) {
+    if (!Object.hasOwn(merged, entityId)) {
+      merged[entityId] = state;
+      continue;
+    }
+    const prior = merged[entityId];
+    merged[entityId] = {
+      pendingApproval: prior.pendingApproval || state.pendingApproval,
+      pendingInterview: prior.pendingInterview || state.pendingInterview,
+      pendingFork: prior.pendingFork || state.pendingFork,
+      unreadFailure: prior.unreadFailure || state.unreadFailure,
+      unreadDone: prior.unreadDone || state.unreadDone,
+    };
+  }
+  return merged;
 }
 
 function firstSupportedHostError(

@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useLayoutEffect,
   useState,
   type ReactElement,
@@ -204,6 +205,31 @@ function PreviewBody(props: {
               {preview.footer.text}
             </div>
           ) : null}
+        </>
+      );
+    case "card":
+      return (
+        <>
+          <div className="min-w-0 text-ui-sm text-foreground">
+            {preview.title}
+          </div>
+          <div className="mt-0.5 min-w-0 font-mono text-ui-xs wrap-anywhere text-muted-foreground/70">
+            {preview.subtitle}
+          </div>
+          {preview.facts.length === 0 ? null : (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-2">
+              {preview.facts.map((fact) => (
+                <Fragment key={fact.label}>
+                  <dt className="text-ui-xs text-muted-foreground/70">
+                    {fact.label}
+                  </dt>
+                  <dd className="min-w-0 text-ui-xs wrap-anywhere text-foreground">
+                    {fact.value}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+          )}
         </>
       );
   }

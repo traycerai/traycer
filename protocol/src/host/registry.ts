@@ -448,6 +448,10 @@ import {
   prSubscribeDetailV10,
   prGetLocalDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
+import {
+  mentionGithubCatalogV10,
+  mentionGithubSearchV10,
+} from "@traycer/protocol/host/mention-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -6615,6 +6619,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: prGetLocalDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Additive post-v1.0 unary methods. An older host lacks the GitHub mention
+  // picker surface entirely, so callers feature-detect and degrade per call.
+  "mention.githubCatalog": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: mentionGithubCatalogV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "mention.githubSearch": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: mentionGithubSearchV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -1,8 +1,10 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   ROOT_MENTION_STEP,
+  sameMentionStepChrome,
   type MentionFlowStep,
   type MentionMenuEntry,
+  type MentionStepChrome,
 } from "@/lib/composer/mentions";
 import type {
   MentionPreview,
@@ -66,7 +68,7 @@ export type ComposerPickerItem =
 export function pickerItemDisabledReason(
   item: ComposerPickerItem,
 ): string | null {
-  if (item.kind === "mention") return null;
+  if (item.kind === "mention") return item.entry.disabledReason;
   return item.disabledReason;
 }
 
@@ -139,6 +141,21 @@ export interface ComposerPickerState {
    */
   readonly dismiss: (() => void) | null;
   /**
+   * Returns DOM focus (and the caret) to the composer's editor, inserting
+   * `resumeText` at the caret when it is non-null.
+   *
+   * Registered by the suggestion render beside `commit`/`dismiss`, because the
+   * editor handle only exists there. The one caller is the filter popover's
+   * close: Radix restores focus to its trigger by default, which would leave
+   * the caret outside the composer with the mention menu still open.
+   *
+   * `resumeText` carries the printable character that dismissed the popover.
+   * That keystroke is delivered to the popover's radio group and the editor is
+   * not focused until a microtask later, so without handing it over the first
+   * letter of the resumed query is silently dropped.
+   */
+  readonly focusEditor: ((resumeText: string | null) => void) | null;
+  /**
    * True when the active kind's catalog query FAILED (currently only the
    * slash-command catalog reports this). The menu renders a "couldn't load"
    * row with a Retry action instead of claiming "no matching" results -
@@ -149,6 +166,18 @@ export interface ComposerPickerState {
    */
   readonly loadFailed: boolean;
   readonly retryLoad: (() => void) | null;
+  /**
+   * The current step's top-bar chrome (refresh, freshness, notice, filter) and
+   * its two body affordances (degraded-source banner, appended status row), or
+   * null for a step that has none.
+   *
+   * Published by the item hooks for the same reason `retryLoad` and `commit`
+   * are: the values are live query state and closures that only exist in the
+   * hook layer, while the menu that renders them reads the store. The provider
+   * registry stays hook-free and declares only the static capability - see
+   * `MentionStepChromeCapability`.
+   */
+  readonly stepChrome: MentionStepChrome | null;
   /**
    * Latest viewport rect of the suggestion range (trigger char + query).
    * Tiptap rebuilds the closure on every view update; we keep the function
@@ -195,6 +224,7 @@ export interface ComposerPickerActions {
     readonly query: string;
     readonly commit: ComposerPickerCommit;
     readonly dismiss: (() => void) | null;
+    readonly focusEditor: ((resumeText: string | null) => void) | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {
@@ -215,6 +245,18 @@ export interface ComposerPickerActions {
     readonly loading: boolean;
     readonly loadFailed: boolean;
     readonly retryLoad: (() => void) | null;
+  }) => void;
+  /**
+   * Publishes the chrome for `step`. Guarded like `setItems`: a chrome built
+   * for a step or session the store has already moved past would otherwise put
+   * the previous section's refresh button and freshness stamp on the new one.
+   * Value-equal republishes are dropped so a hook that rebuilds its chrome
+   * object each render cannot drive a loop through the store.
+   */
+  readonly setStepChrome: (input: {
+    readonly sessionId: number;
+    readonly step: MentionFlowStep;
+    readonly chrome: MentionStepChrome | null;
   }) => void;
   readonly setLoading: (input: {
     readonly kind: ComposerPickerKind;
@@ -259,8 +301,10 @@ const INITIAL_STATE: ComposerPickerState = {
   fetching: false,
   commit: null,
   dismiss: null,
+  focusEditor: null,
   loadFailed: false,
   retryLoad: null,
+  stepChrome: null,
   clientRect: null,
   knownSlashCommands: null,
 };
@@ -342,6 +386,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       query,
       commit,
       dismiss,
+      focusEditor,
       clientRect,
     }) => {
       set({
@@ -362,8 +407,10 @@ export function createComposerPickerStore(): ComposerPickerStore {
         fetching: false,
         commit,
         dismiss,
+        focusEditor,
         loadFailed: false,
         retryLoad: null,
+        stepChrome: null,
         clientRect,
       });
     },
@@ -420,7 +467,22 @@ export function createComposerPickerStore(): ComposerPickerStore {
         fetching: false,
         loadFailed: false,
         retryLoad: null,
+        stepChrome: null,
       });
+    },
+
+    setStepChrome: ({ sessionId, step, chrome }) => {
+      const previous = get();
+      if (
+        !previous.open ||
+        previous.kind !== "mention" ||
+        previous.sessionId !== sessionId ||
+        stepIdOf(previous.step) !== stepIdOf(step)
+      ) {
+        return;
+      }
+      if (sameMentionStepChrome(previous.stepChrome, chrome)) return;
+      set({ stepChrome: chrome });
     },
 
     setItems: ({

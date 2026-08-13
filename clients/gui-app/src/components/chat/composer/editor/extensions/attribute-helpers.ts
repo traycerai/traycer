@@ -52,6 +52,14 @@ export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "terminalAgentId",
   "terminalId",
   "status",
+  // GitHub PR/issue references. These names are the protocol serializer's
+  // (`MentionAttrs`), not local ones: `formatMentionForLLMQuery` reads them off
+  // the submitted node by name to build `@github-pr:org/repo#N [url=…]`.
+  "githubHost",
+  "organizationLogin",
+  "repositoryName",
+  "issueNumber",
+  "url",
 ];
 
 export const SLASH_COMMAND_ATTRIBUTE_NAMES: ReadonlyArray<string> = [

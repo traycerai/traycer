@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  artifactsRefreshTargetKey,
   buildCurrentEpicArtifactMentionEntries,
   epicAgentMentionEntriesFromEpic,
   mentionNoMatchDismissVerdict,
@@ -699,10 +700,40 @@ describe("mentionNoMatchDismissVerdict", () => {
     terminalLoading: false,
     terminalFetching: false,
     terminalError: null,
+    githubErrored: false,
+    referenceQuery: false,
   };
 
   it("closes when every source, including the terminal list, has settled with no match", () => {
     expect(mentionNoMatchDismissVerdict(settledNoMatch)).toBe(true);
+  });
+
+  it("holds the menu open when a requested GitHub catalog read failed", () => {
+    // A rejected cache-only read carries no rows and no scope, so zero
+    // matches proves nothing - the PR/issue source never answered. Before the
+    // GitHub error was folded in beside the other sources', retries
+    // exhausting flipped `loading` false and the picker dismissed over rows
+    // it never saw.
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        githubErrored: true,
+      }),
+    ).toBe(false);
+  });
+
+  // Without this the whole `referenceQuery` input can be deleted from the
+  // verdict call and every other case in this suite stays green - the fixture
+  // only ever sets it false, so nothing measures the exemption it exists for.
+  it("holds the menu open for a reference-shaped query that matched nothing", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        query: "#123",
+        debouncedQuery: "#123",
+        referenceQuery: true,
+      }),
+    ).toBe(false);
   });
 
   it("holds the menu open while the terminal list is still loading", () => {
@@ -750,5 +781,25 @@ describe("mentionNoMatchDismissVerdict", () => {
         workspaceError: new Error("search failed"),
       }),
     ).toBe(false);
+  });
+});
+
+describe("artifactsRefreshTargetKey", () => {
+  it("differs across hosts even when the epic id is empty - the landing composer's host-swap case", () => {
+    expect(artifactsRefreshTargetKey("host-1", "")).not.toBe(
+      artifactsRefreshTargetKey("host-2", ""),
+    );
+  });
+
+  it("differs between a null host and a named host", () => {
+    expect(artifactsRefreshTargetKey(null, "epic-1")).not.toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
+  });
+
+  it("is equal for identical host and epic pairs", () => {
+    expect(artifactsRefreshTargetKey("host-1", "epic-1")).toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
   });
 });

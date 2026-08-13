@@ -570,6 +570,14 @@ export function NotificationsSessionProvider(
     }
     if (notificationFeedMode === "cloud") {
       if (localStreamClient === null) return;
+      // The cloud feed owns host/agent rows only. Collaboration events are
+      // still written to the per-user Notifications room, so cloud mode must
+      // keep that replica live alongside the relay or sharing notifications
+      // disappear after the mode-transition reset below.
+      disposerRef.current = openNotificationsStream(
+        createNotificationsStream,
+        onAuthError,
+      );
       cloudDisposerRef.current = openCloudNotificationsStream(
         localStreamClient,
         onAuthError,
