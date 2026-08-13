@@ -14,6 +14,7 @@ import {
   isConfirmedTransportRefusal,
   isWithinRelayFuseGrace,
   RELAY_FUSE_MAX_ATTACH_MS,
+  RELAY_FUSE_MAX_CLOCK_SKEW_MS,
   type HostListFetchResult,
 } from "../remote-fetcher";
 
@@ -283,6 +284,33 @@ describe("isWithinRelayFuseGrace", () => {
     expect(
       isWithinRelayFuseGrace(
         offlineStatus(isoBefore(RELAY_FUSE_MAX_ATTACH_MS + 1)),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for offline + lastSeenAt slightly AHEAD of now (client clock lagging the cloud stamp)", () => {
+    // `lastSeenAt` is cloud-stamped, so a client clock a few seconds behind
+    // the server legitimately reads a just-seen host as "seen in the future".
+    // Refusing that outright would deny the recovery dial to exactly the
+    // freshest candidates.
+    expect(
+      isWithinRelayFuseGrace(
+        offlineStatus(new Date(NOW + 60_000).toISOString()),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for offline + lastSeenAt implausibly far in the future (corrupt anchor, not skew)", () => {
+    // Beyond plausible clock skew a future timestamp is corrupt data, and a
+    // negative age would otherwise hold the dial window open for as long as
+    // it takes the clock to catch up to it.
+    expect(
+      isWithinRelayFuseGrace(
+        offlineStatus(
+          new Date(NOW + RELAY_FUSE_MAX_CLOCK_SKEW_MS + 1).toISOString(),
+        ),
         NOW,
       ),
     ).toBe(false);

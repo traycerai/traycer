@@ -1,4 +1,4 @@
-import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hostSelectRowRefused } from "./host-select-row-refused";
 import {
   useCallback,
   useEffect,
@@ -1113,16 +1113,14 @@ function HostOnlySelect(props: {
             value={host.hostId}
             disabled={
               props.mode === "locked" ||
-              // Not `status === "unavailable"`. Three situations reach that,
-              // and one of them — a failed liveness read — is not a fact about
-              // the host at all. Greying a working host out of the picker on
-              // the strength of a degraded cloud read takes away the only way
-              // back to it; a dial that fails is recoverable, an un-pickable
-              // row is not. `plan-restricted` and `offline` both genuinely
-              // cannot be dialled and stay disabled.
-              hostUnavailability(host) === "offline" ||
-              hostUnavailability(host) === "plan-restricted" ||
-              (remoteRestricted && host.kind === "remote")
+              // Not `status === "unavailable"`, and not the raw
+              // `hostUnavailability` verdict either: the refusal is asked
+              // through the SAME ready-session-aware predicate the activation
+              // path dials through, so a fuse-window `offline` (recovery dial
+              // permitted) or an offline verdict this client holds a ready
+              // live session against stays selectable - see
+              // `hostSelectRowRefused` for the full derivation.
+              hostSelectRowRefused(host, remoteRestricted)
             }
           >
             <HostSelectOptionContent

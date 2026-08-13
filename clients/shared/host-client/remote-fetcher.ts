@@ -193,6 +193,19 @@ export type HostUnavailability =
 export const RELAY_FUSE_MAX_ATTACH_MS = 4 * 60 * 60 * 1000;
 
 /**
+ * How far AHEAD of this client's clock a `lastSeenAt` may sit and still anchor
+ * the fuse window. `lastSeenAt` is stamped by the cloud, so a client clock
+ * lagging the server by a little legitimately reads a just-seen host as "seen
+ * in the future" - refusing those outright would deny the recovery dial to
+ * exactly the freshest candidates. Past this allowance the timestamp is not
+ * skew but a corrupt anchor, and a corrupt future timestamp must not hold the
+ * dial window open (a negative age reads as "within grace" for as long as it
+ * takes the clock to catch up to it). Five minutes is generous against real
+ * NTP drift while staying tiny next to the 4h window it guards.
+ */
+export const RELAY_FUSE_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
  * Whether an `offline` verdict is recent enough that the relay's host-leg fuse
  * COULD still be holding the leg (F7), i.e. whether a recovery dial is worth
  * attempting.
@@ -228,7 +241,15 @@ export function isWithinRelayFuseGrace(
   if (Number.isNaN(lastSeenMs)) {
     return false;
   }
-  return nowMs - lastSeenMs < RELAY_FUSE_MAX_ATTACH_MS;
+  const ageMs = nowMs - lastSeenMs;
+  if (ageMs < -RELAY_FUSE_MAX_CLOCK_SKEW_MS) {
+    // A `lastSeenAt` further ahead of this clock than plausible skew is a
+    // corrupt anchor, not a recent sighting: its negative age would otherwise
+    // read as "within grace" until the clock catches up to it. A small future
+    // value (client clock lagging the cloud stamp) still anchors the window.
+    return false;
+  }
+  return ageMs < RELAY_FUSE_MAX_ATTACH_MS;
 }
 
 /**

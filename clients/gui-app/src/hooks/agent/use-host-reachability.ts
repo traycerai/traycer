@@ -50,7 +50,7 @@ export interface HostReachability {
  */
 export function useHostReachability(hostId: string): HostReachability {
   const list = useHostDirectoryList();
-  const hasReadySession = useRemoteSessionReadiness(hostId);
+  const hasReadySession = useRemoteSessionPollReadiness(hostId);
   return useMemo<HostReachability>(() => {
     if (list.data === undefined) {
       // The directory query is disabled when no host binding exists
@@ -187,7 +187,7 @@ const REMOTE_SESSION_READINESS_POLL_MS = 1_000;
  * the subscription is a bounded poll; `useSyncExternalStore` turns it into a
  * proper snapshot the memo can key on.
  */
-function useRemoteSessionReadiness(hostId: string): boolean {
+function useRemoteSessionPollReadiness(hostId: string): boolean {
   const subscribe = useCallback((onStoreChange: () => void) => {
     const timer = setInterval(onStoreChange, REMOTE_SESSION_READINESS_POLL_MS);
     return () => {

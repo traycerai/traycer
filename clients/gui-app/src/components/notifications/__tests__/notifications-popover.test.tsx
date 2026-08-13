@@ -620,8 +620,13 @@ function defaultHostRequest(method: string): Promise<unknown> {
 }
 
 function activateButtonFor(row: HTMLElement): HTMLButtonElement {
-  const button = row.querySelector("button");
-  if (button === null) throw new Error("activate button not found");
+  // Role query scoped to the row (testing guideline): the navigable body is
+  // the row's first button in document order; the trailing mark-read tick is
+  // its later sibling, never nested inside it.
+  const button = within(row).getAllByRole("button")[0];
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("activate button not found");
+  }
   return button;
 }
 
@@ -876,8 +881,13 @@ describe("NotificationsPopover", () => {
 
     const row = await screen.findByTestId("notification-entry");
     expect(row.dataset.notificationOriginState).toBe("available");
-    expect(screen.queryByTestId("notification-origin-unavailable")).toBeNull();
+    expect(
+      within(row).queryByText("The originating host is unavailable."),
+    ).toBeNull();
     // The primary control is the navigable body button, not a dead div.
+    expect(
+      within(row).getByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBe(activateButtonFor(row));
     expect(activateButtonFor(row).disabled).toBe(false);
   });
 
@@ -908,9 +918,13 @@ describe("NotificationsPopover", () => {
 
     const row = await screen.findByTestId("notification-entry");
     expect(row.dataset.notificationOriginState).toBe("unavailable");
+    // A refused origin renders no navigable body button - the body is inert.
     expect(
-      screen.getByTestId("notification-origin-unavailable").textContent,
-    ).toContain("The originating host is unavailable.");
+      within(row).queryByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBeNull();
+    expect(
+      within(row).getByText("The originating host is unavailable."),
+    ).not.toBeNull();
   });
 
   it("keeps a fuse-window offline origin actionable (the recovery dial the activation path would attempt)", async () => {
@@ -940,7 +954,13 @@ describe("NotificationsPopover", () => {
 
     const row = await screen.findByTestId("notification-entry");
     expect(row.dataset.notificationOriginState).toBe("available");
-    expect(screen.queryByTestId("notification-origin-unavailable")).toBeNull();
+    expect(
+      within(row).queryByText("The originating host is unavailable."),
+    ).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBe(activateButtonFor(row));
+    expect(activateButtonFor(row).disabled).toBe(false);
   });
 
   it("shows and opens the exact renderer-local terminal failure in cloud mode", async () => {

@@ -71,7 +71,7 @@ function registeredHostsQueryOptions(
  * panels that render no liveness at all (Shell, Worktrees, Providers…), and
  * would silently re-arm one for the next panel that mounts the scope.
  * A surface that genuinely renders liveness opts in with
- * {@link useRegisteredHostsLivenessPoll}.
+ * {@link useRegisteredHostsPollLiveness}.
  */
 export function useRegisteredHosts(): UseQueryResult<HostListResponse | null> {
   const binding = useHostBinding();
@@ -96,7 +96,7 @@ export function useRegisteredHosts(): UseQueryResult<HostListResponse | null> {
  * "this surface is showing liveness", and a return value would invite a second
  * read path to the same cache entry.
  */
-export function useRegisteredHostsLivenessPoll(): void {
+export function useRegisteredHostsPollLiveness(): void {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");

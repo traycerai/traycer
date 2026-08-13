@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { isRelayFuseRecoveryCandidate } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
@@ -26,6 +27,16 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // available": a host recovering from a stall goes unavailable -> busy and may
   // sit there, and busy is dialable, so an `=== "available"` edge would simply
   // never fire and would strand the tombstone with the host terminal alive.
+  //
+  // One dial-permission state is deliberately EXCLUDED from the recorded bit:
+  // a registry-`offline` host inside the relay-fuse window
+  // (`isRelayFuseRecoveryCandidate`). There `dialableHostEndpoint` is non-null
+  // because a recovery dial is PERMITTED, not because the host is there -
+  // recording that speculative permission as `true` made a close-during-grace
+  // followed by a genuine offline -> connectable recovery a `true -> true`
+  // non-edge, so the kill never re-fired and the tombstoned PTY outlived its
+  // tab until relaunch. `indeterminate` keeps recording `true` (the paragraph
+  // above), because unlike a fuse-window `offline` it may never resolve.
   const dialableRef = useRef<ReadonlyMap<string, boolean>>(new Map());
 
   useEffect(() => {
@@ -37,7 +48,8 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     const currentDialable = new Map(
       entries.map((entry) => [
         entry.hostId,
-        dialableHostEndpoint(entry) !== null,
+        dialableHostEndpoint(entry) !== null &&
+          !isRelayFuseRecoveryCandidate(entry),
       ]),
     );
     const previousDialable = dialableRef.current;

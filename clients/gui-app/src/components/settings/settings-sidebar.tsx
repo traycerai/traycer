@@ -22,7 +22,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
-import { useRegisteredHostsLivenessPoll } from "@/hooks/auth/use-registered-hosts-query";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -55,7 +55,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // schedule while being fifteen times easier to get wrong. Panels that merely
   // read `useHostScope` for names — Shell, Worktrees, Providers — do not, which
   // is the point: reading the list no longer implies polling it.
-  useRegisteredHostsLivenessPoll();
+  useRegisteredHostsPollLiveness();
   // No row is dimmed by host kind any more. Shell and Diagnostics used to be,
   // because both read the on-disk config store through the local CLI bridge and
   // could only ever describe this computer; `config.*` / `diagnostics.*` made

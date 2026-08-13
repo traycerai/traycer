@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -358,6 +358,14 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("unknown");
     rerender();
 
+    // Flush effects and microtasks before asserting survival: release is
+    // asynchronous (the release test above needs `waitFor`), so a synchronous
+    // read here would stay green even if a regression released the handle one
+    // microtask after the rerender.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     expect(result.current).toBe(liveHandle);
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
@@ -434,6 +442,14 @@ describe("a live chat session survives a degraded liveness read", () => {
 
     hostEntryRef.value = mappedEntry("offline");
     rerender();
+
+    // Flush effects and microtasks before asserting survival: release is
+    // asynchronous (the release test above needs `waitFor`), so a synchronous
+    // read here would stay green even if a regression released the handle one
+    // microtask after the rerender.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(result.current).toBe(liveHandle);
     expect(tracked.records()).toHaveLength(1);
