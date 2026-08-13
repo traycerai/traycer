@@ -164,6 +164,7 @@ export function HostOverviewPanel(props: {
       isError: statusQuery.isError,
       fetchStatus: statusQuery.fetchStatus,
       isStale: statusQuery.isStale,
+      hasLiveSource: usable,
     },
     localHost: props.localHost,
   });
@@ -505,6 +506,7 @@ function useOverviewDisplay(input: {
     readonly isError: boolean;
     readonly fetchStatus: "fetching" | "paused" | "idle";
     readonly isStale: boolean;
+    readonly hasLiveSource: boolean;
   };
   readonly localHost: LocalHostSnapshot | null;
 }): OverviewDisplay {
@@ -518,6 +520,7 @@ function useOverviewDisplay(input: {
     isError: statusHealth.isError,
     fetchStatus: statusHealth.fetchStatus,
     isStale: statusHealth.isStale,
+    hasLiveSource: statusHealth.hasLiveSource,
   });
   const endpointParts = useMemo(
     () =>
@@ -543,6 +546,7 @@ function useOverviewDisplay(input: {
       isError: statusHealth.isError,
       fetchStatus: statusHealth.fetchStatus,
       isStale: statusHealth.isStale,
+      hasLiveSource: statusHealth.hasLiveSource,
     }),
   };
 }

@@ -158,7 +158,17 @@ function isAdministrableRoute(
 ): boolean {
   if (entry === null || dialableHostEndpointFor(entry, hasLiveSession) === null)
     return false;
-  return !(remoteHostsPlanRestricted && entry.kind === "remote");
+  // A READY session also outranks the CLIENT-side plan gate, matching the
+  // transport's own mid-downgrade rule ("the existing session survives, the
+  // next dial refuses"): the RPC route works over the surviving session, and
+  // unmounting the panels here while every other layer keeps routing over it
+  // would report a working host as unreachable. With no session the gate
+  // refuses exactly as before.
+  return !(
+    remoteHostsPlanRestricted &&
+    entry.kind === "remote" &&
+    !hasLiveSession
+  );
 }
 
 /**

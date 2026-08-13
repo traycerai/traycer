@@ -271,6 +271,65 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
     });
     expect(option.planRestricted).toBe(true);
   });
+
+  function realConnectableEntry(): HostDirectoryEntry {
+    return hostListItemToDirectoryEntry(
+      {
+        hostId: "host-a",
+        displayName: "Downgraded Desktop",
+        platform: "darwin-arm64",
+        kind: "personal",
+        publicKey: "pk-a",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatePolicy: "manual",
+        status: {
+          connectivity: "connectable",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: "2026-01-01T00:00:00Z",
+        },
+      },
+      "wss://relay.example.test/attach",
+    );
+  }
+
+  it("mid-downgrade with NO session: the client-side plan gate refuses the route and keeps the billing label", () => {
+    const [option] = buildHostScopeOptions({
+      directory: [realConnectableEntry()],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => false,
+      viewerCheck: () => null,
+      remoteHostsPlanRestricted: true,
+      nowMs: 0,
+    });
+    expect(option.connectable).toBe(false);
+    expect(option.planRestricted).toBe(true);
+  });
+
+  it("mid-downgrade with a READY session: the surviving session keeps the route administrable, the billing label stays", () => {
+    // The transport's own mid-downgrade rule: the existing session survives
+    // and the NEXT dial refuses. Settings must not report a host every other
+    // layer is still routing over as unreachable — but the "requires a paid
+    // plan" remedy remains true and stays on the row.
+    const [option] = buildHostScopeOptions({
+      directory: [realConnectableEntry()],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => true,
+      viewerCheck: () => null,
+      remoteHostsPlanRestricted: true,
+      nowMs: 0,
+    });
+    expect(option.connectable).toBe(true);
+    expect(option.planRestricted).toBe(true);
+  });
 });
 
 describe("resolveScopedHost", () => {

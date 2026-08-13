@@ -199,6 +199,16 @@ export interface LiveBusySessionCountOptions {
   /** TanStack's fetch state; `paused` means offline and unable to refresh. */
   readonly fetchStatus: "fetching" | "paused" | "idle";
   /**
+   * The live RPC behind the read is currently enabled and mounted. When the
+   * scope loses its route the query is DISABLED rather than failed: TanStack
+   * retains the last success as idle, non-error and - until `staleTime` -
+   * non-stale, so the fields above would classify a SOURCELESS number as
+   * settled for up to that window. The count's own contract is "from a LIVE
+   * source only, `null` means no live source"; a disabled query is not one,
+   * so `false` demotes both counts immediately instead of after the age-out.
+   */
+  readonly hasLiveSource: boolean;
+  /**
    * The cached value has aged past its `staleTime`.
    *
    * This is the AGE check, expressed in TanStack's own terms rather than as
@@ -242,6 +252,9 @@ export interface LiveBusySessionCountOptions {
 export function liveBusySessionCount(
   options: LiveBusySessionCountOptions,
 ): number | null {
+  if (!options.hasLiveSource) {
+    return null;
+  }
   if (options.isError || options.fetchStatus === "paused") {
     return null;
   }

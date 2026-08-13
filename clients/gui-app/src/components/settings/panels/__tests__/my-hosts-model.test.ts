@@ -451,9 +451,23 @@ describe("liveBusySessionCount", () => {
       isError: false,
       fetchStatus: "idle",
       isStale: false,
+      hasLiveSource: true,
       ...overrides,
     };
   }
+
+  it("demotes to null the moment the live RPC is disabled - a retained idle/non-error/fresh cache is not a source", () => {
+    // The disabled-query hazard: losing the route disables the query rather
+    // than failing it, and TanStack retains the last success as idle,
+    // non-error and (until staleTime) non-stale - every OTHER field reads
+    // "settled". Without this gate the Updates card could keep offering
+    // "Apply now - ends N sessions" for the whole staleTime window with no
+    // live source behind the number.
+    expect(liveBusySessionCount(options({ hasLiveSource: false }))).toBeNull();
+    expect(
+      settledBusySessionCount(options({ hasLiveSource: false })),
+    ).toBeNull();
+  });
 
   it("passes the reported count through on a healthy, fresh read", () => {
     expect(liveBusySessionCount(options({ reportedCount: 4 }))).toBe(4);
@@ -530,6 +544,7 @@ describe("settledBusySessionCount", () => {
       isError: false,
       fetchStatus: "idle",
       isStale: false,
+      hasLiveSource: true,
       ...overrides,
     };
   }

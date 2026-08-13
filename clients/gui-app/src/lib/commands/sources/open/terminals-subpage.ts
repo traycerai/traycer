@@ -16,7 +16,11 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import {
+  dialableHostEndpoint,
+  dialableHostEndpointFor,
+} from "@/lib/host/transport-key";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import {
   useWorktreeListBindingsForEpic,
@@ -312,6 +316,18 @@ function useNewTerminalWorkspaceItems(
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
+  // Dialability depends on the pull-only session cache, so a memo keyed on
+  // directory state alone freezes the row list while the palette is open: a
+  // session dying under an `offline`/`local-only` host would keep offering a
+  // row whose launch gate then silently declines. The subscription re-renders
+  // on a readiness flip; the launch-time gate inside `run` stays an ambient
+  // live read, which is correct for an action.
+  const hasReadySessionFor = useRemoteSessionsPollReadiness(
+    useMemo(
+      () => (directory.data ?? []).map((entry) => entry.hostId),
+      [directory.data],
+    ),
+  );
   return useMemo(() => {
     const localLeaves =
       activeHostId === null
@@ -335,7 +351,9 @@ function useNewTerminalWorkspaceItems(
       // liveness read came back blind.
       .filter(
         (entry) =>
-          entry.hostId !== activeHostId && dialableHostEndpoint(entry) !== null,
+          entry.hostId !== activeHostId &&
+          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
+            null,
       )
       .map((entry) => {
         const label = entry.label.length > 0 ? entry.label : entry.hostId;
@@ -354,6 +372,7 @@ function useNewTerminalWorkspaceItems(
     bindings.isPending,
     ctx,
     directory.data,
+    hasReadySessionFor,
     hostClient,
   ]);
 }
