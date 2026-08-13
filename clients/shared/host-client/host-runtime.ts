@@ -21,6 +21,16 @@ export interface IHostDirectoryService {
   list(): Promise<readonly HostDirectoryEntry[]>;
   findById(hostId: string): HostDirectoryEntry | null;
   refresh(): Promise<readonly HostDirectoryEntry[]>;
+  /**
+   * Refresh on behalf of an explicitly named identity. The context-change path
+   * uses this because the emission precedes the profile store's update, so an
+   * identity read from inside it names the OUTGOING account.
+   */
+  refreshForIdentity(
+    authContextId: string | null,
+  ): Promise<readonly HostDirectoryEntry[]>;
+  /** Drop any in-flight refresh — used when the credential rotates. */
+  invalidateInFlightRefresh(): void;
   getSelected(): HostDirectoryEntry | null;
   selectById(hostId: string | null): void;
   onSelectionChange(
@@ -134,7 +144,15 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
 
     this.contextUnsubscribe = this.requestContextProvider.onChange((ctx) => {
       this.hostClient.setRequestContext(ctx);
-      void this.directory.refresh();
+      // The identity is passed EXPLICITLY, from the context being emitted.
+      // Reading it from the directory's own accessor here would read the
+      // OUTGOING account: `setSignedIn`/`signOut` emit this context before the
+      // profile store behind that accessor updates, so the one refresh whose
+      // job is to load the incoming account would be stamped with the previous
+      // one and discarded by its own identity guard.
+      // `null` on sign-out, which is exactly right: that IS the incoming
+      // identity, and stamping it lets the signed-out clear commit.
+      void this.directory.refreshForIdentity(ctx?.identity.userId ?? null);
     });
 
     // Same-user token refresh rotates the lease in place (silent on `onChange`);
@@ -142,6 +160,12 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     // connections without a reconnect.
     this.bearerRotationUnsubscribe =
       this.requestContextProvider.onBearerRotated(() => {
+        // A rotation is invisible to a user-id fence — same account, new
+        // credential — so the in-flight refresh is dropped here rather than
+        // joined. The pending request carries the OLD bearer, and if it comes
+        // back 401 its `signed-out` outcome would clear a directory the new
+        // credential had just legitimately filled.
+        this.directory.invalidateInFlightRefresh();
         this.hostClient.notifyBearerRotated();
       });
 

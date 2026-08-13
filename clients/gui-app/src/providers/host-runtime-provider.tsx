@@ -205,6 +205,8 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         // `AuthService`, and telling two accounts apart does not need it.
         authContextId: () =>
           auth.getCurrentSessionSnapshot().profile?.userId ?? null,
+        // Advances on same-user rotations too, which the user id cannot see.
+        credentialGeneration: () => auth.getIdentityGeneration(),
       });
 
       let runtime: HostRuntime<Registry> | null = null;

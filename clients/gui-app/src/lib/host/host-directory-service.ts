@@ -99,6 +99,14 @@ export interface HostDirectoryServiceOptions {
    */
   readonly authContextId: (() => string | null) | null;
   /**
+   * Monotonic counter that advances on every credential rotation, including a
+   * same-user one. `null` disables the credential fence — tests only.
+   *
+   * Separate from `authContextId` on purpose: a rotation is invisible to a
+   * user-id fence, and only DESTRUCTIVE commits need to see it.
+   */
+  readonly credentialGeneration: (() => number) | null;
+  /**
    * Resolves this machine's durable local host id (see
    * `lastKnownLocalHostId`). Injected like `remoteFetcher` rather than read off
    * `runnerHost` inside the service: this class is constructed outside React
@@ -158,6 +166,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
   private readonly remoteFetcher: RemoteHostFetcher;
   private readonly authContextId: () => string | null;
+  private readonly credentialGeneration: () => number;
   private readonly localHostIdSeeder: () => Promise<string | null>;
   private localEntry: HostDirectoryEntry | null = null;
   /**
@@ -315,6 +324,10 @@ export class HostDirectoryService implements IHostDirectoryService {
         : options.localHostIdSeeder;
     this.authContextId =
       options.authContextId === null ? () => null : options.authContextId;
+    this.credentialGeneration =
+      options.credentialGeneration === null
+        ? () => 0
+        : options.credentialGeneration;
   }
 
   /**
@@ -446,12 +459,34 @@ export class HostDirectoryService implements IHostDirectoryService {
    * COMMITS, not only at the one that fetches.**
    */
   refresh(): Promise<readonly HostDirectoryEntry[]> {
-    const authContextId = this.authContextId();
+    return this.refreshForIdentity(this.authContextId());
+  }
+
+  /**
+   * Refresh on behalf of an EXPLICITLY NAMED identity.
+   *
+   * The context-change path must use this, not `refresh()`. `setSignedIn()` /
+   * `signOut()` emit the new `RequestContext` BEFORE the profile behind
+   * `authContextId()` updates, so a refresh that reads the accessor from
+   * inside that emission is stamped with the OUTGOING account — and the commit
+   * guard then correctly discards the one refresh whose whole job was to load
+   * the incoming one. The guard was right; it was being fed the wrong key.
+   *
+   * Passing the identity the refresh is FOR removes the ordering dependency
+   * instead of documenting it: the caller inside the emission already holds
+   * the new context and does not have to wait for a store to catch up.
+   */
+  refreshForIdentity(
+    authContextId: string | null,
+  ): Promise<readonly HostDirectoryEntry[]> {
     const inFlight = this.refreshInFlight;
     if (inFlight !== null && inFlight.authContextId === authContextId) {
       return inFlight.request;
     }
-    const request = this.performRefresh(authContextId).finally(() => {
+    const request = this.performRefresh(
+      authContextId,
+      this.credentialGeneration(),
+    ).finally(() => {
       // Only clear OUR slot: a request superseded by an identity change must
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
@@ -460,6 +495,18 @@ export class HostDirectoryService implements IHostDirectoryService {
     });
     this.refreshInFlight = { authContextId, request };
     return request;
+  }
+
+  /**
+   * Drop any in-flight refresh so the next caller starts a fresh one.
+   *
+   * Called on credential rotation: the pending request carries the OLD bearer,
+   * so joining it hands a caller an answer the new credential never asked for
+   * — and if that answer is a 401, a clear. Losing the coalescing here costs
+   * one request.
+   */
+  invalidateInFlightRefresh(): void {
+    this.refreshInFlight = null;
   }
 
   findById(hostId: string): HostDirectoryEntry | null {
@@ -707,6 +754,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private async performRefresh(
     initiatingAuthContextId: string | null,
+    initiatingCredentialGeneration: number,
   ): Promise<readonly HostDirectoryEntry[]> {
     const outcome = await this.fetchRemoteOutcome();
     // THE COMMIT GUARD. Everything below mutates a long-lived, app-wide object:
@@ -719,6 +767,24 @@ export class HostDirectoryService implements IHostDirectoryService {
     // Discarding is the whole action: the switch itself triggers a fresh
     // refresh under the new identity, so there is nothing to salvage here and
     // nothing waiting on this write.
+    // A CLEARING outcome is destructive, and a user-id fence cannot see the
+    // case that produces it: a same-user bearer rotation. The old credential's
+    // poll 401s, comes back `signed-out`, and the user id still matches — so
+    // an expired token empties a directory the new token had just filled.
+    //
+    // Constructive commits stay fenced by user (a rotation mid-flight still
+    // describes the right account's hosts); destructive ones additionally
+    // require the credential that OBSERVED the failure to still be current.
+    if (
+      outcome.kind === "signed-out" &&
+      this.credentialGeneration() !== initiatingCredentialGeneration
+    ) {
+      appLogger.debug(
+        "[host-directory] ignoring a sign-out clear observed by a superseded credential",
+        { remoteCount: this.remoteEntries.length },
+      );
+      return this.snapshot();
+    }
     if (this.authContextId() !== initiatingAuthContextId) {
       appLogger.debug(
         "[host-directory] discarding a refresh that resolved after an identity change",
