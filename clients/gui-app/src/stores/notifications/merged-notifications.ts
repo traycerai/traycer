@@ -232,6 +232,12 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const appLocalById = useAppLocalNotificationsStore((state) => state.byId);
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   return useMemo(() => {
+    const globalEntriesById = new Map(
+      globalEntries.map((entry) => [entry.id, entry]),
+    );
+    const orderedGlobalEntries = globalIds
+      .map((id) => globalEntriesById.get(id))
+      .filter((entry): entry is NotificationEntry => entry !== undefined);
     if (feedMode === "cloud") {
       const rows: MergedNotificationRow[] = [
         ...Object.values(cloudRows)
@@ -240,17 +246,12 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
           )
           .map(rowFromCloudFeedRow),
         ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
+        ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
       ];
       rows.sort(compareFeedCandidates);
       return rows;
     }
     if (feedMode === "upgrade-required") return [];
-    const globalEntriesById = new Map(
-      globalEntries.map((entry) => [entry.id, entry]),
-    );
-    const orderedGlobalEntries = globalIds
-      .map((id) => globalEntriesById.get(id))
-      .filter((entry): entry is NotificationEntry => entry !== undefined);
     const rows: MergedNotificationRow[] = [
       ...hostIds.map((id) =>
         rowFromHostEntryForOrigin(hostById[id], activeHostId),
@@ -421,7 +422,7 @@ function rowFromLocalFeedId(input: {
         ? null
         : rowFromAppLocalEntry(input.appLocalEntry);
     case "global":
-      return input.feedMode !== "local" || input.globalEntry === null
+      return input.feedMode === "upgrade-required" || input.globalEntry === null
         ? null
         : rowFromGlobalEntry(input.globalEntry);
     case "cloud":
@@ -474,7 +475,7 @@ export function useMergedNotificationUnreadCount(): number {
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
-    return (cloudSummary?.unreadCount ?? 0) + appLocalUnread;
+    return (cloudSummary?.unreadCount ?? 0) + appLocalUnread + globalUnread;
   }
   if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
@@ -519,7 +520,7 @@ export function useNotificationBellState(): NotificationBellState {
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
-    return cloudSummary.unreadCount + appLocalUnread > 0
+    return cloudSummary.unreadCount + appLocalUnread + globalUnread > 0
       ? { kind: "quietDot" }
       : { kind: "clear" };
   }
@@ -990,23 +991,26 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudMarkRead.mutate({ entryId: target.sourceId });
           return;
         }
-        if (feedMode !== "local") return;
-        if (parsed.source === "host") {
-          if (client === null) return;
-          markHostRead.mutate({
-            feedId,
-            sourceId: parsed.sourceId,
-          });
+        if (parsed.source === "global") {
+          if (feedMode === "upgrade-required") return;
+          globalMarkAsRead(parsed.sourceId);
           return;
         }
-        globalMarkAsRead(parsed.sourceId);
+        if (feedMode !== "local") return;
+        if (client === null) return;
+        markHostRead.mutate({
+          feedId,
+          sourceId: parsed.sourceId,
+        });
       },
       markAllAsRead: () => {
         if (feedMode === "cloud") {
           // Renderer-local failures never replicate into the cloud feed, so
-          // they must be acknowledged alongside it rather than hidden behind
-          // the cloud-only early return below.
+          // they (and the collaboration entries in the Notifications room)
+          // must be acknowledged alongside it rather than hidden behind the
+          // cloud-only early return below.
           appLocalMarkAllAsRead(Date.now());
+          globalMarkAllAsRead();
           if (cloudConnectionState !== "connected" || cloudVersion === null) {
             return;
           }
