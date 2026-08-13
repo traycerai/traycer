@@ -323,6 +323,8 @@ import {
   epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
   epicSetChatArchivedV10,
+  epicSetChatSharingDefaultV10,
+  epicSetCloudChatVisibilityV10,
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
   epicSubscribeV10,
@@ -5892,6 +5894,36 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicReadCloudChatPayloadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Visibility mutations. Same optional-channel / hide-the-affordance rule as
+  // the five reads above (new names, so they must not enter the released
+  // floor). A host that predates them answers E_HOST_UNSUPPORTED and the
+  // client hides Share / Mark-all-private rather than rendering a failure.
+  "epic.setCloudChatVisibility": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetCloudChatVisibilityV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.setChatSharingDefault": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetChatSharingDefaultV10,
           upgradeFromPreviousVersion: null,
         },
       },
