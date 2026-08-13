@@ -59,6 +59,8 @@ export interface ChatTimelineFollowLatch {
   /** Arms an explicit programmatic navigation to publish free-scrolling only
    *  if its live geometry actually leaves the strict bottom. */
   readonly beginOwnedFreeNavigation: () => void;
+  /** Releases a settled no-op free navigation that never left the strict end. */
+  readonly completeOwnedFreeNavigation: () => void;
   /** Resolves owned navigation without letting its intermediate reports flap. */
   readonly completeOwnedEndNavigation: (didLandAtEnd: boolean) => void;
   /** Fresh DOM validation for explicit-navigation settle loops. */
@@ -374,6 +376,12 @@ export function useChatTimelineFollowLatch(
     armedReaderDepartureRef.current = { source: "owned-navigation" };
   }, [cancelActiveCorrection]);
 
+  const completeOwnedFreeNavigation = useCallback((): void => {
+    if (armedReaderDepartureRef.current?.source === "owned-navigation") {
+      armedReaderDepartureRef.current = null;
+    }
+  }, []);
+
   const completeOwnedEndNavigation = useCallback(
     (didLandAtEnd: boolean): void => {
       cancelActiveCorrection();
@@ -386,12 +394,17 @@ export function useChatTimelineFollowLatch(
     cancelActiveCorrection();
     readerEndCandidateRef.current = null;
     const armedDeparture = armedReaderDepartureRef.current;
-    if (armedDeparture?.source === "gesture") {
-      // A strict-bottom observation after gesture preflight proves that no
-      // reader departure has been published. Release gesture arms so a no-op
-      // wheel/touch/scrollbar interaction cannot strand live follow. Owned
-      // navigation deliberately survives: an animated free jump may report a
-      // sub-epsilon first frame before it genuinely leaves the edge.
+    if (
+      armedDeparture?.source === "gesture" &&
+      !armedDeparture.blocksAutomaticCorrection
+    ) {
+      // Only issue-time geometry that proved this gesture cannot move can
+      // release on a strict-bottom observation. A movable wheel/touch gesture
+      // can still be awaiting its native scroll report, so treating the
+      // unchanged geometry as a no-op would let a subsequent maintain
+      // correction mask the reader's departure. Owned navigation deliberately
+      // survives too: an animated free jump may report a sub-epsilon first
+      // frame before it genuinely leaves the edge.
       armedReaderDepartureRef.current = null;
     }
     const isSuppressed = isCorrectionSuppressed?.() === true;
@@ -616,6 +629,7 @@ export function useChatTimelineFollowLatch(
       noteReaderGesture,
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
+      completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       isAtStrictEnd,
       observeLiveGeometry,
@@ -623,6 +637,7 @@ export function useChatTimelineFollowLatch(
     [
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
+      completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,
       isAtStrictEnd,
