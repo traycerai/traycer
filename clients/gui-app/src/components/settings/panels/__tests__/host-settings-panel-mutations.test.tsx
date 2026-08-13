@@ -52,12 +52,27 @@ const hostScopeMocks: {
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
 // mocks at that boundary rather than re-mocking the scope's internals.
+//
+// The default scope here is THIS COMPUTER'S HOST, NOT DIALABLE — which is the
+// recovery console's state, and this suite is the recovery console's suite.
+// Every flow below (install, register a service, apply a staged build, pick a
+// version, rename via the name file) runs over the local CLI bridge, and the
+// bridge is what answers when the host process cannot. A reachable host, local
+// or remote, now gets the RPC Overview instead; that page's flows are covered
+// by the `host-overview-*` suites. Leaving this default `connectable` silently
+// re-pointed most of these tests at a page that has none of these controls.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } =
+  const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () =>
       hostScopeFixture({
+        host: hostScopeOptionFixture({
+          hostId: hostScopeMocks.hostId,
+          isLocalMachine: true,
+          connectable: false,
+        }),
+        status: "unreachable",
         client: hostScopeMocks.client,
         hostId: hostScopeMocks.hostId,
         ...hostScopeMocks.extra,
@@ -1048,6 +1063,7 @@ function makeLocalHostSnapshot(): LocalHostSnapshot {
     pid: 12345,
     systemHostName: "hardiks-macbook",
     displayName: "hardiks-macbook",
+    availability: "available",
   };
 }
 

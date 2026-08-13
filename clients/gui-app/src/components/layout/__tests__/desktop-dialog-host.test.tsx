@@ -41,7 +41,10 @@ import type {
   OpenEpicState,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_PROJECTED_SLICES,
+} from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   knownField,
@@ -310,6 +313,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    deregisterHostFromAccount: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -436,6 +441,8 @@ function createDirtyEpicHandle(
     awareness,
     bindingVersion: 0,
     ...EMPTY_PROJECTED_SLICES,
+    chatRecords: EMPTY_CHATS_SLICE,
+    chatRetractions: {},
     artifactRooms: { stateByArtifactRoomId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
@@ -476,6 +483,9 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
+    applyChatRecords: () => undefined,
+    applyChatRecordDelta: () => undefined,
+    republishChatRecordsForCurrentUser: () => undefined,
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,

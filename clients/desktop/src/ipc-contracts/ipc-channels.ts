@@ -53,6 +53,11 @@ export const RunnerHostInvoke = {
   // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
   // reason as `listRegisteredHosts`.
   updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
+  // "Remove from account": `POST /api/v3/hosts/:hostId/deregister`. Same CORS
+  // reason as the two above — and, like them, a registry-only write that needs
+  // no route to the machine, which is why it does not live on the host-
+  // management bridge next to the OS-service verbs it must not be confused with.
+  deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -68,6 +73,7 @@ export const RunnerHostInvoke = {
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
+  clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   // The `hostId` in `pid.json`, read as a pure structural parse with no
   // reachability requirement. `localHostChange` only ever emits a snapshot
@@ -76,6 +82,17 @@ export const RunnerHostInvoke = {
   // This is that durable identity, and the renderer needs it precisely when
   // no snapshot exists.
   lastKnownLocalHostId: "runnerHost:host:lastKnownLocalHostId",
+  // PULL for the same snapshot `localHostChange` pushes.
+  //
+  // The push side is edge-triggered onto a renderer-side cache that starts at
+  // `null`, so every delivery hazard between the two processes - a window that
+  // registers after the fan-out, a `webContents` reload that resets the preload
+  // cache, a send dropped while the renderer navigates - is INDISTINGUISHABLE
+  // in the renderer from "this machine has no host", and stays that way until
+  // the main process happens to emit a change. On a steady-state host that
+  // change may never come. This channel removes the whole class: a subscriber
+  // asks for the current value instead of hoping it was told.
+  localHostSnapshot: "runnerHost:host:localHostSnapshot",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).

@@ -8,6 +8,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useDeregisterHostFromAccount } from "@/hooks/auth/use-deregister-host-mutation";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -20,6 +21,7 @@ import {
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
 
@@ -67,8 +69,127 @@ export function HostDangerZone(props: {
       >
         <ClearFileEditSnapshotsRow scope={scope} />
       </HostScopeGate>
-      {scope.host.isLocalMachine ? <RemoveTraycerRow /> : null}
+      {/* The remote counterpart sits on a THIRD capability plane: not host RPC
+          and not the local CLI bridge, but an account write. So it is outside
+          the gate for the same reason "Remove Traycer" is — it needs no route,
+          and a host you cannot reach is a common reason to want it gone. */}
+      <HostRemovalRow host={scope.host} />
     </SettingsGroup>
+  );
+}
+
+/**
+ * Whichever removal verb this host actually has.
+ *
+ * They are not two versions of one action. "Remove Traycer" uninstalls
+ * components from THIS computer over the CLI bridge; "Remove from account" ends
+ * a host's membership of the account and changes nothing on its machine.
+ * Offering both would put two destructive buttons side by side whose difference
+ * only becomes visible afterwards.
+ *
+ * Account removal is registered-only: a directory-only host has no membership to
+ * end, so the row would be a destructive control with nothing behind it.
+ */
+function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
+  const { host } = props;
+  if (host.isLocalMachine) return <RemoveTraycerRow />;
+  if (!host.registered) return null;
+  // Keyed by host id so a scope change REMOUNTS the row. Passing the new id
+  // into the same instance would leave an already-open confirmation - and the
+  // mutation's own `isPending` - pointing at whichever host the page moved to.
+  return (
+    <RemoveFromAccountRow
+      key={host.hostId}
+      hostId={host.hostId}
+      hostName={host.name}
+    />
+  );
+}
+
+/**
+ * "Remove from account" — the remote danger-zone verb.
+ *
+ * NEVER the word "deregister" in copy, and the collision is not hypothetical:
+ * this app already says "Deregister" for OS-SERVICE deregistration in the
+ * Advanced disclosure one card away, which is a machine-local repair operation
+ * with nothing in common with this one.
+ *
+ * The copy is written against what `POST /api/v3/hosts/:hostId/deregister`
+ * actually does. It stamps `deregisteredAt` and clears the presence lease; it
+ * does not revoke, does not touch the machine, and keeps the `hostId`.
+ *
+ * What happens to a host that is STILL RUNNING was got wrong once here, in the
+ * optimistic direction, so it is traced rather than assumed. Its next heartbeat
+ * 404s and it reads that as `not-registered`, which drops it to unprovisioned
+ * and re-runs `reconcile()` — but reconcile finds the on-box device credential
+ * still present and still matching this host id, so it takes
+ * `adoptActiveCredential()` and RETURNS, before either enrollment source. It
+ * never calls `registerHost()`, which is the only thing that would clear
+ * `deregisteredAt`. The host therefore loops (adopt → beat → 404 → adopt) and
+ * does not rejoin on its own.
+ *
+ * Signing in again on that machine does not help either, and the copy must not
+ * suggest it: the interactive login path sits BELOW the same early return, so a
+ * fresh `traycer login` is never consulted while a matching credential file
+ * exists. Coming back requires the host to be set up again on that machine —
+ * and because the row is deregistered rather than revoked, a re-enrollment
+ * re-adopts the SAME id with its policy preserved.
+ */
+function RemoveFromAccountRow(props: {
+  readonly hostId: string;
+  readonly hostName: string;
+}): ReactNode {
+  const { hostId, hostName } = props;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  // Closing over `hostId` is NOT by itself what stops a scope change from
+  // retargeting an open confirmation - a re-render with a new prop rebuilds
+  // these closures around the new id while `confirmOpen` survives. The remount
+  // key at this component's one call site is what makes that safe.
+  const removeFromAccount = useDeregisterHostFromAccount(hostId);
+
+  return (
+    <>
+      <SettingsRow
+        label="Remove from account"
+        description={`Removes ${hostName} from this account's host list and drops its presence. Nothing is uninstalled and no data is deleted.`}
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={removeFromAccount.isPending}
+            data-testid="settings-remove-host-from-account"
+            onClick={() => setConfirmOpen(true)}
+          >
+            {removeFromAccount.isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="settings-remove-host-from-account-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            Remove from account
+          </Button>
+        }
+      />
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Remove ${hostName} from this account?`}
+        description={`${hostName} stops appearing in your host list and stops reporting presence. Nothing on that machine changes - Traycer stays installed and no agents, history or credentials are deleted. It won't rejoin on its own, and signing in on that machine again won't bring it back: it has to be set up again there. Its host ID is kept, so setting it up again restores the same name and settings.`}
+        cascadeSummary={null}
+        actionLabel="Remove from account"
+        isPending={removeFromAccount.isPending}
+        onConfirm={() => {
+          removeFromAccount.mutate(undefined, {
+            onSuccess: () => {
+              setConfirmOpen(false);
+              toast.success(`Removed ${hostName} from this account`);
+            },
+          });
+        }}
+      />
+    </>
   );
 }
 

@@ -254,6 +254,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -1466,6 +1467,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "command",
@@ -1511,6 +1513,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1574,6 +1577,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1626,6 +1630,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "text",
@@ -1703,6 +1708,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           // The resume trigger's blockId targets the subagent itself, but in
@@ -1812,6 +1818,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: null,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -1926,6 +1933,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1945,6 +1953,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: null,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1967,6 +1976,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1986,6 +1996,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 67_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2002,6 +2013,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 2000,
           endedAt: 5000,
+          imageResults: [],
         },
       ],
     };
@@ -2087,6 +2099,55 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a command child");
     }
     expect(child.command).toBe("rg TODO");
+  });
+
+  it("keeps a nested image generation visible as a top-level card", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "artist",
+          task: "Create an image.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "tool_call",
+          blockId: "image-1",
+          toolName: "image_generation",
+          ...toolCallInputFields("image_generation", { prompt: "a cat" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+          imageResults: [],
+          parentBlockId: "agent-1",
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent", "tool"]);
+    const image = top[1];
+    if (image.kind !== "tool") throw new Error("expected image tool segment");
+    expect(image.toolName).toBe("image_generation");
+    expect(image.parentId).toBe("agent-1");
   });
 
   it("folds a depth-3 nested subagent chain via parentBlockId", () => {
@@ -2423,6 +2484,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2000,
           startedAt: 2000,
           endedAt: 2000,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -2523,6 +2585,8 @@ describe("useRenderedMessages", () => {
         blocks: [],
         startedAt: 2500,
         blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2500,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -2565,6 +2629,8 @@ describe("useRenderedMessages", () => {
         ],
         startedAt: 2000,
         blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2000,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -2597,6 +2663,8 @@ describe("useRenderedMessages", () => {
         ],
         startedAt: 2000,
         blocksVersion: 2,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2001,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -2717,6 +2785,8 @@ describe("useRenderedMessages", () => {
       blocks: [],
       startedAt: 10_000,
       blocksVersion: 0,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
       timestamp: 20_000,
       reasoningEffort: null,
       serviceTier: null,
@@ -2779,6 +2849,8 @@ describe("useRenderedMessages", () => {
         blocks: [],
         startedAt: 10_000,
         blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 20_000,
         reasoningEffort: null,
         serviceTier: null,
@@ -2815,6 +2887,8 @@ describe("useRenderedMessages", () => {
         blocks: [],
         startedAt: 2000,
         blocksVersion: 0,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2000,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -3022,6 +3096,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",
@@ -3075,6 +3150,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",
@@ -3131,6 +3207,8 @@ describe("useRenderedMessages", () => {
         ],
         startedAt: 1,
         blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2001,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -3179,6 +3257,8 @@ describe("useRenderedMessages", () => {
         blocks: [fileChangeBlock("/repo/src/app.ts")],
         startedAt: 2500,
         blocksVersion: 1,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
         timestamp: 2500,
         sender: ASSISTANT_SENDER,
         reasoningEffort: null,
@@ -3969,6 +4049,8 @@ describe("useRenderedMessages head/tail partition", () => {
       blocks,
       startedAt,
       blocksVersion: blocks.length,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
       timestamp: startedAt + blocks.length,
       reasoningEffort: null,
       serviceTier: null,

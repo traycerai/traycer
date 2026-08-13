@@ -89,12 +89,19 @@ const CLAUDE_PROFILES = [
 ];
 
 function registerChatSession(): ChatSessionStoreHandle {
+  // `hostId` is the SAME host the focused tile ref is bound to - the header
+  // resolves the session by (epic, chat, host), so a different host here would
+  // read as no session at all.
   return __getChatSessionRegistryForTests().acquire(
-    "epic-1",
-    CHAT_TILE.id,
-    "test:epic-1:chat-1",
+    {
+      epicId: "epic-1",
+      chatId: CHAT_TILE.id,
+      hostId: CHAT_TILE.hostId,
+      scopeKey: "test:epic-1:chat-1",
+    },
     (epicId, chatId) =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId,
         chatId,
         userId: null,

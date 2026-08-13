@@ -35,18 +35,32 @@ import { describeLogError, log } from "../app/logger";
  *
  * The path is ENV-scoped (never slot-scoped): all `make dev-desktop` slots and
  * the CLI share one file per environment, which is the whole point — sign in
- * once, signed in everywhere. `authnBaseUrl` is stamped here (from this
- * process's config) on interactive sign-in, so the renderer can never write a
- * mismatched authn origin into the shared file.
+ * once, signed in everywhere. The file carries no authn URL: every refresh and
+ * probe targets THIS process's configured `authnBaseUrl` (baked, with the
+ * dev-slot env override), so a pair written by one dev slot stays refreshable
+ * from every other slot instead of chasing the writer's (possibly dead) port.
  *
  * §4 owns the file watcher: directory watch + basename filter, debounced
  * revisioned `TokenStoreChange` fan-out (external writes AND self-writes).
  * Reconcile never writes/spends, so self-write echoes are fine (sibling
  * windows adopt; origin re-reads to the same state).
  */
+/**
+ * The directory-watch factory `installWatcher` uses. Injected because the
+ * failure the self-healing reinstall exists for - an FSEvents stream error
+ * AFTER a successful install - cannot be provoked through the real fs in a
+ * test, and module-mocking node builtins does not reach transitive imports
+ * under vitest. `undefined` -> the real `node:fs` `watch`.
+ */
+export type WatchImpl = (
+  dir: string,
+  listener: (event: string, filename: string | Buffer | null) => void,
+) => FSWatcher;
+
 export interface FileTokenStoreOptions {
   readonly environment: Environment;
   readonly authnBaseUrl: string;
+  readonly watchImpl: WatchImpl | undefined;
 }
 
 type ChangeListener = (change: TokenStoreChange) => void;
@@ -65,6 +79,25 @@ const INIT_GATE_WAIT_MS = 2_000;
 // Collapse FS event bursts (rename + rename of .tmp, multi-process writers) to
 // one revisioned emit.
 const WATCHER_DEBOUNCE_MS = 50;
+// Reinstall backoff after a watcher error or a failed install. A dead watcher
+// leaves this slot permanently blind to sibling rotations (no reconcile, no
+// adoption), so it is retried forever rather than given up on.
+const WATCHER_REINSTALL_INITIAL_MS = 1_000;
+const WATCHER_REINSTALL_MAX_MS = 30_000;
+// A watcher that survived this long was healthy: its NEXT failure starts a
+// fresh backoff. Anything shorter is the same incident still failing - the
+// delay keeps doubling. (Resetting on mere construction success would pin an
+// install-ok/error-later FSEvents loop at the initial delay forever.)
+const WATCHER_STABILITY_MS = 30_000;
+
+// The reinstall's catch-up read is the ONLY delivery of everything written
+// while the watch was down - unlike an ordinary watch event, no further
+// filesystem event is coming to try again. A transient read fault (EIO,
+// EACCES, a briefly unavailable mount) would otherwise strand this process on
+// a stale session forever, so the catch-up alone retries on backoff until it
+// gets a snapshot or a real event supersedes it.
+const CATCH_UP_RETRY_INITIAL_MS = 1_000;
+const CATCH_UP_RETRY_MAX_MS = 30_000;
 // §6 migration: overall abort deadline threaded through the probes, lock waits,
 // and the in-lock refresh. Set above one healthy probe + one refresh timeout
 // (~10s each is the inner bound) so a slow-but-alive rotate finishes on its own
@@ -95,14 +128,23 @@ export class FileTokenStore {
   private revision = 0;
   private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private watcherReinstallTimer: NodeJS.Timeout | null = null;
+  private watcherReinstallDelayMs: number = WATCHER_REINSTALL_INITIAL_MS;
+  private watcherWasInterrupted = false;
+  private watcherInstalledAtMs = 0;
+  private catchUpPending = false;
+  private catchUpRetryTimer: NodeJS.Timeout | null = null;
+  private catchUpRetryDelayMs: number = CATCH_UP_RETRY_INITIAL_MS;
   // §6 single-flight: every window reads the same shared localStorage pair, so
   // the first migration call drives it and all concurrent/later calls adopt the
   // same result (retained for the process lifetime; a `retryable` outcome
   // re-migrates on the NEXT launch, which is a fresh process).
   private migrationInFlight: Promise<CredentialsMigrationOutcome> | null = null;
+  private readonly watchImpl: WatchImpl;
 
   constructor(options: FileTokenStoreOptions) {
     this.authnBaseUrl = options.authnBaseUrl;
+    this.watchImpl = options.watchImpl ?? watch;
     const credentialsPath = cliCredentialsPath(options.environment);
     this.credentialsPath = credentialsPath;
     this.credentialsDir = dirname(credentialsPath);
@@ -112,7 +154,11 @@ export class FileTokenStore {
     this.store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       refresh: (args) =>
-        refreshOnceAbortable({ ...args, clientKind: "desktop" }),
+        refreshOnceAbortable({
+          ...args,
+          authnBaseUrl: options.authnBaseUrl,
+          clientKind: "desktop",
+        }),
       lockWaitMs: LOCK_WAIT_MS,
       lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
       continuationRetryMs: CONTINUATION_RETRY_MS,
@@ -157,6 +203,11 @@ export class FileTokenStore {
    * Directory watch + basename filter (same pattern as host-lifecycle pid
    * metadata watcher). More reliable than watching the file path itself, which
    * drops when the file is deleted and recreated.
+   *
+   * Self-healing: an FSEvents stream error (or a failed install) schedules a
+   * backoff reinstall instead of leaving the store blind for the rest of the
+   * process lifetime, and a successful REinstall emits a catch-up change so
+   * anything written while the watch was down is reconciled immediately.
    */
   private installWatcher(): void {
     if (this.disposed || this.watcher !== null) {
@@ -171,38 +222,100 @@ export class FileTokenStore {
           error: describeLogError(error),
         },
       );
+      this.watcherWasInterrupted = true;
+      this.scheduleWatcherReinstall();
       return;
     }
     try {
-      const watcher = watch(this.credentialsDir, (_event, filename) => {
-        if (filename === null) {
-          this.scheduleEmitChange();
-          return;
-        }
-        if (
-          typeof filename === "string" &&
-          filename === this.credentialsBasename
-        ) {
-          this.scheduleEmitChange();
-        }
-      });
+      const watcher = this.watchImpl(
+        this.credentialsDir,
+        (_event, filename) => {
+          if (filename === null) {
+            this.scheduleEmitChange();
+            return;
+          }
+          if (
+            typeof filename === "string" &&
+            filename === this.credentialsBasename
+          ) {
+            this.scheduleEmitChange();
+          }
+        },
+      );
       watcher.on("error", (err) => {
-        // Null the reference so a later reinstall path can recover. Without
-        // this, an FSEvents stream-reset leaves `watcher` non-null but inert
-        // for the rest of the process lifetime (host-lifecycle pattern).
+        // Close + null the reference and schedule the reinstall. Without
+        // this, an FSEvents stream-reset leaves the store blind for the rest
+        // of the process lifetime (host-lifecycle pattern, now with recovery).
         log.warn("[file-token-store] credentials watcher error", {
           error: describeLogError(err),
         });
         if (this.watcher === watcher) {
+          try {
+            watcher.close();
+          } catch {
+            // An errored watcher may already be torn down; the reference drop
+            // below is what matters.
+          }
           this.watcher = null;
+          this.watcherWasInterrupted = true;
+          // Backoff resets only after a STABLE run (see WATCHER_STABILITY_MS)
+          // - construction success alone proves nothing about the stream.
+          if (Date.now() - this.watcherInstalledAtMs >= WATCHER_STABILITY_MS) {
+            this.watcherReinstallDelayMs = WATCHER_REINSTALL_INITIAL_MS;
+          }
+          this.scheduleWatcherReinstall();
         }
       });
       this.watcher = watcher;
+      this.watcherInstalledAtMs = Date.now();
+      if (this.watcherWasInterrupted) {
+        this.watcherWasInterrupted = false;
+        log.info("[file-token-store] credentials watcher reinstalled");
+        // Catch up on anything written while the watch was down - a change
+        // event is a hint and the reconcile re-reads the store, so a spurious
+        // one is harmless while a missed one is a stale-session hazard. Marked
+        // as the catch-up so a failed read retries: nothing else will redeliver
+        // it.
+        this.catchUpPending = true;
+        this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
+        this.scheduleEmitChange();
+      }
     } catch (error) {
       log.warn("[file-token-store] unable to install credentials watcher", {
         error: describeLogError(error),
       });
+      this.watcherWasInterrupted = true;
+      this.scheduleWatcherReinstall();
     }
+  }
+
+  private scheduleWatcherReinstall(): void {
+    if (this.disposed || this.watcherReinstallTimer !== null) {
+      return;
+    }
+    const delayMs = this.watcherReinstallDelayMs;
+    this.watcherReinstallDelayMs = Math.min(
+      delayMs * 2,
+      WATCHER_REINSTALL_MAX_MS,
+    );
+    this.watcherReinstallTimer = setTimeout(() => {
+      this.watcherReinstallTimer = null;
+      this.installWatcher();
+    }, delayMs);
+  }
+
+  private scheduleCatchUpRetry(): void {
+    if (this.disposed || this.catchUpRetryTimer !== null) {
+      return;
+    }
+    const delayMs = this.catchUpRetryDelayMs;
+    this.catchUpRetryDelayMs = Math.min(delayMs * 2, CATCH_UP_RETRY_MAX_MS);
+    this.catchUpRetryTimer = setTimeout(() => {
+      this.catchUpRetryTimer = null;
+      if (this.catchUpPending) {
+        this.scheduleEmitChange();
+      }
+    }, delayMs);
   }
 
   private scheduleEmitChange(): void {
@@ -229,10 +342,23 @@ export class FileTokenStore {
       log.warn("[file-token-store] credentials read after watch event failed", {
         error: describeLogError(error),
       });
+      // An ordinary watch event can be dropped - the next one re-reads. An
+      // outstanding reinstall catch-up cannot: it is standing in for events
+      // that already happened and will never be re-delivered.
+      if (this.catchUpPending) {
+        this.scheduleCatchUpRetry();
+      }
       return;
     }
     if (this.disposed) {
       return;
+    }
+    // Any successful read satisfies the catch-up, whoever triggered it.
+    this.catchUpPending = false;
+    this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
+    if (this.catchUpRetryTimer !== null) {
+      clearTimeout(this.catchUpRetryTimer);
+      this.catchUpRetryTimer = null;
     }
     this.revision += 1;
     const change: TokenStoreChange = {
@@ -268,9 +394,9 @@ export class FileTokenStore {
   /**
    * Interactive create/replace — the device-flow sign-in. The renderer supplies
    * only the freshly-minted pair and the validated identity; this process stamps
-   * the env-scoped `authnBaseUrl` and `savedAt`. Rejects on a non-`applied`
-   * outcome (a persistent local failure) so the sign-in surfaces as failed
-   * rather than a signed-in state the next launch cannot rehydrate.
+   * `savedAt`. Rejects on a non-`applied` outcome (a persistent local failure)
+   * so the sign-in surfaces as failed rather than a signed-in state the next
+   * launch cannot rehydrate.
    */
   signIn(
     tokens: StoredAuthTokens,
@@ -280,7 +406,6 @@ export class FileTokenStore {
       const credentials: StoredCredentials = {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: identity,
       };
@@ -400,6 +525,14 @@ export class FileTokenStore {
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
+    }
+    if (this.watcherReinstallTimer !== null) {
+      clearTimeout(this.watcherReinstallTimer);
+      this.watcherReinstallTimer = null;
+    }
+    if (this.catchUpRetryTimer !== null) {
+      clearTimeout(this.catchUpRetryTimer);
+      this.catchUpRetryTimer = null;
     }
     if (this.watcher !== null) {
       this.watcher.close();

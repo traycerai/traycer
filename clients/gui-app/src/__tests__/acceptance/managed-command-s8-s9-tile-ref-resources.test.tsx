@@ -326,6 +326,7 @@ beforeEach(() => {
   });
   useSettingsStore.setState({ showNavigatorResourceStats: true });
   chatSession = installManagedCommandChatSession({
+    hostId: HOST_ID,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
   });

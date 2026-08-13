@@ -54,13 +54,35 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
   return client;
 }
 
+// The binding carries a `directory` as well as a client: the indicator hook
+// now resolves its host EXPLICITLY (`useHostClientForHostId`), and that
+// resolution consults the directory listing so an explicit id keeps pointing
+// at the same machine when the app-wide default moves. A binding without one
+// is not a shape the app ever publishes.
+const hostDirectoryStub = {
+  list: () => Promise.resolve([mockLocalHostEntry]),
+  onChange: () => ({ dispose: () => undefined }),
+};
+
 vi.mock("@/lib/host", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host")>();
   return {
     ...actual,
     useHostClient: () => requireHostClient(),
-    useHostBinding: () => ({ hostClient: requireHostClient() }),
+    useHostBinding: () => ({
+      hostClient: requireHostClient(),
+      directory: hostDirectoryStub,
+    }),
   };
+});
+
+// `useHostClientForHostId` reaches the runtime through BOTH entry points: the
+// directory listing via `@/lib/host`, and the pinned-requester builder via
+// `@/lib/host/runtime`. Mocking only the first leaves the second on the real
+// provider, which throws outside `<HostRuntimeProvider>`.
+vi.mock("@/lib/host/runtime", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useHostClient: () => requireHostClient() };
 });
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
@@ -165,7 +187,30 @@ function IndicatorProbe(props: {
   readonly entity: HostNotificationsEntityRef;
   readonly testId: string;
 }): ReactNode {
-  const state = useSurfaceNotificationIndicatorState(props.entity);
+  const state = useSurfaceNotificationIndicatorState(props.entity, null);
+  const lit = [
+    state.pendingFork ? "pendingFork" : null,
+    state.pendingApproval ? "pendingApproval" : null,
+    state.pendingInterview ? "pendingInterview" : null,
+    state.unreadFailure ? "unreadFailure" : null,
+    state.unreadDone ? "unreadDone" : null,
+  ].filter((flag): flag is string => flag !== null);
+  return (
+    <span data-testid={props.testId}>
+      {lit.length === 0 ? "none" : lit.join(",")}
+    </span>
+  );
+}
+
+function HostScopedIndicatorProbe(props: {
+  readonly entity: HostNotificationsEntityRef;
+  readonly originHostId: string;
+  readonly testId: string;
+}): ReactNode {
+  const state = useSurfaceNotificationIndicatorState(
+    props.entity,
+    props.originHostId,
+  );
   const lit = [
     state.pendingFork ? "pendingFork" : null,
     state.pendingApproval ? "pendingApproval" : null,
@@ -214,6 +259,7 @@ function IndicatorSurface(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const indicators = useNotificationIndicators({
+    hostId: null,
     epicIds: props.epicIds,
     chatIds: props.chatIds,
     enabled: props.epicIds.length > 0 || props.chatIds.length > 0,
@@ -378,6 +424,46 @@ describe("cloud-derived notification indicators", () => {
     expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
 
+  it("does not decorate a host-bound tab with another host's same-id feed row", async () => {
+    const harness = createHarness(EMPTY_HOST_RESPONSE);
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-b",
+          originHostId: OTHER_HOST_ID,
+          readAt: null,
+        }),
+      ],
+      1,
+    );
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: (
+        <>
+          <IndicatorProbe entity={ENTITY} testId="aggregate" />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={CONNECTED_HOST_ID}
+            testId="connected-host"
+          />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={OTHER_HOST_ID}
+            testId="origin-host"
+          />
+        </>
+      ),
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("aggregate")).toBe("unreadDone");
+      expect(indicatorText("connected-host")).toBe("none");
+      expect(indicatorText("origin-host")).toBe("unreadDone");
+    });
+  });
+
   it("rolls a foreign-host chat entry up into its epic indicator", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
@@ -512,18 +598,32 @@ describe("cloud-derived notification indicators", () => {
       children: (
         <>
           <IndicatorProbe entity={ENTITY} testId="chat" />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={CONNECTED_HOST_ID}
+            testId="connected-host"
+          />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={OTHER_HOST_ID}
+            testId="origin-host"
+          />
           <MarkReadButton entryId="entry-b" />
         </>
       ),
     });
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("pendingFork,unreadDone");
+      expect(indicatorText("connected-host")).toBe("pendingFork");
+      expect(indicatorText("origin-host")).toBe("unreadDone");
     });
 
     screen.getByRole("button", { name: "Mark read" }).click();
 
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("pendingFork");
+      expect(indicatorText("connected-host")).toBe("pendingFork");
+      expect(indicatorText("origin-host")).toBe("none");
     });
   });
 
@@ -643,6 +743,48 @@ describe("local-mode notification indicators", () => {
       expect(indicatorText("chat")).toBe("pendingApproval");
     });
     expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+  });
+
+  it("does not decorate another host's bound tab with the active host response", async () => {
+    feedMode.value = "local";
+    const harness = createHarness({
+      epics: {},
+      chats: {
+        [CHAT_ID]: {
+          unreadFailure: false,
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: true,
+        },
+      },
+    });
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: (
+        <>
+          <IndicatorProbe entity={ENTITY} testId="aggregate" />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={CONNECTED_HOST_ID}
+            testId="connected-host"
+          />
+          <HostScopedIndicatorProbe
+            entity={ENTITY}
+            originHostId={OTHER_HOST_ID}
+            testId="other-host"
+          />
+        </>
+      ),
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("aggregate")).toBe("unreadDone");
+      expect(indicatorText("connected-host")).toBe("unreadDone");
+      expect(indicatorText("other-host")).toBe("none");
+    });
   });
 
   it("folds unread app-local failures into the host response", async () => {

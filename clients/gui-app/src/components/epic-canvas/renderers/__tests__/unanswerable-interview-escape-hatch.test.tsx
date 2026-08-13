@@ -91,6 +91,7 @@ function props(
     epicId: "epic-1",
     viewTabId: "tab-1",
     chatId: "chat-1",
+    hostId: "host-1",
     runtime: { snapshotLoaded: true },
     access: { isViewer: false, canAct, readOnlyNotice: null },
     turn: {

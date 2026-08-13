@@ -1,11 +1,12 @@
 import { useMemo } from "react";
-import { keepPreviousData } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { WorkspaceMentionSuggestion } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
+import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-same-host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import type { HostRequestSpec } from "@/hooks/host/use-host-queries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type {
   MentionSearchPathsRequest,
   MentionWorkspaceRequest,
@@ -50,6 +51,10 @@ type LegacyMentionRequest = Exclude<
 export function useWorkspaceEntries(
   params: UseWorkspaceEntriesParams,
 ): UseWorkspaceEntriesResult {
+  // Same-host only: bare keepPreviousData would bleed mention results across a
+  // host switch and show the previous host's filesystem in the picker.
+  const { hostId } = useReactiveHostReadiness(params.client);
+  const placeholderData = keepPreviousDataForSameHost(hostId);
   const legacyRequests = useMemo(
     () => params.requests.filter(isLegacyRequest),
     [params.requests],
@@ -73,7 +78,7 @@ export function useWorkspaceEntries(
         })),
       [searchRequests],
     ),
-    options: { staleTime: 30_000, placeholderData: keepPreviousData },
+    options: { staleTime: 30_000, placeholderData },
   });
 
   // Fall back to the legacy RPC for any scoped root the host could not search:
@@ -110,7 +115,7 @@ export function useWorkspaceEntries(
         () => [...legacyRequests, ...fallbackRequests],
         [legacyRequests, fallbackRequests],
       ),
-      options: { staleTime: 30_000, placeholderData: keepPreviousData },
+      options: { staleTime: 30_000, placeholderData },
     },
   );
 

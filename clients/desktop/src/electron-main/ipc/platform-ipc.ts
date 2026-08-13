@@ -54,11 +54,17 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  nativeImage,
   type ProxyConfig,
 } from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  isClipboardImageMediaType,
+  type ClipboardImageMediaType,
+} from "@traycer-clients/shared/images/clipboard-image-media";
+import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import {
   getDesktopLogLevel,
@@ -86,7 +92,9 @@ import type {
  * All handlers are silent if the platform doesn't support them - the renderer
  * can call them unconditionally without platform-specific branches.
  */
-export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
+export function registerPlatformIpc(
+  bridge: Pick<RunnerIpcBridge, "handleInvoke">,
+): void {
   bridge.handleInvoke(
     RunnerHostInvoke.fileDropWriteTemporary,
     async (_event, input: unknown): Promise<string> => {
@@ -148,6 +156,26 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
       if (result.canceled || !result.filePath) return null;
       await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
       return path.basename(result.filePath);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.clipboardWriteImage,
+    (_event, input: unknown): void => {
+      const image = parseClipboardImageInput(input);
+      const native = nativeImage.createFromBuffer(
+        Buffer.from(new Uint8Array(image.bytes)),
+      );
+      const size = native.getSize();
+      if (
+        native.isEmpty() ||
+        size.width <= 0 ||
+        size.height <= 0 ||
+        size.width > MAX_CLIPBOARD_IMAGE_PIXELS / size.height
+      ) {
+        throw new Error("clipboard image bytes are invalid");
+      }
+      clipboard.writeImage(native);
     },
   );
 
@@ -520,6 +548,128 @@ function parseFileSaveInput(input: unknown): FileSaveInput {
     throw new Error("file.save requires ArrayBuffer bytes");
   }
   return { name, type, bytes };
+}
+
+interface ClipboardImageInput {
+  // Advisory caller metadata; Electron validates the actual bytes below.
+  readonly type: ClipboardImageMediaType;
+  readonly bytes: ArrayBuffer;
+}
+
+const MAX_CLIPBOARD_IMAGE_PIXELS = 64_000_000;
+
+function parseClipboardImageInput(input: unknown): ClipboardImageInput {
+  if (!isRecord(input)) {
+    throw new Error("clipboard.writeImage requires an object payload");
+  }
+  const type = clipboardImageMediaType(input.type);
+  if (type === null) {
+    throw new Error("clipboard.writeImage requires an image MIME type");
+  }
+  const bytes = input.bytes;
+  if (
+    !(bytes instanceof ArrayBuffer) ||
+    bytes.byteLength > MAX_ARTIFACT_IMAGE_BYTES
+  ) {
+    throw new Error("clipboard.writeImage requires image bytes under 30 MB");
+  }
+  assertClipboardImageDimensions(type, bytes);
+  return { type, bytes };
+}
+
+function assertClipboardImageDimensions(
+  type: ClipboardImageMediaType,
+  bytes: ArrayBuffer,
+): void {
+  const dimensions =
+    type === "image/png" ? pngDimensions(bytes) : jpegDimensions(bytes);
+  if (
+    dimensions === null ||
+    dimensions[0] <= 0 ||
+    dimensions[1] <= 0 ||
+    dimensions[0] > MAX_CLIPBOARD_IMAGE_PIXELS / dimensions[1]
+  ) {
+    throw new Error("clipboard image bytes are invalid");
+  }
+}
+
+function pngDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
+  const view = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 24));
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (
+    view.length < 24 ||
+    signature.some((byte, index) => view[index] !== byte) ||
+    view[12] !== 0x49 ||
+    view[13] !== 0x48 ||
+    view[14] !== 0x44 ||
+    view[15] !== 0x52
+  ) {
+    return null;
+  }
+  return [readUint32BigEndian(view, 16), readUint32BigEndian(view, 20)];
+}
+
+function jpegDimensions(bytes: ArrayBuffer): readonly [number, number] | null {
+  const view = new Uint8Array(bytes);
+  if (view.length < 4 || view[0] !== 0xff || view[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 1 < view.length) {
+    if (view[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (view[offset] === 0xff) offset += 1;
+    if (offset >= view.length) return null;
+    const marker = view[offset];
+    offset += 1;
+    if (marker === 0x00) continue;
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01) continue;
+    if (marker >= 0xd0 && marker <= 0xd7) continue;
+    if (offset + 1 >= view.length) return null;
+    const segmentLength = readUint16BigEndian(view, offset);
+    if (segmentLength < 2 || offset + segmentLength > view.length) {
+      return null;
+    }
+    if (isJpegFrameMarker(marker)) {
+      if (segmentLength < 7 || offset + 7 > view.length) return null;
+      return [
+        readUint16BigEndian(view, offset + 5),
+        readUint16BigEndian(view, offset + 3),
+      ];
+    }
+    offset += segmentLength;
+  }
+  return null;
+}
+
+function isJpegFrameMarker(marker: number): boolean {
+  return (
+    (marker >= 0xc0 && marker <= 0xc3) ||
+    (marker >= 0xc5 && marker <= 0xc7) ||
+    (marker >= 0xc9 && marker <= 0xcb) ||
+    (marker >= 0xcd && marker <= 0xcf)
+  );
+}
+
+function readUint16BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) + bytes[offset + 1];
+}
+
+function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset] * 2 ** 24 +
+    bytes[offset + 1] * 2 ** 16 +
+    bytes[offset + 2] * 2 ** 8 +
+    bytes[offset + 3]
+  );
+}
+
+function clipboardImageMediaType(
+  value: unknown,
+): ClipboardImageMediaType | null {
+  if (typeof value !== "string") return null;
+  const mediaType = value.trim().toLowerCase();
+  return isClipboardImageMediaType(mediaType) ? mediaType : null;
 }
 
 function parseCopyDroppedFileInput(input: unknown): readonly string[] {

@@ -15,6 +15,15 @@ import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 export interface ActiveChatTarget {
   readonly epicId: string;
   readonly chatId: string;
+  /**
+   * The focused tile's OWN bound host. The header sits outside every
+   * `TabHostProvider`, so it cannot call `useTabHostId()`; it resolves the
+   * focused tile's ref instead, and the ref carries the host that tile is
+   * bound to for life. That is the host whose chat session the header must
+   * read - not the app-wide active host, which can be a different machine
+   * entirely while a peer-host tile holds focus.
+   */
+  readonly hostId: string;
 }
 
 export interface RateLimitProfileSelection {
@@ -41,7 +50,7 @@ export function selectActiveChatTarget(
   if (pane === null || pane.activeTabId === null) return null;
   const tile = canvas.tilesByInstanceId[pane.activeTabId];
   if (tile === undefined || tile.type !== "chat") return null;
-  return { epicId: tab.epicId, chatId: tile.id };
+  return { epicId: tab.epicId, chatId: tile.id, hostId: tile.hostId };
 }
 
 /**
@@ -59,6 +68,8 @@ export function useRateLimitProfileSelection(): RateLimitProfileSelection {
   const handle = useExistingChatSessionHandle(
     activeChatTarget?.epicId ?? "",
     activeChatTarget?.chatId ?? "",
+    // `null` when no chat pane is focused: no target, so no session to read.
+    activeChatTarget?.hostId ?? null,
   );
   const subscribeToComposerSettings = useCallback(
     (listener: () => void) => {

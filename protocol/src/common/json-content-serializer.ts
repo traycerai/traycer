@@ -1,10 +1,12 @@
 import type { JsonContent } from "./registry";
+import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
   File = "file",
   Folder = "folder",
   Worktree = "worktree",
   GithubIssue = "github_issue",
+  GithubPullRequest = "github_pull_request",
   Attachment = "attachment",
   Phase = "phase",
   ReviewComment = "review_comment",
@@ -245,6 +247,7 @@ export interface MentionAttrs {
   organizationLogin?: string;
   repositoryName?: string;
   issueNumber?: number;
+  githubHost?: string;
   branchName?: string;
   commitHash?: string;
   gitType?: string;
@@ -287,11 +290,20 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const title = attrs.label || attrs.id || "";
       return `epic:${title}`;
     }
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `${org}/${repo}#${issue}`;
+      const reference = `${org}/${repo}#${issue}`;
+      // Same default-host rule as the LLM form below: github.com is what an
+      // unqualified reference already means, while an enterprise reference
+      // with the same coordinates is a different thing and must not read
+      // identically to the human this string is for.
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
+        return `${attrs.githubHost}/${reference}`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       const { branchName, commitHash } = attrs;
@@ -403,11 +415,32 @@ function formatMentionForLLMQuery(
     }
     case ContextType.Epic:
       return atRef(attrs.relPath || `epic:${attrs.epicId || attrs.id || ""}`);
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `github:${org}/${repo}#${issue}`;
+      const prefix =
+        attrs.contextType === ContextType.GithubPullRequest
+          ? "github-pr"
+          : "github-issue";
+      const reference = `@${prefix}:${org}/${repo}#${issue}`;
+      // `url` is still optional on the node, so the suffix is only appended
+      // when there is one. Emitting `[url=]` for a node that predates the
+      // attribute - or for any caller that omits it - turns a reference that
+      // used to serialize cleanly into malformed metadata, and hands the agent
+      // an empty fallback instead of no fallback.
+      if (attrs.url) return `${reference} [url=${attrs.url}]`;
+      // Without a URL, the host is the only thing that can disambiguate an
+      // enterprise reference: `org/repo#123` on ghe.example.com is a different
+      // artifact from the same coordinates on github.com, and the node keeps
+      // `githubHost` even when no `url` was ever set. github.com stays bare -
+      // it is the default every unqualified reference already means, and
+      // qualifying it would churn every serialization that was fine.
+      if (attrs.githubHost && !isDefaultGithubMentionHost(attrs.githubHost)) {
+        return `${reference} [host=${attrs.githubHost}]`;
+      }
+      return reference;
     }
     case ContextType.Git: {
       if (attrs.branchName)
@@ -502,6 +535,20 @@ function formatMentionForUser(
   if (attrs.contextType === ContextType.User) {
     const name = attrs.label || attrs.id || "";
     return `@${name}`;
+  }
+
+  // GitHub references carry their durable URL in the LLM form and are never
+  // materialized against this host. Unlike file/artifact references, a stale
+  // validation result must not append `[NOT FOUND]` to either kind of chip.
+  if (
+    attrs.contextType === ContextType.GithubIssue ||
+    attrs.contextType === ContextType.GithubPullRequest
+  ) {
+    const formatted = formatMentionForDisplayQuery({
+      ...attrs,
+      contextType: attrs.contextType,
+    });
+    return `\`${formatted}\``;
   }
 
   // Use shared formatting for all other types. `contextType` is
@@ -810,6 +857,17 @@ function serializeChildren(
   return parts.join("");
 }
 
+function serializeImage(node: JsonContent): string {
+  const src = readStringAttr(node.attrs, "src");
+  const alt = readStringAttr(node.attrs, "alt");
+  if (src.length === 0) return "";
+  const escapedAlt = alt.replace(/[\\[\]]/g, "\\$&");
+  const destination = /[\s()<>]/.test(src)
+    ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
+    : src;
+  return `![${escapedAlt}](${destination})`;
+}
+
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {
   switch (node.type) {
     case "doc":
@@ -820,6 +878,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeText(node);
     case "hardBreak":
       return serializeHardBreak();
+    case "image":
+      return serializeImage(node);
     case "heading":
       return serializeHeading(node, ctx);
     case "bulletList":

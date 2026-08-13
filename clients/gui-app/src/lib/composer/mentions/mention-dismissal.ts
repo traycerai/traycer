@@ -14,13 +14,24 @@
  * and multi-word titles must stay searchable, so single spaces and other
  * punctuation never dismiss.
  */
-export function isDismissedMentionQuery(query: string): boolean {
-  return (
-    query.startsWith(" ") ||
-    query.includes(",") ||
-    query.includes(";") ||
-    query.includes("  ")
-  );
+export function isDismissedMentionQuery(
+  query: string,
+  /**
+   * True while the picker is inside a PR/Issue section.
+   *
+   * The clause-punctuation rules are switched off there, and this is not a
+   * nicety: PR and issue titles are FULL of the two characters this checks,
+   * commas and semicolons - `fix(relay): stop the busy-loop, again` - so a
+   * user typing a real title
+   * would have the menu closed out from under them mid-word. Everything a
+   * section title cannot contain still dismisses: a leading space, and a
+   * double space. Escape always does.
+   */
+  inGithubSection: boolean,
+): boolean {
+  if (query.startsWith(" ") || query.includes("  ")) return true;
+  if (inGithubSection) return false;
+  return query.includes(",") || query.includes(";");
 }
 
 export interface MentionNoMatchCloseInput {
@@ -43,6 +54,16 @@ export interface MentionNoMatchCloseInput {
    * must not read as "settled with zero matches".
    */
   readonly sourcesErrored: boolean;
+  /**
+   * True when the query is a GitHub REFERENCE (`#123`, `org/repo#123`, a PR or
+   * issue URL) rather than prose.
+   *
+   * These are exempt from the zero-match close, and the exemption is the whole
+   * point of recognizing them: a reference the warm cache happens not to hold
+   * is exactly when closing the menu is wrong, because the PR/Issue sections
+   * can still resolve it. Root offers the drill-in rows instead.
+   */
+  readonly referenceQuery: boolean;
 }
 
 /**
@@ -60,6 +81,7 @@ export function shouldCloseMentionForNoMatches(
 ): boolean {
   if (input.stepKind !== "root") return false;
   if (input.query.trim().length === 0) return false;
+  if (input.referenceQuery) return false;
   // Debounce still pending: the cloud requests for this query have not even
   // been issued, so their loading/fetching flags are meaningless for it.
   if (input.query !== input.debouncedQuery) return false;

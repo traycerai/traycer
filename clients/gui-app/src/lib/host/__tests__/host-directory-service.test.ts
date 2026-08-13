@@ -15,6 +15,24 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
+const toastInfo = vi.hoisted(() => vi.fn());
+
+// Failover / re-adopt announce through sonner. The mock must not throw for any
+// other path that imports the service - existing suites never assert on toast.
+// `error` and `warning` are stubbed too, not just `info`: this suite reaches
+// `reportable-error-toast.ts`, which calls both, and a whole-module factory
+// replaces sonner entirely - so an exercised failure path would die on
+// `toast.error is not a function` rather than on its own assertion.
+vi.mock("sonner", () => ({
+  toast: {
+    info: (...args: unknown[]) => {
+      toastInfo(...args);
+    },
+    error: () => undefined,
+    warning: () => undefined,
+  },
+}));
+
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
@@ -26,6 +44,7 @@ const localSnapshot: LocalHostSnapshot = {
   pid: 4242,
   systemHostName: "hardiks-macbook",
   displayName: "hardiks-macbook",
+  availability: "available",
 };
 
 const localSnapshotNewEndpoint: LocalHostSnapshot = {
@@ -48,6 +67,16 @@ const secondRemoteHostEntry: HostDirectoryEntry = {
   label: "Second Remote",
   kind: "remote",
   websocketUrl: "wss://second-remote.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  status: "available",
+};
+
+/** A third dialable remote, for the case where BOTH failover ends vanish. */
+const thirdRemoteHostEntry: HostDirectoryEntry = {
+  hostId: "third-remote-host",
+  label: "Third Remote",
+  kind: "remote",
+  websocketUrl: "wss://third-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
   status: "available",
 };
@@ -164,6 +193,7 @@ describe("HostDirectoryService", () => {
     const renamedSnapshot: LocalHostSnapshot = {
       ...localSnapshot,
       displayName: "Design Studio",
+      availability: "available",
     };
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
@@ -1853,6 +1883,814 @@ describe("HostDirectoryService", () => {
         rememberedRemoteHostEntry,
         secondRemoteHostEntry,
       ]);
+    });
+  });
+
+  /**
+   * D7 auto-failover: a selection the registry still lists but nothing can
+   * dial is re-homed after two consecutive genuine refreshes, transiently,
+   * and handed back when the user's own host returns.
+   */
+  describe("reconcileSelectionDialability (D7 auto-failover)", () => {
+    beforeEach(() => {
+      toastInfo.mockClear();
+    });
+
+    /** A listed row that is no longer usable - the D7 debounce subject. */
+    function asNonDialable(entry: HostDirectoryEntry): HostDirectoryEntry {
+      return {
+        ...entry,
+        websocketUrl: null,
+        status: "unavailable",
+      };
+    }
+
+    it("fails over a listed-but-non-dialable remote selection only on the second consecutive genuine refresh", async () => {
+      // Pins the debounce itself: a one-emission implementation would move on
+      // the first non-dialable read and pass an end-state-only assertion.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+    });
+
+    it("prefers a dialable local failover target over a dialable remote, and never the dead or a non-dialable host", async () => {
+      // Pins nextAvailableEntry: local first, never the corpse, never a row
+      // that would just re-arm the failover on the next poll.
+      const nonDialableOther: HostDirectoryEntry = asNonDialable({
+        hostId: "non-dialable-other",
+        label: "Dead Other",
+        kind: "remote",
+        websocketUrl: "wss://dead-other.traycer.invalid/rpc",
+        version: "0.0.0-mock",
+        status: "available",
+      });
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+        nonDialableOther,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(localSnapshot),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+        nonDialableOther,
+      ];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      await directory.refresh();
+
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(directory.getSelected()?.hostId).not.toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      expect(directory.getSelected()?.hostId).not.toBe(nonDialableOther.hostId);
+    });
+
+    it("continues a failover when the target AND the origin both vanish", async () => {
+      // The gap between the two moves D7 makes. `reconcileSelection` resolves a
+      // vanished selection from intent, and intent still names the origin the
+      // failover moved off - so when BOTH leave the registry it resolves to
+      // `null` and unbinds. `failOverFromDeadSelection` cannot recover it
+      // either: it returns immediately on a null selection. The window stranded
+      // with a perfectly dialable third host listed.
+      //
+      // The "an explicit pick resolves to null" rule is not violated by moving
+      // here: a failover already moved this window off that pick once, which is
+      // what `failoverOriginHostId` records. Continuing is the same decision.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      // Fail over off the explicit pick onto the second remote.
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      // Now BOTH the failover target and the origin leave the directory, and a
+      // third dialable host arrives. Before this fix the app unbound here.
+      remotes = [thirdRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(thirdRemoteHostEntry.hostId);
+    });
+
+    it("keeps explicitSelection on the dead host through failover and re-adopts when it is dialable again", async () => {
+      // Pins D7.3: failover is transient (explicit pick survives), recovery is
+      // damped to TWO consecutive genuine dialable reads (same bar as death),
+      // and an explicit selectById in between retires the re-adoption.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      // Explicit pick still names the dead host: if the failover target leaves,
+      // reconcileSelection resolves intent back to that id (still listed).
+      remotes = [asNonDialable(rememberedRemoteHostEntry)];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      // Re-select a live pair, fail over again, then re-adopt when origin
+      // answers TWO consecutive genuine dialable reads.
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      // One dialable read is a blip - same negative pin as the death debounce.
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      // selectById retires the origin marker: a later recovery must not yank
+      // the user back after they picked something else.
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      directory.selectById(secondRemoteHostEntry.hostId);
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+    });
+
+    it("does not fail over when the dead host is the only host / no dialable candidate exists", async () => {
+      // Pins the empty-candidate no-op: moving to a second non-dialable host
+      // (or nowhere) would re-home the window every poll and still leave the
+      // user stranded - readiness owns that surface instead.
+      let remotes: readonly HostDirectoryEntry[] = [rememberedRemoteHostEntry];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      remotes = [asNonDialable(rememberedRemoteHostEntry)];
+      await directory.refresh();
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+    });
+
+    it("never fails over a non-dialable local-kind selection even when a dialable remote is listed", async () => {
+      // Pins the this-machine guard: a local row that cannot be dialed is a
+      // host booting/restarting, and treating it as death re-homes the window
+      // off the machine whose provisioning lifecycle owns recovery.
+      window.localStorage.setItem(
+        LAST_LOCAL_HOST_ID_STORAGE_KEY,
+        localSnapshot.hostId,
+      );
+      // Many-entry directories do not auto-promote (Flow 6); pin the booting
+      // twin the way a remembered local selection does during restart.
+      rememberHostSelection(localSnapshot.hostId);
+      const registryTwin: HostDirectoryEntry = {
+        hostId: localSnapshot.hostId,
+        label: "Registry twin",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "0.0.0-mock",
+        status: "available",
+      };
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [registryTwin, secondRemoteHostEntry],
+          }),
+      });
+      await directory.start();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(directory.getSelected()?.kind).toBe("local");
+      expect(directory.getSelected()?.websocketUrl).toBeNull();
+
+      await directory.refresh();
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(directory.getSelected()?.kind).toBe("local");
+    });
+
+    it("resets the non-dialable streak when the selection becomes dialable again between blips", async () => {
+      // Pins streak reset on recovery: non-dialable once, dialable, non-dialable
+      // once must not fail over - only consecutive genuine non-dialable reads.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+    });
+
+    it("does not advance the non-dialable debounce on a failed fetcher outcome", async () => {
+      // Pins failed-path isolation: a failed refresh retains last-known rows
+      // and must not count as a genuine dialability read. If it did, one
+      // non-dialable + one failed would re-home on the failed path.
+      const { fetcher } = queuedFetcher([
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+        { kind: "failed" },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+      ]);
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+
+      await directory.refresh();
+      // Second genuine non-dialable read (failed did not count) → now fail over.
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+    });
+
+    it("toasts on failover and on re-adoption of the origin host", async () => {
+      // Pins both announcement directions and one-move-one-toast: a silent
+      // re-home reads as a bug; a double toast on one move is also wrong.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+      expect(toastInfo).toHaveBeenCalledWith(
+        `Switched to ${secondRemoteHostEntry.label}`,
+        {
+          description: `${rememberedRemoteHostEntry.label} stopped responding.`,
+        },
+      );
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      // Recovery is damped: the first dialable read must not re-home or toast.
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(2);
+      expect(toastInfo).toHaveBeenLastCalledWith(
+        `Switched to ${rememberedRemoteHostEntry.label}`,
+        {
+          description: `${rememberedRemoteHostEntry.label} is available again.`,
+        },
+      );
+    });
+
+    it("does not re-adopt when the origin flaps dialable once then lapses", async () => {
+      // HIGH: recovery streak must restart from zero across a gap. If it
+      // accumulated, dialable → non-dialable → dialable would re-home on the
+      // second dialable read even though they were never consecutive.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it("retires the failover marker on signed-out so a later session does not re-adopt with a toast", async () => {
+      // Pins authoritative clear on sign-out: the marker must not outlive the
+      // session whose pick armed it.
+      // Local host is required in this fixture: it is the failover target
+      // (`nextAvailableEntry` prefers dialable local) and SURVIVES signed-out
+      // (only remotes clear). Without it, selection goes null and intent
+      // re-binds the origin silently - toast stays 1 even with the retire
+      // line deleted, so the test would pin nothing.
+      const { fetcher } = queuedFetcher([
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+        { kind: "signed-out" },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+      ]);
+      const directory = makeDirectory({
+        runnerHost: makeHost(localSnapshot),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+
+      await directory.refresh();
+      // signed-out clears remotes; local row (and selection on it) survive.
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(
+        (await directory.list()).some(
+          (entry) => entry.hostId === localSnapshot.hostId,
+        ),
+      ).toBe(true);
+
+      await directory.refresh();
+      await directory.refresh();
+      await directory.refresh();
+      // Discriminator: selection stays on the failover target AND no second
+      // toast. Without retireFailoverStateOnAuthoritativeClear the marker
+      // would re-adopt the origin on the 2nd dialable read.
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it("retires the failover marker on an empty genuine hosts outcome so the origin is not re-adopted", async () => {
+      // Counterpart of sign-out for the empty-directory epoch.
+      // Local host is required in this fixture: it is the failover target
+      // that SURVIVES an empty remotes batch (only remotes clear). Without it
+      // the test is vacuous - selection goes null and intent re-binds origin
+      // silently either with or without the retire line.
+      const { fetcher } = queuedFetcher([
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+        {
+          kind: "hosts",
+          entries: [
+            asNonDialable(rememberedRemoteHostEntry),
+            secondRemoteHostEntry,
+          ],
+        },
+        { kind: "hosts", entries: [] },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+        {
+          kind: "hosts",
+          entries: [rememberedRemoteHostEntry, secondRemoteHostEntry],
+        },
+      ]);
+      const directory = makeDirectory({
+        runnerHost: makeHost(localSnapshot),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+
+      await directory.refresh();
+      // Empty remotes; local row (and selection on it) survive.
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      await directory.refresh();
+      await directory.refresh();
+      await directory.refresh();
+      // Discriminator: selection stays on the failover target AND no second
+      // toast. Without retireFailoverStateOnAuthoritativeClear the marker
+      // would re-adopt the origin on the 2nd dialable read.
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retire the failover marker when the origin is merely missing from a still-populated list", async () => {
+      // Counterpart of the authoritative-clear pins: a missing origin while
+      // other hosts remain is the outage this feature exists for - the pick
+      // must still re-adopt after two consecutive dialable returns.
+      let remotes: readonly HostDirectoryEntry[] = [
+        rememberedRemoteHostEntry,
+        secondRemoteHostEntry,
+      ];
+      const directory = makeDirectory({
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+      directory.selectById(rememberedRemoteHostEntry.hostId);
+
+      remotes = [
+        asNonDialable(rememberedRemoteHostEntry),
+        secondRemoteHostEntry,
+      ];
+      await directory.refresh();
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+
+      remotes = [secondRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+
+      remotes = [rememberedRemoteHostEntry, secondRemoteHostEntry];
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        secondRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+      await directory.refresh();
+      expect(directory.getSelected()?.hostId).toBe(
+        rememberedRemoteHostEntry.hostId,
+      );
+      expect(toastInfo).toHaveBeenCalledTimes(2);
+      expect(toastInfo).toHaveBeenLastCalledWith(
+        `Switched to ${rememberedRemoteHostEntry.label}`,
+        {
+          description: `${rememberedRemoteHostEntry.label} is available again.`,
+        },
+      );
+    });
+  });
+});
+
+/**
+ * Boot-ordering convergence (int #48).
+ *
+ * The 2026-08-11 lock was not reproducible on demand: one launch of the same
+ * install came up locked and STAYED locked through a renderer reload, the next
+ * came up clean. That is the signature of a startup race whose bad outcome
+ * LATCHES - and the latch here is an ask that happens exactly once.
+ *
+ * `start()` asks the shell for this machine's durable host id a single time.
+ * The ask crosses an IPC boundary with `retry: false`, its answer is cacheable
+ * for a minute, and on a fresh profile there is no persisted fallback - so
+ * `null` is an ordinary outcome, and it used to be permanent for the life of
+ * the app instance. A null id means `snapshot()` cannot recognise the
+ * registry's twin of this machine, so the twin is published verbatim:
+ * `kind: "remote"`, relay URL, and whatever its presence lease says. Right
+ * after the host was down - precisely when this path runs - that lease reads
+ * expired, and the row for the user's own working machine is a remote host
+ * marked unavailable. Every chat it owns locks to a published copy, and
+ * nothing re-asks.
+ *
+ * These tests pin CONVERGENCE rather than ordering: whichever input is late,
+ * the directory has to arrive at the truth on its own.
+ */
+describe("HostDirectoryService boot-ordering convergence", () => {
+  const LOCAL_HOST_ID = "desktop-pid-123";
+
+  /** The registry's view of THIS machine while its host is down. */
+  const expiredOwnTwin: HostDirectoryEntry = {
+    hostId: LOCAL_HOST_ID,
+    label: "hardiks-macbook",
+    kind: "remote",
+    websocketUrl: "wss://relay.traycer.invalid/attach",
+    version: "1.2.3",
+    status: "unavailable",
+  };
+
+  it("re-asks for this machine's id when the first ask came back null, and stops claiming its own host is a dead remote", async () => {
+    // The shell cannot answer yet (host still booting, or the IPC query
+    // resolved null and cached it).
+    let shellHostId: string | null = null;
+    const directory = makeDirectory({
+      runnerHost: makeHost(null),
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: () => Promise.resolve(shellHostId),
+    });
+
+    await directory.start();
+
+    // The latched state: our own machine, presented as an unavailable REMOTE
+    // row. Both of `useHostReachability`'s protections miss this shape - the
+    // directory is not empty, and the row is not a local one - so it reports
+    // `unreachable` and locks the user's chats.
+    const beforeReseed = await directory.list();
+    expect(beforeReseed).toHaveLength(1);
+    expect(beforeReseed[0].kind).toBe("remote");
+    expect(beforeReseed[0].status).toBe("unavailable");
+
+    // The shell can answer now. Nothing else about the world changed - no new
+    // snapshot, no registry change - so only a re-ask can converge this.
+    shellHostId = LOCAL_HOST_ID;
+    await directory.refresh();
+
+    const afterReseed = await directory.list();
+    expect(afterReseed).toHaveLength(1);
+    // Recognised as this machine: non-dialable (so nothing can reach for the
+    // relay against our own host) and LOCAL, which is the shape
+    // `useHostReachability` reads as "not published yet" rather than "dead",
+    // and which keeps the local provisioning lifecycle armed.
+    expect(afterReseed[0].kind).toBe("local");
+    expect(afterReseed[0].websocketUrl).toBeNull();
+  });
+
+  it("stops re-asking once the id is known", async () => {
+    const seeder = vi.fn(() => Promise.resolve(LOCAL_HOST_ID));
+    const directory = makeDirectory({
+      runnerHost: makeHost(null),
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: seeder,
+    });
+
+    await directory.start();
+    const asksAfterStart = seeder.mock.calls.length;
+    await directory.refresh();
+    await directory.refresh();
+
+    // Self-retiring: the repair costs one ask, not one per poll forever.
+    expect(seeder.mock.calls.length).toBe(asksAfterStart);
+  });
+
+  it("converges to the live local host whenever its snapshot finally arrives", async () => {
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
+      localHostIdSeeder: () => Promise.resolve(LOCAL_HOST_ID),
+    });
+
+    await directory.start();
+    expect((await directory.list())[0].websocketUrl).toBeNull();
+
+    // Late arrival - the case the whole ticket is about. The local arm must
+    // win over the registry twin and the row must become dialable.
+    host.setLocalHost(localSnapshot);
+
+    const converged = await directory.list();
+    expect(converged).toHaveLength(1);
+    expect(converged[0]).toMatchObject({
+      hostId: LOCAL_HOST_ID,
+      kind: "local",
+      status: "available",
+      websocketUrl: localSnapshot.websocketUrl,
+    });
+  });
+
+  it("carries a busy shell verdict through as a reachable local entry", async () => {
+    // A host that lost a probe is still the host: dialable URL, `busy` status.
+    // Publishing it as anything else is what put the registry twin - and its
+    // hardcoded `unavailable` - in front of the user in the first place.
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      runnerHost: host,
+      remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
+        Promise.resolve({ kind: "hosts", entries: [] }),
+      localHostIdSeeder: () => Promise.resolve(LOCAL_HOST_ID),
+    });
+    await directory.start();
+
+    host.setLocalHost({ ...localSnapshot, availability: "busy" });
+
+    expect((await directory.list())[0]).toMatchObject({
+      kind: "local",
+      status: "busy",
+      websocketUrl: localSnapshot.websocketUrl,
     });
   });
 });

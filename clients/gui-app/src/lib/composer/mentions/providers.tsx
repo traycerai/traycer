@@ -13,8 +13,30 @@ import type {
 import { basenameOfPath } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  GithubMentionRepository,
+  GithubMentionRow,
+  GithubMentionSection,
+} from "@traycer/protocol/host/mention-schemas";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
+import {
+  githubMentionAttachmentFromRow,
+  githubMentionCategoryIcon,
+  githubMentionPreview,
+  githubMentionReference,
+  githubMentionRowIcon,
+  githubMentionRowTrailing,
+} from "./github-mention-display";
+import {
+  githubMentionEntryId,
+  parseGithubReferenceQuery,
+} from "./github-mention-rows";
+import { isDefaultGithubMentionHost } from "@traycer/protocol/common/github-mention-host";
+import {
+  NO_STEP_CHROME_CAPABILITY,
+  type MentionStepChromeCapability,
+} from "./step-chrome";
 import {
   artifactsIcon,
   descriptionForSuggestion,
@@ -51,6 +73,8 @@ export type MentionProviderId =
   | "folders"
   | "worktree"
   | "git"
+  | "pull-requests"
+  | "issues"
   | "epic"
   | "chat"
   | "terminals"
@@ -77,11 +101,53 @@ export type MentionMenuAction =
 
 export interface MentionMenuEntry {
   readonly id: string;
+  /**
+   * A short, never-truncated segment rendered ahead of `label` - the PR/issue
+   * `#4917`. It is separate from `label` rather than prefixed onto it because
+   * the two truncate differently: the number is the row's identity and must
+   * survive at any width, while the title is what gives way.
+   *
+   * `null` for every row that has no such identity segment.
+   */
+  readonly labelPrefix: string | null;
   readonly label: string;
   readonly detail: string;
   readonly description: string;
+  /**
+   * Text the row is findable by at root but never renders - the source
+   * matcher's fields that no visible segment carries (a PR/issue author's
+   * login). The root ranker searches this beside the visible fields so a row
+   * a SOURCE matched can always be re-matched client-side: a row that only
+   * survives in the appended, unmatched tail does not gate the zero-match
+   * dismissal, and a source match the ranker could not reproduce closed the
+   * picker over a row it was showing.
+   */
+  readonly searchText: string | null;
+  /**
+   * Non-null renders the row inert: visible and focusable for continuity,
+   * but not committable, with this text as the screen-reader's why. The one
+   * producer today is a held row set standing in for a changed filter's
+   * still-searching answer - see `GithubMentionSectionContext.rowsHeld`.
+   */
+  readonly disabledReason: string | null;
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
+  /**
+   * Last-activity timestamp rendered at the row's trailing edge (compact
+   * relative form, static per render - menu rows do not tick). Null for rows
+   * with no meaningful activity clock: files and categories, terminals
+   * (whose `updatedAt` is really a start time), and ARCHIVED Agents - the
+   * record clock is a mutation clock that the archive write itself bumps, so
+   * an archived row's time would always read as the archive action, not the
+   * Agent's real activity.
+   */
+  readonly updatedAt: number | null;
+  /**
+   * Renders the row's "Archived" badge. A flag rather than text baked into
+   * `detail` so the badge can be a styled element and never truncates away
+   * with the detail string.
+   */
+  readonly archived: boolean;
   /**
    * Full, untruncated preview content for the side preview panel. `null` for
    * `Back` and category-navigate rows, which have nothing to preview.
@@ -193,7 +259,71 @@ export interface ComposerMentionProviderContext {
    * Epic) keep the legacy raw-root RPC so a suggestion never disappears.
    */
   readonly epicAttachedRoots: ReadonlySet<string>;
+  /** PR/issue rows for the CURRENT step, already merged, filtered and ranked. */
+  readonly github: GithubMentionProviderContext;
 }
+
+/**
+ * One section's rows as the picker should show them right now. The hook owns
+ * which rows these are - at root they are cache-only (root search never hits
+ * the network), inside a section they are the catalog merged with the live
+ * search - so the provider renders one list and never has to know which.
+ */
+export interface GithubMentionSectionContext {
+  readonly rows: ReadonlyArray<GithubMentionRow>;
+  /**
+   * True while `rows` is a previous filter's answer held on screen so a
+   * funnel change does not flash the list away while the search for the new
+   * filter runs. Held rows render but must not be committable: the funnel
+   * already claims the NEW filter, and inserting a row that filter never
+   * matched would act on a claim the list is not making. The row entries
+   * carry a `disabledReason` while this is true.
+   */
+  readonly rowsHeld: boolean;
+  /**
+   * The repositories the host resolved from this scope's folders, or `null`
+   * while no answer exists yet.
+   *
+   * The list rather than a `singleRepositoryScope` flag, because how a row
+   * must name its repository is not a yes/no: one repository prints no name at
+   * all, and two repositories that share a name have to print the owner as
+   * well. See `githubRepositoryQualification`.
+   *
+   * Null is NOT an empty list: `[]` is the host's authoritative "these folders
+   * hold no GitHub repo", while null means the collision question has no
+   * answer - the live search can put rows on screen before any catalog
+   * resolves, and qualification under that ignorance prints `owner/repo`
+   * rather than trusting a fact nobody has stated.
+   */
+  readonly repositories: ReadonlyArray<GithubMentionRepository> | null;
+}
+
+export interface GithubMentionProviderContext {
+  readonly pullRequests: GithubMentionSectionContext;
+  readonly issues: GithubMentionSectionContext;
+  /**
+   * Whether the bound host advertised BOTH mention methods at handshake.
+   *
+   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor)
+   * RPCs, so a host predating them negotiates them away rather than failing
+   * the handshake. Without this gate the two categories stay selectable
+   * against such a host and render permanently empty - the RPC rejects, the
+   * rejection is deliberately swallowed into the section's degraded state, and
+   * the user is left with a category that looks broken rather than absent.
+   *
+   * Fails closed via `useHostSupportsMethod`, so the categories stay hidden
+   * until a manifest positively proves both methods present.
+   */
+  readonly supported: boolean;
+  /** Sampled once per build so every row's relative age agrees. */
+  readonly now: number;
+}
+
+export const EMPTY_GITHUB_SECTION_CONTEXT: GithubMentionSectionContext = {
+  rows: [],
+  rowsHeld: false,
+  repositories: null,
+};
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
 
@@ -249,6 +379,17 @@ export abstract class ComposerMentionProvider {
       header: this.label,
       empty: `No matching ${this.label.toLowerCase()}`,
     };
+  }
+
+  /**
+   * The STATIC half of the step's chrome: which affordances this step has at
+   * all. Live values (a refetch closure, whether it is in flight, the host's
+   * freshness stamp) cannot come from here - this registry is a hook-free
+   * module singleton - and are published into the picker store instead. See
+   * `step-chrome.ts`.
+   */
+  stepChromeCapability(_step: MentionFlowStep): MentionStepChromeCapability {
+    return NO_STEP_CHROME_CAPABILITY;
   }
 
   protected providerStep(stepId: string, workspacePath: string | null) {
@@ -760,6 +901,262 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
       empty: "No artifacts available",
     };
   }
+
+  // Artifacts have always rendered a refresh button; until now it re-set the
+  // step it was already on, which `setStep` early-returns from, so it spun for
+  // its minimum visible time and refetched nothing. The capability is declared
+  // here and `useMentionItems` publishes the real `refetch`.
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (!isArtifactMentionStep(step)) return NO_STEP_CHROME_CAPABILITY;
+    return { refresh: true, freshness: false, filter: false };
+  }
+}
+
+/**
+ * The two repo-flavoured mention categories. Structurally identical - only the
+ * row vocabulary and the filter presets differ - so they share one class and
+ * differ by `section`.
+ *
+ * Gated on `roots.length > 0` exactly like Files/Folders/Git, which makes the
+ * epic-less landing composer a first-class case: it has attached folders, so
+ * it gets both sections, scoped to those folders' repos.
+ *
+ * The categories appear even when the attached folders have no GitHub remote.
+ * Hiding them would make the feature undiscoverable for precisely the users
+ * who need to learn why it is empty; the section explains itself inside.
+ */
+/**
+ * The screen-reader's why for a held row. The visible chrome already carries
+ * the state (the `Searching GitHub…` row below the list); this is the same
+ * fact for the row itself, where "Disabled." alone would read as a mystery.
+ */
+export const GITHUB_MENTION_HELD_ROWS_DISABLED_REASON =
+  "Showing the previous filter's results while GitHub answers the current one.";
+
+class GithubMentionProvider extends ComposerMentionProvider {
+  readonly id: MentionProviderId;
+  readonly rootOrder: number;
+  protected readonly label: string;
+  protected readonly description: string;
+  private readonly section: GithubMentionSection;
+  private readonly emptyCopy: string;
+  private readonly resolveLabel: string;
+
+  constructor(section: GithubMentionSection) {
+    super();
+    this.section = section;
+    const isPullRequests = section === "pull-requests";
+    this.id = isPullRequests ? "pull-requests" : "issues";
+    // After Git's 30 (repo-flavoured context belongs beside it), before the
+    // Task category at 40.
+    this.rootOrder = isPullRequests ? 32 : 34;
+    this.label = isPullRequests ? "Pull requests" : "Issues";
+    this.description = isPullRequests
+      ? "Repository pull requests"
+      : "Repository issues";
+    this.emptyCopy = isPullRequests
+      ? "No matching pull requests"
+      : "No matching issues";
+    this.resolveLabel = isPullRequests
+      ? "Resolve in Pull requests..."
+      : "Resolve in Issues...";
+  }
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (!this.available(context)) return null;
+    return providerEntry({
+      id: `provider:${this.id}`,
+      label: this.label,
+      description: this.description,
+      icon: githubMentionCategoryIcon(this.section),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  private available(context: ComposerMentionProviderContext): boolean {
+    return githubMentionCategoryAvailable(
+      context.github.supported,
+      context.roots.length,
+    );
+  }
+
+  /**
+   * Root search is served from the warmed cache only - no GitHub call per
+   * keystroke at root - plus, for a reference-shaped query, a row that drills
+   * into this section with the query intact. That row is what keeps a `#4917`
+   * the cache does not hold from dead-ending: the section can still resolve it.
+   */
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    // Same gate as `rootEntry`. The flat root list is a SECOND way into these
+    // rows, so a category hidden from the root menu but still answering root
+    // search would be hidden in name only - and the reference-resolve row
+    // would drill into a step that no host can serve.
+    if (!this.available(context)) return [];
+    return [
+      ...this.rowEntries(context),
+      ...this.referenceResolveEntries(context),
+    ];
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...this.rowEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: this.label, empty: this.emptyCopy };
+  }
+
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (step.kind !== "provider" || step.providerId !== this.id) {
+      return NO_STEP_CHROME_CAPABILITY;
+    }
+    return { refresh: true, freshness: true, filter: true };
+  }
+
+  private sectionContext(
+    context: ComposerMentionProviderContext,
+  ): GithubMentionSectionContext {
+    return this.section === "pull-requests"
+      ? context.github.pullRequests
+      : context.github.issues;
+  }
+
+  private rowEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    const section = this.sectionContext(context);
+    // Held rows are the PREVIOUS filter's answer kept on screen while the
+    // new filter's search runs; they stay visible for continuity but must
+    // not be committable under the funnel's new claim.
+    const disabledReason = section.rowsHeld
+      ? GITHUB_MENTION_HELD_ROWS_DISABLED_REASON
+      : null;
+    return section.rows.map((row) =>
+      githubRowEntry({
+        row,
+        section: this.section,
+        repositories: section.repositories,
+        now: context.github.now,
+        disabledReason,
+      }),
+    );
+  }
+
+  private referenceResolveEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    // The same gate `rootEntry` applies, called rather than restated: an
+    // unsupported host and a folderless composer both leave these rows
+    // drilling into a section whose catalog query is disabled - a permanent
+    // "Not yet fetched" beside a refresh button that can never fetch. The sole
+    // caller already returns early when the provider is unavailable, so this
+    // is the contract holding for the next one.
+    if (!this.available(context)) return EMPTY_MENU_ENTRIES;
+    const reference = parseGithubReferenceQuery(context.query);
+    if (reference === null) return EMPTY_MENU_ENTRIES;
+    // A pasted URL already says which section it belongs to; offering to
+    // resolve a `/pull/` link under Issues would be an invitation to a dead end.
+    if (reference.kind === "url" && reference.section !== this.section) {
+      return EMPTY_MENU_ENTRIES;
+    }
+    return [
+      navigateEntry({
+        id: `github-resolve:${this.id}`,
+        label: this.resolveLabel,
+        detail: "",
+        description: this.label,
+        icon: githubMentionCategoryIcon(this.section),
+        step: this.providerStep("root", null),
+      }),
+    ];
+  }
+}
+
+function githubRowEntry(args: {
+  readonly row: GithubMentionRow;
+  readonly section: GithubMentionSection;
+  readonly repositories: ReadonlyArray<GithubMentionRepository> | null;
+  readonly now: number;
+  readonly disabledReason: string | null;
+}): MentionMenuEntry {
+  const { row, section, repositories, now, disabledReason } = args;
+  return {
+    id: githubMentionEntryId(section, row),
+    labelPrefix: `#${row.number}`,
+    label: row.title,
+    detail: githubMentionRowTrailing(row, repositories, now),
+    description: githubMentionReference(row),
+    // Every field `githubMentionMatchScore` matches is carried by a
+    // searchable segment: number and reference by `labelPrefix` and
+    // `description`, title by `label`, owner/repo by `detail` - and the
+    // author only here, because no rendered segment shows the login.
+    searchText: row.author?.login ?? null,
+    disabledReason,
+    // Null even though these rows DO have a last-activity clock: their age is
+    // already composed into `detail` alongside the repository (`acme/web ·
+    // 2h`), because the two only read correctly together. Filling the separate
+    // time slot as well would render the age twice on the same row.
+    updatedAt: null,
+    archived: false,
+    icon: githubMentionRowIcon(row),
+    action: {
+      kind: "complete",
+      mention: githubMentionAttachmentFromRow(row, repositories),
+    },
+    preview: githubMentionPreview(row, now),
+  };
+}
+
+/**
+ * The string root ranking judges a query by.
+ *
+ * A pasted GitHub URL names one artifact exactly, and the section matcher
+ * admits that row (`referenceMatchesRow` parses URLs) - but no entry field
+ * carries the URL, so the ranker judged the exact row on strings that can
+ * never contain it and let fuzzy matches on unrelated rows outrank it. The
+ * URL rewrites to the `org/repo#123` reference form the row's `description`
+ * leads with - host-prefixed off github.com, with the default-host check on
+ * the FOLDED host, the same rule `referenceMatchesRow` applies to pasted
+ * `https://GitHub.com/...` spellings. The other reference shapes already ARE
+ * the strings rows carry, and prose queries pass through untouched.
+ */
+function rootRankingQuery(query: string): string {
+  const reference = parseGithubReferenceQuery(query);
+  if (reference === null || reference.kind !== "url") return query;
+  const base = `${reference.owner}/${reference.repo}#${reference.number}`;
+  return isDefaultGithubMentionHost(reference.githubHost)
+    ? base
+    : `${reference.githubHost}/${base}`;
+}
+
+/**
+ * Both conditions the GitHub categories need before they may appear at all:
+ * folders to scope them to, and a host that actually serves the two mention
+ * methods. Exported so the zero-match reference exemption in
+ * `use-mention-items.ts` gates on the SAME predicate the provider does - a
+ * hand-written twin there is how `@#123` once pinned the picker open over a
+ * category that contributes no rows.
+ */
+export function githubMentionCategoryAvailable(
+  supported: boolean,
+  rootCount: number,
+): boolean {
+  return supported && rootCount > 0;
+}
+
+/** The GitHub section this step belongs to, or `null` for any other step. */
+export function githubMentionSectionForStep(
+  step: MentionFlowStep,
+): GithubMentionSection | null {
+  if (step.kind !== "provider") return null;
+  if (step.providerId === "pull-requests") return "pull-requests";
+  if (step.providerId === "issues") return "issues";
+  return null;
 }
 class MentionProviderRegistry {
   private readonly providersById: ReadonlyMap<
@@ -785,7 +1182,8 @@ class MentionProviderRegistry {
             .rootSearchEntries(context)
             .map((entry) => ({ entry, providerId: provider.id })),
         ),
-        context.query,
+        // Sources match on the raw query - only the ranking string rewrites.
+        rootRankingQuery(context.query),
       );
     }
     return {
@@ -854,6 +1252,11 @@ class MentionProviderRegistry {
     return this.provider(step.providerId).menuCopy(step);
   }
 
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (step.kind === "root") return NO_STEP_CHROME_CAPABILITY;
+    return this.provider(step.providerId).stepChromeCapability(step);
+  }
+
   provider(id: MentionProviderId): ComposerMentionProvider {
     const provider = this.providersById.get(id);
     if (provider === undefined) {
@@ -868,6 +1271,8 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new FolderMentionProvider(),
   new WorktreeMentionProvider(),
   new GitMentionProvider(),
+  new GithubMentionProvider("pull-requests"),
+  new GithubMentionProvider("issues"),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
   new TerminalMentionProvider(),
@@ -893,11 +1298,16 @@ function providerEntry(args: ProviderEntryArgs): MentionMenuEntry {
 function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
   return {
     id: args.id,
+    labelPrefix: null,
     label: args.label,
     detail: args.detail,
     description: args.description,
+    searchText: null,
+    disabledReason: null,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -905,11 +1315,16 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
 function backEntry(description: string): MentionMenuEntry {
   return {
     id: "mention-back",
+    labelPrefix: null,
     label: "Back",
     detail: "",
     description,
+    searchText: null,
+    disabledReason: null,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -917,14 +1332,27 @@ function backEntry(description: string): MentionMenuEntry {
 function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   const mention = mentionAttachmentFromSuggestion(entry);
   if (mention === null) return [];
+  // Agent rows are the only ones whose `updatedAt` approximates activity (it
+  // bumps on streaming ticks); a terminal's is its start time, so terminals
+  // keep a null clock and no badge semantics apply outside Agents. Archived
+  // Agents get no time either: the record clock is bumped by the archive
+  // write itself (and other metadata writes), so it would always claim the
+  // archive action as "activity" - the badge alone tells their story.
+  const isAgent =
+    entry.kind === "epic-chat" || entry.kind === "epic-terminal-agent";
   return [
     {
       id: entry.id,
+      labelPrefix: null,
       label: entry.label,
       detail: detailForSuggestion(entry),
       description: descriptionForSuggestion(entry),
+      searchText: null,
+      disabledReason: null,
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
+      updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
+      archived: isAgent ? entry.archived : false,
       preview: previewForSuggestion(entry),
     },
   ];
@@ -951,12 +1379,50 @@ function terminalSuggestionEntries(
   ).flatMap((entry) => suggestionEntry(entry));
 }
 
+/**
+ * Agent-specific ranking: `rankByLabelAndId`'s match scoring, with
+ * archived-ness slotted BETWEEN match quality and recency. An archived Agent
+ * never outranks a live one of equal match quality, but archived-ness never
+ * overrides relevance either - an archived exact/prefix hit still beats a
+ * live substring hit. This provider-level order also feeds the root `@`
+ * search as the candidates' input order, where the fuzzy pass breaks equal
+ * scores by input index and the prefix/substring tiers are a stable resort -
+ * so the same rule carries through there: demotion applies within a match
+ * tier, never across tiers.
+ *
+ * The recency tie-break reads the record's `updatedAt`, which is a MUTATION
+ * clock, not a pure activity clock: the archive write itself bumps it, as do
+ * renames and other metadata writes. Among archived rows it therefore orders
+ * by roughly "most recently archived/touched first" - accepted, since their
+ * true pre-archive activity time is unrecoverable client-side (the archive
+ * write overwrote it), and archive recency is a reasonable order for
+ * archived rows. Their menu rows show no time label for the same reason.
+ */
 function rankAgentEntries(
   entries: ReadonlyArray<EpicAgentMentionEntry>,
   query: string,
   limit: number,
 ): ReadonlyArray<EpicAgentMentionEntry> {
-  return rankByLabelAndId(entries, agentEntryRecordId, query, limit);
+  const normalizedQuery = query.trim().toLowerCase();
+  return entries
+    .flatMap((entry) => {
+      const score = scoreLabelAndId(
+        entry.label,
+        agentEntryRecordId(entry),
+        normalizedQuery,
+      );
+      if (score === null) return [];
+      return [{ entry, score }];
+    })
+    .toSorted((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+      if (left.entry.archived !== right.entry.archived) {
+        return left.entry.archived ? 1 : -1;
+      }
+      return right.entry.updatedAt - left.entry.updatedAt;
+    })
+    .map((item) => item.entry)
+    .slice(0, limit);
 }
 
 /** The Agent's durable record id, whichever interface it uses. */

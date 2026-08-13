@@ -5,13 +5,20 @@ import type {
   MentionMenuEntry,
   MentionSearchPathsRequest,
 } from "../providers";
-import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
+import {
+  EMPTY_GITHUB_SECTION_CONTEXT,
+  GITHUB_MENTION_HELD_ROWS_DISABLED_REASON,
+  githubMentionCategoryAvailable,
+  mentionProviderRegistry,
+  ROOT_MENTION_STEP,
+} from "../providers";
 import type {
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
   EpicTerminalMentionEntry,
 } from "@/lib/composer/types";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { GithubMentionRow } from "@traycer/protocol/host/mention-schemas";
 
 function context(
   overrides: Partial<ComposerMentionProviderContext>,
@@ -26,6 +33,15 @@ function context(
     agentEntries: [],
     terminalEntries: [],
     epicAttachedRoots: new Set(),
+    github: {
+      pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+      issues: EMPTY_GITHUB_SECTION_CONTEXT,
+      // The default fixture is a host that HAS both mention methods, so the
+      // existing cases keep exercising the categories rather than the
+      // unsupported-host gate. The gate has its own cases below.
+      supported: true,
+      now: 0,
+    },
     ...overrides,
   };
 }
@@ -65,6 +81,7 @@ function chatAgent(
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "chat",
     runtimeSupportsMessageDelivery: true,
   };
@@ -96,6 +113,7 @@ function terminalAgent(fields: {
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "terminal",
     runtimeSupportsMessageDelivery,
   };
@@ -112,6 +130,23 @@ function navigateEntry(entry: MentionMenuEntry) {
   return entry.action.step;
 }
 
+/**
+ * Resolve a category by its label rather than its index. Root ordering is a
+ * separate assertion in this file; a positional lookup here means inserting a
+ * category silently re-points these tests at a different step instead of
+ * failing where the ordering actually changed.
+ */
+function entryByLabel(
+  entries: ReadonlyArray<MentionMenuEntry>,
+  label: string,
+): MentionMenuEntry {
+  const found = entries.find((entry) => entry.label === label);
+  if (found === undefined) {
+    throw new Error(`no entry labelled ${label}`);
+  }
+  return found;
+}
+
 function completeEntry(entry: MentionMenuEntry) {
   if (entry.action.kind !== "complete") {
     throw new Error(`expected complete entry: ${entry.label}`);
@@ -123,7 +158,236 @@ describe("mention provider registry", () => {
   it("returns root providers in the composer order", () => {
     expect(
       labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, context({}))),
-    ).toEqual(["Files", "Folders", "Worktrees", "Git", "Task", "Artifacts"]);
+    ).toEqual([
+      "Files",
+      "Folders",
+      "Worktrees",
+      "Git",
+      "Pull requests",
+      "Issues",
+      "Task",
+      "Artifacts",
+    ]);
+  });
+
+  /**
+   * `mention.githubCatalog` / `mention.githubSearch` are optional (non-floor)
+   * RPCs, so a host predating them negotiates them away rather than failing
+   * the handshake. Left ungated, both categories stay selectable against such
+   * a host and render permanently empty - the RPC rejects, the rejection is
+   * swallowed into the section's degraded state, and the user is shown a
+   * category that looks broken rather than one that is absent.
+   */
+  it("hides both GitHub categories when the host does not serve the mention methods", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        github: {
+          pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: false,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(labels(entries)).toEqual([
+      "Files",
+      "Folders",
+      "Worktrees",
+      "Git",
+      "Task",
+      "Artifacts",
+    ]);
+  });
+
+  // Root search is a SECOND way into the same rows, so a category hidden from
+  // the root menu but still answering flat search would be hidden in name only
+  // - and its reference-resolve row would drill into a step no host can serve.
+  it("contributes no root-search rows when the host does not serve the mention methods", () => {
+    const unsupported = context({
+      query: "#123",
+      github: {
+        pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+        issues: EMPTY_GITHUB_SECTION_CONTEXT,
+        supported: false,
+        now: 0,
+      },
+    });
+
+    // Positive control first. Two absence assertions on their own stay green
+    // if the labels are renamed, or if `entries` stops returning anything at
+    // all for this query - so pin that a SUPPORTED host does produce exactly
+    // the rows whose absence is the claim below.
+    const supportedLabels = labels(
+      mentionProviderRegistry.entries(
+        ROOT_MENTION_STEP,
+        context({ query: "#123" }),
+      ),
+    );
+    expect(supportedLabels).toContain("Resolve in Pull requests...");
+    expect(supportedLabels).toContain("Resolve in Issues...");
+
+    const unsupportedLabels = labels(
+      mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported),
+    );
+    expect(unsupportedLabels).not.toContain("Resolve in Pull requests...");
+    expect(unsupportedLabels).not.toContain("Resolve in Issues...");
+  });
+
+  it("counts an author-login root match toward the zero-match verdict", () => {
+    // `githubMentionMatchScore` matches the author's login, so the source
+    // includes this row at root - but no rendered segment carries the login.
+    // The entry's search-only text is what lets the root ranker reproduce
+    // that match; without it the row rode the appended, unmatched tail with
+    // `matchedCount: 0`, and the settled zero-match dismissal closed the
+    // picker over a row it was showing.
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "octocat", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+
+    const searched = mentionProviderRegistry.entriesWithMatches(
+      ROOT_MENTION_STEP,
+      context({
+        query: "octocat",
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(searched.matchedCount).toBe(1);
+  });
+
+  /**
+   * Held rows are the PREVIOUS filter's answer kept on screen while the new
+   * filter's search runs (see `useHeldRowsDuringSearch` in
+   * `use-github-mention-sections`). They stay visible for continuity but must
+   * not be committable under the funnel's new claim, so the provider marks
+   * their entries inert with the shared, screen-reader-facing reason.
+   */
+  it("marks a held row's entry inert with the shared disabled reason", () => {
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "alice", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "pull-requests",
+      stepId: "pull-requests",
+      workspacePath: null,
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: true,
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entryByLabel(entries, "Stop the busy-loop").disabledReason).toBe(
+      GITHUB_MENTION_HELD_ROWS_DISABLED_REASON,
+    );
+  });
+
+  it("leaves the row committable when rowsHeld is false", () => {
+    // The control. Without it, a bug that disabled every GitHub row
+    // unconditionally would pass the case above too.
+    const row: GithubMentionRow = {
+      kind: "pull-request",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer",
+      number: 4917,
+      title: "Stop the busy-loop",
+      url: "https://github.com/traycerai/traycer/pull/4917",
+      author: { login: "alice", avatarUrl: null },
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "pull-requests",
+      stepId: "pull-requests",
+      workspacePath: null,
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "traycerai", repo: "traycer" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(
+      entryByLabel(entries, "Stop the busy-loop").disabledReason,
+    ).toBeNull();
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {
@@ -154,6 +418,8 @@ describe("mention provider registry", () => {
       "Folders",
       "Worktrees",
       "Git",
+      "Pull requests",
+      "Issues",
       "Task",
       "Agents",
       "Terminals",
@@ -161,7 +427,7 @@ describe("mention provider registry", () => {
     ]);
 
     const agentRows = mentionProviderRegistry.entries(
-      navigateEntry(entries[5]),
+      navigateEntry(entryByLabel(entries, "Agents")),
       context({ currentEpicId: "epic-1", agentEntries }),
     );
 
@@ -173,9 +439,11 @@ describe("mention provider registry", () => {
       "Kickoff chat",
       "Codex run",
     ]);
-    expect(mentionProviderRegistry.menuCopy(navigateEntry(entries[5]))).toEqual(
-      { header: "Agents", empty: "No agents available" },
-    );
+    expect(
+      mentionProviderRegistry.menuCopy(
+        navigateEntry(entryByLabel(entries, "Agents")),
+      ),
+    ).toEqual({ header: "Agents", empty: "No agents available" });
 
     expect(completeEntry(agentRows[2])).toMatchObject({
       contextType: "chat",
@@ -211,7 +479,7 @@ describe("mention provider registry", () => {
       ROOT_MENTION_STEP,
       context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
     );
-    const terminalsStep = navigateEntry(entries[6]);
+    const terminalsStep = navigateEntry(entryByLabel(entries, "Terminals"));
 
     const rows = mentionProviderRegistry.entries(
       terminalsStep,
@@ -312,14 +580,105 @@ describe("mention provider registry", () => {
       )
       .slice(1);
 
+    // The row detail carries harness and reference-only capability, never an
+    // interface label; the trailing slot's time rides `updatedAt` separately.
     expect(rows.map((row) => row.detail)).toEqual([
-      "Chat",
-      "Terminal · Claude Code",
-      "Terminal · Codex · Reference only",
-      "Terminal · OpenCode · Reference only",
+      "",
+      "Claude Code",
+      "Codex · Reference only",
+      "OpenCode · Reference only",
     ]);
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, 9, 8, 7]);
     // Reference-only Agents stay selectable - only delivery is unavailable.
     expect(rows.every((row) => row.action.kind === "complete")).toBe(true);
+  });
+
+  it("ranks archived Agents below live ones at equal match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          agentEntries: [
+            // The archived record is the more recent one: archived-ness must
+            // outweigh recency, not just tie-break it.
+            { ...chatAgent("chat-arch", "Archived run", 100), archived: true },
+            chatAgent("chat-live", "Live run", 10),
+          ],
+        }),
+      )
+      .slice(1);
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+    ]);
+    expect(rows.map((row) => row.archived)).toEqual([false, true]);
+    // Archived rows carry no time: the record clock is bumped by the archive
+    // write itself, so a label would always claim the archive action as
+    // activity. The badge alone marks them.
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, null]);
+  });
+
+  it("never lets archived-ness override match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          query: "auth",
+          agentEntries: [
+            chatAgent("chat-live", "my oauth notes", 10),
+            { ...chatAgent("chat-arch", "auth runner", 5), archived: true },
+          ],
+        }),
+      )
+      .slice(1);
+
+    // The archived prefix hit still beats the live substring hit: demotion
+    // applies within a match-quality band, never across bands.
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-live",
+    ]);
+  });
+
+  it("carries the archived demotion into root search within a match tier", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        currentEpicId: "epic-1",
+        query: "auth",
+        agentEntries: [
+          // Same label = same fuzzy score and same prefix tier: the tie falls
+          // back to the provider's input order, where archived sorts last.
+          { ...chatAgent("chat-arch", "auth runner", 100), archived: true },
+          chatAgent("chat-live", "auth runner", 10),
+          // A live substring hit sits in a LOWER tier than the archived
+          // prefix hits - demotion never lifts it above them.
+          chatAgent("chat-sub", "my auth helper", 200),
+        ],
+      }),
+    );
+
+    const agentIds = entries
+      .map((entry) => entry.id)
+      .filter((id) => id.startsWith("chat:epic-1:"));
+    expect(agentIds).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-sub",
+    ]);
   });
 
   it("filters mixed-interface Agents by query and falls back to untitled labels", () => {
@@ -1017,5 +1376,226 @@ describe("mention preview payloads", () => {
       secondary: "Fix bug in parser",
       mono: true,
     });
+  });
+});
+
+/**
+ * `rootEntries` ranks a URL-shaped query through `rootRankingQuery`, which
+ * rewrites it to the `owner/repo#123` reference form the row's `description`
+ * actually carries - host-prefixed off github.com, folded the same way
+ * `referenceMatchesRow` folds a pasted `https://GitHub.com/...` spelling. The
+ * raw URL string matches nothing any row carries, so without the rewrite a
+ * coincidental fuzzy hit elsewhere could outrank the exact row the URL names.
+ */
+describe("pasted-URL root ranking", () => {
+  function pullRequestRow(fields: {
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly title: string;
+  }): GithubMentionRow {
+    return {
+      kind: "pull-request",
+      githubHost: fields.githubHost,
+      owner: fields.owner,
+      repo: fields.repo,
+      number: fields.number,
+      title: fields.title,
+      url: `https://${fields.githubHost}/${fields.owner}/${fields.repo}/pull/${fields.number}`,
+      author: null,
+      updatedAt: 1_000,
+      buckets: ["recent"],
+      state: "open",
+      isDraft: false,
+      baseRefName: null,
+      headRefName: null,
+      reviewDecision: null,
+      checksRollup: null,
+    };
+  }
+
+  /**
+   * A file whose path spells out "github.com" - a coincidental substring
+   * match against the raw pasted URL that could out-rank the exact row if
+   * the ranking query were never rewritten off the URL text.
+   */
+  function competingFileEntry() {
+    return {
+      kind: "file" as const,
+      id: "file:/repo:docs/github.com-integration-notes.md",
+      label: "github.com-integration-notes.md",
+      relPath: "docs/github.com-integration-notes.md",
+      absolutePath: "/repo/docs/github.com-integration-notes.md",
+      workspacePath: "/repo",
+      description: "docs",
+    };
+  }
+
+  it("ranks the row a pasted GitHub URL names first, ahead of a coincidental path match", () => {
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://github.com/acme/widgets/pull/123",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+
+  it("ranks the same row first when the pasted URL's host is cased differently", () => {
+    // `GitHub.com` folds to the default host exactly like `github.com`, so the
+    // rewritten ranking query omits the host segment either way.
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://GitHub.com/acme/widgets/pull/123",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+
+  it("ranks an enterprise-host row first for a pasted URL on that host", () => {
+    // A non-default host is NOT omitted from the rewritten query, so the row
+    // must actually carry that host segment in its description to still win.
+    // The competing file's path echoes the enterprise host's URL text
+    // itself, so it stays a real competitor for the unrewritten raw URL.
+    const row = pullRequestRow({
+      githubHost: "ghe.corp",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Enterprise title",
+    });
+    const competingEnterpriseFileEntry = {
+      kind: "file" as const,
+      id: "file:/repo:docs/ghe.corp-acme-widgets-notes.md",
+      label: "ghe.corp-acme-widgets-notes.md",
+      relPath: "docs/ghe.corp-acme-widgets-notes.md",
+      absolutePath: "/repo/docs/ghe.corp-acme-widgets-notes.md",
+      workspacePath: "/repo",
+      description: "docs",
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "https://ghe.corp/acme/widgets/pull/123",
+        workspaceEntries: [competingEnterpriseFileEntry],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "ghe.corp", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Enterprise title");
+  });
+
+  it("leaves a non-reference prose query's ranking unaffected", () => {
+    // The control: `parseGithubReferenceQuery` returns null for prose, so
+    // `rootRankingQuery` hands the query straight through and ranking works
+    // exactly as it always has - matching on what the row actually says.
+    const row = pullRequestRow({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      number: 123,
+      title: "Some title",
+    });
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "some title",
+        workspaceEntries: [competingFileEntry()],
+        github: {
+          pullRequests: {
+            rows: [row],
+            rowsHeld: false,
+            repositories: [
+              { githubHost: "github.com", owner: "acme", repo: "widgets" },
+            ],
+          },
+          issues: EMPTY_GITHUB_SECTION_CONTEXT,
+          supported: true,
+          now: 0,
+        },
+      }),
+    );
+
+    expect(entries[0].label).toBe("Some title");
+  });
+});
+
+/**
+ * The zero-match reference exemption in `use-mention-items.ts` gates on this
+ * SAME predicate rather than a hand-written twin - a restated copy is how
+ * `@#123` once pinned the picker open over a category that contributes no
+ * rows. Direct unit coverage on both terms, independent of the registry
+ * plumbing above.
+ */
+describe("githubMentionCategoryAvailable", () => {
+  it("is available when the host serves the mention methods and there is at least one root", () => {
+    expect(githubMentionCategoryAvailable(true, 1)).toBe(true);
+  });
+
+  it("is unavailable when the host does not serve the mention methods, even with roots", () => {
+    expect(githubMentionCategoryAvailable(false, 1)).toBe(false);
+  });
+
+  it("is unavailable with no roots to scope to, even on a supporting host", () => {
+    expect(githubMentionCategoryAvailable(true, 0)).toBe(false);
   });
 });

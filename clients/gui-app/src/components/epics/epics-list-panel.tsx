@@ -301,6 +301,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [items],
   );
   const notificationIndicators = useNotificationIndicators({
+    // Epic ids only - see the header tab strip's note: the app-wide active
+    // host is the right scope for a shared cloud entity.
+    hostId: null,
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
@@ -1526,9 +1529,10 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
   );
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.item.epicId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.item.epicId },
+    null,
+  );
   return (
     <NotificationIndicatorIcon
       state={indicatorState}

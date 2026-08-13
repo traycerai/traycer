@@ -1,4 +1,7 @@
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isHostReachable,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
@@ -18,8 +21,10 @@ const SEPARATOR = String.fromCharCode(0);
  * across benign directory churn, instead of tearing the socket down and
  * rebuilding it.
  *
- * Returns `null` when the host cannot be dialed (no `websocketUrl`) or is not
- * currently `available`; callers treat `null` as "no client".
+ * Returns `null` when the host cannot be dialed (no `websocketUrl`) or is
+ * `unavailable`; callers treat `null` as "no client". A `busy` host is dialable
+ * - same process, same URL - so it keeps its client instead of having the
+ * socket torn down for the duration of someone else's slow epic open.
  *
  * Shared by the app-wide `HostStreamProvider` (via
  * `readHostTransportKey(client.getActiveHost())`) and the per-tab
@@ -30,11 +35,15 @@ export function hostTransportKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (entry.status !== "available") return null;
+  if (!isHostReachable(entry.status)) return null;
+  // `status` is deliberately NOT a key component. The gate above already
+  // collapses it to reachable/not, and folding the raw value in would make an
+  // available <-> busy flicker - which is a transient probe result, not a
+  // transport change - rebuild the client and tear down a live socket. That is
+  // churn at exactly the moment the host is least able to absorb it.
   return [
     entry.hostId,
     entry.kind,
-    entry.status,
     entry.version ?? "",
     entry.websocketUrl,
   ].join(SEPARATOR);
@@ -42,8 +51,8 @@ export function hostTransportKey(
 
 /**
  * The dialable `{ hostId, websocketUrl }` endpoint for a directory entry, or
- * `null` when the host cannot currently be dialed (no `websocketUrl`, or not
- * `available`). Same dialability rule as `hostTransportKey`.
+ * `null` when the host cannot currently be dialed (no `websocketUrl`, or
+ * `unavailable`). Same dialability rule as `hostTransportKey`.
  *
  * Read LIVE on every (re)dial by the session-owned durable streams (chat /
  * terminal) so a host that respawns on a new `websocketUrl` while the session
@@ -55,7 +64,7 @@ export function dialableHostEndpoint(
   entry: HostDirectoryEntry | null,
 ): HostTransportEndpoint | null {
   if (entry === null || entry.websocketUrl === null) return null;
-  if (entry.status !== "available") return null;
+  if (!isHostReachable(entry.status)) return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
 }
 

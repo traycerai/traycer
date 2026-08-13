@@ -23,6 +23,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationFilterMenu } from "@/components/notifications/notification-filter-menu";
 import { NotificationRow } from "@/components/notifications/notification-row";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
 import { useNotificationCenterScrollAnchor } from "@/hooks/notifications/use-notification-center-scroll-anchor";
@@ -63,6 +64,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useAppLocalNotificationUnreadCount } from "@/stores/notifications/app-local-notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 interface NotificationsPopoverProps {
@@ -102,14 +104,22 @@ function isAttentionSectionVisible(input: {
 
 function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
+  readonly loadedHostAttentionCount: number;
+  readonly appLocalUnreadCount: number;
+  readonly hasActiveHost: boolean;
   readonly cloudConnectionState: CloudNotificationsConnectionState | null;
 }): boolean {
   if (input.cloudConnectionState !== null) {
     return (
-      input.unreadCount === 0 || input.cloudConnectionState !== "connected"
+      input.unreadCount === 0 ||
+      (input.appLocalUnreadCount === 0 &&
+        input.cloudConnectionState !== "connected")
     );
   }
-  return input.unreadCount === 0;
+  const actionableHostAttention = input.hasActiveHost
+    ? input.loadedHostAttentionCount
+    : 0;
+  return input.unreadCount === 0 && actionableHostAttention === 0;
 }
 
 /** Local-fallback header subtitle text. A partial host state is either
@@ -161,6 +171,7 @@ export function NotificationsPopover(
   const attentionIds = useAttentionNotificationIds();
   const recentIds = useRecentNotificationIds();
   const unreadCount = useMergedNotificationUnreadCount();
+  const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const hostState = useNotificationCenterHostState();
@@ -170,6 +181,9 @@ export function NotificationsPopover(
   );
   const cloudHasSnapshot = useCloudNotificationsStore(
     (state) => state.hasSnapshot,
+  );
+  const cloudTotalCount = useCloudNotificationsStore(
+    (state) => state.summary?.totalCount ?? 0,
   );
   const cloudPresentationState = cloudStateForFeedMode(
     feedMode,
@@ -188,6 +202,14 @@ export function NotificationsPopover(
   const notificationsSupport = useStreamMethodSupport(
     "host.notifications.feed.subscribe",
   );
+  // Authoritative active-host signal for the "Mark all read" enablement gate -
+  // `null` during a disconnect even though the runtime binding is retained.
+  const activeHostId = useReactiveActiveHostId();
+  // Loaded HOST Attention rows (feed ids are `host:<id>`); app-local/global
+  // attention is locally actionable and already reflected in `unreadCount`.
+  const loadedHostAttentionCount = attentionIds.filter((feedId) =>
+    feedId.startsWith("host:"),
+  ).length;
   const { activate } = useNotificationActivation();
   const { openSettings } = useSystemTabModalActions();
   const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
@@ -395,13 +417,16 @@ export function NotificationsPopover(
           onMarkAllRead={handleMarkAllRead}
           isMarkAllReadDisabled={isMarkAllReadDisabled({
             unreadCount,
+            loadedHostAttentionCount,
+            appLocalUnreadCount,
+            hasActiveHost: activeHostId !== null,
             cloudConnectionState: cloudPresentationState,
           })}
           showClearAll={feedMode === "cloud"}
           isClearAllDisabled={
             !cloudHasSnapshot ||
             cloudConnectionState !== "connected" ||
-            fullOccurrenceOrder.length === 0
+            cloudTotalCount === 0
           }
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}

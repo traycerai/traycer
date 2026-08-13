@@ -53,6 +53,25 @@ const listeners = new Set<ManifestListener>();
  * transport after every successful handshake, so this runs on the hot path -
  * it exits without notifying when the set is unchanged, which is the
  * overwhelmingly common case (every RPC to an already-seen host).
+ *
+ * **A recorded absence is refreshed by TRAFFIC, and by nothing else.** There is
+ * no eviction here and no production caller of `resetNegotiatedManifests`: an
+ * entry is only ever overwritten by a later handshake for the same host id. For
+ * almost every consumer that is exactly right - it keeps issuing RPCs, so a
+ * host upgraded in place is re-negotiated on its next call and the answer flips
+ * on its own.
+ *
+ * It is a DEADLOCK for one shape of consumer: a surface that parks all of its
+ * host reads on the strength of a `false`. The reads it switched off are the
+ * reads that would have produced the next `openAck`, so the stale verdict
+ * outlives the host that gave it - and such a surface typically tells the user
+ * "update the host and this fills in on its own", a promise it has just made
+ * unkeepable. If you are building one, keep an incarnation-keyed floor-method
+ * probe alive while the answer is `false` (see gui-app's
+ * `use-host-capability-probe.ts`, used by the Shell and Diagnostics settings
+ * panels): one bounded read of a released-floor method, re-fetched when the
+ * host's reported version or dialability changes, is enough to keep the
+ * question answerable.
  */
 export function recordNegotiatedHostMethods(
   hostId: string,

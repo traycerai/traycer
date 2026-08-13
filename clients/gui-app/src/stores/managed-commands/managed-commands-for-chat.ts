@@ -19,7 +19,9 @@ import type {
  * projections of the chat session store rather than a stream of their own.
  * Every surface that reads them is chat-scoped - the chat tile's menu and the
  * chat's Background panel - and reading through the chat session binds them to
- * the tab's host the way every other chat surface is bound.
+ * the tab's host the way every other chat surface is bound. That binding is
+ * now EXPLICIT: each hook takes the `hostId` its caller is bound to, since a
+ * host-minted `chatId` alone does not name a session.
  *
  * Empty means empty: a host too old to serve the field has no managed-command
  * subsystem, so it owns no commands. There is no "unavailable" state to
@@ -39,8 +41,8 @@ const emptyChatSlice = create<ManagedCommandsChatSlice>()(() => ({
   connectionStatus: "connecting",
 }));
 
-function useChatSliceStore(epicId: string, chatId: string) {
-  const handle = useExistingChatSessionHandle(epicId, chatId);
+function useChatSliceStore(epicId: string, chatId: string, hostId: string) {
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
   return handle === null ? emptyChatSlice : handle.store;
 }
 
@@ -64,9 +66,10 @@ function compareManagedCommands(a: ManagedCommand, b: ManagedCommand): number {
 export function useManagedCommandsForChat(
   epicId: string,
   chatId: string,
+  hostId: string,
 ): readonly ManagedCommand[] {
   const commands = useStore(
-    useChatSliceStore(epicId, chatId),
+    useChatSliceStore(epicId, chatId, hostId),
     (state) => state.managedCommands,
   );
   return useMemo(() => [...commands].sort(compareManagedCommands), [commands]);
@@ -77,11 +80,16 @@ export function useManagedCommandsForChat(
  * the chat's Background panel lists, since that panel is about work happening
  * at this moment rather than about the commands as durable objects.
  */
-export function useRunningManagedCommandsForChat(
-  epicId: string,
-  chatId: string,
-): readonly ManagedCommand[] {
-  const commands = useManagedCommandsForChat(epicId, chatId);
+export function useRunningManagedCommandsForChat(options: {
+  epicId: string;
+  chatId: string;
+  hostId: string;
+}): readonly ManagedCommand[] {
+  const commands = useManagedCommandsForChat(
+    options.epicId,
+    options.chatId,
+    options.hostId,
+  );
   return useMemo(
     () => commands.filter((command) => command.status.state === "running"),
     [commands],
@@ -96,9 +104,10 @@ export function useRunningManagedCommandsForChat(
 export function useManagedCommandsConnectionStatus(
   epicId: string,
   chatId: string,
+  hostId: string,
 ): StreamConnectionStatus {
   return useStore(
-    useChatSliceStore(epicId, chatId),
+    useChatSliceStore(epicId, chatId, hostId),
     (state) => state.connectionStatus,
   );
 }

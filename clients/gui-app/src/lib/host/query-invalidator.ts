@@ -1,6 +1,6 @@
 import type { Query, QueryClient } from "@tanstack/react-query";
 import type { IHostQueryInvalidator } from "@traycer-clients/shared/host-client/host-client";
-import { queryKeys } from "@/lib/query-keys";
+import { isCloudEpicTasksQueryKey, queryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 /**
@@ -43,7 +43,21 @@ const ACTIVE_REFETCH_EXEMPT_METHODS: ReadonlySet<string> = new Set([
   "agent.gui.listCommands",
 ]);
 
+/**
+ * The cloud epic-tasks history is the second carve-out, and it is a
+ * documented invariant rather than a tuning choice: the list is
+ * manual-refresh-only (`staleTime: Infinity`) and holds optimistically
+ * inserted local-first epics that a cloud `listTasks` response does not carry
+ * yet, so force-refetching it DROPS epics the user just created
+ * (`cloud-query-keys.ts`). Until now the invariant was enforced at exactly
+ * one call site (`use-workspace-folder-actions`), while the broadest sweep of
+ * all - `HostClient.bind()`, which force-refetches the entire new host scope
+ * on every host switch - ignored it. Applying it here covers both broad
+ * `refetchActive` sweeps (bind and availability recovery); the list still
+ * refreshes through its own lifecycle and its own manual refresh.
+ */
 function isActiveRefetchExempt(query: Query): boolean {
+  if (isCloudEpicTasksQueryKey(query.queryKey)) return true;
   const method = query.queryKey[2];
   return (
     typeof method === "string" && ACTIVE_REFETCH_EXEMPT_METHODS.has(method)
@@ -60,9 +74,10 @@ function isActiveRefetchExempt(query: Query): boolean {
  *
  * `HostClient` calls this on auth change, host bind/unbind, and
  * availability recovery. Auth changes mark stale without refetching because
- * the request context may already be gone; host availability recovery can
- * refetch active observers - except the harness-catalog methods above, which
- * it skips entirely.
+ * the request context may already be gone; host bind and availability
+ * recovery can refetch active observers - except the two carve-outs in
+ * `isActiveRefetchExempt` (harness catalogs, cloud epic-tasks history), which
+ * are skipped entirely.
  */
 export function createHostQueryInvalidator(
   client: QueryClient,

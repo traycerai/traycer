@@ -14,11 +14,16 @@ function entry(fields: {
 }): MentionMenuEntry {
   return {
     id: fields.id,
+    labelPrefix: null,
     label: fields.label,
     detail: fields.detail ?? "",
     description: fields.description ?? "",
+    searchText: null,
+    disabledReason: null,
     icon: createElement("span"),
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -33,6 +38,29 @@ function candidate(
   },
 ): RootSearchCandidate {
   return { entry: entry(fields), providerId };
+}
+
+/** A PR/issue row: identity in `labelPrefix`, title in `label`. */
+function githubCandidate(fields: {
+  id: string;
+  labelPrefix: string;
+  label: string;
+  description?: string;
+  searchText?: string;
+}): RootSearchCandidate {
+  return {
+    entry: {
+      ...entry({
+        id: fields.id,
+        label: fields.label,
+        description: fields.description,
+      }),
+      labelPrefix: fields.labelPrefix,
+      searchText: fields.searchText ?? null,
+      disabledReason: null,
+    },
+    providerId: "pull-requests",
+  };
 }
 
 function rankedLabels(
@@ -165,5 +193,118 @@ describe("rankRootSearchEntries", () => {
       "first.bin",
       "second-dir",
     ]);
+  });
+
+  // A PR/issue row carries its identity in `labelPrefix` and its TITLE in
+  // `label`, because the two truncate differently. Tiering on `label` alone
+  // put the row a query names exactly in the bottom tier.
+  it("ranks an exact GitHub reference above a title that merely contains it", () => {
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "#4917 postmortem draft" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#4917",
+        label: "Stop the busy-loop",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "#4917")[0]).toBe("Stop the busy-loop");
+  });
+
+  it("still ranks a GitHub row by its title when the query is a title", () => {
+    // The control. The fix must not buy the reference case by demoting the
+    // title case - which is what tiering on `labelPrefix + label` joined
+    // together would have done, since that no longer STARTS with the title.
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "Notes about stopping" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#4917",
+        label: "Stop the busy-loop",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
+  });
+
+  // The repository-qualified reference form. `labelPrefix` is only `#123`, so
+  // the identity a qualified query names lives in `description` - tiering
+  // without it put the exact row in the bottom tier, below any row whose label
+  // merely starts with those characters.
+  it("ranks a repository-qualified reference above a label that starts with it", () => {
+    const candidates = [
+      candidate("artifacts", {
+        id: "a1",
+        label: "acme/widgets#123 postmortem",
+      }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#123",
+        label: "Stop the busy-loop",
+        description: "acme/widgets#123",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "acme/widgets#123")[0]).toBe(
+      "Stop the busy-loop",
+    );
+  });
+
+  it("still ranks a GitHub row by its title when the query is a title", () => {
+    // The control, repeated for the description path: adding a third tiering
+    // field must not let an unrelated description outrank a real title match.
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "Notes about stopping" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#123",
+        label: "Stop the busy-loop",
+        description: "acme/widgets#123",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
+  });
+});
+
+describe("search-only text", () => {
+  it("counts a row matched only through its search-only text", () => {
+    // The author's login lives in no rendered segment, so before
+    // `entry.searchText` joined the Fuse keys this row was appended without
+    // counting - and `matchedCount: 0` let the settled zero-match dismissal
+    // close the picker over a row it was showing.
+    const ranked = rankRootSearchEntries(
+      [
+        githubCandidate({
+          id: "pr1",
+          labelPrefix: "#4917",
+          label: "Stop the busy-loop",
+          searchText: "octocat",
+        }),
+      ],
+      "octocat",
+    );
+
+    expect(ranked.matchedCount).toBe(1);
+    expect(ranked.entries).toHaveLength(1);
+  });
+
+  it("appends without counting when no field carries the match", () => {
+    // The control: the same row minus its search-only text stays VISIBLE
+    // (unmatched rows are appended, never dropped) but does not gate the
+    // dismissal - the distinction `matchedCount` exists to draw.
+    const ranked = rankRootSearchEntries(
+      [
+        githubCandidate({
+          id: "pr1",
+          labelPrefix: "#4917",
+          label: "Stop the busy-loop",
+        }),
+      ],
+      "octocat",
+    );
+
+    expect(ranked.matchedCount).toBe(0);
+    expect(ranked.entries).toHaveLength(1);
   });
 });

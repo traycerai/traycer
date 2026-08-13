@@ -86,6 +86,9 @@ function TabStripBody() {
   );
   const indicatorChatIds = useLiveChatIdsForEpics(indicatorEpicIds);
   const notificationIndicators = useNotificationIndicators({
+    // Epic ids only, so the app-wide active host is the right one to ask: an
+    // Epic is a shared cloud entity, not a host-owned record.
+    hostId: null,
     epicIds: indicatorEpicIds,
     chatIds: indicatorChatIds,
     enabled: indicatorEpicIds.length > 0,

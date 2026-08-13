@@ -59,6 +59,16 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const lastSelectedHostKey = (): string =>
   persistKey("last-selected-host");
 
+// The composer's PR/Issue mention filters, sticky per (task, section).
+// Identity-scoped like the run settings above, NOT like the host picker: a
+// stored repository selection names a GitHub host, owner and repo - private
+// coordinates for a private repository - so an identity-free bucket would
+// leave them readable after sign-out and hand them to the next account on
+// this profile. The lifecycle bridge retargets on sign-in and wipes the
+// bucket on sign-out, same as composer run settings.
+export const githubMentionFiltersKey = (email: string | null): string =>
+  scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(email));
+
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
 // about who is signed in. The directory uses it to keep the machine's own
@@ -94,6 +104,36 @@ export const appLocalNotificationDisplayReceiptKey = (input: {
   readonly updatedAt: number;
 }): string =>
   `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
+
+export const appLocalNotificationCompletionReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationCompletionReceiptHostPrefix = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+  );
+
+export const appLocalNotificationCompletionReceiptKey = (input: {
+  readonly userId: string;
+  readonly originHostId: string;
+  readonly occurrenceKey: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-completion-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.originHostId),
+    encodeURIComponent(input.occurrenceKey),
+  );
 
 // Interview answer drafts persist ONE localStorage key per (chatId, blockId)
 // instead of a single full-snapshot Zustand blob. Separate keys prevent a
@@ -184,7 +224,14 @@ export const PERSIST_STORES = [
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Static zustand stores (26) ───────────────────────────────────────────
+  // ── Scoped non-zustand key families (1) ──────────────────────────────────
+  {
+    camelName: "appLocalNotificationCompletionReceipt",
+    leaf: "app-local-notification-completion-receipt",
+    kind: "scoped",
+  },
+
+  // ── Static zustand stores (27) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -253,6 +300,11 @@ export const PERSIST_STORES = [
     leaf: "provider-login-terminals",
     kind: "static",
   },
+  {
+    camelName: "githubMentionFilters",
+    leaf: "github-mention-filters",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
@@ -277,6 +329,12 @@ export const PERSIST_STORES = [
   {
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
+    kind: "channel",
+  },
+  // Ephemeral exact-turn completion acks shared across renderer windows.
+  {
+    camelName: "liveChatCompletionAcknowledgementsChannel",
+    leaf: "live-chat-completion-acknowledgements:v1",
     kind: "channel",
   },
   // One monotonic key per displayed app-local notification version. Separate

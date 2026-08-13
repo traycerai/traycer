@@ -308,6 +308,7 @@ function renderIcon() {
       chatId={CHAT_ID}
       className={undefined}
       epicId={EPIC_ID}
+      hostId="host-1"
       mutedClassName="text-muted-foreground"
       testId={TEST_ID}
       defaultIcon={undefined}
@@ -317,6 +318,7 @@ function renderIcon() {
 
 function createHandle(): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: null,

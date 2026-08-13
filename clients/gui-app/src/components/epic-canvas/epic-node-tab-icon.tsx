@@ -92,6 +92,9 @@ function EpicNodeTabIconContent(props: {
       <ChatProgressIcon
         epicId={props.epicId}
         chatId={props.node.id}
+        // The tab ref's bound host - tabs bind a host for life, so this is the
+        // host whose session this tab's tile opened.
+        hostId={props.node.hostId}
         className={props.className}
         mutedClassName="text-muted-foreground"
         testId="chat-tab-spinner"
@@ -112,6 +115,7 @@ function EpicNodeTabIconContent(props: {
       <TerminalNodeTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        originHostId={props.node.hostId}
         running={false}
         runningTitle=""
         statusPresentation="spinner"
@@ -126,6 +130,7 @@ function EpicNodeTabIconContent(props: {
       <TuiAgentLiveTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        originHostId={props.node.hostId}
         statusPresentation="message"
         pendingTuiHarnessId={props.node.pendingTuiHarnessId}
         className={props.className}
@@ -149,15 +154,19 @@ function EpicNodeTabIconContent(props: {
 function TerminalNodeTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly originHostId: string;
   readonly running: IndicatorRunningKind;
   readonly runningTitle: string;
   readonly statusPresentation: "message" | "spinner";
   readonly defaultIcon: ReactNode;
 }) {
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.nodeId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    {
+      epicId: props.epicId,
+      chatId: props.nodeId,
+    },
+    props.originHostId,
+  );
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
@@ -190,6 +199,7 @@ function TerminalNodeTabIcon(props: {
 function TuiAgentLiveTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly originHostId: string;
   readonly statusPresentation: "message" | "spinner";
   readonly pendingTuiHarnessId: EpicArtifactRef["pendingTuiHarnessId"];
   readonly className: string;
@@ -201,6 +211,7 @@ function TuiAgentLiveTabIcon(props: {
     <TerminalNodeTabIcon
       nodeId={props.nodeId}
       epicId={props.epicId}
+      originHostId={props.originHostId}
       running={isActive ? "turn" : false}
       runningTitle="Agent in progress"
       statusPresentation={props.statusPresentation}

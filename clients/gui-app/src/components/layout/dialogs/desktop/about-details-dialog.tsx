@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ExternalLink, Info } from "lucide-react";
+import { Check, Copy, ExternalLink, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Dialog,
@@ -106,7 +107,11 @@ function AboutDetailsDialogContent(
           />
         </div>
       )}
-      <DialogFooter showCloseButton />
+      <DialogFooter showCloseButton>
+        {snapshot.status === "ready" ? (
+          <CopyDetailsButton snapshot={snapshot.snapshot} />
+        ) : null}
+      </DialogFooter>
     </DialogContent>
   );
 }
@@ -179,28 +184,64 @@ interface DetailsGridProps {
   readonly snapshot: DesktopSupportSnapshot;
 }
 
-function DetailsGrid(props: DetailsGridProps): ReactNode {
-  const rows = [
-    ["Version", props.snapshot.appVersion],
-    ["Signed In", formatSignedInUser(props.snapshot)],
-    ["Support", props.snapshot.supportEmail],
-    ["Platform", `${props.snapshot.platform} ${props.snapshot.arch}`],
-    ["Electron", props.snapshot.versions.electron],
-    ["Chrome", props.snapshot.versions.chrome],
-    ["Node", props.snapshot.versions.node],
+/**
+ * Copies the whole details grid as `Label: value` lines - the shape a user is
+ * asked to paste into a support thread or bug report.
+ */
+function CopyDetailsButton(props: {
+  readonly snapshot: DesktopSupportSnapshot;
+}): ReactNode {
+  const { copied, copy } = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: null,
+  });
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      aria-label={copied ? "Copied details" : "Copy details"}
+      onClick={() =>
+        copy(
+          buildDetailRows(props.snapshot)
+            .map(([label, value]) => `${label}: ${value}`)
+            .join("\n"),
+        )
+      }
+    >
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      Copy Details
+    </Button>
+  );
+}
+
+function buildDetailRows(
+  snapshot: DesktopSupportSnapshot,
+): readonly (readonly [string, string])[] {
+  return [
+    ["Version", snapshot.appVersion],
+    ["Signed In", formatSignedInUser(snapshot)],
+    ["Support", snapshot.supportEmail],
+    ["Platform", `${snapshot.platform} ${snapshot.arch}`],
+    ["Electron", snapshot.versions.electron],
+    ["Chrome", snapshot.versions.chrome],
+    ["Node", snapshot.versions.node],
     [
       "Host",
-      props.snapshot.host.status === "ready"
-        ? `${props.snapshot.host.version ?? "unknown"} (pid ${
-            props.snapshot.host.pid ?? "unknown"
+      snapshot.host.status === "ready"
+        ? `${snapshot.host.version ?? "unknown"} (pid ${
+            snapshot.host.pid ?? "unknown"
           })`
         : "starting",
     ],
-  ] as const;
+  ];
+}
 
+function DetailsGrid(props: DetailsGridProps): ReactNode {
   return (
     <dl className="grid gap-2">
-      {rows.map(([label, value]) => (
+      {buildDetailRows(props.snapshot).map(([label, value]) => (
         <div key={label} className="grid grid-cols-[7rem_1fr] gap-3">
           <dt className="text-ui-sm text-muted-foreground">{label}</dt>
           <dd className="min-w-0 truncate text-ui-sm">{value}</dd>

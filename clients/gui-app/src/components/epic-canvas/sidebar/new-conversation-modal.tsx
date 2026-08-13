@@ -804,6 +804,10 @@ export function NewConversationModalBody(props: {
     createChat.mutate(
       {
         epicId,
+        // The host the modal resolved its own client for, checked non-null
+        // just above - the machine the user picked, not the app-wide active
+        // one (they diverge for a row-scoped child create).
+        hostId: activeHostId,
         parentId,
         title: "",
         chatId,

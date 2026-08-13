@@ -10,8 +10,34 @@ export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 // leaves `-agent` unconsumed, fails the anchor, and backtracks into the longer
 // arm. What the anchors buy is exactly that - no partial prefix can be
 // mistaken for a whole token.
+// `github-pr` / `github-issue` are listed ahead of the shorter prefixes for
+// readability only - the alternation is anchored at both ends, so no prefix can
+// swallow another's token.
 const COMPLETE_ENTITY_TOKEN_REGEX =
-  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal):[^/\s]+\/[^\s]+)$/u;
+  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
+
+/**
+ * A GitHub entity token ends at its reference, and nothing after it belongs.
+ *
+ * `MENTION_TOKEN_REGEX` captures a whole non-space run, and the entity pattern
+ * accepts any non-space tail - so `@github-pr:acme/widgets#123,` carried the
+ * comma INTO the path. The sent-message renderer then looks the attachment up
+ * by that comma-suffixed path, misses the real one, and falls back to a generic
+ * chip with the punctuation swallowed into its label. Typing a comma after a
+ * mention is ordinary, so this is the common case rather than the exotic one.
+ *
+ * Trimmed only for GitHub tokens, and only because their grammar states where
+ * they END: the reference is `#` followed by digits, so anything after the
+ * final digit run provably is not part of the token. The other entity kinds
+ * have no such terminator - trimming them would be guesswork about which
+ * trailing characters are meaningful, and their behaviour here is unchanged.
+ */
+const GITHUB_ENTITY_TOKEN_REGEX = /^(?:github-pr|github-issue):[^\s]*#\d+/u;
+
+/** The token itself, with any trailing non-reference characters returned to the text. */
+function entityTokenWithoutTrailingText(path: string): string {
+  return GITHUB_ENTITY_TOKEN_REGEX.exec(path)?.[0] ?? path;
+}
 
 interface MentionTokenMatch {
   path: string;
@@ -35,12 +61,13 @@ function pushTextSegment(
 function collectMentionMatches(text: string): MentionTokenMatch[] {
   const matches: MentionTokenMatch[] = [];
   for (const match of text.matchAll(MENTION_TOKEN_REGEX)) {
-    const fullMatch = match[0];
     const prefix = match[1];
-    const path = match[2];
+    const path = entityTokenWithoutTrailingText(match[2]);
     const matchIndex = match.index;
     const start = matchIndex + prefix.length;
-    const end = start + fullMatch.length - prefix.length;
+    // Measured from the TRIMMED path, so whatever was trimmed falls back into
+    // the following text segment instead of disappearing with the token.
+    const end = start + "@".length + path.length;
     const completeEndMention =
       end < text.length || COMPLETE_ENTITY_TOKEN_REGEX.test(path);
     if (path.length > 0 && completeEndMention) {

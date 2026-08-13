@@ -11,6 +11,11 @@ import type {
   EpicCloudSyncStatus,
   EpicMigrationPhase,
 } from "@traycer/protocol/host/epic/subscribe";
+import type {
+  ChatRecordRemovalReason,
+  ChatRecordSummary,
+} from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
@@ -42,9 +47,13 @@ import type {
 import {
   EMPTY_ARTIFACT_ROOM_DIRTY,
   EMPTY_ARTIFACT_ROOMS_SLICE,
+  EMPTY_CHATS_SLICE,
   EMPTY_PROJECTED_SLICES,
 } from "./types";
 import {
+  chatRecordsSlice,
+  chatSlicesEq,
+  isChatVisibleToUser,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
@@ -112,6 +121,15 @@ export interface EpicMigrationSlice {
   readonly chunksDone: number;
   readonly chunksTotal: number;
 }
+
+/**
+ * Shared identity for "nothing retracted", so a session that never sees a
+ * removal - every session, almost always - hands the same reference to every
+ * subscriber and re-renders nobody.
+ */
+const EMPTY_CHAT_RETRACTIONS: Readonly<
+  Record<string, ChatRecordRemovalReason>
+> = Object.freeze({});
 
 const IDLE_MIGRATION_SLICE: EpicMigrationSlice = {
   status: "idle",
@@ -277,6 +295,39 @@ export interface OpenEpicState {
    * tree input.
    */
   readonly deletedArtifacts: DeletedArtifactsSlice;
+  /**
+   * The Y.Doc's own chat entries. The projector's working state, NOT a
+   * component-facing slice - read {@link OpenEpicState.chats}, which is this
+   * unioned with the host's store-backed records.
+   */
+  readonly docChats: ChatsSlice;
+  /**
+   * The host's store-backed chat records (`epic.listChatRecords`), as last
+   * served. Empty in doc-only mode: an older host that lacks the method, or
+   * before the first response lands.
+   */
+  readonly chatRecords: ChatsSlice;
+  /**
+   * Chats the record plane RETRACTED while this session was open, and why.
+   *
+   * Written only by {@link OpenEpicState.applyChatRecordDelta}'s `remove` arm,
+   * which is the only signal that distinguishes the two honest end states an
+   * OPEN tab can show - "this chat was deleted" versus "this chat is no longer
+   * shared with you". The record table alone cannot: a row that left for either
+   * reason is simply a row that is gone.
+   *
+   * ABSORBING for the life of the session: an id in here is filtered out of
+   * every later record answer, poll included, so an in-flight
+   * `epic.listChatRecords` that was issued before the retraction cannot
+   * resurrect the row seconds after the tab announced it was gone. The cost is
+   * the re-share case - a chat unshared and then shared again stays hidden
+   * until the epic session is disposed and rebuilt (closing and reopening the
+   * epic) - which is the contract the stream declares ("removal is terminal and
+   * absorbing; no later upsert resurrects the row on this client") and is
+   * strictly preferable to a tile that flickers back to life after saying it
+   * was revoked.
+   */
+  readonly chatRetractions: Readonly<Record<string, ChatRecordRemovalReason>>;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
@@ -410,6 +461,49 @@ export interface OpenEpicState {
    * No-op when no migration has been observed on this session.
    */
   retryMigration: () => void;
+  /**
+   * Publishes the host's `epic.listChatRecords` answer into the record table.
+   *
+   * The store-backed half of `chats` (chat-sync-v2 ticket 49). Idempotent and
+   * change-gated: an answer that says the same thing as the last one writes
+   * nothing, so the poll behind it costs no renders while an epic is quiet.
+   *
+   * Never called in doc-only mode - an older host answers `E_HOST_UNSUPPORTED`
+   * and the caller simply does not call this, leaving the record slice empty and
+   * `chats` identical to the doc projection.
+   */
+  applyChatRecords: (records: readonly ChatRecordSummary[]) => void;
+  /**
+   * Applies ONE `host.chatRecords.subscribe` delta - the push half of the same
+   * record table {@link OpenEpicState.applyChatRecords} fills from the poll.
+   *
+   * Push is the trigger and the poll is the backup, so both write the same
+   * slice and neither owns it: a host without the stream loses latency and
+   * nothing else, and a delta lost to a disconnect is repaired by the next
+   * 20s list read.
+   *
+   * `upsert` is REVISION-GUARDED: `revision` is per-chat monotonic and the only
+   * ordering fact on a row, so a delta whose revision does not strictly exceed
+   * the one already held is dropped. That is what makes replayed, reordered and
+   * duplicated frames harmless without any merge logic. `remove` carries no
+   * revision and needs none - it applies unconditionally and idempotently, and
+   * is remembered in {@link OpenEpicState.chatRetractions}.
+   *
+   * Callers must route by `delta.epicId` before calling: the subscription is
+   * host-scoped and covers every open epic, and this store is one of them.
+   */
+  applyChatRecordDelta: (delta: ChatRecordDelta) => void;
+  /**
+   * Rebuilds the record slice for the CURRENTLY signed-in user from the raw
+   * rows this session has retained.
+   *
+   * Internal, and driven by exactly one caller: the auth subscription, on a
+   * user switch. The slice is keyed on `chatId` alone and so can only ever
+   * represent one owner's rows, which means a user switch has to REBUILD it -
+   * re-projecting alone would keep serving the previous identity's selection.
+   * Retained rows make that lossless; see `applyChatRecords`.
+   */
+  republishChatRecordsForCurrentUser: () => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
 
@@ -1476,6 +1570,50 @@ export function createOpenEpicStore(
   const getCurrentChatProjectionUserId = (): string | null =>
     useAuthStore.getState().profile?.userId ?? null;
 
+  /**
+   * The host's store-backed chat records, held OUTSIDE the store state as the
+   * projector's input (the mirrored copy in `state.chatRecords` is what
+   * components and tests read). A closure variable rather than a state read
+   * because the projector runs inside `setState` computations, where reading
+   * the store it is about to write is exactly the kind of cycle that produces a
+   * projection built from half-updated state.
+   */
+  let chatRecords: ChatsSlice = EMPTY_CHATS_SLICE;
+
+  /**
+   * The RAW rows behind `chatRecords`, keyed by OWNER AND CHAT.
+   *
+   * The projected slice cannot serve as the record layer's own state on two
+   * counts. It drops `revision`, which is the entire basis of the staleness
+   * test a push delta has to make; and it is keyed on `chatId` ALONE, which is
+   * not a record identity. A record is `(epicId, ownerUserId, chatId)` - the
+   * id is host-minted, so two users can legitimately hold the same one inside
+   * a single task, and this store is already scoped to one epic. Keying this
+   * map on the id alone would let a collaborator's row EVICT the viewer's own
+   * same-id chat, which reads as the viewer's chat vanishing from their own
+   * sidebar.
+   *
+   * Held beside the slice rather than folded into `ChatProjection`, because a
+   * revision is sync bookkeeping and nothing that renders should be able to
+   * read it.
+   */
+  const chatRecordRows = new Map<string, ChatRecordSummary>();
+  const recordKey = (ownerUserId: string, chatId: string): string =>
+    `${ownerUserId}\u001f${chatId}`;
+  /**
+   * See `OpenEpicState.chatRetractions` - absorbing for the session's life.
+   *
+   * Keyed by `chatId` alone, unlike {@link chatRecordRows}, because that is all
+   * a `remove` frame carries: the delta names `(epicId, chatId, reason)` and no
+   * owner. The frame's addressing is therefore COARSER than a record identity,
+   * so a removal retracts every retained row with that id in this epic. Bounded
+   * and invisible today - the display filter already withholds every row whose
+   * owner is not the signed-in user, so the only rows that can render are ones
+   * for which `chatId` IS unique. Widening the frame is a protocol change, not
+   * something to guess at here.
+   */
+  const chatRetractions = new Map<string, ChatRecordRemovalReason>();
+
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId` (NOT the store's `userId` option,
   // which is the email used for persist namespacing). Read lazily so a session
@@ -1483,6 +1621,7 @@ export function createOpenEpicStore(
   // projection.
   const projector: EpicProjector = createEpicProjector(
     getCurrentChatProjectionUserId,
+    () => chatRecords,
   );
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown) => {
@@ -1557,6 +1696,63 @@ export function createOpenEpicStore(
   const store = create<OpenEpicState>()(
     persist(
       (set, get, api) => {
+        /**
+         * Re-derives `chatRecords` from `chatRecordRows` and publishes it.
+         *
+         * The ONE writer of the record slice, shared by the poll
+         * (`applyChatRecords`) and the push (`applyChatRecordDelta`) so the two
+         * halves of one table cannot drift in how they publish it.
+         *
+         * Change-gated on {@link chatSlicesEq}: an answer that says the same
+         * thing as the last one writes nothing, so the 20s poll behind this
+         * costs no renders while an epic is quiet. `extra` (the retraction map)
+         * bypasses that gate, because a removal that leaves the slice unchanged
+         * - a chat this session never held a record for, opened cross-host from
+         * the sidebar - still has to reach the open tab that is rendering it.
+         *
+         * A FULL re-projection rather than a hand-rolled patch: `chats` feeds
+         * the tree and the role-claim slices, and re-deriving those here would
+         * be a second implementation of the projector's own composition, free
+         * to drift from it. Records change rarely (this is gated on an actual
+         * difference), so the cost is a snapshot-shaped re-project on a real
+         * change and nothing at all otherwise.
+         */
+        const publishChatRecords = (
+          extra: Pick<OpenEpicState, "chatRetractions"> | null,
+        ): void => {
+          // The slice is keyed on `chatId` alone, so it can only be built from
+          // rows for which that id is unambiguous - i.e. ONE owner's. Selecting
+          // that owner here (rather than letting `unionChatsSlice`'s filter do
+          // it downstream) is what stops a collaborator's same-id row from
+          // taking the `byId` slot the viewer's own chat needs.
+          //
+          // The objection this used to carry - that filtering at ingest freezes
+          // the answer at the moment the rows ARRIVED - is answered by
+          // `chatRecordRows`, which retains EVERY row regardless of owner. A
+          // user switch re-runs this from the retained rows (see the auth
+          // subscription below), so nothing is frozen and nothing is lost.
+          // `unionChatsSlice` still applies the same predicate at projection
+          // time; two boundaries, one shared rule, so they cannot disagree.
+          const currentUserId = getCurrentChatProjectionUserId();
+          const visible: ChatRecordSummary[] = [];
+          for (const row of chatRecordRows.values()) {
+            if (!isChatVisibleToUser(row.ownerUserId, currentUserId)) continue;
+            visible.push(row);
+          }
+          const next = chatRecordsSlice(visible);
+          const nextSlice = next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
+          if (extra === null && chatSlicesEq(chatRecords, nextSlice)) return;
+          chatRecords = nextSlice;
+          set(
+            projector.isAttached()
+              ? { chatRecords: nextSlice, ...extra, ...projector.projectFull() }
+              : // Nothing attached yet: the records are held, and the
+                // attach-time projection folds them in through the same
+                // getter. Writing EMPTY slices here would erase the store.
+                { chatRecords: nextSlice, ...extra },
+          );
+        };
+
         const syncCurrentConnectionStatus = (): StreamConnectionStatus => {
           currentStatus = deriveConnectionStatus(
             transportStatus,
@@ -2516,6 +2712,8 @@ export function createOpenEpicStore(
           awareness,
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
+          chatRecords: EMPTY_CHATS_SLICE,
+          chatRetractions: EMPTY_CHAT_RETRACTIONS,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
           artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
           rootDirty: null,
@@ -2626,6 +2824,69 @@ export function createOpenEpicStore(
             if (!reopen) {
               streamClient?.retryMigration();
             }
+          },
+
+          applyChatRecords: (records) => {
+            if (disposed) return;
+            chatRecordRows.clear();
+            for (const row of records) {
+              // A retracted chat never comes back through the poll. The list
+              // read is a SNAPSHOT of the host's SQLite and the host applies a
+              // removal before it emits one, so a response that still carries
+              // the row was necessarily issued before the retraction - letting
+              // it through would resurrect a chat seconds after its tab said it
+              // was gone. See `OpenEpicState.chatRetractions`.
+              if (chatRetractions.has(row.chatId)) continue;
+              chatRecordRows.set(recordKey(row.ownerUserId, row.chatId), row);
+            }
+            publishChatRecords(null);
+          },
+
+          applyChatRecordDelta: (delta) => {
+            if (disposed) return;
+            if (delta.kind === "remove") {
+              // Every retained row with this id, because the frame carries no
+              // owner to narrow by - see `chatRetractions` for why that is
+              // bounded rather than wrong.
+              const doomed = Array.from(chatRecordRows.entries())
+                .filter(([, row]) => row.chatId === delta.chatId)
+                .map(([key]) => key);
+              // Idempotent: a redelivered removal for the same reason is not a
+              // state change, and re-publishing on it would re-project the epic
+              // for nothing.
+              if (
+                chatRetractions.get(delta.chatId) === delta.reason &&
+                doomed.length === 0
+              ) {
+                return;
+              }
+              chatRetractions.set(delta.chatId, delta.reason);
+              for (const key of doomed) chatRecordRows.delete(key);
+              publishChatRecords({
+                chatRetractions: Object.fromEntries(chatRetractions),
+              });
+              return;
+            }
+            const { record } = delta;
+            // Removal is TERMINAL AND ABSORBING - the one lifecycle rule in
+            // this design - so no later upsert resurrects the row here.
+            if (chatRetractions.has(record.chatId)) return;
+            const key = recordKey(record.ownerUserId, record.chatId);
+            const held = chatRecordRows.get(key);
+            // The staleness test, and the only ordering fact on a row:
+            // `revision` is per-chat monotonic, so a delta that does not
+            // strictly exceed what is held is a replay, a reorder or a
+            // duplicate. Dropping it is what makes those harmless with no merge
+            // logic anywhere. NOT a timestamp comparison - host clocks skew and
+            // `updatedAt` is display metadata no ordering decision may read.
+            if (held !== undefined && record.revision <= held.revision) return;
+            chatRecordRows.set(key, record);
+            publishChatRecords(null);
+          },
+
+          republishChatRecordsForCurrentUser: () => {
+            if (disposed) return;
+            publishChatRecords(null);
           },
 
           dispose: () => {
@@ -2840,6 +3101,12 @@ export function createOpenEpicStore(
     const nextUserId = state.profile?.userId ?? null;
     const prevUserId = prevState.profile?.userId ?? null;
     if (nextUserId === prevUserId || disposed) return;
+    // Re-derive the record slice from the RETAINED raw rows first. It is built
+    // for one owner (a `byId` keyed on `chatId` can hold no more), so a user
+    // switch has to rebuild it rather than merely re-filter downstream - a
+    // re-projection alone would keep serving the previous identity's selection.
+    // This is what makes the ingest-time owner selection safe.
+    store.getState().republishChatRecordsForCurrentUser();
     store.setState(projector.projectFull());
   });
 

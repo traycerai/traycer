@@ -23,6 +23,7 @@ import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@/lib/host/stream-reopen"
 import {
   cloudNotificationFeedId,
   openCloudNotificationsStream,
+  selectCloudEntityReadTargets,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 
@@ -255,6 +256,27 @@ describe("cloud notifications store", () => {
     });
   });
 
+  it("selects focused entity reads from only the focused origin host", () => {
+    const hostA = cloudFailureRow("failure-a", 1);
+    const hostB = {
+      ...cloudFailureRow("failure-b", 2),
+      originHostId: "host-b",
+    };
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [hostA, hostB],
+      summary: { ...summary, totalCount: 2, unreadCount: 2 },
+      version: 1,
+    });
+
+    expect(
+      selectCloudEntityReadTargets(
+        useCloudNotificationsStore.getState(),
+        { epicId: "epic-1", chatId: "chat-1" },
+        "host-a",
+      ),
+    ).toEqual(["failure-a"]);
+  });
+
   it("adopts a newer version from a content-identical snapshot", () => {
     const row = cloudRow("entry-a", 1, "host-a");
     useCloudNotificationsStore.getState().applySnapshot({
@@ -313,7 +335,7 @@ describe("cloud notifications store", () => {
         summary: staleSummary,
         version: 9,
       }),
-    ).toEqual([]);
+    ).toBeNull();
   });
 
   it("ignores a delayed snapshot from below the version already rendered", () => {
@@ -557,6 +579,57 @@ describe("cloud notifications store", () => {
       summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
     });
     expect(useCloudNotificationsStore.getState().rows).toEqual({});
+    close();
+  });
+
+  it("reports baseline rows as a snapshot even when there are no arrivals", () => {
+    const client = new ControlledWsStreamClient();
+    const onSnapshot = vi.fn();
+    const close = openCloudNotificationsStream(client, null, null, onSnapshot);
+    const row = cloudRow("entry-a", 4, "host-a");
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 4,
+      rows: [row],
+      summary,
+    });
+
+    expect(onSnapshot).toHaveBeenCalledWith({ rows: [row], arrivals: [] });
+    close();
+  });
+
+  it("does not forward a lower-version snapshot after rejecting its rewind", () => {
+    const client = new ControlledWsStreamClient();
+    const onSnapshot = vi.fn();
+    const close = openCloudNotificationsStream(client, null, null, onSnapshot);
+    const accepted = cloudRow("entry-current", 10, "host-a");
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 10,
+      rows: [accepted],
+      summary,
+    });
+    onSnapshot.mockClear();
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 9,
+      rows: [cloudRow("entry-stale", 9, "host-a")],
+      summary: staleSummary,
+    });
+
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(useCloudNotificationsStore.getState().rows).toEqual({
+      [cloudNotificationFeedId("entry-current")]: accepted,
+    });
     close();
   });
 

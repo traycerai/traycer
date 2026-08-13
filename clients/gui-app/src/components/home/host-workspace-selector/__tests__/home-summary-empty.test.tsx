@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -38,7 +38,7 @@ import {
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV15[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -114,7 +114,7 @@ const mocks = vi.hoisted(() => {
 
 const GIT_REPO_IDENTIFIER = { owner: "acme", repo: "app" };
 
-const GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
   repoIdentifier: GIT_REPO_IDENTIFIER,
@@ -131,9 +131,10 @@ const GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   scripts: null,
   repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
+  presence: "present",
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
@@ -142,6 +143,19 @@ const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   scripts: null,
   repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
+  presence: "present",
+};
+
+const ABSENT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
+  workspacePath: "/workspace/app",
+  isGitRepo: false,
+  repoIdentifier: null,
+  mainBranch: null,
+  worktrees: [],
+  scripts: null,
+  repoBranchPrefix: { status: "absent" },
+  resolvedAt: 1,
+  presence: "absent",
 };
 
 vi.mock("@/components/ui/select", () => ({
@@ -507,7 +521,7 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("stacked");
     const trigger = screen.getByTestId("folder-location-trigger");
 
-    expect(screen.queryByText("Unavailable")).toBeNull();
+    expect(screen.queryByTestId("folder-row-not-available")).toBeNull();
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(trigger.textContent).toContain("Local");
     expect(trigger.getAttribute("aria-disabled")).toBe("true");
@@ -516,6 +530,71 @@ describe("landing workspace summary empty state", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Worktrees require a Git repository",
     );
+
+    queryClient.clear();
+  });
+
+  it("renders absent presence as not-available with Locate, not the non-git tooltip", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "unresolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [ABSENT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
+    expect(screen.getByTestId("folder-row-locate").textContent).toContain(
+      "Locate on this host",
+    );
+    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+
+    queryClient.clear();
+  });
+
+  it("keeps {presence:absent, resolvedAt:null} pending, not definitive not-available", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "unresolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: {
+        workspaces: [
+          {
+            ...ABSENT_SUMMARY,
+            resolvedAt: null,
+          },
+        ],
+      },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    // Wire cross-field: absence without a resolve time is not a verdict.
+    expect(screen.queryByTestId("folder-row-not-available")).toBeNull();
+    expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
 
     queryClient.clear();
   });
@@ -697,9 +776,11 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("stacked");
 
     expect(screen.queryByTestId("folder-row-loading")).toBeNull();
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
     expect(screen.getByTestId("folder-row-locate").textContent).toContain(
-      "Locate folder",
+      "Locate on this host",
     );
 
     queryClient.clear();
@@ -713,7 +794,7 @@ describe("landing workspace summary empty state", () => {
     const folderAPath = GIT_SUMMARY.workspacePath;
     const folderBPath = "/workspace/lib";
     const folderBRepo = { owner: "acme", repo: "lib" };
-    const folderBSummary: WorktreeWorkspaceSummaryV14 = {
+    const folderBSummary: WorktreeWorkspaceSummaryV15 = {
       workspacePath: folderBPath,
       isGitRepo: true,
       repoIdentifier: folderBRepo,
@@ -730,6 +811,7 @@ describe("landing workspace summary empty state", () => {
       scripts: null,
       repoBranchPrefix: { status: "absent" },
       resolvedAt: 1,
+      presence: "present",
     };
 
     // Mount with default prefix; only folder A is resolved.

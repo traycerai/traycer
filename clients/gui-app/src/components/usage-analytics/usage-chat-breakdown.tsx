@@ -11,12 +11,14 @@ export interface UsageChatBreakdownProps {
 }
 
 /**
- * By-chat/agent breakdown for the epic-scoped panel. Titles are joined
- * CLIENT-SIDE from the open epic's own tree projection (`useEpicTreeNode`) -
- * the summary only carries `chatId`, and this is the one place in the app
- * that already knows every node's title, chat or A2A child agent alike (an
- * A2A child agent is its own chat, so this list doubles as the by-agent
- * view with no separate wire shape).
+ * By-chat/agent breakdown for the epic-scoped panel, as a real table
+ * (2026-08-11 feedback round) with the same column styling as
+ * `UsageBreakdownTable`. Titles are joined CLIENT-SIDE from the open epic's
+ * own tree projection (`useEpicTreeNode`) - the summary only carries
+ * `chatId`, and this is the one place in the app that already knows every
+ * node's title, chat or A2A child agent alike (an A2A child agent is its
+ * own chat, so this list doubles as the by-agent view with no separate wire
+ * shape).
  */
 export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
   if (props.rows.length === 0) {
@@ -33,11 +35,29 @@ export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
     (a, b) => b.knownCostUsd - a.knownCostUsd,
   );
   return (
-    <ul className="flex flex-col gap-1.5" data-testid="usage-chat-breakdown">
-      {sorted.map((row) => (
-        <UsageChatBreakdownRow key={row.chatId} row={row} />
-      ))}
-    </ul>
+    <table
+      className="w-full border-collapse text-ui-sm"
+      data-testid="usage-chat-breakdown"
+    >
+      <thead>
+        <tr className="border-b border-border/60 text-left text-ui-xs text-muted-foreground">
+          <th scope="col" className="py-1.5 pr-3 font-medium">
+            Chat / agent
+          </th>
+          <th scope="col" className="py-1.5 pr-3 text-right font-medium">
+            Tokens
+          </th>
+          <th scope="col" className="py-1.5 text-right font-medium">
+            Cost
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((row) => (
+          <UsageChatBreakdownRow key={row.chatId} row={row} />
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -49,20 +69,21 @@ function UsageChatBreakdownRow(props: {
   const title = node?.title ?? row.chatId;
   const tokens = sumTokenTotals(row.tokens);
   return (
-    <li
-      className="flex items-center gap-3 text-ui-sm"
+    <tr
+      className="border-b border-border/40 last:border-b-0"
       data-testid={`usage-chat-breakdown-row-${row.chatId}`}
     >
-      <span className="min-w-0 flex-1 truncate text-foreground">{title}</span>
-      <span className="shrink-0 tabular-nums text-ui-xs text-muted-foreground">
+      {/* `wrap-anywhere`, matching the other breakdown tables' identifier
+          cells: a fallback chatId (or a long unbroken title) must not set
+          the auto-layout table's minimum width and push Tokens/Cost out of
+          the dialog, and truncating would hide the identifier instead. */}
+      <td className="py-1.5 pr-3 wrap-anywhere text-foreground">{title}</td>
+      <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
         {tokens.toLocaleString()}
-      </span>
-      {/* `min-w-16`, not `w-16`: the column still aligns at the common
-          case's width, but a wider figure ("$1,234.56") grows instead of
-          overflowing its box. */}
-      <span className="min-w-16 shrink-0 text-right tabular-nums font-medium text-foreground">
+      </td>
+      <td className="py-1.5 text-right tabular-nums font-medium text-foreground">
         {formatUsd(row.knownCostUsd)}
-      </span>
-    </li>
+      </td>
+    </tr>
   );
 }

@@ -77,6 +77,7 @@ function skillsState(): ProviderCliState {
           remove: [],
         },
       },
+      modelProviders: null,
     },
     selected: { kind: "bundled" },
     candidates: [],

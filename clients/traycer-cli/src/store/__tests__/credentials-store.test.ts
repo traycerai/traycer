@@ -20,7 +20,6 @@ function pair(token: string): StoredCredentials {
   return {
     token,
     refreshToken: `${token}-refresh`,
-    authnBaseUrl: "https://authn.test",
     savedAt: "2026-01-01T00:00:00.000Z",
     user: { id: "u1", email: "a@b.c", name: "A" },
   };

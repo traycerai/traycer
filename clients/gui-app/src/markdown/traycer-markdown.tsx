@@ -17,7 +17,10 @@ import {
   TableRow,
   TableWrapper,
 } from "./components/table-wrapper";
-import { markdownUrlTransform } from "./links/markdown-url-transform";
+import {
+  assistantMarkdownUrlTransform,
+  markdownUrlTransform,
+} from "./links/markdown-url-transform";
 import {
   TRAYCER_CHAT_TAG,
   TRAYCER_EPIC_TAG,
@@ -30,7 +33,10 @@ import { rehypeTraycerChat } from "./plugins/rehype-traycer-chat";
 import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
 import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
 import { rehypeTraycerTicket } from "./plugins/rehype-traycer-ticket";
-import { extendTraycerSanitizeSchema } from "./plugins/rehype-sanitize-schema";
+import {
+  extendAssistantImageSanitizeSchema,
+  extendTraycerSanitizeSchema,
+} from "./plugins/rehype-sanitize-schema";
 import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter";
 
 const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
@@ -79,6 +85,8 @@ export interface TraycerMarkdownProps {
   className: string | null;
   proseSize: "compact" | "normal";
   components: Record<string, ComponentType<Record<string, unknown>>> | null;
+  /** Relaxed image sources are reserved for assistant-owned markdown. */
+  imageRendering?: "assistant" | "standard";
   remarkPlugins: PluggableList | null;
   rehypePlugins: PluggableList | null;
   quotable: boolean;
@@ -95,6 +103,7 @@ export function TraycerMarkdown({
   className,
   proseSize,
   components,
+  imageRendering = "standard",
   remarkPlugins,
   rehypePlugins,
   quotable,
@@ -134,8 +143,16 @@ export function TraycerMarkdown({
       <StreamingMarkdown
         isStreaming={isStreaming}
         highlighter={TRAYCER_STREAMING_HIGHLIGHTER}
-        sanitizeSchema={extendTraycerSanitizeSchema}
-        urlTransform={markdownUrlTransform}
+        sanitizeSchema={
+          imageRendering === "assistant"
+            ? extendAssistantImageSanitizeSchema
+            : extendTraycerSanitizeSchema
+        }
+        urlTransform={
+          imageRendering === "assistant"
+            ? assistantMarkdownUrlTransform
+            : markdownUrlTransform
+        }
         remarkPlugins={effectiveRemarkPlugins}
         rehypePlugins={effectiveRehypePlugins}
         components={mergedComponents}

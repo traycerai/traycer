@@ -169,14 +169,24 @@ export function useTaskProfileRateLimitSwitch(input: {
         // `currentComposerSettings`, so an open sibling tile reflects the
         // switch immediately instead of stomping it on its next send. This is
         // local display state, not a wire persist.
-        const warmSession = getChatSessionRegistry().peek(epicId, chat.chatId);
+        //
+        // Peeked on THIS TAB'S host, which is also the host `affected` was
+        // filtered by (`chat.hostId === tabHostId` above): the sibling being
+        // re-seeded is by construction a chat of this tab's host, and a
+        // same-id chat on another host is a different agent whose composer
+        // must not be touched by this switch.
+        const warmSession = getChatSessionRegistry().peek(
+          epicId,
+          chat.chatId,
+          tabHostId,
+        );
         warmSession?.store.getState().setCurrentComposerSettings({
           ...chat.settings,
           profileId: nextProfileId,
         });
       }
     },
-    [affected, chatId, epicId, updateChatProfileMutate],
+    [affected, chatId, epicId, tabHostId, updateChatProfileMutate],
   );
 
   return { affectedChatCount, switchOtherTaskChats };

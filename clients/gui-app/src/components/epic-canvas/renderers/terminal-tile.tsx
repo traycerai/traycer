@@ -76,6 +76,8 @@ export function TerminalTile(props: TerminalTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
+      hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -88,8 +90,10 @@ export function TerminalTile(props: TerminalTileProps) {
     });
   }, [
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);
@@ -100,6 +104,8 @@ export function TerminalTile(props: TerminalTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
+      hostId,
+      terminalName: props.node.name,
       target: {
         kind: "terminal",
         epicId,
@@ -112,8 +118,10 @@ export function TerminalTile(props: TerminalTileProps) {
     });
   }, [
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
+    props.node.name,
     props.tileId,
     props.viewTabId,
   ]);
@@ -147,6 +155,7 @@ export function TerminalTile(props: TerminalTileProps) {
     if (epicId === null) return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
+      hostId,
       hostLabel: reachability.hostLabel,
       target: {
         kind: "terminal",
@@ -161,6 +170,7 @@ export function TerminalTile(props: TerminalTileProps) {
     reachability.status,
     reachability.hostLabel,
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
     props.tileId,

@@ -329,6 +329,54 @@ describe("buildHostUpdateCommand composite", () => {
     });
   });
 
+  it("forwards an explicit version request to downloadAndStageHost", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "2.1.0",
+      installedVersion: "2.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("2.0.0", "2.1.0", null),
+    );
+
+    const command = buildHostUpdateCommand({
+      force: false,
+      versionRequest: "2.1.0",
+    });
+    await command(fakeCtx());
+
+    expect(mocks.downloadAndStageHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        versionRequest: "2.1.0",
+        automatic: false,
+      }),
+    );
+  });
+
+  it("keeps a null version request for latest semantics", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "2.1.0",
+      installedVersion: "2.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("2.0.0", "2.1.0", null),
+    );
+
+    const command = buildHostUpdateCommand({
+      force: false,
+      versionRequest: null,
+    });
+    await command(fakeCtx());
+
+    expect(mocks.downloadAndStageHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        versionRequest: null,
+        automatic: false,
+      }),
+    );
+  });
+
   it("reuses an existing stage (already-staged short-circuit) and still applies it, projecting the legacy shape from the applied record", async () => {
     mocks.downloadAndStageHostMock.mockResolvedValue({
       outcome: "short-circuit",

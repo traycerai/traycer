@@ -89,6 +89,7 @@ interface Harness {
 function createHarness(): Harness {
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,

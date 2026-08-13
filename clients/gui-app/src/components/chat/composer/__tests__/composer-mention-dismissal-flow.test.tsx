@@ -80,11 +80,16 @@ function mentionItem(path: string): ComposerPickerItem {
     kind: "mention",
     entry: {
       id: `mention:${path}`,
+      labelPrefix: null,
       label: path,
       detail: "",
       description: "",
+      searchText: null,
+      disabledReason: null,
       icon: FAKE_ICON,
       action: { kind: "complete", mention: fileMention(path) },
+      updatedAt: null,
+      archived: false,
       preview: null,
     },
   };
@@ -343,5 +348,83 @@ describe("mention selection", () => {
     await flush();
     expect(mentionNodeCount(editor)).toBe(1);
     expect(submitCalls.count).toBe(0);
+  });
+});
+
+describe("mention menu dismissal on returning to root", () => {
+  const PR_STEP = {
+    kind: "provider",
+    providerId: "pull-requests",
+    stepId: "pull-requests",
+    workspacePath: null,
+  } as const;
+  const ROOT_STEP = { kind: "root" } as const;
+
+  /** Drills the live session into the PR section, as picking the row does. */
+  function drillIntoPullRequests(pickerStore: ComposerPickerStore): void {
+    if (pickerStore.getState().sessionId === null) {
+      throw new Error("expected an open picker session");
+    }
+    pickerStore.getState().setStep(PR_STEP);
+  }
+
+  function returnToRoot(pickerStore: ComposerPickerStore): void {
+    if (pickerStore.getState().sessionId === null) {
+      throw new Error("expected an open picker session");
+    }
+    pickerStore.getState().setStep(ROOT_STEP);
+  }
+
+  it("dismisses a section-exempt prose query once the step returns to root", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@");
+    await flush();
+    drillIntoPullRequests(pickerStore);
+    await flush();
+
+    // A real PR title. The comma is ordinary punctuation inside the section,
+    // so the menu must stay open while the user types it.
+    editor.commands.insertContent("fix(relay): stop the busy-loop, again");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+
+    // Back. The step moves without the editor moving, so no `onUpdate`
+    // follows - and at root that same comma is prose.
+    returnToRoot(pickerStore);
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(false);
+  });
+
+  it("keeps the menu open when the query is not prose at root", async () => {
+    // The control. The fix must dismiss on the QUERY, not on the transition -
+    // returning to root is otherwise an ordinary navigation.
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@");
+    await flush();
+    drillIntoPullRequests(pickerStore);
+    await flush();
+
+    editor.commands.insertContent("busy-loop");
+    await flush();
+    returnToRoot(pickerStore);
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+  });
+
+  it("leaves a prose query inside the section alone", async () => {
+    // The other control: the exemption itself must survive. Only the return to
+    // root re-arms the rule.
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@");
+    await flush();
+    drillIntoPullRequests(pickerStore);
+    await flush();
+
+    editor.commands.insertContent("stop the busy-loop, again");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
   });
 });

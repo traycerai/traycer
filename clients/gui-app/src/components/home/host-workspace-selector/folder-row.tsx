@@ -120,15 +120,21 @@ function FolderRowBody(props: {
 }) {
   const { item } = props;
 
-  // Folder not available on the selected host. The row still offers both
-  // recoveries — locate it on this host, or remove it — because an unresolved
-  // folder otherwise blocks send (see `deriveResolvedWorkspaceAvailability`)
-  // with no way out.
+  // Folder not available on the selected host (`presence: "absent"`, or no
+  // summary after the listing settled). The row still offers both recoveries
+  // — locate it on this host, or remove it — because an unresolved folder
+  // otherwise blocks send (see `deriveResolvedWorkspaceAvailability`) with no
+  // way out. `branchLabel` carries "Not available on <host label>".
   if (item.unresolved) {
     return (
       <>
         <div className="col-[3/5] flex min-w-0 items-center gap-2">
-          <span className="text-ui-sm text-muted-foreground">Unavailable</span>
+          <span
+            className="min-w-0 truncate text-ui-sm text-muted-foreground"
+            data-testid="folder-row-not-available"
+          >
+            {item.branchLabel}
+          </span>
           {props.readOnly || item.onLocate === null ? null : (
             <Button
               type="button"
@@ -137,7 +143,7 @@ function FolderRowBody(props: {
               data-testid="folder-row-locate"
               onClick={item.onLocate}
             >
-              Locate folder…
+              Locate on this host…
             </Button>
           )}
         </div>

@@ -906,7 +906,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     }
   });
 
-  it("forced reload emits null for unchanged unreachable pid metadata and restores the same host id when it is reachable again", async () => {
+  it("holds one failed probe, degrades the second to busy - never to absent - and recovers on the next success", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
     const layout = {
       rootDir: dir,
@@ -956,16 +956,29 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
 
+      // ONE failed probe against a live process changes nothing the renderer
+      // can see. This assertion used to demand `null` - and that is the
+      // 2026-08-11 outage in one line: a single unanswered loopback probe
+      // telling the renderer a host it was actively using no longer exists.
       reachable = false;
       await lifecycle.reloadSnapshotFromDisk();
-      expect(lifecycle.getSnapshot()).toBeNull();
-      expect(changes).toEqual(["same-host", null]);
+      expect(lifecycle.getSnapshot()?.availability).toBe("available");
+      expect(changes).toEqual(["same-host"]);
 
+      // The SECOND consecutive failure is corroboration, so the verdict
+      // degrades - to `busy`, never to absence. The host is still named, still
+      // carries its real websocketUrl, and stays dialable throughout.
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+      expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
+      expect(changes).toEqual(["same-host", "same-host"]);
+
+      // Recovery takes exactly one success and no app relaunch.
       reachable = true;
       await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.availability).toBe("available");
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
-      expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
-      expect(changes).toEqual(["same-host", null, "same-host"]);
+      expect(changes).toEqual(["same-host", "same-host", "same-host"]);
     } finally {
       restoreLiveness();
       lifecycle.dispose();

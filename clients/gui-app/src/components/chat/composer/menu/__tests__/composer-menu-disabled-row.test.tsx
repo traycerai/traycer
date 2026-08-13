@@ -2,6 +2,10 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { SlashCommand } from "@/lib/composer/types";
+import {
+  ROOT_MENTION_STEP,
+  type MentionMenuEntry,
+} from "@/lib/composer/mentions";
 
 import {
   createComposerPickerStore,
@@ -43,11 +47,74 @@ function slashItem(
   };
 }
 
+function mentionEntry(
+  label: string,
+  disabledReason: string | null,
+): MentionMenuEntry {
+  return {
+    id: label,
+    labelPrefix: null,
+    label,
+    detail: "",
+    description: "",
+    searchText: null,
+    disabledReason,
+    icon: <span />,
+    action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
+    preview: null,
+  };
+}
+
+function mentionItem(
+  label: string,
+  disabledReason: string | null,
+): ComposerPickerItem {
+  return {
+    id: label,
+    kind: "mention",
+    entry: mentionEntry(label, disabledReason),
+  };
+}
+
 function openWith(
   store: ComposerPickerStore,
   items: ReadonlyArray<ComposerPickerItem>,
 ): void {
   openTriggered(store, items, "/", "skills");
+}
+
+// Mirrors `openTriggered`, but for a MENTION-kind picker session - the shape
+// `renderPickerItem` actually sees for a mention row (a slash-kind session
+// never carries one).
+function openMentionWith(
+  store: ComposerPickerStore,
+  items: ReadonlyArray<ComposerPickerItem>,
+): void {
+  store.getState().openPicker({
+    sessionId: 1,
+    kind: "mention",
+    slashScope: null,
+    slashTrigger: null,
+    range: { from: 1, to: 2 },
+    query: "",
+    commit: () => undefined,
+    dismiss: null,
+    focusEditor: null,
+    clientRect: null,
+  });
+  store.getState().setItems({
+    sessionId: 1,
+    kind: "mention",
+    query: "",
+    slashScope: null,
+    step: ROOT_MENTION_STEP,
+    items,
+    loading: false,
+    loadFailed: false,
+    retryLoad: null,
+  });
 }
 
 function openTriggered(
@@ -65,6 +132,7 @@ function openTriggered(
     query: "",
     commit: () => undefined,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
   store.getState().setItems({
@@ -106,6 +174,40 @@ describe("<ComposerMenu /> disabled rows", () => {
     });
     act(() => {
       openWith(store, [slashItem("plan", null)]);
+    });
+
+    const option = screen.getByRole("option");
+    expect(option.getAttribute("aria-disabled")).toBe("false");
+    expect(option.textContent).not.toContain("Disabled.");
+  });
+
+  // `renderPickerItem` used to hardcode `disabledReason: null` for mention
+  // rows, so a held mention entry (e.g. a GitHub row shown during a filter
+  // swap) rendered as actionable even though the store's own commit gate
+  // reads `entry.disabledReason` and would have refused it.
+  it("puts the disabled reason in a mention row's accessible name", () => {
+    const store = createComposerPickerStore();
+    act(() => {
+      render(<ComposerMenu pickerStore={store} />);
+    });
+    act(() => {
+      openMentionWith(store, [mentionItem("Stop the busy-loop", LEADING_ONLY)]);
+    });
+
+    const option = screen.getByRole("option");
+    expect(option.getAttribute("aria-disabled")).toBe("true");
+    expect(option.textContent).toContain(`Disabled. ${LEADING_ONLY}`);
+  });
+
+  it("leaves an enabled mention row's accessible name free of policy text", () => {
+    // The control. Without it, a fix that disabled every mention row
+    // unconditionally would pass the case above too.
+    const store = createComposerPickerStore();
+    act(() => {
+      render(<ComposerMenu pickerStore={store} />);
+    });
+    act(() => {
+      openMentionWith(store, [mentionItem("Stop the busy-loop", null)]);
     });
 
     const option = screen.getByRole("option");

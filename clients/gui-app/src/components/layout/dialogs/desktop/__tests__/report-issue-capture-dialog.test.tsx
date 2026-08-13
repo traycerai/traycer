@@ -212,6 +212,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    deregisterHostFromAccount: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),

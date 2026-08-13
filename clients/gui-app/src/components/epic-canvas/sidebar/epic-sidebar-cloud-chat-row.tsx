@@ -16,6 +16,7 @@ import { TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   BASE_PAD_LEFT,
   INDENT_PX,
+  useNodeIconDisplay,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
@@ -65,6 +66,12 @@ export function EpicSidebarCloudChatRow(
   // byte pipe any reachable host can answer, and the tile the ref opens binds
   // its own tab's host for life regardless. The OWNING host below is metadata.
   const readingHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The SAME tint rule a local chat row's idle glyph resolves (settings-driven
+  // per-type color, muted only when the user turns icon colors off). A
+  // hardcoded muted class here made the icon column encode row ORIGIN - local
+  // rows colored, cloud rows grey - when read-only-ness is the lock badge's
+  // job and provenance is nobody's.
+  const chatIconDisplay = useNodeIconDisplay("chat");
   const ownerReachability = useHostReachability(chat.ownerHostId);
   // The lock is the CHAT's state, not the row's category. A cloud row whose
   // owning host is reachable is an ordinary chat that simply is not on this
@@ -180,12 +187,16 @@ export function EpicSidebarCloudChatRow(
         onDoubleClick={props.selectionMode ? undefined : openPermanent}
       >
         <TreeChevronSpacer />
-        {/* The SAME icon a local chat row renders. A distinct glyph for
-            "arrived via the cloud list" would re-encode the demolished "other
-            devices" section as iconography - provenance, not state. State is
-            the lock badge below; the cause stays in words (host chip, tooltip,
-            composer notice). */}
-        <ChatIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        {/* The SAME icon a local chat row renders - glyph AND tint. A distinct
+            glyph or a muted tint for "arrived via the cloud list" would
+            re-encode the demolished "other devices" section as iconography -
+            provenance, not state. State is the lock badge below; the cause
+            stays in words (host chip, tooltip, composer notice). */}
+        <ChatIcon
+          aria-hidden
+          className={chatIconDisplay.className}
+          style={chatIconDisplay.style}
+        />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate">{title}</span>
           {/* The lock states what is true of the CHAT - its owner is out of

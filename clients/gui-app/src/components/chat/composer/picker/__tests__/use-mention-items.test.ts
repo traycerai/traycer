@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  artifactsRefreshTargetKey,
   buildCurrentEpicArtifactMentionEntries,
   epicAgentMentionEntriesFromEpic,
   mentionNoMatchDismissVerdict,
@@ -113,6 +114,7 @@ describe("epicAgentMentionEntriesFromEpic", () => {
         description: "My Epic",
         parentId: null,
         updatedAt: 200,
+        archived: false,
         agentInterface: "chat",
         runtimeSupportsMessageDelivery: true,
       },
@@ -127,6 +129,7 @@ describe("epicAgentMentionEntriesFromEpic", () => {
         description: "My Epic",
         parentId: "c1",
         updatedAt: 100,
+        archived: false,
         agentInterface: "chat",
         runtimeSupportsMessageDelivery: true,
       },
@@ -165,9 +168,38 @@ describe("epicAgentMentionEntriesFromEpic", () => {
       description: "My Epic",
       parentId: "c1",
       updatedAt: 150,
+      archived: false,
       agentInterface: "terminal",
       runtimeSupportsMessageDelivery: true,
     });
+  });
+
+  it("marks entries archived from the record's archivedAt", () => {
+    const archivedChat = { ...chat("c1", "Old run", null, 200), archivedAt: 5 };
+    const archivedAgent = {
+      ...terminalAgent({
+        id: "t1",
+        harnessId: "claude",
+        title: "Old refactor",
+        parentId: null,
+        updatedAt: 150,
+      }),
+      archivedAt: 5,
+    };
+    const entries = epicAgentMentionEntriesFromEpic(
+      chatsSlice([archivedChat, chat("c2", "Live run", null, 100)]),
+      terminalAgentsSlice([archivedAgent]),
+      "epic-1",
+      "My Epic",
+    );
+
+    expect(
+      entries.map((entry) => ({ id: entry.id, archived: entry.archived })),
+    ).toEqual([
+      { id: "chat:epic-1:c1", archived: true },
+      { id: "chat:epic-1:c2", archived: false },
+      { id: "terminal-agent:epic-1:t1", archived: true },
+    ]);
   });
 
   it("keeps Codex and OpenCode Terminal Agents referenceable but not messageable", () => {
@@ -668,10 +700,40 @@ describe("mentionNoMatchDismissVerdict", () => {
     terminalLoading: false,
     terminalFetching: false,
     terminalError: null,
+    githubErrored: false,
+    referenceQuery: false,
   };
 
   it("closes when every source, including the terminal list, has settled with no match", () => {
     expect(mentionNoMatchDismissVerdict(settledNoMatch)).toBe(true);
+  });
+
+  it("holds the menu open when a requested GitHub catalog read failed", () => {
+    // A rejected cache-only read carries no rows and no scope, so zero
+    // matches proves nothing - the PR/issue source never answered. Before the
+    // GitHub error was folded in beside the other sources', retries
+    // exhausting flipped `loading` false and the picker dismissed over rows
+    // it never saw.
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        githubErrored: true,
+      }),
+    ).toBe(false);
+  });
+
+  // Without this the whole `referenceQuery` input can be deleted from the
+  // verdict call and every other case in this suite stays green - the fixture
+  // only ever sets it false, so nothing measures the exemption it exists for.
+  it("holds the menu open for a reference-shaped query that matched nothing", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        query: "#123",
+        debouncedQuery: "#123",
+        referenceQuery: true,
+      }),
+    ).toBe(false);
   });
 
   it("holds the menu open while the terminal list is still loading", () => {
@@ -719,5 +781,25 @@ describe("mentionNoMatchDismissVerdict", () => {
         workspaceError: new Error("search failed"),
       }),
     ).toBe(false);
+  });
+});
+
+describe("artifactsRefreshTargetKey", () => {
+  it("differs across hosts even when the epic id is empty - the landing composer's host-swap case", () => {
+    expect(artifactsRefreshTargetKey("host-1", "")).not.toBe(
+      artifactsRefreshTargetKey("host-2", ""),
+    );
+  });
+
+  it("differs between a null host and a named host", () => {
+    expect(artifactsRefreshTargetKey(null, "epic-1")).not.toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
+  });
+
+  it("is equal for identical host and epic pairs", () => {
+    expect(artifactsRefreshTargetKey("host-1", "epic-1")).toBe(
+      artifactsRefreshTargetKey("host-1", "epic-1"),
+    );
   });
 });

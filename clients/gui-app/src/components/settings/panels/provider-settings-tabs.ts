@@ -1,5 +1,8 @@
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 
 /**
  * A tab the detail pane can render. Every wire tab, plus `account` — which is
@@ -30,12 +33,20 @@ export type ProviderTabKey = ProviderSettingsTab | "account";
  * setup and sits after them. The first *supported* tab is also the default
  * selection ({@link supportedTabsFor} keeps this order), so a provider with
  * neither account nor usage still opens on a sensible first tab (env, mcp, …).
+ *
+ * `modelProviders` sits after `env` and before the three inventory tabs, for
+ * two reasons. It is CONFIGURATION - which upstream models this provider can
+ * reach at all - rather than an inventory of things installed into it, so it
+ * belongs with the other configuration tabs. And placing it there cannot move
+ * any provider's DEFAULT tab: every provider that advertises it also advertises
+ * `general` and `env`, which come first.
  */
 export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
   "account",
   "usage",
   "general",
   "env",
+  "modelProviders",
   "mcp",
   "plugins",
   "skills",
@@ -99,4 +110,48 @@ export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
     apiKeySupported: state.apiKey.supported,
     advertised: state.nativeCapabilities.supportedTabs,
   };
+}
+
+/**
+ * Whether this provider has MANAGED PROFILES at all.
+ *
+ * A deliberate mirror of the host's `providerSupportsManagedProfiles`
+ * (`traycer-host/src/domain/providers/provider-profile-support.ts`), which is
+ * itself an id check - there is no capability on the wire to read instead,
+ * because the host answers this question before it builds one. For a provider
+ * outside this set `profiles` is empty BY RULE rather than by chance
+ * (`resolveProfileWireEntries` returns `[]` without consulting the registry),
+ * so the array cannot stand in for the rule: an unseeded claude-code is empty
+ * too, and a label that reads the count would announce the wrong tab until the
+ * first profile appears and then change under the user.
+ *
+ * Adding a profile-capable provider means updating BOTH sides. The cost of
+ * missing it is a tab that under-promises until someone notices, not a broken
+ * surface - which is why the label mirrors the rule rather than inventing a
+ * second source of truth for it.
+ */
+function providerSupportsManagedProfiles(providerId: ProviderId): boolean {
+  return providerId === "claude-code" || providerId === "codex";
+}
+
+/**
+ * The tab's label for THIS provider.
+ *
+ * Only `usage` varies. The tab holds managed profiles and usage limits, and for
+ * every provider but two it holds only the second - so a fixed
+ * "Profiles & Limits" promised a section that is not there, on ~10 of 12
+ * providers. The short form is the panel's own words for what remains: the
+ * section inside is headed "Usage limits".
+ *
+ * The tab ID is untouched - it is the wire enum, and this is presentation.
+ */
+export function providerTabLabel(
+  tab: ProviderTabKey,
+  labels: Readonly<Record<ProviderTabKey, string>>,
+  providerId: ProviderId,
+): string {
+  if (tab !== "usage" || providerSupportsManagedProfiles(providerId)) {
+    return labels[tab];
+  }
+  return "Usage limits";
 }

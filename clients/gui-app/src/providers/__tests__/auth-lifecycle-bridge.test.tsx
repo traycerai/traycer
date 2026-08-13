@@ -15,6 +15,10 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
+/** Chat sessions are keyed by (epic, chat, host); sign-out / user-switch
+ *  teardown is host-agnostic, so one host id serves every fixture here. */
+const CHAT_HOST_ID = "host-1";
+
 function chatScope(userId: string): string {
   return `test-chat-scope:${userId}`;
 }
@@ -53,6 +57,7 @@ function fakeChatHandle(
   const calls = { close: 0 };
   return {
     handle: createChatSessionStore({
+      hostId: "host-a",
       epicId,
       chatId,
       userId,
@@ -118,15 +123,21 @@ describe("<EpicSessionLifecycleBridge />", () => {
     epicRegistry.acquire("e1", () => h1);
     epicRegistry.acquire("e2", () => h2);
     chatRegistry.acquire(
-      "e1",
-      "c1",
-      chatScope("alice@example.com"),
+      {
+        epicId: "e1",
+        chatId: "c1",
+        hostId: CHAT_HOST_ID,
+        scopeKey: chatScope("alice@example.com"),
+      },
       () => c1.handle,
     );
     chatRegistry.acquire(
-      "e2",
-      "c2",
-      chatScope("alice@example.com"),
+      {
+        epicId: "e2",
+        chatId: "c2",
+        hostId: CHAT_HOST_ID,
+        scopeKey: chatScope("alice@example.com"),
+      },
       () => c2.handle,
     );
     expect(epicRegistry.size()).toBe(2);
@@ -158,9 +169,12 @@ describe("<EpicSessionLifecycleBridge />", () => {
     const c1 = fakeChatHandle("e1", "c1", "alice@example.com");
     epicRegistry.acquire("e1", () => h1);
     chatRegistry.acquire(
-      "e1",
-      "c1",
-      chatScope("alice@example.com"),
+      {
+        epicId: "e1",
+        chatId: "c1",
+        hostId: CHAT_HOST_ID,
+        scopeKey: chatScope("alice@example.com"),
+      },
       () => c1.handle,
     );
 
@@ -182,9 +196,12 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     const c2 = fakeChatHandle("e1", "c1", "bob@example.com");
     const nextChat = chatRegistry.acquire(
-      "e1",
-      "c1",
-      chatScope("bob@example.com"),
+      {
+        epicId: "e1",
+        chatId: "c1",
+        hostId: CHAT_HOST_ID,
+        scopeKey: chatScope("bob@example.com"),
+      },
       () => c2.handle,
     );
 
@@ -360,9 +377,12 @@ describe("<EpicSessionLifecycleBridge />", () => {
     const c1 = fakeChatHandle("e1", "c1", "alice@example.com");
     epicRegistry.acquire("e1", () => h1);
     chatRegistry.acquire(
-      "e1",
-      "c1",
-      chatScope("alice@example.com"),
+      {
+        epicId: "e1",
+        chatId: "c1",
+        hostId: CHAT_HOST_ID,
+        scopeKey: chatScope("alice@example.com"),
+      },
       () => c1.handle,
     );
 

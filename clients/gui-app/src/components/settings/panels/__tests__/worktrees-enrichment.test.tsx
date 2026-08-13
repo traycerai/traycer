@@ -7,8 +7,8 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
-  WorktreeHostEntryV14,
-  WorktreeListAllForHostResponseV14,
+  WorktreeHostEntryV15,
+  WorktreeListAllForHostResponseV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -46,7 +46,7 @@ const NO_SWEEP_PATHS: readonly string[] = [];
 function enrichedEntry(
   worktreePath: string,
   branch: string,
-): WorktreeHostEntryV14 {
+): WorktreeHostEntryV15 {
   return {
     worktreePath,
     branch,
@@ -68,6 +68,7 @@ function enrichedEntry(
     submodules: [],
     atBaseCommit: false,
     resolvedAt: 1,
+    presence: "present",
   };
 }
 
@@ -104,8 +105,8 @@ function baseKey(): readonly unknown[] {
   ];
 }
 
-function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV14): void {
-  qc.setQueryData<WorktreeListAllForHostResponseV14>(
+function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV15): void {
+  qc.setQueryData<WorktreeListAllForHostResponseV15>(
     perPathKey(entry.worktreePath),
     {
       worktrees: [entry],
@@ -126,7 +127,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     // The base list (includeActivity: false) carries a DIFFERENT path's base-only
     // data. It must NOT enter the overlay - else that row would classify from
     // base-only fields instead of staying pending.
-    qc.setQueryData<WorktreeListAllForHostResponseV14>(baseKey(), {
+    qc.setQueryData<WorktreeListAllForHostResponseV15>(baseKey(), {
       worktrees: [enrichedEntry("/wt/b", "feat-b")],
       nextCursor: null,
     });
@@ -160,7 +161,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     seedEnriched(qc, fresh);
     // Created later, so the old insertion-order fold incorrectly overwrote the
     // fresher per-path row with this older multi-path response.
-    qc.setQueryData<WorktreeListAllForHostResponseV14>(
+    qc.setQueryData<WorktreeListAllForHostResponseV15>(
       hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
         HOST_ID,
         "worktree.listAllForHost",
@@ -270,7 +271,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   });
 
   function createFixture(
-    entriesByPath: ReadonlyMap<string, WorktreeHostEntryV14>,
+    entriesByPath: ReadonlyMap<string, WorktreeHostEntryV15>,
     onPathRequest: ((path: string) => void) | null,
     // Awaited per requested path before the response resolves - lets a test
     // hold probes in flight to observe dedupe. `null` = respond immediately
@@ -298,7 +299,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
                 ? params.activityPaths
                 : [];
             wireRequests.push([...paths]);
-            const worktrees: WorktreeHostEntryV14[] = [];
+            const worktrees: WorktreeHostEntryV15[] = [];
             for (const path of paths) {
               // Snapshot the entry BEFORE the callbacks, so a callback that
               // mutates `entriesByPath` affects the NEXT request's response
@@ -327,7 +328,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
   it("discards a debounced viewport report when the host scope changes", async () => {
     vi.useFakeTimers();
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const requests: string[] = [];
@@ -372,7 +373,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   });
 
   it("enriches a reported window, then keeps it enriched after the window shrinks", async () => {
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
       ["/wt/b", enrichedEntry("/wt/b", "feat-b")],
     ]);
@@ -427,7 +428,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     // the exact production shape (report from a mount effect under
     // StrictMode), and becomes a real regression net the moment the test
     // runtime gains dev-mode double-invocation.
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const fixture = createFixture(entriesByPath, null, null, new QueryClient());
@@ -462,13 +463,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   it("refetches cold null PR state and stops after it resolves", async () => {
     vi.useFakeTimers();
     const coldEntry = enrichedEntry("/wt/a", "feat-a");
-    const resolvedEntry: WorktreeHostEntryV14 = {
+    const resolvedEntry: WorktreeHostEntryV15 = {
       ...coldEntry,
       prState: "open",
       prNumber: 42,
       prUrl: "https://github.com/acme/app/pull/42",
     };
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", coldEntry],
     ]);
     const requests: string[] = [];
@@ -530,7 +531,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       unmergedCommitCount: null,
       unmergedCommitSubjects: null,
     };
-    const coldEntry: WorktreeHostEntryV14 = {
+    const coldEntry: WorktreeHostEntryV15 = {
       ...enrichedEntry("/wt/a", "feat-a"),
       prState: "merged",
       prNumber: 7,
@@ -538,7 +539,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       mergedHeadShaMatches: true,
       submodules: [coldSubmodule],
     };
-    const resolvedEntry: WorktreeHostEntryV14 = {
+    const resolvedEntry: WorktreeHostEntryV15 = {
       ...coldEntry,
       submodules: [
         {
@@ -550,7 +551,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         },
       ],
     };
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", coldEntry],
     ]);
     const requests: string[] = [];
@@ -601,7 +602,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
   it("stops cold PR refetching after the bounded retry budget", async () => {
     vi.useFakeTimers();
-    const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV15>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const requests: string[] = [];
@@ -687,7 +688,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   });
 
   describe("background sweep (no scrolling required)", () => {
-    function warmEntry(path: string, branch: string): WorktreeHostEntryV14 {
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV15 {
       // `prState: "none"` = probed, no PR - a WARM row the sweep must fetch
       // exactly once and then leave alone (the shared fixture's `null` means
       // cold/unprobed and would re-arm the retry budget).
@@ -696,7 +697,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("sweeps every un-reported path in bounded chunks until the whole list enriches", async () => {
       const paths = Array.from({ length: 20 }, (_, i) => `/wt/sweep-${i}`);
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>(
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>(
         paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
       );
       const requests: string[] = [];
@@ -733,7 +734,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     });
 
     it("probes a path exactly once when the sweep and the viewport race for it", async () => {
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", warmEntry("/wt/a", "feat-a")],
       ]);
       const requests: string[] = [];
@@ -773,7 +774,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       vi.useFakeTimers();
       const coldEntry = enrichedEntry("/wt/a", "feat-a"); // prState null = cold
       const resolvedEntry = warmEntry("/wt/a", "feat-a");
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", coldEntry],
       ]);
       const requests: string[] = [];
@@ -820,7 +821,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("stops sweeping a permanently cold path after the bounded probe budget", async () => {
       vi.useFakeTimers();
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
       ]);
       const requests: string[] = [];
@@ -910,7 +911,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {
       const paths = Array.from({ length: 12 }, (_, i) => `/wt/refresh-${i}`);
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>(
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>(
         paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
       );
       const requests: string[] = [];
@@ -961,7 +962,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("keeps a permanently rejecting refresh bounded (regression: isInvalidated persists across failed refetches)", async () => {
       vi.useFakeTimers();
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", warmEntry("/wt/a", "feat-a")],
       ]);
       const requests: string[] = [];
@@ -1120,7 +1121,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     // which the panel renders as "detached HEAD" / "Waiting for host
     // verification…". Caching those over good rows (and then persisting them)
     // turned one cold read into a fleet of permanently-unknown rows.
-    function sentinelEntry(worktreePath: string): WorktreeHostEntryV14 {
+    function sentinelEntry(worktreePath: string): WorktreeHostEntryV15 {
       return {
         ...enrichedEntry(worktreePath, "feat-a"),
         branch: null,
@@ -1131,11 +1132,11 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     }
 
     it("keeps a resolved cached row when a later read answers with the sentinel", async () => {
-      const resolved: WorktreeHostEntryV14 = {
+      const resolved: WorktreeHostEntryV15 = {
         ...enrichedEntry("/wt/a", "feat-a"),
         prState: "none",
       };
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", resolved],
       ]);
       // Count host reads so we can prove the sentinel refetch actually landed.
@@ -1186,15 +1187,15 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     });
 
     it("still accepts a resolved row that replaces another resolved row", async () => {
-      const first: WorktreeHostEntryV14 = {
+      const first: WorktreeHostEntryV15 = {
         ...enrichedEntry("/wt/a", "feat-a"),
         prState: "none",
       };
-      const renamed: WorktreeHostEntryV14 = {
+      const renamed: WorktreeHostEntryV15 = {
         ...enrichedEntry("/wt/a", "feat-renamed"),
         prState: "none",
       };
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", first],
       ]);
       const fixture = createFixture(
@@ -1237,7 +1238,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     // task rollups, filters, and finally a re-render of EVERY worktree row
     // (100-450ms long tasks on a 50-row fleet). So identity churn without a
     // data change IS the bug these tests pin down.
-    function warmEntry(path: string, branch: string): WorktreeHostEntryV14 {
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV15 {
       return { ...enrichedEntry(path, branch), prState: "none" };
     }
 
@@ -1312,14 +1313,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   });
 
   describe("warm-open persistence (localStorage snapshot)", () => {
-    function warmEntry(path: string, branch: string): WorktreeHostEntryV14 {
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV15 {
       return { ...enrichedEntry(path, branch), prState: "none" };
     }
 
     // Writes a last-run snapshot the way the production writer does, so the
     // restore path exercises a genuine round-trip (schema validation and all).
     function seedLastRunSnapshot(
-      entries: readonly WorktreeHostEntryV14[],
+      entries: readonly WorktreeHostEntryV15[],
       savedAt: number,
     ): void {
       persistWorktreeActivitySnapshot({
@@ -1339,7 +1340,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       // Since the last run, /wt/a's PR merged - the host now serves fresher
       // data than the snapshot. The restored tier must show instantly and the
       // live truth must replace it.
-      const freshA: WorktreeHostEntryV14 = {
+      const freshA: WorktreeHostEntryV15 = {
         ...restoredA,
         prState: "merged",
         prNumber: 5,
@@ -1387,7 +1388,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("reports restored paths as SEEDED until a live probe replaces them (delete-gate input)", async () => {
       seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now() - 60_000);
-      const liveA: WorktreeHostEntryV14 = {
+      const liveA: WorktreeHostEntryV15 = {
         ...warmEntry("/wt/a", "feat-a"),
         prState: "merged",
         prNumber: 5,
@@ -1455,7 +1456,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     });
 
     it("never overwrites live cache data with the snapshot", () => {
-      const liveA: WorktreeHostEntryV14 = {
+      const liveA: WorktreeHostEntryV15 = {
         ...warmEntry("/wt/a", "feat-a"),
         prState: "open",
         prNumber: 7,
@@ -1463,7 +1464,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       };
       seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now());
       const qc = createAppQueryClient();
-      qc.setQueryData<WorktreeListAllForHostResponseV14>(perPathKey("/wt/a"), {
+      qc.setQueryData<WorktreeListAllForHostResponseV15>(perPathKey("/wt/a"), {
         worktrees: [liveA],
         nextCursor: null,
       });
@@ -1487,7 +1488,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       // no probe here - `HostClient.bind` invalidates the whole host scope on
       // its own.)
       const cached =
-        fixture.queryClient.getQueryData<WorktreeListAllForHostResponseV14>(
+        fixture.queryClient.getQueryData<WorktreeListAllForHostResponseV15>(
           perPathKey("/wt/a"),
         );
       expect(cached?.worktrees[0]?.prState).toBe("open");
@@ -1551,7 +1552,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     it("writes a debounced snapshot of the WARM entries once the fold settles", async () => {
       vi.useFakeTimers();
-      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+      const entriesByPath = new Map<string, WorktreeHostEntryV15>([
         ["/wt/a", warmEntry("/wt/a", "feat-a")],
         // Permanently cold - must never enter the snapshot (restoring it
         // would just re-render "Checking…" and burn a probe).

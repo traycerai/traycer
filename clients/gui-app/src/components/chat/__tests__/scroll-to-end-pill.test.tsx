@@ -19,7 +19,7 @@ describe("ScrollToEndPill", () => {
   it("keeps aria-label 'Scroll to end' across plain, streaming, new-reply, and hidden", () => {
     const states: ReadonlyArray<ScrollToEndPillState> = [
       { kind: "plain" },
-      { kind: "streaming" },
+      { kind: "streaming", workingVerb: "Cogitating" },
       { kind: "new-reply" },
       { kind: "hidden" },
     ];
@@ -37,40 +37,35 @@ describe("ScrollToEndPill", () => {
     }
   });
 
-  it("renders only the three-dot wave in the streaming state", () => {
-    renderPill({ kind: "streaming" });
-    const pill = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Scroll to end",
-    });
+  it("renders the agent spinner, working verb, and chevron while streaming", () => {
+    renderPill({ kind: "streaming", workingVerb: "Noodling" });
 
-    expect(
-      screen.getByTestId("scroll-to-end-pill-streaming-dots"),
-    ).toBeTruthy();
-    expect(pill.textContent).toBe("");
+    expect(screen.getByTestId("scroll-to-end-pill-spinner")).toBeTruthy();
+    expect(screen.getByTestId("scroll-to-end-pill-chevron")).toBeTruthy();
+    expect(screen.getByText("Noodling…")).toBeTruthy();
   });
 
-  it("renders only the down arrow for new replies", () => {
+  it("renders 'New Reply' after streaming completes", () => {
     renderPill({ kind: "new-reply" });
-    const pill = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Scroll to end",
-    });
 
-    expect(pill.querySelector("svg.lucide-arrow-down")).toBeTruthy();
-    expect(pill.textContent).toBe("");
-    expect(
-      screen.queryByTestId("scroll-to-end-pill-streaming-dots"),
-    ).toBeNull();
+    expect(screen.getByText("New Reply")).toBeTruthy();
+    expect(screen.queryByTestId("scroll-to-end-pill-spinner")).toBeNull();
   });
 
-  it("uses a compact circle and animates its presence", () => {
+  it("renders 'Jump to Latest' in the plain state", () => {
     renderPill({ kind: "plain" });
-    const pill = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Scroll to end",
-    });
 
-    expect(pill.classList.contains("size-8")).toBe(true);
-    expect(pill.classList.contains("scale-100")).toBe(true);
-    expect(pill.classList.contains("opacity-100")).toBe(true);
+    expect(screen.getByText("Jump to Latest")).toBeTruthy();
+  });
+
+  it("sizes the pill from its label and adds restrained press feedback", () => {
+    renderPill({ kind: "plain" });
+    const pill = screen.getByRole("button", { name: "Scroll to end" });
+
+    expect(pill.classList.contains("h-8")).toBe(true);
+    expect(pill.classList.contains("text-ui-sm")).toBe(true);
+    expect(pill.classList.contains("min-w-36")).toBe(false);
+    expect(pill.classList.contains("active:scale-[0.96]")).toBe(true);
   });
 
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {

@@ -64,17 +64,25 @@ function registerSessionHoldingAgents(agentIds: readonly string[]): void {
   handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });
 }
 
+/** Sessions are keyed by (epic, chat, host); these aggregate reads scan every
+ *  handle, so one host id serves the whole fixture set. */
+const ACTIVITY_HOST_ID = "host-1";
+
 /** A live chat session for `chatId`, owning `managedCommands`. */
 function registerChatSession(
   chatId: string,
   managedCommands: readonly ManagedCommand[],
 ): void {
   const handle = __getChatSessionRegistryForTests().acquire(
-    EPIC_ID,
-    chatId,
-    "activity-test-scope",
+    {
+      epicId: EPIC_ID,
+      chatId,
+      hostId: ACTIVITY_HOST_ID,
+      scopeKey: "activity-test-scope",
+    },
     () =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId: EPIC_ID,
         chatId,
         userId: null,

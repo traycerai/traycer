@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import type { QueryClient, UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -7,7 +7,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { queryKeys } from "@/lib/query-keys";
 import { appLogger } from "@/lib/logger";
+
+const PUBLICATION_TARGETS_METHOD = "epic.listChatPublicationTargets" as const;
 
 /**
  * Which cloud row each of this task's local chats publishes into.
@@ -54,6 +57,40 @@ export function useChatPublicationTargets(
 }
 
 /**
+ * Drops every cached redirect map for `hostId`, whatever epic or id set it was
+ * keyed by.
+ *
+ * The five-minute `staleTime` below is the reason this exists rather than a
+ * comment saying the answer is immutable. A redirect is minted ONCE - but it is
+ * minted by a fork, which is precisely the event that happens while a sidebar is
+ * already mounted and already holding the pre-fork answer. Without this, the
+ * fold goes on matching post-fork cloud rows against the old `chatId` for up to
+ * five minutes: the forked chat's own lineage renders as a second, phantom row -
+ * the exact symptom `useLogUnsupportedDegrade` describes for a host that cannot
+ * answer at all.
+ *
+ * Host-scoped rather than epic-scoped on purpose. A fork episode names the chats
+ * it touched, but those chats' epics are not what this query is keyed by
+ * (`{ epicId, chatIds }` - an id set that churns with the sidebar's projection),
+ * so a precise filter would have to re-derive an epic set from an episode and
+ * would silently miss any epic whose chat set had drifted since. One host's
+ * redirect maps are a handful of cache entries; re-reading them after a fork is
+ * cheaper than being subtly wrong about which ones to keep.
+ *
+ * The owner of this key format is {@link useChatPublicationTargetsQuery} below,
+ * through `queryKeys.hostMethod`; this uses the same builder's method SCOPE so
+ * the two cannot drift into two spellings of one key.
+ */
+export function invalidateChatPublicationTargets(
+  queryClient: QueryClient,
+  hostId: string,
+): void {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.hostMethodScope(hostId, PUBLICATION_TARGETS_METHOD),
+  });
+}
+
+/**
  * States the degrade ONCE per epic, at `info`.
  *
  * A degrade that is correct and invisible is still a trap: the fold silently
@@ -92,10 +129,10 @@ function useChatPublicationTargetsQuery(
     () => ({ epicId: args.epicId, chatIds: [...args.chatIds] }),
     [args.epicId, args.chatIds],
   );
-  return useHostQuery<HostRpcRegistry, "epic.listChatPublicationTargets">({
+  return useHostQuery<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>({
     cacheKeyIdentity: undefined,
     client: args.client,
-    method: "epic.listChatPublicationTargets",
+    method: PUBLICATION_TARGETS_METHOD,
     params,
     options: {
       enabled:

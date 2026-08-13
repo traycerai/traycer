@@ -4,7 +4,10 @@ import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-r
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  useHostReachability,
+  type HostReachabilityStatus,
+} from "@/hooks/agent/use-host-reachability";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
@@ -14,7 +17,7 @@ import {
   convertReplicaChat,
   createPublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
-import { ChatTileSessionView } from "./chat-tile";
+import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
 import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
@@ -109,6 +112,31 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.ownerHostId.length > 0
       ? ownerReachability.hostLabel
       : "another device";
+  // Whether the machine that owns this chat is the one serving this copy.
+  // Read off the ref rather than probed: `hostId` is the serving host this
+  // tile is bound to for life and `ownerHostId` is the row's owner, so their
+  // equality IS the question, settled at open and stable for the tab's life
+  // (a later active-host swap cannot reach either field). Reached by the
+  // canvas substituting a copy for a chat its own connected host answered
+  // `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s
+  // `chat-not-on-this-host`, whose banner this footer sits under.
+  const ownerIsThisHost =
+    node.ownerHostId.length > 0 && node.ownerHostId === node.hostId;
+
+  // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
+  // Gated (inside the child) on the SAME two signals the lock sentence below
+  // reads - the owner's reachability and `ownerIsThisHost` - so the banner and
+  // the sentence can never describe one host two ways.
+  const deadTileBanner = (
+    <PublishedChatDeadTileBanner
+      node={node}
+      epicId={props.epicId}
+      tabId={props.viewTabId}
+      ownerStatus={ownerReachability.status}
+      ownerIsThisHost={ownerIsThisHost}
+      ownerLabel={ownerLabel}
+    />
+  );
 
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
@@ -215,6 +243,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (replicaHandle !== null && replicaConversion !== null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        {deadTileBanner}
         <ChatTileSessionView
           handle={replicaHandle}
           node={{
@@ -227,6 +256,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerIsThisHost,
             ownerLabel,
             unreadableCount: replicaConversion.unreadableCount,
           })}
@@ -276,6 +306,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+      {deadTileBanner}
       {/* The heavy content this transcript NAMES - file diffs, full plans -
           is not in the published document; it is content-addressed in the
           cloud. The blocks that expand it decide their own fetch several
@@ -299,6 +330,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerIsThisHost,
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
@@ -306,6 +338,41 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         />
       </PublishedChatSourceProvider>
     </div>
+  );
+}
+
+/**
+ * The clone banner an unreachable owner earns on the copy, or nothing.
+ *
+ * Reachable owner: the row offers the live tab, no clone needed. Owner IS the
+ * serving host: that is the canvas substitution arm, whose banner
+ * `tab-group-view` already mounts above this tile - a second one here would
+ * double it. The ref carries the owner (`ownerUserId`), so it is threaded
+ * through rather than re-resolved from the cloud list, which a post-restart
+ * host with swept registry facts cannot answer.
+ */
+function PublishedChatDeadTileBanner(props: {
+  readonly node: PublishedChatTileRef;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly ownerStatus: HostReachabilityStatus;
+  readonly ownerIsThisHost: boolean;
+  readonly ownerLabel: string;
+}): ReactNode {
+  if (props.ownerStatus !== "unreachable" || props.ownerIsThisHost) {
+    return null;
+  }
+  return (
+    <ChatDeadTileBannerContainer
+      epicId={props.epicId}
+      tabId={props.tabId}
+      chatId={props.node.chatId}
+      sourceHostId={props.node.ownerHostId}
+      hostLabel={props.ownerLabel}
+      reason="host-offline"
+      testId={`published-chat-dead-tile-${props.node.chatId}`}
+      sourceOwnerUserId={props.node.ownerUserId}
+    />
   );
 }
 

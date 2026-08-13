@@ -22,6 +22,7 @@ import {
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
 import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
@@ -79,7 +80,11 @@ export function useCloudChatList(
   const viewerUserId = useCloudChatViewerId();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
   return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
-    cacheKeyIdentity: [viewerUserId],
+    // The one shared spelling of this key's viewer component -
+    // `cloudChatListQueryKey` (the imperative reader's builder) appends the
+    // same call to the same base, which is what keeps the two sides of that
+    // seam from drifting.
+    cacheKeyIdentity: cloudChatListCacheKeyIdentity(viewerUserId),
     client: args.client,
     method: "epic.listCloudChats",
     params,
@@ -288,6 +293,80 @@ export function useCloudChatRead(
  * retry window is time the reader spends on a skeleton for a chat that is
  * already fully downloaded. Failing fast degrades to the markers this surface
  * rendered before the channel existed.
+ *
+ * ## The short list heals on REOPEN, and on nothing else
+ *
+ * What `staleTime: 0` buys is exactly one thing: the next mount of this key
+ * refetches rather than being served the short answer. It is not a heal for a
+ * reader already sitting on the transcript. The app's QueryClient sets
+ * `refetchOnWindowFocus: false` and `refetchOnReconnect: false` and this query
+ * does not opt out, so nothing fires while a mounted reader stays put - a
+ * payload that lands seconds after the head keeps its "stored on the
+ * originating device" marker until the surface is reopened or the key is
+ * explicitly invalidated.
+ *
+ * A bounded self-poll was evaluated to close that and REJECTED. All four
+ * reasons are structural rather than matters of taste, so they are written
+ * here instead of being rediscovered:
+ *
+ * 1. **There is no caller-owned interval to set.** `useHostQuery` omits
+ *    `refetchInterval` from its options type on purpose - cadence belongs to
+ *    `HOST_METHOD_POLL_TABLE`, where a `condition` policy classifies from THIS
+ *    method's response alone. Nothing in a `ListCloudChatPayloadsResponse`
+ *    says whether it is short, so the condition cannot be written where the
+ *    conditions live.
+ * 2. **The only predicate that can say "short" cannot say "not yet".** That
+ *    predicate is "wanted is not a subset of available": the refs the
+ *    assembled chat names, tested against this list through
+ *    `resolverFromPayloadRefs` - which is precisely the
+ *    `fidelity.missingPayloads > 0` the transcript already computes
+ *    downstream. It is equally true in the ordinary STEADY state: content that
+ *    only ever lived on the originating device, a payload the publisher
+ *    skipped as too large or could not read, a chat published by a host that
+ *    predates payload upload entirely. A poll gated on it would spend its
+ *    whole window on chats that can never converge.
+ * 3. **The obvious discriminator does not discriminate.** "The head was
+ *    committed seconds ago", read off the summary's `publishedAt`, excludes
+ *    the archived chats nobody is reading and admits every chat somebody IS
+ *    reading: a live chat recommits its head each turn, so its `publishedAt`
+ *    is always fresh. It also compares a server-stamped timestamp against a
+ *    browser clock, which fails silently, in both directions, under skew.
+ * 4. **The bound would have to encode the publisher's internals.** How long
+ *    "not yet" lasts is the owning host's blob retry ladder and its park
+ *    interval - numbers this client does not know, must not copy, and cannot
+ *    observe.
+ *
+ * ## What the host would have to emit instead
+ *
+ * The fix belongs where the fact already is. The publisher settles each blob
+ * pass on a count of what it still OWES and parks the chat when it gives up,
+ * so "more payloads are coming" is a fact it holds precisely. It has to travel
+ * on the cloud ROW, because a reader is generally on a different device than
+ * the owning host: `epic.chatBackupStatus` cannot stand in, it is a local read
+ * that answers about the host being asked.
+ *
+ * So: the publisher records its payload debt on the chat row, and this list
+ * answers with it. Adding a key to an existing unary response is breaking for
+ * an older client even when nullable - the same rule that kept this answer off
+ * the head resolve in the first place - so that is a new major of
+ * `epic.listCloudChatPayloads` with a bridge, or a new optional method name.
+ * Either way an older host degrades to exactly today's behavior.
+ *
+ * The client side then costs one table entry and nothing in this hook:
+ * `defineConditionPolicy("epic.listCloudChatPayloads", ...)`, returning a lane
+ * while the outcome reports debt and `false` once it does not. The episode
+ * coordinator already supplies everything a hand-rolled interval would have
+ * had to invent - backoff between an initial and a maximum delay, an episode
+ * that ends when the condition clears, stop-on-unmount and stop-when-disabled
+ * off observer activity, and a reset on host/auth transitions - and a parked
+ * or unpublishable payload reports NO debt, so the poll that could never
+ * converge never starts. `staleTime: 0`, the viewer-scoped key and the
+ * no-identity gate below are untouched by any of it (a condition policy owns
+ * `retry`, which is already `false` here).
+ *
+ * The three facts that reading rests on - one request per mount with no
+ * interval behind it, a remount that refetches, and a focus event that does
+ * not - are pinned in `__tests__/cloud-chat-payload-list-healing.test.tsx`.
  */
 export function useCloudChatPayloadList(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

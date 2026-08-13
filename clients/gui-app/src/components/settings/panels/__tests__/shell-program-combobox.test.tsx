@@ -11,6 +11,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
+import { bridgeShellProbeSource } from "@/components/settings/panels/shell/use-bridge-shell-config-controller";
 
 afterEach(cleanup);
 
@@ -43,10 +44,13 @@ const FISH_MISSING: TraycerDetectedShell = {
   missing: true,
 };
 
-function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
+function makeHost(configure: (cli: MockTraycerCli) => void): {
+  readonly host: IRunnerHost;
+  readonly cli: MockTraycerCli;
+} {
   const cli = new MockTraycerCli();
   configure(cli);
-  return new MockRunnerHost({
+  const host = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
     localHost: null,
@@ -55,6 +59,7 @@ function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: cli,
   });
+  return { host, cli };
 }
 
 function renderCombobox(props: {
@@ -67,7 +72,7 @@ function renderCombobox(props: {
   readonly onUseSystemDefault?: () => void;
   readonly configure?: (cli: MockTraycerCli) => void;
 }) {
-  const host = makeHost(props.configure ?? (() => undefined));
+  const { host, cli } = makeHost(props.configure ?? (() => undefined));
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -78,6 +83,7 @@ function renderCombobox(props: {
           value={props.value}
           synthesised={props.synthesised}
           shells={props.shells}
+          probeSource={bridgeShellProbeSource(cli)}
           disabled={false}
           onSelect={props.onSelect ?? (() => undefined)}
           onAdd={props.onAdd ?? (() => undefined)}

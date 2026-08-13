@@ -31,38 +31,67 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 
 /**
- * Variables for `useEpicCreateChat.mutate`/`mutateAsync`. `hostId` is
- * stamped by the hook from the active host - callers never pass it
- * explicitly. Centralizing the projection here means there is exactly
- * one place that resolves "which host owns this new chat" and exactly
- * one place that fails loudly when no host is active.
+ * Variables for `useEpicCreateChat.mutate`/`mutateAsync`.
+ *
+ * `hostId` is REQUIRED and named by the caller - it is not projected from
+ * whatever host happens to be active when `mutate` fires. A chat is bound to
+ * its host for life, so the host is part of what the caller is asking for
+ * ("create this agent on THAT machine"), and a hook-side projection let an
+ * active-host change between the click and the mutate silently redirect the
+ * create. Callers pass their tab's bound host, or the host they explicitly
+ * chose in a picker.
+ *
+ * The hooks below still own the CHECK: the request travels on a client that
+ * dials one specific host, so a named host that no longer matches that client
+ * is rejected through the mutation error channel instead of creating the chat
+ * on the wrong machine.
  */
-export type CreateChatMutationInput = Omit<CreateChatRequestV11, "hostId">;
+export type CreateChatMutationInput = CreateChatRequestV11;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
 }
 
+interface DeleteChatMutationContext {
+  readonly hostId: string | null;
+}
+
+/**
+ * What a chat mutation has to remember to refresh the record list afterwards:
+ * the host it was actually sent to, captured at mutate time so a host swap in
+ * flight cannot redirect the invalidation at another machine's cache.
+ */
+interface ChatRecordMutationContext {
+  readonly hostId: string | null;
+}
+
 export type DeleteChatMutationOptions = Omit<
-  UseMutationOptions<DeleteChatResponse, HostRpcError, DeleteChatRequest>,
+  UseMutationOptions<
+    DeleteChatResponse,
+    HostRpcError,
+    DeleteChatRequest,
+    DeleteChatMutationContext
+  >,
   "mutationFn"
 >;
 
 /**
- * Mutation hook for epic.createChat.
+ * Mutation hook for epic.createChat, sent on the APP-WIDE client (the active
+ * host).
  *
- * Owns the per-tab host binding rule (`chatSchema.hostId` is required)
- * by stamping `hostId` from `useReactiveActiveHostId()` in the request
- * mapper. If no host is active at mutate time, the mutation rejects
- * through the mutation error channel with a `HostRpcError` so the failure
- * surfaces through `onError` (and `toastFromHostError`) instead of
- * silently dropping the action at the call site.
- *
- * Uses `useHostMutation` with a request mapper so the host RPC path stays
- * centralized while callers still pass host-agnostic chat inputs.
+ * The caller names the host on the request (`CreateChatMutationInput.hostId`).
+ * This hook's job is to make sure the machine it is about to send to is still
+ * that host: the active host can move between the moment a flow decides where
+ * a chat belongs and the moment `mutate` fires, and a create that lands
+ * anyway would put the chat on a machine the caller never named. A mismatch
+ * (including "no host is active at all") rejects through the mutation error
+ * channel with a `HostRpcError`, so it surfaces through `onError` (and
+ * `toastFromHostError`, or the clone flow's `onCloneFailed`) instead of
+ * silently creating the wrong thing.
  */
 export function useEpicCreateChat(): UseMutationResult<
   CreateChatResponse,
@@ -82,25 +111,29 @@ export function useEpicCreateChat(): UseMutationResult<
     client,
     method: "epic.createChat",
     mapVariables: (params) => {
-      if (activeHostId === null) {
+      if (activeHostId !== params.hostId) {
         throw new HostRpcError({
           code: "RPC_ERROR",
           message:
-            "No active host - connect to a host before creating an agent.",
+            activeHostId === null
+              ? "No active host - connect to a host before creating an agent."
+              : "The active host moved - this agent would be created on a different host than the one requested.",
           requestId: "client-pre-flight",
           method: "epic.createChat",
           fatalDetails: null,
         });
       }
-      return {
-        ...params,
-        hostId: activeHostId,
-      };
+      return params;
     },
     options: {
       onMutate: () => ({ hostId: activeHostId }),
       onSuccess: (_data, _params, ctx) => {
         invalidateBindingsForEpic(queryClient, ctx.hostId);
+        // The created chat lands in the host's chat DATABASE and nowhere the
+        // renderer already listens (chat-sync-v2 ticket 19 stopped the doc
+        // write), so this is what makes it a record here rather than waiting
+        // out the record list's poll interval.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error, variables) => {
         if (isRecoverableLatestForkFailure(error, variables)) return;
@@ -148,16 +181,20 @@ export function useEpicCreateChatForHost(): UseMutationResult<
 
 /**
  * Host-parametric variant of {@link useEpicCreateChat}: the caller resolves
- * an explicit `HostClient` (e.g. via `useHostClientFor` for a sidebar
- * row's OWN host) and the hook stamps that client's host id onto the new
- * chat, rather than the app-wide active host. `null` client (offline /
- * directory unresolved) rejects through the mutation error channel so the
- * caller can disable the affordance - `useHostMutation`'s own `client ===
- * null` guard covers that case; only the second-stage "client resolved but
- * host identity unset" check lives in `mapVariables` here (also normalized
- * to `HostRpcError` by `useHostMutation`'s boundary). `useEpicCreateChatForHost`
- * is the tab-scoped wrapper over this; row child-create passes the row's
- * host client.
+ * an explicit `HostClient` (e.g. via `useHostClientFor` for a sidebar row's
+ * OWN host) and the request is sent on THAT client rather than on the
+ * app-wide active one. `null` client (offline / directory unresolved) rejects
+ * through the mutation error channel so the caller can disable the affordance
+ * - `useHostMutation`'s own `client === null` guard covers that case; only
+ * the second-stage host check lives in `mapVariables` here (also normalized
+ * to `HostRpcError` by `useHostMutation`'s boundary).
+ *
+ * Same rule as the app-wide hook: the caller names `hostId` on the request
+ * and this hook verifies the resolved client actually dials it, so a client
+ * that lost (or changed) its host identity can never make the create land
+ * somewhere the caller did not ask for. `useEpicCreateChatForHost` is the
+ * tab-scoped wrapper over this; row child-create passes the row's host
+ * client.
  */
 export function useEpicCreateChatForHostClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -177,23 +214,36 @@ export function useEpicCreateChatForHostClient(
     client,
     method: "epic.createChat",
     mapVariables: (params) => {
-      const hostId = client?.getActiveHostId() ?? null;
-      if (hostId === null) {
+      const clientHostId = client?.getActiveHostId() ?? null;
+      if (clientHostId !== params.hostId) {
         throw new HostRpcError({
           code: "RPC_ERROR",
-          message: "Tab host identity unavailable - cannot stamp hostId.",
+          message:
+            clientHostId === null
+              ? "Tab host identity unavailable - cannot create an agent on it."
+              : "This host client no longer addresses the requested host - the agent would be created on a different host.",
           requestId: "client-pre-flight",
           method: "epic.createChat",
           fatalDetails: null,
         });
       }
-      return { ...params, hostId };
+      return params;
     },
     options: {
       mutationKey: epicMutationKeys.createChat(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _params, ctx) => {
         invalidateBindingsForEpic(queryClient, ctx.hostId);
+        // Same reason as the app-wide hook above, and NOT optional here: this
+        // is the variant the in-Epic new-conversation modal and the fork
+        // dialog actually run. The created chat lands in the host's chat
+        // database and in nothing this renderer already listens to, so without
+        // this the record list is never re-read - and every create-then-open
+        // flow (`openCreatedChatWhenProjected`, the handoff's
+        // `projectedChatId`) waits on a projection that only a poll tick can
+        // deliver. Scoped to the host the request was actually SENT to, which
+        // is the one whose registry changed.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't create agent.");
@@ -284,11 +334,22 @@ export function useEpicUpdateChatProfile(): UseMutationResult<
  */
 export function useEpicRenameChat() {
   const client = useHostClient();
+  const queryClient = useQueryClient();
   return useHostMutation({
     client,
     method: "epic.renameChat",
     mapVariables: (variables) => variables,
     options: {
+      // Captured at mutate time, per the host-swap convention: a swap while the
+      // rename is in flight must not invalidate a different machine's list.
+      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onSuccess: (_data, _variables, ctx) => {
+        // The title now lives in the chat database. For a chat whose doc entry
+        // the upgrade sweep removed there is no replicated write to re-project,
+        // so without this refetch the row keeps its old title until the poll
+        // fires - a rename that reads as a no-op.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't rename agent.");
       },
@@ -335,10 +396,11 @@ function useEpicArchiveChatMutation(
   SetChatArchivedRequest
 > {
   const client = useEpicSessionHostClient();
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",
-    unknown,
+    ChatRecordMutationContext,
     SetChatArchivedRequest
   >({
     client,
@@ -346,6 +408,14 @@ function useEpicArchiveChatMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.setChatArchived(),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_data, _variables, ctx) => {
+        // The comment this replaces said the archive flag "lives in the epic
+        // Y.Doc, so the host's write replicates back through the epic stream".
+        // That stopped being true at the single-write pivot: `archivedAt` is a
+        // chat-database fact now, and the record list is how it reaches here.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
+      },
       onError:
         failurePresentation === "individual"
           ? (error) => {
@@ -435,18 +505,43 @@ export function useEpicArchiveChats(): UseMutationResult<
  * Caller opens a confirm dialog first; on Delete the button enters
  * pending state; success is silent.
  */
-export function useEpicDeleteChat() {
+export function useEpicDeleteChat(): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatRequest,
+  DeleteChatMutationContext
+> {
   const client = useHostClient();
-  return useHostMutation({
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.deleteChat",
+    DeleteChatMutationContext,
+    DeleteChatRequest
+  >({
     client,
     method: "epic.deleteChat",
     mapVariables: (variables) => variables,
     options: {
-      onSuccess: (_data, variables) => {
-        getChatSessionRegistry().forceRelease(
-          variables.epicId,
-          variables.chatId,
-        );
+      // `epic.deleteChat` names no host on the wire - the host it is SENT to
+      // is the one that owns the chat being deleted - so the teardown below
+      // has to be told which host that was. Captured at mutate time (the
+      // repo's host-swap convention) rather than re-read in `onSuccess`, so a
+      // host swap while the delete is in flight cannot make us dispose a
+      // same-id chat session belonging to a different machine.
+      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onSuccess: (_data, variables, ctx) => {
+        // No active host at mutate time means nothing could have acquired a
+        // session under this chat's identity either, so there is nothing to
+        // force-release - and guessing a host here is exactly the
+        // cross-host dispose this teardown must not perform.
+        if (ctx.hostId !== null) {
+          getChatSessionRegistry().forceRelease(
+            variables.epicId,
+            variables.chatId,
+            ctx.hostId,
+          );
+        }
         // Ticket 15 (decision #29): a deleted chat can never be reopened -
         // drop its durable chat-key entries across all seven per-tab
         // registries (the tab-key side, if this chat happened to be open,
@@ -456,6 +551,10 @@ export function useEpicDeleteChat() {
           epicId: variables.epicId,
           chatId: variables.chatId,
         });
+        // The registry tombstones the chat, and its absence from the record
+        // list is what removes the row here - a doc-side removal no longer
+        // happens for a chat whose entry the sweep already took.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't delete agent.");
