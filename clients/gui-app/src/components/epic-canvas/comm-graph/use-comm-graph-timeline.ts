@@ -49,7 +49,11 @@ const LIVE_PULSE_MS = 1_400;
 export interface CommGraphTimelineProjection {
   /** The full merged array up to the cursor - what the canvas projects. */
   readonly asOfEvents: ReadonlyArray<CommGraphEvent>;
-  /** Agents that exist as of the cursor (they appear at `createdAt`). */
+  /**
+   * Agents that exist as of the cursor. When their `agent_created` event is
+   * available, they appear at that ordered cursor; historical agents without
+   * one fall back to `createdAt`.
+   */
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly pulse: CommGraphPulse | null;
 }
