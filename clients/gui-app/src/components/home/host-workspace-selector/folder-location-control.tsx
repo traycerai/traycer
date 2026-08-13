@@ -258,8 +258,9 @@ function FolderLocationMenu(props: {
  * list is always height-capped to ~5 rows and scrolls beyond that; a search bar
  * appears once the worktrees exceed {@link EXISTING_WORKTREE_SEARCH_THRESHOLD}.
  * Mounted only while the submenu is open, so the query resets per open and the
- * search autofocuses. `onKeyDown` stops propagation so the menu's typeahead
- * doesn't steal keystrokes (Escape still bubbles up to close the menu).
+ * search autofocuses. `onKeyDown` stops typed characters from reaching the
+ * menu's typeahead, bridges vertical arrows into the filtered menu items, and
+ * lets Escape reach Radix's dismissal handler.
  */
 function ExistingWorktreeList(props: {
   readonly rows: ReadonlyArray<UnifiedPickerWorktreeRow>;
@@ -268,6 +269,8 @@ function ExistingWorktreeList(props: {
   readonly onSelect: (intent: WorktreeFolderIntent) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const allowOpenFocusRecoveryRef = useRef(true);
   const [query, setQuery] = useState("");
   const rows = useMemo(
     () => promotePickerRow(props.rows, props.promoteRowId),
@@ -286,9 +289,10 @@ function ExistingWorktreeList(props: {
     if (input === null) return;
     let reclaims = 0;
     const focusSearch = (): void => {
-      if (input.isConnected) input.focus();
+      if (allowOpenFocusRecoveryRef.current && input.isConnected) input.focus();
     };
     const handleBlur = (): void => {
+      if (!allowOpenFocusRecoveryRef.current) return;
       if (reclaims >= 4) return;
       reclaims += 1;
       window.requestAnimationFrame(focusSearch);
@@ -311,6 +315,19 @@ function ExistingWorktreeList(props: {
             row.worktreePath.toLowerCase().includes(needle),
         );
 
+  const focusFilteredRow = (edge: "first" | "last"): void => {
+    const list = listRef.current;
+    if (list === null) return;
+    const items = list.querySelectorAll<HTMLElement>(
+      '[data-slot="dropdown-menu-item"]:not([data-disabled])',
+    );
+    if (items.length === 0) return;
+    const item =
+      edge === "first" ? items.item(0) : items.item(items.length - 1);
+    allowOpenFocusRecoveryRef.current = false;
+    item.focus();
+  };
+
   return (
     <>
       {showSearch ? (
@@ -324,6 +341,14 @@ function ExistingWorktreeList(props: {
               className="text-ui-sm"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  focusFilteredRow(
+                    event.key === "ArrowDown" ? "first" : "last",
+                  );
+                  return;
+                }
                 if (event.key !== "Escape") event.stopPropagation();
               }}
             />
@@ -334,6 +359,7 @@ function ExistingWorktreeList(props: {
         </div>
       ) : null}
       <div
+        ref={listRef}
         // When the search bar is shown the height is PINNED (not capped) so
         // filtering the list down doesn't shrink the submenu and trigger Radix
         // to recompute/reposition it - that resize-on-every-keystroke is what
