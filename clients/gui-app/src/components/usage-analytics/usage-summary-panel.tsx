@@ -41,6 +41,13 @@ import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure"
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 import { UsageHostFilter } from "@/components/usage-analytics/usage-host-filter";
 import { UsageHostSplit } from "@/components/usage-analytics/usage-host-split";
+import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
+import {
+  buildUsageActivityCalendar,
+  isWindowTooWideError,
+  USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
+  USAGE_ACTIVITY_WINDOW_DAYS,
+} from "@/lib/usage-analytics/usage-activity";
 import {
   buildUsageHostFilterOptions,
   buildUsageHostSplitRows,
@@ -95,12 +102,51 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId }),
     [windowDays, hostId],
   );
+  // The activity heatmap's own fixed-year read (ticket 15) - independent of
+  // the 7/30/90 picker (an activity calendar over one month is all padding)
+  // but scoped by the same host filter, so narrowing to a machine narrows
+  // the calendar too.
+  const activityRequest = useMemo(
+    () =>
+      buildUsageSummaryRequest({
+        windowDays: USAGE_ACTIVITY_WINDOW_DAYS,
+        epicId: null,
+        hostId,
+      }),
+    [hostId],
+  );
   // Enabled unconditionally: this panel only mounts once its caller has
   // already confirmed `host.usage.summary` is supported (see
   // `UsageSettingsPanelBody`'s early return). No polling here - unlike the
   // ambient epic cost badge, this is an actively-viewed screen with its own
   // refetch triggers (window/metric change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);
+  const activityQuery = useUsageSummaryForClient(
+    props.client,
+    activityRequest,
+    true,
+    false,
+  );
+  // Hosts update independently of the app: one released before ticket 15
+  // caps `windowDays` at 90 and rejects the year outright. ONLY that
+  // classified rejection arms this narrower read - a transient failure on
+  // the year read must surface as an error, not be quietly replaced by a
+  // quarter of the calendar that happened to succeed.
+  const activityFallbackRequest = useMemo(
+    () =>
+      buildUsageSummaryRequest({
+        windowDays: USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
+        epicId: null,
+        hostId,
+      }),
+    [hostId],
+  );
+  const activityFallbackQuery = useUsageSummaryForClient(
+    props.client,
+    activityFallbackRequest,
+    isWindowTooWideError(activityQuery.error),
+    false,
+  );
   const days = useMemo(() => daysForResponse(query.data), [query.data]);
   const dateRangeLabel = formatDateRangeLabel(days);
 
@@ -129,10 +175,24 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   if (pinnedToHostName !== null && hostId !== null) {
     setHostId(null);
   }
+  // Hosts named by EITHER read. The activity calendar spans a year while
+  // the picker's own read spans 7/30/90 days, so a host that was active
+  // months ago - and that the local directory can no longer name - shows up
+  // in the All-hosts calendar with no way to isolate it. Both responses are
+  // evidence about which hosts exist, so both feed the filter.
   const responseHostIds = useMemo(
     () =>
-      (query.data?.summary.hostBuckets ?? []).map((bucket) => bucket.hostId),
-    [query.data],
+      unionHostIds(
+        [
+          ...(query.data?.summary.hostBuckets ?? []),
+          ...(activityQuery.data?.summary.hostBuckets ?? []),
+          // The fallback calendar is a real read too: an old host that
+          // rejected the year can still surface a host (active e.g. 60 days
+          // ago) that neither the directory nor the 30-day window knows.
+          ...(activityFallbackQuery.data?.summary.hostBuckets ?? []),
+        ].map((bucket) => bucket.hostId),
+      ),
+    [query.data, activityQuery.data, activityFallbackQuery.data],
   );
   // Host ids learned from the last UNFILTERED response.
   //
@@ -182,6 +242,8 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       </div>
       <UsageSummaryPanelBody
         query={query}
+        activityQuery={activityQuery}
+        activityFallbackQuery={activityFallbackQuery}
         metric={metric}
         days={days}
         breakdownGroupBy={breakdownGroupBy}
@@ -193,6 +255,16 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       />
     </div>
   );
+}
+
+/**
+ * Merged host ids from the two reads, sorted so the result is a function of
+ * WHICH hosts appeared rather than of which response happened to arrive
+ * first - {@link sameHostIds} compares position-wise, and an unsorted union
+ * would flip-flop as the two queries settle.
+ */
+function unionHostIds(ids: readonly string[]): readonly string[] {
+  return [...new Set(ids)].sort((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -250,6 +322,16 @@ function daysForResponse(
 
 function UsageSummaryPanelBody(props: {
   readonly query: UsageSummaryQueryResult;
+  /**
+   * The fixed-year activity read. The WHOLE result, not just its data: the
+   * page-level Retry refetches the primary window query only, so handing
+   * this one's `data` alone would drop a failed activity read on the floor
+   * - the section would silently vanish with no explanation and no way
+   * back. It stays SECONDARY (its own inline error, never the page's).
+   */
+  readonly activityQuery: UsageSummaryQueryResult;
+  /** The narrower read that runs only once {@link activityQuery} has failed. */
+  readonly activityFallbackQuery: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
@@ -260,6 +342,8 @@ function UsageSummaryPanelBody(props: {
 }): ReactNode {
   const {
     query,
+    activityQuery,
+    activityFallbackQuery,
     metric,
     days,
     breakdownGroupBy,
@@ -350,6 +434,11 @@ function UsageSummaryPanelBody(props: {
         )}
       </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
+      <UsageActivitySection
+        query={activityQuery}
+        fallbackQuery={activityFallbackQuery}
+        metric={metric}
+      />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
@@ -370,4 +459,67 @@ function UsageSummaryPanelBody(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The activity calendar and its own loading/error handling.
+ *
+ * Deliberately NOT folded into the page's loading and error states: this
+ * read is a second, independent request, and a failed year-long calendar
+ * must not blank a working dashboard. But it must not vanish silently
+ * either - the page's Retry only refetches the primary window query, so
+ * this section carries its own error card and its own refetch.
+ */
+function UsageActivitySection(props: {
+  readonly query: UsageSummaryQueryResult;
+  readonly fallbackQuery: UsageSummaryQueryResult;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  const { query, fallbackQuery, metric } = props;
+  // A host too old for the year window answers the narrower read instead -
+  // a shorter calendar, not an error. The fallback query is only ever
+  // ENABLED for that classified rejection (see `isWindowTooWideError`), so
+  // its data can't paper over an unrelated year-read failure.
+  const data = query.data ?? fallbackQuery.data;
+  if (data !== undefined) {
+    return (
+      <div className="flex flex-col gap-2" data-testid="usage-activity-section">
+        <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+        <UsageActivityHeatmap
+          calendar={buildUsageActivityCalendar(
+            lastNCalendarDays(
+              data.summary.window.windowDays,
+              data.summary.window.timezone,
+              data.summary.window.endAtExclusive - 1,
+            ),
+            data.summary.buckets,
+            metric,
+          )}
+          metric={metric}
+        />
+      </div>
+    );
+  }
+  // The year read failed for a reason the fallback does not exist for, or
+  // the fallback itself failed too - either way the section owes the
+  // reader an explanation and a way back, never a silent gap.
+  const windowTooWide = isWindowTooWideError(query.error);
+  if (
+    query.error !== null &&
+    (!windowTooWide || fallbackQuery.error !== null)
+  ) {
+    return (
+      <div className="flex flex-col gap-2" data-testid="usage-activity-section">
+        <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+        <UsageErrorCard
+          error={query.error}
+          onRetry={() => {
+            void query.refetch();
+            void fallbackQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+  return null;
 }
