@@ -294,13 +294,29 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "recordCount": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "firstRecordId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lastRecordId": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
               "sha256",
               "byteLength",
               "firstSeq",
-              "lastSeq"
+              "lastSeq",
+              "recordCount",
+              "firstRecordId",
+              "lastRecordId"
             ]
           }
         },
@@ -338,13 +354,29 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "recordCount": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "firstRecordId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lastRecordId": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
               "sha256",
               "byteLength",
               "firstSeq",
-              "lastSeq"
+              "lastSeq",
+              "recordCount",
+              "firstRecordId",
+              "lastRecordId"
             ]
           }
         },
@@ -715,13 +747,29 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "recordCount": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "firstRecordId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lastRecordId": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
               "sha256",
               "byteLength",
               "firstSeq",
-              "lastSeq"
+              "lastSeq",
+              "recordCount",
+              "firstRecordId",
+              "lastRecordId"
             ],
             "additionalProperties": false
           }
@@ -1053,13 +1101,29 @@ export const chatSyncSchemaSurfaceBaseline = {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "recordCount": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "firstRecordId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lastRecordId": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
               "sha256",
               "byteLength",
               "firstSeq",
-              "lastSeq"
+              "lastSeq",
+              "recordCount",
+              "firstRecordId",
+              "lastRecordId"
             ],
             "additionalProperties": false
           }

@@ -44,12 +44,18 @@ const PART_A = {
   byteLength: 120,
   firstSeq: 1,
   lastSeq: 3,
+  recordCount: 2,
+  firstRecordId: "m-a",
+  lastRecordId: "m-c",
 };
 const PART_B = {
   sha256: "b".repeat(64),
   byteLength: 240,
   firstSeq: 4,
   lastSeq: 7,
+  recordCount: 2,
+  firstRecordId: "m-d",
+  lastRecordId: "m-g",
 };
 // Distinct from A and B: a head may not name the same part twice, so a
 // graduated section in these fixtures needs an address of its own.
@@ -58,6 +64,9 @@ const PART_C = {
   byteLength: 360,
   firstSeq: 8,
   lastSeq: 8,
+  recordCount: 1,
+  firstRecordId: "m-h",
+  lastRecordId: "m-h",
 };
 
 const wireHead: JsonObject = {
@@ -104,8 +113,11 @@ describe("chat-head shape", () => {
     // address-only (see chat-sync-head-document.test.ts).
     expect(Object.keys(head.messageShards[0]).sort()).toEqual([
       "byteLength",
+      "firstRecordId",
       "firstSeq",
+      "lastRecordId",
       "lastSeq",
+      "recordCount",
       "sha256",
     ]);
   });
@@ -405,7 +417,7 @@ describe("chat-head canonical encoding", () => {
     ).toThrow();
   });
 
-  it("refuses a 1.1 writer head that omits cdc or cohort seq ranges", () => {
+  it("refuses a 1.1 writer head that omits cdc or cohort cut-plan fields", () => {
     const { cdc: _cdc, ...withoutCdc } = wireHead;
     expect(() => parse(withoutCdc)).toThrow();
 

@@ -60,9 +60,11 @@ import { z } from "zod";
  * what makes retries converge on the same object with no session state.
  *
  * The payload's message / event cohort entries carry the same address plus
- * the seq range they cover (`firstSeq` / `lastSeq`). That cut plan is
- * chat-domain data and MUST NOT leak into the envelope - the sync layer
- * interprets nothing but the address. `hostPrivate` stays address-only.
+ * the last-write extrema they cover (`firstSeq` / `lastSeq`) and the
+ * exact membership key (`recordCount`, `firstRecordId`, `lastRecordId`).
+ * That cut plan is chat-domain data and MUST NOT leak into the envelope -
+ * the sync layer interprets nothing but the address. `hostPrivate` stays
+ * address-only.
  *
  * ## Graduation
  *
@@ -103,14 +105,23 @@ export type ChatHeadAddressPart = z.infer<typeof chatHeadAddressPartSchema>;
 /**
  * A head-named part as the payload carries it.
  *
- * 1.1 extends the address with an optional seq range so a publisher can
- * plan the next cut from the predecessor head. Both bounds are present
- * together or absent together (`refineChatHeadPartRanges`). 1.0 heads omit
- * them; the 1.1 writer requires them on message / event cohorts.
+ * 1.1 extends the address with an optional last-write seq range and the
+ * exact membership key (`recordCount` + first/last record ids) so a
+ * publisher can plan the next cut from the predecessor head. The five
+ * fields are present together or absent together
+ * (`refineChatHeadPartRanges`). 1.0 heads omit them; the 1.1 writer
+ * requires them on message / event cohorts.
+ *
+ * `firstSeq` / `lastSeq` are last-write extrema, not a membership
+ * interval. Tail membership is the `recordCount` records from
+ * `firstRecordId` through `lastRecordId` in section order.
  */
 export const chatHeadPartSchema = chatHeadAddressPartSchema.extend({
   firstSeq: z.number().int().nonnegative().optional(),
   lastSeq: z.number().int().nonnegative().optional(),
+  recordCount: z.number().int().positive().optional(),
+  firstRecordId: z.string().min(1).optional(),
+  lastRecordId: z.string().min(1).optional(),
 });
 export type ChatHeadPart = z.infer<typeof chatHeadPartSchema>;
 
@@ -119,6 +130,9 @@ export const chatHeadCohortPartSchema = chatHeadAddressPartSchema
   .extend({
     firstSeq: z.number().int().nonnegative(),
     lastSeq: z.number().int().nonnegative(),
+    recordCount: z.number().int().positive(),
+    firstRecordId: z.string().min(1),
+    lastRecordId: z.string().min(1),
   })
   .superRefine((part, ctx) => {
     if (part.firstSeq > part.lastSeq) {
@@ -250,8 +264,8 @@ export const chatHeadRecordShape = {
 
 /**
  * Writer shape for the registered 1.1 contract: CDC params and per-cohort
- * seq ranges are required. The reader shape above stays additive so a 1.0
- * head still opens.
+ * seq ranges plus membership are required. The reader shape above stays
+ * additive so a 1.0 head still opens.
  */
 export const chatHeadWriterRecordShape = {
   ...chatHeadRecordShape,
@@ -397,12 +411,12 @@ export function refineMinReaderVersion(
 }
 
 /**
- * Seq ranges on a part are paired, ordered, and never appear on hostPrivate.
+ * Cut-plan fields on a part are present together, ordered, and never
+ * appear on hostPrivate.
  *
  * A 1.0 head omits them; a 1.1 writer requires them on message / event
- * cohorts via `chatHeadCohortPartSchema`. Either way a lone bound or a
- * reversed range is corrupt, and a host-private part is not a seq-ranged
- * cohort.
+ * cohorts via `chatHeadCohortPartSchema`. Either way a lone bound, a
+ * reversed range, or a host-private part carrying membership is corrupt.
  */
 export function refineChatHeadPartRanges(
   head: {
@@ -415,13 +429,22 @@ export function refineChatHeadPartRanges(
   const check = (part: ChatHeadPart, path: (string | number)[]): void => {
     const firstSeq = part.firstSeq;
     const lastSeq = part.lastSeq;
-    const hasFirst = firstSeq !== undefined;
-    const hasLast = lastSeq !== undefined;
-    if (hasFirst !== hasLast) {
+    const recordCount = part.recordCount;
+    const firstRecordId = part.firstRecordId;
+    const lastRecordId = part.lastRecordId;
+    const flags = [
+      firstSeq !== undefined,
+      lastSeq !== undefined,
+      recordCount !== undefined,
+      firstRecordId !== undefined,
+      lastRecordId !== undefined,
+    ];
+    if (flags.some((flag) => flag !== flags[0])) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path,
-        message: "firstSeq and lastSeq must be paired on a cohort part",
+        message:
+          "firstSeq, lastSeq, recordCount, firstRecordId and lastRecordId must be present together on a cohort part",
       });
       return;
     }
@@ -444,7 +467,11 @@ export function refineChatHeadPartRanges(
   const hostPrivate = head.hostPrivateShard;
   if (
     hostPrivate !== null &&
-    (hostPrivate.firstSeq !== undefined || hostPrivate.lastSeq !== undefined)
+    (hostPrivate.firstSeq !== undefined ||
+      hostPrivate.lastSeq !== undefined ||
+      hostPrivate.recordCount !== undefined ||
+      hostPrivate.firstRecordId !== undefined ||
+      hostPrivate.lastRecordId !== undefined)
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -583,6 +610,15 @@ function encodeChatHeadPart(part: ChatHeadPart): JsonObject {
   }
   if (part.lastSeq !== undefined) {
     encoded.lastSeq = part.lastSeq;
+  }
+  if (part.recordCount !== undefined) {
+    encoded.recordCount = part.recordCount;
+  }
+  if (part.firstRecordId !== undefined) {
+    encoded.firstRecordId = part.firstRecordId;
+  }
+  if (part.lastRecordId !== undefined) {
+    encoded.lastRecordId = part.lastRecordId;
   }
   return encoded;
 }

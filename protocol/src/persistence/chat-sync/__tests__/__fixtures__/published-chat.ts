@@ -349,7 +349,24 @@ export function publishChat(options: {
     bytesByPart.set(published.part.sha256, published.bytes);
     const firstSeq = index === 0 ? 1 : 3;
     const lastSeq = index === 0 ? 2 : 3;
-    return { ...published.part, firstSeq, lastSeq };
+    const first = cohort[0];
+    const last = cohort[cohort.length - 1];
+    const firstRecordId =
+      first !== undefined && typeof first.messageId === "string"
+        ? first.messageId
+        : `m-first-${index}`;
+    const lastRecordId =
+      last !== undefined && typeof last.messageId === "string"
+        ? last.messageId
+        : `m-last-${index}`;
+    return {
+      ...published.part,
+      firstSeq,
+      lastSeq,
+      recordCount: cohort.length,
+      firstRecordId,
+      lastRecordId,
+    };
   });
 
   const eventShards: ChatHeadPart[] = [];
@@ -357,10 +374,17 @@ export function publishChat(options: {
     for (const [index, cohort] of [[knownEvent], [unknownEvent]].entries()) {
       const published = publishShard(eventShard(cohort));
       bytesByPart.set(published.part.sha256, published.bytes);
+      const eventId =
+        cohort[0] !== undefined && typeof cohort[0].eventId === "string"
+          ? cohort[0].eventId
+          : `e-${index}`;
       eventShards.push({
         ...published.part,
         firstSeq: 4 + index,
         lastSeq: 4 + index,
+        recordCount: cohort.length,
+        firstRecordId: eventId,
+        lastRecordId: eventId,
       });
     }
   }
