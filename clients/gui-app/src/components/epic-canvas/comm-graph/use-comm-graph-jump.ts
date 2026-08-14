@@ -25,7 +25,8 @@ import { v4 as uuidv4 } from "uuid";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostDirectory } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import { isCommGraphOriginAvailable } from "@/lib/comm-graph/comm-graph-origin-availability";
 import {
   makeOpenableNodeRef,
@@ -111,19 +112,31 @@ export function useCommGraphJump(
     },
     [directory],
   );
-  const getDirectorySnapshot = useCallback(() => {
+  const relevantHostIds = useMemo(() => {
     const hostIds = new Set(events.map((event) => event.hostId));
     for (const agent of agents) {
       if (agent.hostId !== null) hostIds.add(agent.hostId);
     }
-    return Array.from(hostIds)
-      .sort()
+    return Array.from(hostIds).sort();
+  }, [agents, events]);
+  // Dialability now depends on the pull-only session cache, so the directory
+  // subscription alone cannot see a session dying or appearing under an
+  // `offline`/`local-only` origin. This second subscription re-renders on a
+  // readiness flip; the snapshot read below then re-runs with the new answer,
+  // so jump affordances follow the route's real state instead of freezing at
+  // whatever was true on the last directory emit.
+  const hasReadySessionFor = useRemoteSessionsPollReadiness(relevantHostIds);
+  const getDirectorySnapshot = useCallback(() => {
+    return relevantHostIds
       .map((hostId) => {
-        const endpoint = dialableHostEndpoint(directory.findById(hostId));
+        const endpoint = dialableHostEndpointFor(
+          directory.findById(hostId),
+          hasReadySessionFor(hostId),
+        );
         return `${hostId}:${endpoint?.websocketUrl ?? "offline"}`;
       })
       .join("|");
-  }, [agents, directory, events]);
+  }, [directory, hasReadySessionFor, relevantHostIds]);
   const directorySnapshot = useSyncExternalStore(
     subscribeToDirectory,
     getDirectorySnapshot,
@@ -132,9 +145,13 @@ export function useCommGraphJump(
   const isOriginAvailable = useCallback(
     (event: CommGraphEvent): boolean => {
       void directorySnapshot;
-      return isCommGraphOriginAvailable(directory, event);
+      return isCommGraphOriginAvailable(
+        directory,
+        event,
+        hasReadySessionFor(event.hostId),
+      );
     },
-    [directory, directorySnapshot],
+    [directory, directorySnapshot, hasReadySessionFor],
   );
 
   const canJump = useCallback(

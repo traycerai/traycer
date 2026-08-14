@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  RemoteHostFetchOutcome,
-  RemoteHostFetcher,
+import {
+  hostListItemToDirectoryEntry,
+  isRemoteHostDirectoryEntry,
+  RELAY_FUSE_MAX_ATTACH_MS,
+  type RemoteHostFetchOutcome,
+  type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostDirectoryService,
@@ -33,7 +38,40 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
+/**
+ * Controllable ready-session evidence, mirroring the seam
+ * `use-host-reachability.composition.test.tsx` already uses. The service's
+ * death gate (`isConfirmedHostDeath`) honours a ready live session as
+ * firsthand proof of life; after the cold review's P1 correction that dial
+ * outcome - never `lastSeenAt` recency - is the ONLY thing that suppresses
+ * failover for an `offline` selection inside the relay-fuse window. Partial
+ * (spread-actual) so every other export stays real.
+ */
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
+afterEach(() => {
+  readySessionHosts.value.clear();
+});
+
+// Matches the production constant of the same name in `host-directory-service.ts`
+// — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
+// 60s to actually match the Settings observer's poll (see that file's comment).
+const HOST_DIRECTORY_REFRESH_POLL_MS = 60_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
 
@@ -59,7 +97,7 @@ const rememberedRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://remembered-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const secondRemoteHostEntry: HostDirectoryEntry = {
@@ -68,7 +106,7 @@ const secondRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://second-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 /** A third dialable remote, for the case where BOTH failover ends vanish. */
@@ -78,7 +116,7 @@ const thirdRemoteHostEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://third-remote.traycer.invalid/rpc",
   version: "0.0.0-mock",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 function makeHost(localHost: LocalHostSnapshot | null): MockRunnerHost {
@@ -167,6 +205,61 @@ function queuedFetcher(outcomes: readonly RemoteHostFetchOutcome[]): {
   return { fetcher, callCount: () => calls };
 }
 
+/**
+ * A `RemoteHostFetcher` where each call returns a promise the test resolves
+ * explicitly, by call index - for pinning identity-scoping ordering (a caller
+ * mid-flight, an identity switch, a late resolution) that `queuedFetcher`'s
+ * synchronous resolution can't express.
+ */
+function deferredFetcher(): {
+  readonly fetcher: RemoteHostFetcher;
+  readonly callCount: () => number;
+  readonly resolve: (
+    callIndex: number,
+    outcome: RemoteHostFetchOutcome,
+  ) => void;
+} {
+  const resolvers = new Map<
+    number,
+    (outcome: RemoteHostFetchOutcome) => void
+  >();
+  let calls = 0;
+  const fetcher: RemoteHostFetcher = () =>
+    new Promise<RemoteHostFetchOutcome>((resolve) => {
+      resolvers.set(calls, resolve);
+      calls += 1;
+    });
+  return {
+    fetcher,
+    callCount: () => calls,
+    resolve: (callIndex, outcome) => {
+      const resolver = resolvers.get(callIndex);
+      if (resolver === undefined) {
+        throw new Error(`deferredFetcher: no call at index ${callIndex} yet`);
+      }
+      resolver(outcome);
+    },
+  };
+}
+
+const accountAHostEntry: HostDirectoryEntry = {
+  hostId: "account-a-host",
+  label: "Account A Host",
+  kind: "remote",
+  websocketUrl: "wss://account-a.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
+const accountBHostEntry: HostDirectoryEntry = {
+  hostId: "account-b-host",
+  label: "Account B Host",
+  kind: "remote",
+  websocketUrl: "wss://account-b.traycer.invalid/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
 describe("HostDirectoryService", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -175,6 +268,8 @@ describe("HostDirectoryService", () => {
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -197,6 +292,8 @@ describe("HostDirectoryService", () => {
     };
     const host = makeHost(renamedSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -211,6 +308,8 @@ describe("HostDirectoryService", () => {
     const remoteFetcher: RemoteHostFetcher = () =>
       Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] });
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher,
@@ -229,7 +328,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://relay.traycer.invalid/attach",
       version: localSnapshot.version,
-      status: "available",
+      transportDialability: "dialable",
     };
     const remoteFetcher: RemoteHostFetcher = () =>
       Promise.resolve({
@@ -237,6 +336,8 @@ describe("HostDirectoryService", () => {
         entries: [registeredLocalHostEntry, mockRemoteHostEntry],
       });
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher,
@@ -255,6 +356,8 @@ describe("HostDirectoryService", () => {
   it("defaults to the shared stubbed remote fetcher when none is supplied", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -267,6 +370,8 @@ describe("HostDirectoryService", () => {
   it("prefers the local entry as the default when one exists", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -282,6 +387,8 @@ describe("HostDirectoryService", () => {
   it("falls back to the single remote entry when no local host exists and the directory has exactly one entry", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -306,9 +413,11 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://mock-remote-2.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -327,6 +436,8 @@ describe("HostDirectoryService", () => {
   it("reports cardinality 'zero' when the directory has no local or remote entries", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -340,6 +451,8 @@ describe("HostDirectoryService", () => {
   it("emits onSelectionChange after selectById()", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -363,6 +476,8 @@ describe("HostDirectoryService", () => {
   it("persists explicit host selection gestures including clear", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -385,6 +500,8 @@ describe("HostDirectoryService", () => {
     rememberHostSelection(rememberedRemoteHostEntry.hostId);
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -413,6 +530,8 @@ describe("HostDirectoryService", () => {
         pending.resolve = resolve;
       });
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -440,6 +559,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -470,6 +591,8 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -508,6 +631,8 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -534,6 +659,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -563,6 +690,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [rememberedRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -603,6 +732,8 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -636,6 +767,8 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -655,6 +788,8 @@ describe("HostDirectoryService", () => {
   it("clears stale selection when the selected host is no longer in the directory", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -671,6 +806,8 @@ describe("HostDirectoryService", () => {
   it("refreshes the local entry when the runner emits an update", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -694,6 +831,8 @@ describe("HostDirectoryService", () => {
   it("emits a fresh selected local entry when the same host id changes endpoint", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -731,6 +870,8 @@ describe("HostDirectoryService", () => {
     host.setLocalHost(localSnapshot);
 
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -753,6 +894,8 @@ describe("HostDirectoryService", () => {
     // fire `onSelectionChange(...)` so the runtime rebinds without a remount.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -777,6 +920,8 @@ describe("HostDirectoryService", () => {
   it("preserves an explicit non-null selection when the local host appears later", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -803,6 +948,8 @@ describe("HostDirectoryService", () => {
     // auto-bind only runs when the user has made no explicit selection yet.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -830,6 +977,8 @@ describe("HostDirectoryService", () => {
   it("does not fall back to another host while an explicit selected host is offline", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -864,6 +1013,8 @@ describe("HostDirectoryService", () => {
   it("restores an explicitly selected host when the same id returns after going offline", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: null,
@@ -893,6 +1044,8 @@ describe("HostDirectoryService", () => {
   it("resolves entries by id across local and remote", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: () =>
@@ -915,6 +1068,8 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: remoteEntries });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -942,6 +1097,8 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: remoteEntries });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -974,6 +1131,8 @@ describe("HostDirectoryService", () => {
       return Promise.resolve({ kind: "hosts", entries: [] });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1009,6 +1168,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [{ ...mockRemoteHostEntry }] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1045,6 +1206,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1078,6 +1241,8 @@ describe("HostDirectoryService", () => {
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemoteHostEntry] },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1112,6 +1277,8 @@ describe("HostDirectoryService", () => {
       },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1131,6 +1298,84 @@ describe("HostDirectoryService", () => {
     expect(observed).toHaveLength(1);
   });
 
+  it("notifies onChange when an offline row's ONLY change is its relay-fuse grace aging past the cap", async () => {
+    // The registry row itself never changes: same host, same `offline`
+    // verdict, same `lastSeenAt`. What changes is the clock - the projection
+    // recomputes `relayFuseGrace` from recency on every fetch, so once
+    // `lastSeenAt` ages past RELAY_FUSE_MAX_ATTACH_MS the flag flips while
+    // every other compared field (including the derived verdict) stays
+    // identical. Swallowing that emission left every consumer holding
+    // `relayFuseGrace: true` forever - recovery dials permitted indefinitely
+    // past the documented 4h cap.
+    const lastSeenAt = "2026-07-03T12:00:00.000Z";
+    const lastSeenMs = Date.parse(lastSeenAt);
+    const item = {
+      hostId: "fuse-aging-host",
+      displayName: "Fuse Aging Host",
+      platform: "Ubuntu",
+      kind: "personal",
+      publicKey: "pk-fuse-aging-host",
+      createdAt: "2026-07-01T12:00:00.000Z",
+      status: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.4.2",
+        lastSeenAt,
+      },
+      updatePolicy: "manual",
+    } as const;
+    // The SAME registry row projected at two moments, by the REAL projection
+    // (not hand-flipped flags): one minute after last-seen, then one tick
+    // past the fuse cap.
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(lastSeenMs + 60_000);
+    const inGrace = hostListItemToDirectoryEntry(
+      item,
+      "wss://relay.example.test/attach",
+    );
+    nowSpy.mockReturnValue(lastSeenMs + RELAY_FUSE_MAX_ATTACH_MS + 1);
+    const aged = hostListItemToDirectoryEntry(
+      item,
+      "wss://relay.example.test/attach",
+    );
+    nowSpy.mockRestore();
+    expect(inGrace.relayFuseGrace).toBe(true);
+    expect(aged.relayFuseGrace).toBe(false);
+
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [inGrace] },
+      { kind: "hosts", entries: [aged] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    const observed: Array<readonly HostDirectoryEntry[]> = [];
+    directory.onChange((entries) => {
+      observed.push(entries);
+    });
+
+    await directory.refresh();
+
+    expect(observed).toHaveLength(1);
+    const emitted = observed[0]?.find(
+      (entry) => entry.hostId === "fuse-aging-host",
+    );
+    expect(
+      emitted !== undefined && isRemoteHostDirectoryEntry(emitted)
+        ? emitted.relayFuseGrace
+        : null,
+    ).toBe(false);
+  });
+
   it("retains the last-known remote entries and selection when a refresh fails (T20 / audit P4)", async () => {
     const host = makeHost(null);
     const { fetcher } = queuedFetcher([
@@ -1138,6 +1383,8 @@ describe("HostDirectoryService", () => {
       { kind: "failed" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1164,6 +1411,8 @@ describe("HostDirectoryService", () => {
       { kind: "signed-out" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1184,13 +1433,15 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://mock-remote-2.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const { fetcher } = queuedFetcher([
       { kind: "hosts", entries: [mockRemoteHostEntry, secondRemote] },
       { kind: "failed" },
     ]);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1223,6 +1474,8 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1258,6 +1511,8 @@ describe("HostDirectoryService", () => {
       });
     };
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       localHostIdSeeder: null,
       remoteFetcher: fetcher,
@@ -1288,6 +1543,8 @@ describe("HostDirectoryService", () => {
     it("binds through the same selection listener as an explicit pick", async () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1315,6 +1572,8 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1348,6 +1607,8 @@ describe("HostDirectoryService", () => {
       const host = makeHost(localSnapshot);
       let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1365,6 +1626,8 @@ describe("HostDirectoryService", () => {
     it("is a no-op for an id the directory does not hold, never an unbind", async () => {
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: null,
@@ -1387,6 +1650,8 @@ describe("HostDirectoryService", () => {
       const track = vi.spyOn(Analytics.getInstance(), "track");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1429,7 +1694,7 @@ describe("HostDirectoryService", () => {
       kind: "remote",
       websocketUrl: "wss://relay.traycer.invalid/attach",
       version: "1.2.2",
-      status: "available",
+      transportDialability: "dialable",
     };
 
     it("presents the machine's own registry twin as a non-dialable local entry", async () => {
@@ -1439,6 +1704,8 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1459,11 +1726,11 @@ describe("HostDirectoryService", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.2.2",
-        // Not the twin's presence lease: `unavailable` is the truth, and it is
-        // what leaves an `unavailable -> available` edge for status-transition
+        // Not the twin's presence lease: `not-dialable` is the truth, and it
+        // is what leaves a `not-dialable -> dialable` edge for dialability
         // subscribers (e.g. landing-terminal tombstone recovery) when the real
         // host finally publishes.
-        status: "unavailable",
+        transportDialability: "not-dialable",
       });
       expect(entries[1]).toEqual(secondRemoteHostEntry);
     });
@@ -1476,6 +1743,8 @@ describe("HostDirectoryService", () => {
       rememberHostSelection(localSnapshot.hostId);
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1505,6 +1774,8 @@ describe("HostDirectoryService", () => {
       rememberHostSelection(localSnapshot.hostId);
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1534,6 +1805,8 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1557,6 +1830,8 @@ describe("HostDirectoryService", () => {
       const firstLaunchHost = makeHost(localSnapshot);
       const firstLaunch = makeDirectory({
         runnerHost: firstLaunchHost,
+        authContextId: null,
+        credentialGeneration: null,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
       });
@@ -1570,6 +1845,8 @@ describe("HostDirectoryService", () => {
       const secondLaunchHost = makeHost(null);
       const secondLaunch = makeDirectory({
         runnerHost: secondLaunchHost,
+        authContextId: null,
+        credentialGeneration: null,
         localHostIdSeeder: null,
         remoteFetcher: () =>
           Promise.resolve({ kind: "hosts", entries: [ownRegistryTwin] }),
@@ -1603,6 +1880,8 @@ describe("HostDirectoryService", () => {
         traycerCli: undefined,
       });
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1649,6 +1928,8 @@ describe("HostDirectoryService", () => {
       });
       const onLocalHostChange = vi.spyOn(host, "onLocalHostChange");
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1678,6 +1959,8 @@ describe("HostDirectoryService", () => {
         hostId: "re-enrolled-host-id",
       };
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         remoteFetcher: () =>
@@ -1717,6 +2000,8 @@ describe("HostDirectoryService", () => {
         hostId: "re-enrolled-host-id",
       };
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         // The registry still lists BOTH rows until deregistration propagates -
@@ -1758,6 +2043,8 @@ describe("HostDirectoryService", () => {
       };
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1792,6 +2079,8 @@ describe("HostDirectoryService", () => {
         .setScopedHostId(localSnapshot.hostId);
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1819,6 +2108,8 @@ describe("HostDirectoryService", () => {
         .setScopedHostId("some-other-remote-host");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
@@ -1844,6 +2135,8 @@ describe("HostDirectoryService", () => {
       );
       rememberHostSelection(rememberedRemoteHostEntry.hostId);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: () => Promise.resolve("re-enrolled-host-id"),
         remoteFetcher: () =>
@@ -1869,6 +2162,8 @@ describe("HostDirectoryService", () => {
       );
       const host = makeHost(null);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: host,
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1901,7 +2196,7 @@ describe("HostDirectoryService", () => {
       return {
         ...entry,
         websocketUrl: null,
-        status: "unavailable",
+        transportDialability: "not-dialable",
       };
     }
 
@@ -1913,6 +2208,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1948,7 +2245,7 @@ describe("HostDirectoryService", () => {
         kind: "remote",
         websocketUrl: "wss://dead-other.traycer.invalid/rpc",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       });
       let remotes: readonly HostDirectoryEntry[] = [
         rememberedRemoteHostEntry,
@@ -1956,6 +2253,8 @@ describe("HostDirectoryService", () => {
         nonDialableOther,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -1998,6 +2297,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2033,6 +2334,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2109,6 +2412,8 @@ describe("HostDirectoryService", () => {
       // user stranded - readiness owns that surface instead.
       let remotes: readonly HostDirectoryEntry[] = [rememberedRemoteHostEntry];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2145,9 +2450,11 @@ describe("HostDirectoryService", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       };
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2176,6 +2483,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2235,6 +2544,8 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2259,6 +2570,160 @@ describe("HostDirectoryService", () => {
       );
     });
 
+    /**
+     * `isConfirmedHostDeath` composition — the P0 the review named directly.
+     *
+     * `asNonDialable` above is a SYNTHETIC literal with no `remoteStatus`, so
+     * `hostUnavailability` falls straight to its non-remote branch
+     * (`"offline"`) regardless of what it is meant to represent — every
+     * existing D7 test above is, without knowing it, only ever exercising the
+     * genuinely-dead case. These compose REAL entries from
+     * `hostListItemToDirectoryEntry` instead, so the `connectivity: "unknown"`
+     * case is actually reachable: a degraded liveness read maps `status` to
+     * the exact same `"unavailable"` `asNonDialable` fakes, but
+     * `isConfirmedHostDeath` must refuse to treat it as evidence.
+     *
+     * This is also the case the old per-poll debounce could never catch: a
+     * degraded cloud read re-polls to the SAME degraded answer, so two
+     * consecutive reads agree and the streak completes anyway. Only gating on
+     * the REASON (not just "two non-dialable reads in a row") fixes it.
+     */
+    describe("isConfirmedHostDeath composition — real mapped connectivity, not a synthetic unavailable literal", () => {
+      function realRemoteEntry(
+        hostId: string,
+        displayName: string,
+        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+      ): HostDirectoryEntry {
+        return hostListItemToDirectoryEntry(
+          {
+            hostId,
+            displayName,
+            platform: "Ubuntu",
+            kind: "personal",
+            publicKey: `pk-${hostId}`,
+            createdAt: "2026-07-01T12:00:00.000Z",
+            status: {
+              connectivity,
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt: "2026-07-03T11:59:50.000Z",
+            },
+            updatePolicy: "manual",
+          },
+          "wss://relay.example.test/attach",
+        );
+      }
+
+      it("does NOT fail over a selected remote host across two consecutive 'unknown' reads — a degraded read is not evidence of death", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        // The cloud goes blind on this host. Both this entry's mapped `status`
+        // ("unavailable") AND its dialability are identical to the genuinely-dead
+        // case above — the only thing that differs is `remoteStatus.connectivity`.
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "unknown"),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        // A second consecutive genuine read, still "unknown" — re-polling a
+        // degraded read returns the same degraded answer, which is exactly why
+        // the old debounce alone could not have protected this case.
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+      });
+
+      it("DOES fail over the same selected host across two consecutive genuinely 'offline' reads", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "offline"),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("does NOT fail over a 'local-only' (plan-restricted) selection either — it is not dead, it is billing", async () => {
+        const remembered = realRemoteEntry(
+          "remembered-real",
+          "Remembered Real",
+          "connectable",
+        );
+        const second = realRemoteEntry(
+          "second-real",
+          "Second Real",
+          "connectable",
+        );
+        let remotes: readonly HostDirectoryEntry[] = [remembered, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(remembered.hostId);
+
+        remotes = [
+          realRemoteEntry("remembered-real", "Remembered Real", "local-only"),
+          second,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+      });
+    });
+
     it("toasts on failover and on re-adoption of the origin host", async () => {
       // Pins both announcement directions and one-move-one-toast: a silent
       // re-home reads as a bug; a double toast on one move is also wrong.
@@ -2267,6 +2732,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2319,6 +2786,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2403,6 +2872,8 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2474,6 +2945,8 @@ describe("HostDirectoryService", () => {
         },
       ]);
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(localSnapshot),
         localHostIdSeeder: null,
         remoteFetcher: fetcher,
@@ -2509,6 +2982,8 @@ describe("HostDirectoryService", () => {
         secondRemoteHostEntry,
       ];
       const directory = makeDirectory({
+        authContextId: null,
+        credentialGeneration: null,
         runnerHost: makeHost(null),
         localHostIdSeeder: null,
         remoteFetcher: () =>
@@ -2552,6 +3027,758 @@ describe("HostDirectoryService", () => {
         },
       );
     });
+
+    /**
+     * F7: the fuse-vs-lease reconciliation. An `offline` verdict the relay's
+     * host-leg fuse is still plausibly holding (recent `lastSeenAt`) reads as
+     * `indeterminate`, not confirmed death - so it must not drive the D7
+     * auto-failover, and a non-explicit (auto/default/transient) selection
+     * must still be handed back once its origin recovers.
+     */
+    describe("F7 relay fuse grace vs. D7 auto-failover", () => {
+      const CONNECTABLE_LAST_SEEN = "2026-07-03T11:59:50.000Z";
+
+      function realRemoteEntryWithLastSeen(
+        hostId: string,
+        displayName: string,
+        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+        lastSeenAt: string,
+      ): HostDirectoryEntry {
+        return hostListItemToDirectoryEntry(
+          {
+            hostId,
+            displayName,
+            platform: "Ubuntu",
+            kind: "personal",
+            publicKey: `pk-${hostId}`,
+            createdAt: "2026-07-01T12:00:00.000Z",
+            status: {
+              connectivity,
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt,
+            },
+            updatePolicy: "manual",
+          },
+          "wss://relay.example.test/attach",
+        );
+      }
+
+      it("PAIRED (a): lease-lapse offline whose recovery dial SUCCEEDED (ready session) is not re-homed", async () => {
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-first",
+          "Fuse First",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-second",
+          "Fuse Second",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+
+        // The lease has lapsed (cloud reports `offline`) with a recent
+        // `lastSeenAt`, and the relay leg really is still attached: the
+        // recovery dial the fuse window keeps open has succeeded, so a ready
+        // live session exists. That session - firsthand, present-tense
+        // evidence, not the timestamp - is what suppresses the failover.
+        readySessionHosts.value.add("fuse-first");
+        const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-first",
+            "Fuse First",
+            "offline",
+            recentLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+      });
+
+      it("PAIRED (b): the same recent lastSeenAt with NO session (detach/crash) DOES re-home after two reads", async () => {
+        // Observationally this host is identical to the lease-lapse case
+        // above except for the dial outcome: it cleanly detached or crashed a
+        // minute ago, so its `lastSeenAt` is just as recent, but no relay leg
+        // answers. Before the P1 correction the fuse window rewrote this
+        // `offline` to `indeterminate` from recency alone and the selection
+        // stayed parked on a dead host for up to four hours.
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-dead-first",
+          "Fuse Dead First",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-dead-second",
+          "Fuse Dead Second",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+
+        const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-dead-first",
+            "Fuse Dead First",
+            "offline",
+            recentLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        // First read: the debounce holds.
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+        await directory.refresh();
+        // Second consecutive genuine read confirms death - failover fires.
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("contrast: DOES re-home once the same host is genuinely offline, past the fuse cap", async () => {
+        const first = realRemoteEntryWithLastSeen(
+          "fuse-first-genuine",
+          "Fuse First Genuine",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const second = realRemoteEntryWithLastSeen(
+          "fuse-second-genuine",
+          "Fuse Second Genuine",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [first, second];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById(first.hostId);
+
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "fuse-first-genuine",
+            "Fuse First Genuine",
+            "offline",
+            oldLastSeen,
+          ),
+          second,
+        ];
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(first.hostId);
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(second.hostId);
+      });
+
+      it("hands back an auto/default/transient selection after its origin recovers", async () => {
+        const a = realRemoteEntryWithLastSeen(
+          "hand-back-a",
+          "Hand Back A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "hand-back-b",
+          "Hand Back B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        // Selected through the TRANSIENT seam - `explicitSelection` is
+        // deliberately NOT set here, which is the point of this test: before
+        // F7, `failOverFromDeadSelection` only armed the hand-back marker for
+        // an explicit pick, so a notification-driven transient selection like
+        // this one would never have been handed back after its origin
+        // recovered.
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "hand-back-a",
+            "Hand Back A",
+            "offline",
+            oldLastSeen,
+          ),
+          b,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "hand-back-a",
+            "Hand Back A",
+            "connectable",
+            CONNECTABLE_LAST_SEEN,
+          ),
+          b,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+      });
+
+      it("hands back to a failover origin proven live by a READY session while the registry still says offline", async () => {
+        // Tabs stay bound to their origin host across an app-wide failover,
+        // so a bound tab's fuse-recovery dial can succeed - producing a ready
+        // session - while the registry spends the whole credential-plane
+        // incident saying `offline`. That session is firsthand positive
+        // evidence (the same evidence that outranks the cloud in
+        // `isConfirmedTransportRefusal` / `isConfirmedHostDeath`), so the
+        // hand-back must not wait for the cloud verdict to catch up.
+        const a = realRemoteEntryWithLastSeen(
+          "session-back-a",
+          "Session Back A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "session-back-b",
+          "Session Back B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        // A dies genuinely (past the fuse window); failover parks on B.
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        const offlineA = realRemoteEntryWithLastSeen(
+          "session-back-a",
+          "Session Back A",
+          "offline",
+          oldLastSeen,
+        );
+        remotes = [offlineA, b];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        // A bound tab's dial to A succeeds; the registry row never changes.
+        readySessionHosts.value.add("session-back-a");
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+      });
+
+      it("does NOT hand back over a newer notification-driven selection (P2): A -> failover B -> notification C -> A recovers => stays C", async () => {
+        // The auto/transient seam the cold review named: the hand-back marker
+        // remembers A, the user then follows a notification to C
+        // (`selectTransientById`), and A's recovery must not steal the
+        // selection from C - the notification bridge promises a switched
+        // selection stays put. The marker is retired by the later
+        // non-failover transient selection.
+        const a = realRemoteEntryWithLastSeen(
+          "steal-a",
+          "Steal A",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const b = realRemoteEntryWithLastSeen(
+          "steal-b",
+          "Steal B",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        const c = realRemoteEntryWithLastSeen(
+          "steal-c",
+          "Steal C",
+          "connectable",
+          CONNECTABLE_LAST_SEEN,
+        );
+        let remotes: readonly HostDirectoryEntry[] = [a, b, c];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+
+        directory.selectTransientById(a.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(a.hostId);
+
+        // A dies (genuinely - past the fuse window); failover parks on B
+        // (first dialable candidate) and the hand-back marker remembers A.
+        const oldLastSeen = new Date(
+          Date.now() - 5 * 60 * 60 * 1000,
+        ).toISOString();
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "steal-a",
+            "Steal A",
+            "offline",
+            oldLastSeen,
+          ),
+          b,
+          c,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(b.hostId);
+
+        // The user follows a notification to C before A recovers.
+        directory.selectTransientById(c.hostId, "notification");
+        expect(directory.getSelected()?.hostId).toBe(c.hostId);
+
+        // A recovers and stays dialable for the full two-read damping - and
+        // the selection must remain C across further polls.
+        remotes = [
+          realRemoteEntryWithLastSeen(
+            "steal-a",
+            "Steal A",
+            "connectable",
+            CONNECTABLE_LAST_SEEN,
+          ),
+          b,
+          c,
+        ];
+        await directory.refresh();
+        await directory.refresh();
+        await directory.refresh();
+        expect(directory.getSelected()?.hostId).toBe(c.hostId);
+      });
+    });
+  });
+
+  describe("identity-scoped refresh (auth context switch mid-flight)", () => {
+    it("does not join a new identity's mandatory refresh to a stale identity's in-flight promise (the reviewer's P0 probe)", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Account A's poll goes in flight and does not resolve yet.
+      const aRefresh = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // A second caller still under A, while A's flight is pending, DOES join
+      // - same identity, same memo slot. No new fetcher call.
+      const aRefreshJoined = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // The account switch. B's refresh must NOT join A's still-pending
+      // flight just because one is in flight - the memo is keyed by identity,
+      // not by "is anything in flight".
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      expect(callCount()).toBe(2);
+
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A third caller under B, after B's own flight has settled and cleared
+      // its slot, gets a fresh fetch - proving the slot was cleared by B's OWN
+      // settle, not left dangling or falsely reused.
+      const bRefreshAgain = directory.refresh();
+      expect(callCount()).toBe(3);
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefreshAgain;
+
+      // Let A's stale flight resolve too, late, so nothing is left dangling.
+      // Its outcome must never have reached the directory - covered precisely
+      // by the next test, asserted lightly here for completeness.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+      await aRefreshJoined;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
+    it("discards a refresh that resolves after the identity has moved on, even though it started legally", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // A's refresh starts legally - A is current when it is issued.
+      const aRefresh = directory.refresh();
+
+      // The switch happens while A's fetch is still in flight.
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+
+      // B's refresh resolves and commits FIRST.
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A's fetch NOW resolves - after the switch, carrying A's hosts. A
+      // keyed memo alone would not stop this: `performRefresh` must re-check
+      // the identity at commit time and discard the write, because the read
+      // was issued for an identity that is no longer current.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
+    it("drops a previous account's retained hosts when the new identity's first read fails", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Account A commits its directory.
+      const aRefresh = directory.refresh();
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+
+      // Direct A -> B switch; B's FIRST read fails. "Retain last-known on
+      // failure" is only safe for the SAME identity - keeping the list here
+      // would show A's machines (and keep A's selection bindable) under B's
+      // signed-in session until some later read happened to succeed.
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      resolve(1, { kind: "failed" });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([]);
+
+      // A later successful read populates B's own list...
+      const bRetry = directory.refresh();
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRetry;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // ...and a same-identity blip keeps its retention semantics: B's next
+      // failure retains B's list, exactly as before.
+      const bBlip = directory.refresh();
+      resolve(3, { kind: "failed" });
+      await bBlip;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+
+    it("does not let an old-bearer 401 clear the directory under a new identity", async () => {
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // A's fetch is in flight when the switch happens.
+      const aRefresh = directory.refresh();
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+
+      // B's refresh legitimately loads B's hosts.
+      resolve(1, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRefresh;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+
+      // A's expired bearer earns a 401 - `signed-out` - and resolves late,
+      // after the switch. Without the commit guard this clears the directory
+      // exactly as a successful empty `hosts` result would, erasing the list
+      // B had just legitimately loaded.
+      resolve(0, { kind: "signed-out" });
+      await aRefresh;
+
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountBHostEntry.hostId,
+      ]);
+    });
+  });
+
+  describe("credential-scoped destructive commits (same-user bearer rotation)", () => {
+    // The counter these fence on is the REAL one, driven by a real rotation
+    // through `DefaultRequestContextProvider` — not a local variable the test
+    // increments where it thinks a rotation would be.
+    //
+    // That distinction is the reason this pair is here at all. The previous
+    // version of these tests hand-drove a number, so they passed while
+    // production was wired to an identity-transition counter that does not
+    // move on a rotation at all: they proved the fence works GIVEN a credential
+    // counter, never that the thing wired into it is one. What they still do
+    // not reach is the wiring from `AuthService` down to the credential a fetch
+    // actually uses — `auth-era-composition.test.ts` covers that end to end.
+    function signedInProvider(): DefaultRequestContextProvider {
+      const provider = new DefaultRequestContextProvider({
+        origin: "renderer",
+      });
+      const user = createAuthenticatedUserFixture({});
+      (user.user as { id: string }).id = "account-a";
+      provider.setSignedIn({
+        user,
+        bearerToken: "bearer-a1",
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+      return provider;
+    }
+
+    it("drops the in-flight refresh on rotation (a fresh fetcher call, not a join) and fences the old bearer's late sign-out clear by the exact credential", async () => {
+      const provider = signedInProvider();
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Prime the directory with a legitimately loaded host so a wrongful
+      // clear below is observable.
+      const primed = directory.refresh();
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await primed;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+
+      // The old bearer's poll goes in flight and does not resolve yet.
+      const oldBearerPoll = directory.refresh();
+      expect(callCount()).toBe(2);
+
+      // Rotation: same user, new credential, through the real provider - the
+      // generation moves because a bearer was replaced, not because the test
+      // said so. `HostRuntime.onBearerRotated` drops the in-flight memo: a
+      // joined promise from the OLD bearer must not satisfy a caller under
+      // the new one.
+      directory.invalidateInFlightRefresh();
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+
+      // A refresh issued right after rotation must be a NEW fetcher call,
+      // not a join onto the old bearer's dropped flight - proving the memo
+      // was actually cleared, not merely rekeyed.
+      const newBearerPoll = directory.refresh();
+      expect(callCount()).toBe(3);
+      resolve(2, { kind: "hosts", entries: [accountAHostEntry] });
+      await newBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+
+      // The old bearer's poll NOW resolves, late, with the 401 its expired
+      // token earned. The user id still matches ("account-a" throughout), so
+      // a user-id-only fence would let this clear the directory the new
+      // credential just legitimately filled. The credential fence must
+      // discard it instead: the generation this refresh was issued under no
+      // longer matches the one the rotation left behind.
+      resolve(1, { kind: "signed-out" });
+      await oldBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+    });
+
+    it("does not let a caller in a NEW credential era join a request issued in the old one, even with the memo left in place", async () => {
+      const provider = signedInProvider();
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      const oldEraRefresh = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // Deliberately NOT calling `invalidateInFlightRefresh()` - that is the
+      // runtime's rotation hook, and this asserts the memo KEY on its own.
+      // Both guards cover this, and either alone is enough; the key is what
+      // holds if a future caller reaches the directory without going through
+      // the rotation listener.
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+
+      const newEraRefresh = directory.refresh();
+      expect(callCount()).toBe(2);
+
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      resolve(1, { kind: "hosts", entries: [accountAHostEntry] });
+      await Promise.all([oldEraRefresh, newEraRefresh]);
+    });
+
+    it("still commits a constructive (hosts) outcome that resolves after a mid-flight rotation, when nothing newer has landed - a valid answer beats a stale directory", async () => {
+      const provider = signedInProvider();
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // Issued under the pre-rotation generation, and deliberately NOT dropped
+      // by `invalidateInFlightRefresh()` here - this is the case the asymmetry
+      // is about: a rotation happens while this refresh is in flight, but it
+      // still describes the right account's hosts, so it must not be fenced
+      // the way a `signed-out` clear is. (The ordering watermark does not bite
+      // either: no newer-generation commit has landed for it to be beneath.)
+      const inFlight = directory.refresh();
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await inFlight;
+
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+      ]);
+    });
+
+    it("discards a constructive (hosts) outcome that resolves AFTER a newer credential's refresh already committed - reordered reads must not overwrite the newer list", async () => {
+      const provider = signedInProvider();
+      const { fetcher, callCount, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => "account-a",
+        credentialGeneration: () => provider.getCredentialGeneration(),
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      // The old bearer's poll goes in flight and stalls (a slow response is
+      // all the reorder needs).
+      const oldBearerPoll = directory.refresh();
+      expect(callCount()).toBe(1);
+
+      // Same-user rotation through the real provider, with the runtime's
+      // rotation hook dropping the in-flight memo - the same sequence the
+      // destructive-fence test drives.
+      directory.invalidateInFlightRefresh();
+      provider.rotateCurrentBearer({
+        userId: "account-a",
+        bearerToken: "bearer-a2",
+      });
+
+      // The post-rotation refresh races ahead and commits FIRST, and its list
+      // is genuinely newer: a second host registered between the two reads.
+      const newBearerPoll = directory.refresh();
+      expect(callCount()).toBe(2);
+      resolve(1, {
+        kind: "hosts",
+        entries: [accountAHostEntry, accountBHostEntry],
+      });
+      await newBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+        accountBHostEntry.hostId,
+      ]);
+
+      // NOW the old bearer's read resolves - constructive, same user, but a
+      // snapshot from before the newer commit. An identity-only fence lets it
+      // through, silently dropping the newly registered host until the next
+      // poll. The ordering watermark must discard it instead.
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await oldBearerPoll;
+      expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+        accountAHostEntry.hostId,
+        accountBHostEntry.hostId,
+      ]);
+    });
   });
 });
 
@@ -2588,7 +3815,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     kind: "remote",
     websocketUrl: "wss://relay.traycer.invalid/attach",
     version: "1.2.3",
-    status: "unavailable",
+    transportDialability: "not-dialable",
   };
 
   it("re-asks for this machine's id when the first ask came back null, and stops claiming its own host is a dead remote", async () => {
@@ -2596,6 +3823,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     // resolved null and cached it).
     let shellHostId: string | null = null;
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: makeHost(null),
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -2611,7 +3840,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     const beforeReseed = await directory.list();
     expect(beforeReseed).toHaveLength(1);
     expect(beforeReseed[0].kind).toBe("remote");
-    expect(beforeReseed[0].status).toBe("unavailable");
+    expect(beforeReseed[0].transportDialability).toBe("not-dialable");
 
     // The shell can answer now. Nothing else about the world changed - no new
     // snapshot, no registry change - so only a re-ask can converge this.
@@ -2631,6 +3860,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
   it("stops re-asking once the id is known", async () => {
     const seeder = vi.fn(() => Promise.resolve(LOCAL_HOST_ID));
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: makeHost(null),
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -2649,6 +3880,8 @@ describe("HostDirectoryService boot-ordering convergence", () => {
   it("converges to the live local host whenever its snapshot finally arrives", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [expiredOwnTwin] }),
@@ -2667,17 +3900,26 @@ describe("HostDirectoryService boot-ordering convergence", () => {
     expect(converged[0]).toMatchObject({
       hostId: LOCAL_HOST_ID,
       kind: "local",
-      status: "available",
+      transportDialability: "dialable",
       websocketUrl: localSnapshot.websocketUrl,
     });
   });
 
-  it("carries a busy shell verdict through as a reachable local entry", async () => {
-    // A host that lost a probe is still the host: dialable URL, `busy` status.
-    // Publishing it as anything else is what put the registry twin - and its
-    // hardcoded `unavailable` - in front of the user in the first place.
+  it("projects a busy shell verdict into a DIALABLE local entry", async () => {
+    // A host that lost a probe is still the host: dialable URL, `busy`
+    // availability. Publishing it as anything else is what put the registry
+    // twin - and its hardcoded `unavailable` - in front of the user in the
+    // first place.
+    //
+    // The entry no longer carries the shell's three-valued availability; it
+    // carries the projection (`toLocalEntry`), which is the one seam where a
+    // `HostAvailability` becomes a `HostTransportDialability`. Pinning it here
+    // is what keeps `busy` from ever reaching a consumer as death: every
+    // downstream reason (`hostUnavailability`) derives from this field.
     const host = makeHost(null);
     const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
       runnerHost: host,
       remoteFetcher: (): Promise<RemoteHostFetchOutcome> =>
         Promise.resolve({ kind: "hosts", entries: [] }),
@@ -2689,7 +3931,7 @@ describe("HostDirectoryService boot-ordering convergence", () => {
 
     expect((await directory.list())[0]).toMatchObject({
       kind: "local",
-      status: "busy",
+      transportDialability: "dialable",
       websocketUrl: localSnapshot.websocketUrl,
     });
   });

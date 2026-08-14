@@ -53,7 +53,7 @@ interface MockHostClient {
     readonly kind: "local";
     readonly websocketUrl: string;
     readonly version: string;
-    readonly status: "available";
+    readonly transportDialability: "dialable";
   };
   getActiveHostId(): string;
   getRequestContextUserId(): string;
@@ -71,7 +71,7 @@ function createMockHostClient(
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
-      status: "available",
+      transportDialability: "dialable",
     }),
     getActiveHostId: () => "host-home",
     getRequestContextUserId: () => "user-home",
@@ -233,7 +233,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "local",
         websocketUrl: "ws://127.0.0.1:4917/rpc",
         version: "0.0.0-test",
-        status: "available",
+        transportDialability: "dialable",
       },
     ],
   }),

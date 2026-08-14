@@ -90,6 +90,94 @@ export const AGENT_ACTIVITY_AWARENESS_FIELD = "agentActivityByEpic";
  */
 export const AGENT_ACTIVITY_HOST_ID_AWARENESS_FIELD = "agentActivityHostId";
 
+/**
+ * Awareness state field under which each host publishes its own RUNTIME status
+ * — the drain-relevant facts about what it is doing right now:
+ *
+ * ```ts
+ * {
+ *   busy: boolean;
+ *   busySessionCount: number;
+ *   updateProgress: { state: "updating" | "failed"; error: string | null } | null;
+ * }
+ * ```
+ *
+ * These three used to ride the cloud `GET /api/v3/hosts` DTO, on a lease the
+ * host refreshed every 20 seconds. That lease is gone, and its replacement is
+ * refreshed on the order of MINUTES — far too coarse for a session count that
+ * gates a destructive "Apply now — ends N sessions" button. So they moved to
+ * the two channels that are actually live: `host.status@1.1` for a client
+ * holding a session to the host, and this field for a client that holds the
+ * room but no session (the cross-host case — the My-Hosts-style surfaces).
+ *
+ * ADDITIVE, and additive is the whole point: awareness entries are per-host and
+ * unnegotiated, so a host that does not publish this is not an error state, it
+ * is the normal steady state for part of a fleet. Every rule on
+ * {@link AGENT_ACTIVITY_AWARENESS_FIELD} applies here verbatim — frozen shape,
+ * per-HOST absence, shape-check per entry, skip the offending entry rather than
+ * the whole read.
+ *
+ * One rule is specific to this field, and it is the load-bearing one:
+ * **absence is not zero.** A missing entry means "this host is not telling us",
+ * and the only correct rendering is no drain information at all. Defaulting it
+ * to `busySessionCount: 0` would state, in the UI, that ending the update now
+ * costs nothing — about a host that never said so.
+ */
+export const HOST_RUNTIME_STATUS_AWARENESS_FIELD = "hostRuntimeStatus";
+
+/**
+ * Shape-check for one {@link HOST_RUNTIME_STATUS_AWARENESS_FIELD} value.
+ *
+ * Shared so the publishing host and the reading client cannot drift on a field
+ * the stream contract's `major`/`minor` negotiation does not cover. Mirrors
+ * `host.status@1.1`'s `updateProgress` arm exactly — the same fact reaching a
+ * client by a second route must not arrive in a second shape.
+ *
+ * Deliberately NOT `.strict()`, unlike the `GET /api/v3/hosts` DTO. There,
+ * strictness makes a server-side addition fail loudly, because both ends of a
+ * negotiated HTTP contract ship together. Here they do not: awareness entries
+ * from old and new hosts coexist in one room indefinitely, so an unrecognised
+ * key must be dropped and the rest of the entry still read — a strict parse
+ * would blank out a newer host's busy count on every older client.
+ */
+export const hostRuntimeStatusAwarenessSchema = z.object({
+  busy: z.boolean(),
+  busySessionCount: z.number().int().nonnegative(),
+  updateProgress: z
+    .object({
+      state: z.enum(["updating", "failed"]),
+      error: z.string().nullable(),
+    })
+    .nullable(),
+});
+export type HostRuntimeStatusAwareness = z.infer<
+  typeof hostRuntimeStatusAwarenessSchema
+>;
+
+const hostRuntimeStatusAwarenessEntrySchema = z.object({
+  [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: hostRuntimeStatusAwarenessSchema,
+});
+
+/**
+ * Reads one awareness entry's runtime status, or `null` when the entry does not
+ * carry a usable one.
+ *
+ * A helper rather than an inline `safeParse` at each call site because the NULL
+ * RETURN is the contract: "field absent" and "field malformed" are the same
+ * answer to a reader — no live source — and both must stay distinguishable from
+ * a host that positively reported zero busy sessions. A caller that treats the
+ * null as a falsy count reintroduces exactly the claim this field refuses to
+ * make.
+ */
+export function readHostRuntimeStatusAwareness(
+  entry: unknown,
+): HostRuntimeStatusAwareness | null {
+  const parsed = hostRuntimeStatusAwarenessEntrySchema.safeParse(entry);
+  return parsed.success
+    ? parsed.data[HOST_RUNTIME_STATUS_AWARENESS_FIELD]
+    : null;
+}
+
 export const notificationsSubscribeOpenRequestSchema = z.object({});
 export type NotificationsSubscribeOpenRequest = z.infer<
   typeof notificationsSubscribeOpenRequestSchema

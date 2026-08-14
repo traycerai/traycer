@@ -16,7 +16,8 @@ import type {
 } from "@/stores/terminals/terminal-session-store";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
   clearPendingTerminalFocus,
@@ -87,7 +88,13 @@ function LandingTerminalTileBootstrap(
     [props.landingPageId, removeExitedTab],
   );
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
-  const hostEntry = useHostDirectoryEntry(props.tab.hostId);
+  // Derivation, not a coarse read. This gate replaces the tile with an explicit
+  // "is offline" state, which is a claim about a machine — so it asks the one
+  // hook that knows the difference between the cloud saying a host is gone and
+  // the cloud failing to answer, and that lets a live E2E session outrank
+  // either. It used to read the coarse bit, so a single degraded liveness read
+  // told someone their working terminal's host was off.
+  const reachability = useHostReachability(props.tab.hostId);
   const preparePayload = useCallback(
     (): Promise<TerminalCreatePayload> =>
       Promise.resolve({
@@ -119,8 +126,22 @@ function LandingTerminalTileBootstrap(
     rekeyTab(props.tab.instanceId, `landing-term-${uuidv4()}`);
   }, [bootstrap.createError?.code, props.tab.instanceId, rekeyTab]);
 
-  if (hostEntry === null || hostEntry.status === "unavailable") {
-    return <TerminalDeadState hostLabel={hostEntry?.label ?? "This host"} />;
+  if (reachability.status === "unreachable") {
+    return (
+      <TerminalDeadState
+        hostLabel={reachability.hostLabel}
+        unavailability={reachability.unavailability}
+      />
+    );
+  }
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
+    // The directory has not answered yet, or is empty because this machine's
+    // own host has not published. Neither is evidence about the bound host, and
+    // this tile used to render the dead state for both.
+    return <LandingTerminalWaiting />;
   }
   if (bootstrap.createIsError) {
     return (
@@ -271,10 +292,36 @@ function LandingTerminalTileLive(props: {
   );
 }
 
-function TerminalDeadState(props: { readonly hostLabel: string }): ReactNode {
+function LandingTerminalWaiting(): ReactNode {
+  return (
+    <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas">
+      <TerminalLoadingSkeleton />
+    </div>
+  );
+}
+
+/**
+ * The tile replaced by an explanation of why its host cannot be reached.
+ *
+ * `plan-restricted` gets its own sentence rather than the offline one, because
+ * "is offline" is false for it in a way that costs the reader real time: the
+ * machine is running and healthy, it simply has no remote route on this
+ * account's plan. Telling them it is off sends them to restart it, and hides
+ * the only thing that would actually help.
+ *
+ * `indeterminate` never reaches here — `useHostReachability` reports it as
+ * reachable, so the live path runs and the dial either succeeds or fails on its
+ * own evidence.
+ */
+function TerminalDeadState(props: {
+  readonly hostLabel: string;
+  readonly unavailability: HostUnavailability | null;
+}): ReactNode {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas p-4 text-center text-ui-sm text-muted-foreground">
-      {props.hostLabel} is offline. This terminal stays bound to that host.
+      {props.unavailability === "plan-restricted"
+        ? `${props.hostLabel} is local only on your current plan, so it can't be reached from here. Upgrade to use it remotely; this terminal stays bound to it.`
+        : `${props.hostLabel} is offline. This terminal stays bound to that host.`}
     </div>
   );
 }

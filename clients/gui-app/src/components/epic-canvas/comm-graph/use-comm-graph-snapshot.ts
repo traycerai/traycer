@@ -52,11 +52,15 @@ import {
   getCommGraphSubscriptionOpenerOverride,
 } from "@/lib/comm-graph/comm-graph-opener-override";
 import {
-  dialableHostEndpoint,
-  hostTransportKey,
+  dialableHostEndpointFor,
+  hostTransportKeyFor,
 } from "@/lib/host/transport-key";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostUnavailability,
+  isRemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { reconcileCommGraphCloudAuthorityCursor } from "@/stores/epics/comm-graph-timeline-store";
 
 const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
@@ -122,9 +126,25 @@ export function useCommGraphSnapshot(
   // available through another host in the user's directory. Relay choice
   // never becomes row identity; the host's availability frame is the sole
   // plane verdict.
+  // Relay dialability depends on the pull-only session cache, so the
+  // directory query alone cannot see a session dying or appearing under an
+  // `offline`/`local-only` entry. This subscription re-renders on a readiness
+  // flip, which recomputes the two memos below and pushes the new relay set /
+  // readiness keys into the cloud manager through their effects.
+  const directoryHostIdsForReadiness = useMemo(
+    () => (hostDirectory.data ?? []).map((entry) => entry.hostId),
+    [hostDirectory.data],
+  );
+  const hasReadySessionFor = useRemoteSessionsPollReadiness(
+    directoryHostIdsForReadiness,
+  );
   const relayHostIds = useMemo(() => {
     const directoryHostIds = hostDirectory.data
-      ?.filter((entry) => dialableHostEndpoint(entry) !== null)
+      ?.filter(
+        (entry) =>
+          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
+          null,
+      )
       .map((entry) => entry.hostId);
     return Array.from(
       new Set(
@@ -133,7 +153,7 @@ export function useCommGraphSnapshot(
           : directoryHostIds,
       ),
     ).sort();
-  }, [hostDirectory.data, hostIds]);
+  }, [hasReadySessionFor, hostDirectory.data, hostIds]);
   // The ID set does not change when a host publishes its endpoint late or
   // upgrades in place. Keep that transport identity separately so a retained
   // cloud manager can retry a prior dial/compatibility failure for the same
@@ -151,10 +171,16 @@ export function useCommGraphSnapshot(
         return [
           hostId,
           [
-            hostTransportKey(entry) ??
+            hostTransportKeyFor(entry, hasReadySessionFor(hostId)) ??
               [
                 entry.hostId,
-                entry.status,
+                // Derivation, not the coarse bit. This arm runs only when the
+                // transport refuses the entry, so the coarse bit is constant
+                // here and carries no information; the REASON does. A relay
+                // that goes `plan-restricted` → confirmed `offline` must clear
+                // the dial/compatibility verdict it retained under the other
+                // reason, and comparing the coarse bit would not notice.
+                hostUnavailability(entry) ?? "",
                 entry.version ?? "",
                 entry.websocketUrl ?? "",
               ].join("\u0000"),
@@ -166,7 +192,7 @@ export function useCommGraphSnapshot(
         ] as const;
       }),
     );
-  }, [hostDirectory.data, relayHostIds]);
+  }, [hasReadySessionFor, hostDirectory.data, relayHostIds]);
 
   // Read through a ref so acquiring does not re-run (and re-claim) every time
   // the host set changes - the claim only needs the set that is current at the

@@ -50,7 +50,7 @@ const guideMocks = vi.hoisted(
     directoryEntries: ReadonlyArray<{
       readonly hostId: string;
       readonly label: string;
-      readonly status: string;
+      readonly transportDialability: string;
       readonly websocketUrl: string;
     }>;
   } => ({
@@ -72,13 +72,13 @@ const guideMocks = vi.hoisted(
       {
         hostId: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://local.invalid",
       },
       {
         hostId: "remote",
         label: "Remote host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://remote.invalid",
       },
     ],
@@ -316,13 +316,13 @@ describe("AgentSelectionGuideSection", () => {
       {
         hostId: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://local.invalid",
       },
       {
         hostId: "remote",
         label: "Remote host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://remote.invalid",
       },
     ];

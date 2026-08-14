@@ -29,6 +29,10 @@ import {
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import {
+  liveBusySessionCount,
+  settledBusySessionCount,
+} from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import {
   managedInstallation,
@@ -157,6 +161,14 @@ export function HostOverviewPanel(props: {
     host,
     identity: identityQuery.data ?? null,
     status: statusQuery.data ?? null,
+    // The drain count is only as trustworthy as the read behind it, so the
+    // read's HEALTH travels with its value. See `liveBusySessionCount`.
+    statusHealth: {
+      isError: statusQuery.isError,
+      fetchStatus: statusQuery.fetchStatus,
+      isStale: statusQuery.isStale,
+      hasLiveSource: usable,
+    },
   });
   const { identity, displayName } = view;
 
@@ -385,6 +397,8 @@ export function HostOverviewPanel(props: {
           <HostUpdateDrainGateRow
             item={registryItem}
             mutation={policyMutation}
+            liveBusySessionCount={view.busySessionCount}
+            settledBusySessionCount={view.settledBusySessionCount}
           />
         )}
       </HostIdentityCard>
@@ -571,10 +585,24 @@ interface OverviewDisplay {
   readonly displayName: string;
   /** What the rename input shows before the user types. */
   readonly persistedNameDraft: string;
-  /** `host.status`'s own session count; `null` until the host answers. */
-  readonly busySessionCount: number | null;
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
+  /**
+   * Live open-session count from `host.status`, or `null` when this client has
+   * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   *
+   * The DISPLAY read: it survives a refetch of stale data so the row does not
+   * blank for a round trip.
+   */
+  readonly busySessionCount: number | null;
+  /**
+   * The same count, but only when the read is SETTLED — what the drain force
+   * may be armed and confirmed against. Diverges from `busySessionCount`
+   * exactly while a fetch is in flight, which is the window in which the
+   * confirm-time equality guard would otherwise compare a retained number to
+   * itself and wave through a force sized to a count nobody was shown.
+   */
+  readonly settledBusySessionCount: number | null;
 }
 
 function useOverviewDisplay(input: {
@@ -583,8 +611,15 @@ function useOverviewDisplay(input: {
   readonly identity: HostIdentity | null;
   /** The negotiated `host.status` response, as this client's registry sees it. */
   readonly status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null;
+  /** Freshness of the read above — retained cache data is not a live read. */
+  readonly statusHealth: {
+    readonly isError: boolean;
+    readonly fetchStatus: "fetching" | "paused" | "idle";
+    readonly isStale: boolean;
+    readonly hasLiveSource: boolean;
+  };
 }): OverviewDisplay {
-  const { scope, host, identity, status } = input;
+  const { scope, host, identity, status, statusHealth } = input;
   return {
     identity,
     displayName: identity?.effectiveName ?? host?.name ?? scope.hostLabel,
@@ -594,9 +629,26 @@ function useOverviewDisplay(input: {
     // one legitimate per-kind difference, and what they bought was a monospace
     // band nobody acts on from Settings; the session count is the half that
     // answers a question the buttons below actually depend on.
-    busySessionCount: status?.busySessionCount ?? null,
+    //
+    // Routed through `liveBusySessionCount` rather than read straight off the
+    // response: a retained cache entry is not a live read, and this count is
+    // what the chip states and the drain force is sized from.
+    busySessionCount: liveBusySessionCount({
+      reportedCount: status?.busySessionCount ?? null,
+      isError: statusHealth.isError,
+      fetchStatus: statusHealth.fetchStatus,
+      isStale: statusHealth.isStale,
+      hasLiveSource: statusHealth.hasLiveSource,
+    }),
     hostVersion: status?.hostVersion ?? null,
     updateProgress: status?.updateProgress ?? null,
+    settledBusySessionCount: settledBusySessionCount({
+      reportedCount: status?.busySessionCount ?? null,
+      isError: statusHealth.isError,
+      fetchStatus: statusHealth.fetchStatus,
+      isStale: statusHealth.isStale,
+      hasLiveSource: statusHealth.hasLiveSource,
+    }),
   };
 }
 

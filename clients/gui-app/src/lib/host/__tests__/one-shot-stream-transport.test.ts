@@ -19,7 +19,7 @@ const FAKE_TARGET: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: "ws://host-a/rpc",
   version: null,
-  status: "available",
+  transportDialability: "dialable",
 };
 
 function buildParams() {

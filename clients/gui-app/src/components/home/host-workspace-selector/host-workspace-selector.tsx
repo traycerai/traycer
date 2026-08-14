@@ -1,3 +1,5 @@
+import { hostSelectRowRefused } from "./host-select-row-refused";
+import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import {
   useCallback,
   useEffect,
@@ -1105,23 +1107,54 @@ function HostOnlySelect(props: {
         className="data-[side=bottom]:translate-y-0 data-[side=bottom]:rounded-t-none data-[side=top]:translate-y-0 data-[side=top]:rounded-b-none"
       >
         {options.map((host) => (
-          <SelectItem
+          <HostSelectRow
             key={host.hostId}
-            value={host.hostId}
-            disabled={
-              props.mode === "locked" ||
-              host.status === "unavailable" ||
-              (remoteRestricted && host.kind === "remote")
-            }
-          >
-            <HostSelectOptionContent
-              host={host}
-              remoteRestricted={remoteRestricted}
-            />
-          </SelectItem>
+            host={host}
+            remoteRestricted={remoteRestricted}
+            locked={props.mode === "locked"}
+          />
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function HostSelectRow(props: {
+  readonly host: HostDirectoryEntry;
+  readonly remoteRestricted: boolean;
+  readonly locked: boolean;
+}) {
+  // Subscribed, not read: the refusal predicate is ready-session-aware, and
+  // the session cache is pull-only - a readiness flip changes no directory
+  // value, so a row that read `hasReadyRemoteSession` at render time would
+  // keep its refusal answer until some unrelated directory emit. The poll
+  // subscription is what lets a row grey out when its backing session dies
+  // (and re-enable on the converse) while the popover is open.
+  const hasReadySession = useRemoteSessionPollReadiness(props.host.hostId);
+  return (
+    <SelectItem
+      value={props.host.hostId}
+      disabled={
+        props.locked ||
+        // Not `status === "unavailable"`, and not the raw
+        // `hostUnavailability` verdict either: the refusal is asked
+        // through the SAME ready-session-aware predicate the activation
+        // path dials through, so a fuse-window `offline` (recovery dial
+        // permitted) or an offline verdict this client holds a ready
+        // live session against stays selectable - see
+        // `hostSelectRowRefused` for the full derivation.
+        hostSelectRowRefused(
+          props.host,
+          props.remoteRestricted,
+          hasReadySession,
+        )
+      }
+    >
+      <HostSelectOptionContent
+        host={props.host}
+        remoteRestricted={props.remoteRestricted}
+      />
+    </SelectItem>
   );
 }
 
@@ -1167,6 +1200,8 @@ function hostSelectOptions(
   ) {
     return entries;
   }
+  // Same fabricated-row rule as `fixedUnavailableHostEntry`: no route exists to
+  // ask about, so the coarse bit is written directly rather than derived.
   return [
     {
       hostId: activeHostId,
@@ -1174,7 +1209,7 @@ function hostSelectOptions(
       kind: "local",
       websocketUrl: null,
       version: null,
-      status: "unavailable",
+      transportDialability: "not-dialable",
     },
     ...entries,
   ];

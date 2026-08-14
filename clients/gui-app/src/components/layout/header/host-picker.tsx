@@ -177,7 +177,9 @@ function HostPickerList(props: HostPickerListProps): ReactNode {
         >
           No hosts available.
         </p>
-        {options.listsFailed ? <HostPickerPartialFailure options={options} /> : null}
+        {options.listsFailed ? (
+          <HostPickerPartialFailure options={options} />
+        ) : null}
       </div>
     );
   }
@@ -201,7 +203,9 @@ function HostPickerList(props: HostPickerListProps): ReactNode {
         testIdPrefix="host-picker-option"
         emptyLabel="No hosts available."
       />
-      {options.listsFailed ? <HostPickerPartialFailure options={options} /> : null}
+      {options.listsFailed ? (
+        <HostPickerPartialFailure options={options} />
+      ) : null}
     </div>
   );
 }

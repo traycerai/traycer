@@ -1,9 +1,8 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
-import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
@@ -73,11 +72,6 @@ export interface HostOptions {
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
-
-const HEALTHY_PRESENCE: HostPresenceHealth = {
-  status: "healthy",
-  reason: null,
-};
 
 /**
  * Stand-in `queryFn` for the disabled installed-record query.
@@ -156,16 +150,31 @@ export function useHostOptions(): HostOptions {
     [localSnapshot, installedQuery.data],
   );
 
+  // Subscribed, not read ambiently: the session cache is pull-only, and the
+  // memo below would otherwise keep answering with whatever was true at its
+  // last directory/registry recompute - a session dying (or appearing) under
+  // an `offline`/`local-only` entry would leave rows connectable/unreachable
+  // until some unrelated input churned.
+  const scopeHostIds = useMemo(
+    () => [
+      ...new Set([
+        ...(directory ?? []).map((entry) => entry.hostId),
+        ...(registry?.hosts ?? []).map((item) => item.hostId),
+      ]),
+    ],
+    [directory, registry],
+  );
+  const hasLiveSession = useRemoteSessionsPollReadiness(scopeHostIds);
+
   const hosts = useMemo(
     () =>
       buildHostScopeOptions({
         directory: directory ?? [],
         registry: registry?.hosts ?? [],
-        presenceHealth: registry?.presenceHealth ?? HEALTHY_PRESENCE,
         localHostId,
         activeHostId,
         localService,
-        hasLiveSession: hasReadyRemoteSession,
+        hasLiveSession,
         viewerCheck: getViewerReachabilityCheck,
         remoteHostsPlanRestricted,
         nowMs,
@@ -176,6 +185,7 @@ export function useHostOptions(): HostOptions {
       localHostId,
       activeHostId,
       localService,
+      hasLiveSession,
       remoteHostsPlanRestricted,
       nowMs,
     ],

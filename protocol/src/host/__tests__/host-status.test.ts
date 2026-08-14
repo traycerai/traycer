@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   hostListItemSchema,
   hostListResponseSchema,
-  hostPresenceHealthSchema,
 } from "../host-status";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 
@@ -40,21 +39,9 @@ describe("host-status.ts strict parsing", () => {
     );
   });
 
-  it("rejects a server-added field on HostPresenceHealth", () => {
-    const withExtraHealthField = {
-      status: "healthy",
-      reason: null,
-      newHealthField: "unexpected",
-    };
-    expect(
-      hostPresenceHealthSchema.safeParse(withExtraHealthField).success,
-    ).toBe(false);
-  });
-
   it("rejects a server-added field on the HostListResponse envelope", () => {
     const response = {
       hosts: [HOST_LIST_ITEM_GOLDEN_FIXTURE],
-      presenceHealth: { status: "healthy" as const, reason: null },
     };
     expect(hostListResponseSchema.safeParse(response).success).toBe(true);
     expect(
@@ -63,5 +50,40 @@ describe("host-status.ts strict parsing", () => {
         newEnvelopeField: "unexpected",
       }).success,
     ).toBe(false);
+  });
+
+  it("rejects an invalid connectivity value", () => {
+    const withInvalidConnectivity = {
+      ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+      status: {
+        ...HOST_LIST_ITEM_GOLDEN_FIXTURE.status,
+        connectivity: "reconnecting",
+      },
+    };
+    expect(
+      hostListItemSchema.safeParse(withInvalidConnectivity).success,
+    ).toBe(false);
+  });
+
+  it("rejects a payload still carrying the removed presenceLease / busySessionCount fields — the hard cutover has no dual-parse", () => {
+    const legacyShapedStatus = {
+      presenceLease: "fresh",
+      hostRelayAttached: true,
+      viewerReachability: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.viewerReachability,
+      clientCloud: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.clientCloud,
+      busy: false,
+      busySessionCount: 0,
+      updateState: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.updateState,
+      appVersion: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.appVersion,
+      lastSeenAt: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.lastSeenAt,
+    };
+    const legacyItem = {
+      ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+      status: legacyShapedStatus,
+    };
+    // Missing the now-required `connectivity` AND carrying the removed
+    // fields — `.strict()` rejects on both counts, which is the point: there
+    // is no version marker and no dual-parse to fall back to.
+    expect(hostListItemSchema.safeParse(legacyItem).success).toBe(false);
   });
 });

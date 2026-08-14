@@ -29,13 +29,57 @@ import type { SchemaVersion } from "../framework/versioned-rpc-types";
 export const MUX_PROTOCOL_VERSION = 1;
 
 /**
- * Self-imposed hard cap on one encoded mux plaintext. The relay can carry more,
- * but remote-host v1 keeps frames under 1 MiB for interactivity and fails fast
- * locally before encryption/send.
+ * Hard cap on one mux frame as the RELAY sees it (`workers/relay-do`'s
+ * `MAX_FRAME_BYTES` — a larger frame closes the whole session). The relay
+ * measures the Noise CIPHERTEXT, so the plaintext budget senders must obey is
+ * {@link MAX_MUX_FRAME_PLAINTEXT_BYTES}, this minus the Noise overhead.
+ * Inbound decode still tolerates up to this full size.
  */
 export const MAX_MUX_FRAME_BYTES = 1024 * 1024;
 
-const HEADER_LEN = 15;
+/**
+ * Bytes the Noise transport adds around one mux plaintext:
+ * `[v:1][counter:8 BE]` header + the 16-byte AES-GCM tag (see
+ * `crypto/noise/session.ts`). Budgeted here so a frame at the plaintext cap
+ * can never produce a ciphertext the relay's own 1 MiB cap kills.
+ */
+export const NOISE_TRANSPORT_OVERHEAD_BYTES = 9 + 16;
+
+/**
+ * The relay's host uplink is one multiplexed WebSocket, so every frame on it
+ * rides wrapped as `[sid:u32 BE][noise ciphertext]` (host→relay stamped by
+ * `session-fan-out`'s host-leg framing; relay→host stamped by the relay).
+ * The relay applies its 1 MiB `MAX_FRAME_BYTES` to the WHOLE WebSocket
+ * message BEFORE stripping the prefix, so the prefix eats into the frame
+ * budget and must be subtracted from the plaintext cap. Budgeted for both
+ * directions (the client leg carries bare ciphertext, but a symmetric cap
+ * keeps one number true everywhere).
+ */
+export const RELAY_HOST_LEG_PREFIX_BYTES = 4;
+
+/**
+ * The sender-side cap on one encoded mux plaintext
+ * (relay cap − Noise overhead − host-leg demux prefix).
+ */
+export const MAX_MUX_FRAME_PLAINTEXT_BYTES =
+  MAX_MUX_FRAME_BYTES -
+  NOISE_TRANSPORT_OVERHEAD_BYTES -
+  RELAY_HOST_LEG_PREFIX_BYTES;
+
+/**
+ * Receiver-side robustness bound on one LOGICAL mux message (the reassembled
+ * chunk-sequence body). Sized to the platform, not to expected content: V8's
+ * `MAX_STRING_LENGTH` sits 24 bytes UNDER this, so a JSON payload can never
+ * quite reach it and enforcement on the sender is necessarily
+ * stringify-in-a-try (`RangeError`) followed by a byte check — see
+ * `chunking.ts`. Droppable once windowed/paged transfers ship.
+ */
+export const MAX_MUX_MESSAGE_BYTES = 512 * 1024 * 1024;
+
+/** Fixed mux frame header length: `[v:1][type:1][streamId:4][seq:4][flags:1][jsonLen:4]`. */
+export const MUX_FRAME_HEADER_LEN = 15;
+
+const HEADER_LEN = MUX_FRAME_HEADER_LEN;
 
 // -----------------------------------------------------------------------------
 // Frame envelope
@@ -91,6 +135,15 @@ export const MuxFlags = {
   CHUNKED: 0b0000_0100,
   /** The final chunk of a multi-chunk logical message (set with CHUNKED). */
   CHUNK_LAST: 0b0000_1000,
+  /**
+   * The first chunk of a multi-chunk logical message (set with CHUNKED).
+   * Load-bearing for reassembly: every data frame now carries its payload as
+   * opaque body bytes (`chunking.ts`), so no in-band field distinguishes a
+   * sequence start from a stray continuation — this flag is that distinction,
+   * and without it an orphaned continuation would silently seed a fresh
+   * accumulator and surface later as an undiagnosable body-decode failure.
+   */
+  CHUNK_FIRST: 0b0001_0000,
 } as const;
 
 /** The stream id reserved for session-level control frames. */
@@ -102,6 +155,7 @@ export interface MuxFrame {
   readonly seq: number;
   readonly qos: QosClassValue;
   readonly chunked: boolean;
+  readonly chunkFirst: boolean;
   readonly chunkLast: boolean;
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
@@ -113,6 +167,7 @@ export interface EncodeMuxFrameInput {
   readonly seq: number;
   readonly qos: QosClassValue;
   readonly chunked: boolean;
+  readonly chunkFirst: boolean;
   readonly chunkLast: boolean;
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
@@ -343,9 +398,24 @@ export class MuxFrameDecodeError extends Error {
 export class MuxFrameSizeError extends Error {
   constructor(byteLength: number) {
     super(
-      `mux frame exceeds ${MAX_MUX_FRAME_BYTES}-byte cap: ${byteLength} bytes`,
+      `mux frame exceeds the ${MAX_MUX_FRAME_PLAINTEXT_BYTES}-byte plaintext cap (${MAX_MUX_FRAME_BYTES}-byte relay cap − ${NOISE_TRANSPORT_OVERHEAD_BYTES}-byte Noise overhead): ${byteLength} bytes`,
     );
     this.name = "MuxFrameSizeError";
+  }
+}
+
+/**
+ * A LOGICAL mux message (the whole encoded body, before/after chunking) over
+ * {@link MAX_MUX_MESSAGE_BYTES}. Deterministic per message — routed to
+ * per-stream fatal handling, never treated as a droppable transient — on the
+ * sender at body encode and on the receiver as a chunk sequence accumulates.
+ */
+export class MuxMessageSizeError extends Error {
+  constructor(byteLength: number) {
+    super(
+      `mux message exceeds ${MAX_MUX_MESSAGE_BYTES}-byte cap: ${byteLength} bytes`,
+    );
+    this.name = "MuxMessageSizeError";
   }
 }
 
@@ -377,6 +447,9 @@ export function encodeMuxFrame(input: EncodeMuxFrameInput): Uint8Array {
   }
   if (input.chunked) {
     flags |= MuxFlags.CHUNKED;
+  }
+  if (input.chunkFirst) {
+    flags |= MuxFlags.CHUNK_FIRST;
   }
   if (input.chunkLast) {
     flags |= MuxFlags.CHUNK_LAST;
@@ -436,7 +509,11 @@ export function decodeMuxFrame(bytes: Uint8Array): MuxFrame {
   const hasBinary = (flags & MuxFlags.HAS_BINARY) !== 0;
   const json =
     jsonLen === 0 ? null : parseJsonSection(bytes, jsonStart, jsonEnd);
-  const binary = hasBinary ? bytes.slice(jsonEnd) : null;
+  // A view, not a copy: at chunked-transfer scale a copy per frame doubles
+  // peak receive memory. The backing buffer is this frame's own decrypt
+  // output, never reused, so aliasing is safe and the view holds at most the
+  // 15-byte header beyond the payload.
+  const binary = hasBinary ? bytes.subarray(jsonEnd) : null;
 
   return {
     type,
@@ -444,6 +521,7 @@ export function decodeMuxFrame(bytes: Uint8Array): MuxFrame {
     seq,
     qos: (flags & MuxFlags.BULK) !== 0 ? QosClass.BULK : QosClass.INTERACTIVE,
     chunked: (flags & MuxFlags.CHUNKED) !== 0,
+    chunkFirst: (flags & MuxFlags.CHUNK_FIRST) !== 0,
     chunkLast: (flags & MuxFlags.CHUNK_LAST) !== 0,
     json,
     binary,
@@ -457,7 +535,7 @@ function encodeJsonSection(json: Record<string, unknown> | null): Uint8Array {
 }
 
 function assertMuxFrameByteLength(byteLength: number): void {
-  if (byteLength > MAX_MUX_FRAME_BYTES) {
+  if (byteLength > MAX_MUX_FRAME_PLAINTEXT_BYTES) {
     throw new MuxFrameSizeError(byteLength);
   }
 }

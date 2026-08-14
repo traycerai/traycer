@@ -309,12 +309,29 @@ registry-backed presence words and the local service words ("Running" /
 "Stopped" / "Not installed"). It keeps a coarse `state` a person acts on plus a
 `detail` fragment carrying the nuance the old design spent a row of pills on.
 `stopped` and `not-installed` stay distinct from `offline` because they are the
-two a person can act on; for the local machine the live service snapshot
-outranks the cloud lease. It DELEGATES to `deriveHostPresence`
-(`panels/my-hosts-model.ts`) rather than re-deriving it - that function's
-invariants (no green dot without live evidence; live-session evidence outranks
-the lease; an expired lease under degraded presence reads "unknown", never a
-false "Offline") are tested and load-bearing.
+two a person can act on. It DELEGATES to `deriveHostPresence`
+(`panels/my-hosts-model.ts`) rather than re-deriving it.
+
+The precedence across the two is one chain, and each step outranks the next for
+a stated reason: **local process read** (a direct read of the service on this
+box) -> **live session** (an open E2E connection is firsthand proof) ->
+`status.connectivity` (the cloud's relay-attachment answer, and the only one
+available for a host this client has never dialled).
+
+`connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
+plus a separate relay-attach bit, and with them the states that existed only to
+narrate those two disagreeing ("Reconnecting", "Not reporting"). Its remaining
+invariants are tested and load-bearing: no green dot without live evidence;
+`unknown` (liveness unreadable) never renders as a false "Offline"; and
+`local-only` - a host the account's plan will never expose remotely - is an
+upgrade prompt, not an outage.
+
+Two things a reader of this file will look for and not find in the DTO:
+`busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
+cannot carry, so they come from `host.status@1.1` over a live connection (or
+the notification room's `hostRuntimeStatus` awareness field). No live source
+means the drain UI renders NOTHING - never a zero, which would offer to end
+"0 sessions" on a host that never told us how many it had.
 
 ## Sections
 
@@ -1973,34 +1990,19 @@ aria-live="polite"` carrying the equivalent text for
     deregistered-host re-enrollment gap itself is a recorded product follow-up,
     not a client-side fix.
 
-  **Recovery console** (`host-recovery-console.tsx`) is what is left of the old
-  CLI-bridge page, and the only remaining `IHostManagement` consumer here. It
-  renders for THIS COMPUTER only, and only when there is no host process to ask:
-  `scopedIsLocalMachine && (!connectable || not-installed)`, plus the
-  `emptyAccountLocalRecovery` carve-out (a first run has no local host id, so
-  hiding Install behind "No hosts yet" left a fresh install with no way to create
-  its first host). `not-installed` here is `deriveStatus`'s state, so it includes
-  "no live local snapshot" - a live process outranks a missing install record,
-  which both keeps Install away from a running tree-run host and stops the page
-  FLIPPING surfaces when the record resolves late. Restart falls back to
-  `HostController.respawn()` here, since an RPC restart needs a process to accept
-  the call. Contents are unchanged: the summary card
-  (`host-settings-summary-card.tsx`) with its progress and terminal-outcome
-  banners, the Updates card, Installation details and **Advanced** (OS service
-  re-register/deregister · release-candidate checkbox · "Pick a different
-  version"), the busy-host force/defer confirmation, and the bridge Doctor. The
-  available-versions list surfaces the real registry error message with its own
-  Retry, independent of the update region's Retry above - the two error/retry
-  paths are separate and can both be live at once. `host.registerService` /
-  `host.deregisterService` RPCs and remote parity for the REST of the Advanced
-  section are RECORDED SCOPE DROPS, not omissions. Its version picker is the one
-  part that has since gained remote parity - not by exposing the bridge, but
-  because the Overview grew the same list over `host.update.check`, so the two
-  now share `HostVersionRows` and differ only in who they ask.
+  **The recovery console is GONE.** `host-recovery-console.tsx` was what
+  remained of the old CLI-bridge page and the last `IHostManagement` consumer
+  here; it rendered for THIS COMPUTER only, and only when there was no host
+  process to ask. Folding host settings into the Overview removed it along with
+  the `emptyAccountLocalRecovery` carve-out, so Settings no longer has a
+  bridge-backed surface at all and every pane on this page describes its host by
+  asking that host. Getting a machine that has no host process back into a
+  usable state is `local-host-gate.tsx`'s job, upstream of Settings — the gate a
+  person passes before they can reach this page.
   - The legacy `/settings/service` redirect (so any bookmark, remembered tab
     path, or tray command lands on this same pane) is unchanged. Shells without
-    the Traycer CLI (web, mobile) no longer get a reduced page - they render the
-    same RPC Overview and simply have no recovery console.
+    the Traycer CLI (web, mobile) never got a reduced page and still do not:
+    with the console gone, every shell renders the same RPC Overview.
 
 - **Diagnostics is TWO panels**, split 2026-08-14. Both render a **Log detail**
   `SettingsGroup` and a **Recent logs** viewer that may use the remaining height

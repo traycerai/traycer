@@ -139,7 +139,7 @@ function buildClient(
     kind: "local",
     websocketUrl: `ws://127.0.0.1:0/${hostId}`,
     version: "0.0.0-mock",
-    status: "available",
+    transportDialability: "dialable",
   });
   client.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
@@ -208,6 +208,8 @@ function fakeDirectory(
     list: () => Promise.resolve(entries),
     findById: (hostId) => byId.get(hostId) ?? null,
     refresh: () => Promise.resolve(entries),
+    refreshForEra: () => Promise.resolve(entries),
+    invalidateInFlightRefresh: () => undefined,
     getSelected: () => entries[0] ?? null,
     selectById: () => undefined,
     onSelectionChange: () => ({ dispose: () => undefined }),
@@ -252,7 +254,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         kind: "local",
         websocketUrl: "ws://127.0.0.1:0/source",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       },
       // target-host is deliberately absent - simulates it having gone
       // unreachable / been removed from the directory between offering the
@@ -291,7 +293,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         kind: "local",
         websocketUrl: "ws://127.0.0.1:0/target",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       },
     ]);
 
@@ -323,7 +325,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         kind: "local",
         websocketUrl: "ws://127.0.0.1:0/target",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       },
     ]);
 
@@ -354,7 +356,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         kind: "local",
         websocketUrl: "ws://127.0.0.1:0/target",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       },
     ]);
 
@@ -419,7 +421,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         kind: "local",
         websocketUrl: "ws://127.0.0.1:0/target",
         version: "0.0.0-mock",
-        status: "available",
+        transportDialability: "dialable",
       },
     ]);
 
@@ -452,7 +454,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:0/target",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     },
   ]);
 
@@ -797,7 +799,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:0/target",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const movedToEntry: HostDirectoryEntry = {
       hostId: "third-host",
@@ -805,7 +807,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:0/third",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
     };
     const selected = { current: targetEntry };
     const movingDirectory: IHostDirectoryService = {

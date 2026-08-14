@@ -20,14 +20,16 @@ const EVENT = {
   originRefId: null,
 } satisfies CommGraphEvent;
 
-function entry(status: "available" | "unavailable"): HostDirectoryEntry {
+function entry(
+  transportDialability: "dialable" | "not-dialable",
+): HostDirectoryEntry {
   return {
     hostId: "origin-a",
     label: "Origin A",
     kind: "remote",
     websocketUrl: "wss://origin-a.example/stream",
     version: "1.0.0",
-    status,
+    transportDialability,
   };
 }
 
@@ -35,21 +37,39 @@ describe("isCommGraphOriginAvailable", () => {
   it("disables only the source jump when the canonical origin host is offline", () => {
     expect(
       isCommGraphOriginAvailable(
-        { findById: () => entry("unavailable") },
+        { findById: () => entry("not-dialable") },
         EVENT,
+        false,
       ),
     ).toBe(false);
   });
 
   it("reports an origin absent from the directory as unavailable", () => {
-    expect(isCommGraphOriginAvailable({ findById: () => null }, EVENT)).toBe(
-      false,
-    );
+    expect(
+      isCommGraphOriginAvailable({ findById: () => null }, EVENT, false),
+    ).toBe(false);
   });
 
   it("allows the source jump when the origin is dialable", () => {
     expect(
-      isCommGraphOriginAvailable({ findById: () => entry("available") }, EVENT),
+      isCommGraphOriginAvailable(
+        { findById: () => entry("dialable") },
+        EVENT,
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("lets a ready live session outrank an offline verdict", () => {
+    // The caller-supplied answer is the whole point of the parametric form: a
+    // client holding an open session has firsthand proof the origin is up,
+    // and the jump must not be disabled by a stale cloud verdict.
+    expect(
+      isCommGraphOriginAvailable(
+        { findById: () => entry("not-dialable") },
+        EVENT,
+        true,
+      ),
     ).toBe(true);
   });
 });

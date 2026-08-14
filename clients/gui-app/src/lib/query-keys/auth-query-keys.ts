@@ -11,13 +11,16 @@ export const authQueryKeys = {
     authService,
   ],
   // Remote Host Support (§7): the cross-device host registry + live status.
-  // Keyed on the live `AuthService` instance like `user`, so a broad `["auth"]`
-  // invalidation (sign-out / cross-user) drops it too.
-  registeredHosts: (authService: object): readonly unknown[] => [
-    "auth",
-    "registered-hosts",
-    authService,
-  ],
+  // Keyed to the signed-in user like `userSessions`, and for the same reason:
+  // an AuthService survives account changes, so without the user id the
+  // previous account's cached host list (names, ids, platforms) would be
+  // served to its replacement until a refetch landed. `null` is the
+  // signed-out placeholder — the query is disabled then, the key only has to
+  // not collide with a real user's entry.
+  registeredHosts: (
+    authService: object,
+    userId: string | null,
+  ): readonly unknown[] => ["auth", "registered-hosts", authService, userId],
   // Devices & Sessions account-security list, keyed to both the live
   // AuthService and signed-in user. An AuthService survives account changes,
   // so the user id is required to keep an old account's promise/cache from

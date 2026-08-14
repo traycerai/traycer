@@ -178,12 +178,9 @@ describe("<AddHostDialog /> arrival", () => {
         createdAt: new Date().toISOString(),
         updatePolicy: "manual",
         status: {
-          presenceLease: "fresh",
-          hostRelayAttached: true,
+          connectivity: "connectable",
           viewerReachability: "unknown",
           clientCloud: "ok",
-          busy: false,
-          busySessionCount: 0,
           updateState: "current",
           appVersion: "1.4.2",
           lastSeenAt: new Date().toISOString(),

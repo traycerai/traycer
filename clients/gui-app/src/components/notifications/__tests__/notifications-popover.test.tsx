@@ -22,6 +22,10 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -121,6 +125,31 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
 }));
+
+/**
+ * Controllable ready-session evidence, the same seam
+ * `use-host-reachability.composition.test.tsx` uses. `originRefusal` asks the
+ * shared `isConfirmedTransportRefusal` gate, whose ready-session override must
+ * keep an approval actionable when this client holds a live session to a
+ * cloud-`offline` origin. Partial (spread-actual) so every other export stays
+ * real.
+ */
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
 
 vi.mock("@/lib/host-error-toast", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host-error-toast")>();
@@ -392,6 +421,66 @@ function cloudDone(
   };
 }
 
+/**
+ * A REAL projected remote origin entry (the directory service's own mapper),
+ * cloud-`offline` with the given `lastSeenAt` deciding the relay-fuse
+ * recovery-dial window at projection time.
+ */
+function offlineRemoteOrigin(
+  hostId: string,
+  lastSeenAt: string,
+): RemoteHostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    {
+      hostId,
+      displayName: `label-${hostId}`,
+      platform: "Ubuntu",
+      kind: "personal",
+      publicKey: `pk-${hostId}`,
+      createdAt: "2026-07-01T12:00:00.000Z",
+      status: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.4.2",
+        lastSeenAt,
+      },
+      updatePolicy: "manual",
+    },
+    "wss://relay.example.test/attach",
+  );
+}
+
+/** A `lastSeenAt` far past the relay-fuse cap - no recovery-dial window. */
+const STALE_ORIGIN_LAST_SEEN = "2026-07-03T11:59:50.000Z";
+
+function cloudApproval(
+  entryId: string,
+  originHostId: string,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId,
+    coalesceKey: `approval.requested:${entryId}`,
+    entry: hostPrompt(entryId, 300, null),
+    presentation: {
+      epicTitle: "Cloud epic",
+      chatTitle: "Deploy checkout fix",
+    },
+  };
+}
+
+/** Routes origin lookups at the given remote entry, local lookups as usual. */
+function bindOriginDirectory(origin: RemoteHostDirectoryEntry): void {
+  directoryRef.value = {
+    findById: (hostId) => {
+      if (hostId === origin.hostId) return origin;
+      return hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null;
+    },
+  };
+}
+
 function threadEntry(
   id: string,
   epicId: string,
@@ -531,8 +620,13 @@ function defaultHostRequest(method: string): Promise<unknown> {
 }
 
 function activateButtonFor(row: HTMLElement): HTMLButtonElement {
-  const button = row.querySelector("button");
-  if (button === null) throw new Error("activate button not found");
+  // Role query scoped to the row (testing guideline): the navigable body is
+  // the row's first button in document order; the trailing mark-read tick is
+  // its later sibling, never nested inside it.
+  const button = within(row).getAllByRole("button")[0];
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("activate button not found");
+  }
   return button;
 }
 
@@ -600,6 +694,7 @@ describe("NotificationsPopover", () => {
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
     notificationFeedMode.value = "local";
+    readySessionHosts.value.clear();
   });
 
   it("shows loading instead of caught up before the first cloud snapshot", async () => {
@@ -752,6 +847,120 @@ describe("NotificationsPopover", () => {
       "host.notifications.cloudFeed.markRead",
       { entryId: "entry-cloud" },
     );
+  });
+
+  it("keeps an approval actionable when its cloud-offline origin has a READY live session in this client", async () => {
+    // The registry says `offline` (stale lastSeenAt - not even a fuse
+    // window), but THIS client holds a ready E2E session to the origin:
+    // firsthand proof the route works, which `isConfirmedTransportRefusal`
+    // lets outrank the cloud verdict everywhere else (`useHostReachability`,
+    // `dialableHostEndpoint` - the exact gate activation dials through).
+    // Reading the raw verdict here instead removed the activation button
+    // from a route that works.
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    const origin = offlineRemoteOrigin(
+      "remote-origin-live",
+      STALE_ORIGIN_LAST_SEEN,
+    );
+    bindOriginDirectory(origin);
+    readySessionHosts.value.add(origin.hostId);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudApproval("entry-approval-live", origin.hostId)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationOriginState).toBe("available");
+    expect(
+      within(row).queryByText("The originating host is unavailable."),
+    ).toBeNull();
+    // The primary control is the navigable body button, not a dead div.
+    expect(
+      within(row).getByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBe(activateButtonFor(row));
+    expect(activateButtonFor(row).disabled).toBe(false);
+  });
+
+  it("still refuses the same cloud-offline origin when NO ready session exists", async () => {
+    // The counterpart leg: absent firsthand session evidence (and past the
+    // relay-fuse window), the confirmed `offline` refusal still disables the
+    // action - guards against the override making every origin look alive.
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    const origin = offlineRemoteOrigin(
+      "remote-origin-dead",
+      STALE_ORIGIN_LAST_SEEN,
+    );
+    bindOriginDirectory(origin);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudApproval("entry-approval-dead", origin.hostId)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationOriginState).toBe("unavailable");
+    // A refused origin renders no navigable body button - the body is inert.
+    expect(
+      within(row).queryByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBeNull();
+    expect(
+      within(row).getByText("The originating host is unavailable."),
+    ).not.toBeNull();
+  });
+
+  it("keeps a fuse-window offline origin actionable (the recovery dial the activation path would attempt)", async () => {
+    // Inside the relay-fuse window `isConfirmedTransportRefusal` permits the
+    // recovery dial, so `dialableHostEndpoint` routes the activation; a row
+    // that greyed itself out from the raw verdict refused an action the
+    // transport would have attempted (and which fails recoverably if the
+    // host really is dead).
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+    const origin = offlineRemoteOrigin("remote-origin-fuse", recentLastSeen);
+    bindOriginDirectory(origin);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudApproval("entry-approval-fuse", origin.hostId)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationOriginState).toBe("available");
+    expect(
+      within(row).queryByText("The originating host is unavailable."),
+    ).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: /Deploy checkout fix/ }),
+    ).toBe(activateButtonFor(row));
+    expect(activateButtonFor(row).disabled).toBe(false);
   });
 
   it("shows and opens the exact renderer-local terminal failure in cloud mode", async () => {

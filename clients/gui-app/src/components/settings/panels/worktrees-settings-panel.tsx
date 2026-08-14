@@ -591,10 +591,15 @@ function WorktreesBody(props: {
       </WorktreesStateMessage>
     );
   } else if (!reachable) {
+    // The hook's REASON, not one sentence for every non-reachable result. A
+    // `plan-restricted` host is running and its worktrees are intact; saying it
+    // is offline sends someone to fix a machine that is fine and hides the only
+    // thing that would actually restore this panel.
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
-        {reachability.hostLabel} is offline. Worktrees can only be managed on a
-        reachable host.
+        {reachability.unavailability === "plan-restricted"
+          ? `${reachability.hostLabel} is local only on your current plan. Upgrade to manage its worktrees from here.`
+          : `${reachability.hostLabel} is offline. Worktrees can only be managed on a reachable host.`}
       </WorktreesStateMessage>
     );
   } else if (client === null) {

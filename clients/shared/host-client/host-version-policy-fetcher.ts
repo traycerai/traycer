@@ -14,8 +14,14 @@ import {
  * `IRunnerHost.updateHostVersionPolicy(...)`.
  *
  * This write is a registry-only mutation picked up by the host on its next
- * heartbeat (≤ ~20s) — no live session to the host is required, which is the
- * whole point (it works even when the client and host have drifted apart).
+ * check-in — no live session to the host is required, which is the whole point
+ * (it works even when the client and host have drifted apart).
+ *
+ * The latency moved and the UI copy tracks it: the pin used to ride the 20s
+ * host→cloud heartbeat, which no longer exists. It now rides the host's token
+ * refresh (~10 minutes), with a room-carried nudge that collapses that to
+ * seconds for a host holding a live session. Anything user-facing should quote
+ * the ~10-minute upper bound, since a client cannot tell which case it is in.
  */
 
 /** Per-request budget, mirrors `HOST_LIST_FETCH_TIMEOUT_MS`. */

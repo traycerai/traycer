@@ -33,6 +33,7 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
   DefaultRequestContextProvider,
+  type AuthEra,
   type RequestContextProvider,
 } from "@traycer-clients/shared/auth/request-context-provider";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
@@ -71,6 +72,23 @@ import { AuthTokenStore } from "./auth-token-store";
 // shared file, then wipes them.
 const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
 const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
+
+/**
+ * Thrown when a read is asked for on behalf of a credential era that is no
+ * longer the live one — the request would go out under a bearer from a
+ * different era than the answer is meant for.
+ *
+ * A distinct type rather than a bare `Error` so a caller can tell it apart
+ * from a transport failure if it ever needs to; today every caller treats it
+ * the same way, which is the correct one: no answer, retain what you have,
+ * and let the refresh the new era triggers for itself provide the real one.
+ */
+export class SupersededAuthEraError extends Error {
+  constructor() {
+    super("Refusing a read issued for a superseded credential era");
+    this.name = "SupersededAuthEraError";
+  }
+}
 
 // Stored-session recovery backoff bounds (see `sessionRecoveryTimer`).
 const SESSION_RECOVERY_INITIAL_DELAY_MS = 1_000;
@@ -312,6 +330,15 @@ export class AuthService {
    * runtime consumers must NEVER read this - they thread the context.
    */
   private currentBearer: string | null = null;
+  /**
+   * The `GET /api/v3/hosts` request currently in flight, together with the
+   * bearer it was ISSUED UNDER. Both halves are load-bearing — see
+   * `fetchRegisteredHosts`.
+   */
+  private registeredHostsInFlight: {
+    readonly bearer: string;
+    readonly request: Promise<HostListResponse | null>;
+  } | null = null;
   private currentProfile: AuthProfile | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
@@ -458,9 +485,47 @@ export class AuthService {
    * Live identity-transition generation. WindowsBridge captures this before a
    * delayed `authSession.get()` so a stale initial snapshot cannot overwrite a
    * newer local mutation that landed while the get was in flight.
+   *
+   * NOT a credential counter, and it must not be pressed into service as one:
+   * it moves on `signIn` / `signOut` / `dispose` only, so every ordinary
+   * same-user rotation (proactive refresh, reconcile adopt, external
+   * projection) leaves it exactly where it was. Callers fencing a DESTRUCTIVE
+   * decision on "is the credential that observed this still current?" want
+   * {@link getCredentialGeneration}.
    */
   getIdentityGeneration(): number {
     return this.identityGeneration;
+  }
+
+  /**
+   * Live credential generation — advances on every bearer change, including
+   * same-user rotations (see `RequestContextProvider.getCredentialGeneration`).
+   *
+   * Delegated to the context provider rather than counted here because the
+   * provider is the object every rotation already goes through; a second
+   * counter maintained alongside it would be one more thing to forget to bump
+   * on a new rotation path, which is exactly the failure this replaces.
+   */
+  getCredentialGeneration(): number {
+    return this.contextProvider.getCredentialGeneration();
+  }
+
+  /**
+   * The era the live credential belongs to, for a caller that has no era of
+   * its own — an ambient poll, a focus refetch, a picker-open read. Both
+   * fields are read together from committed state, so the pair is coherent
+   * even though the two sources are separate.
+   *
+   * A caller reacting to a TRANSITION must not use this: it threads the era
+   * the emission handed it (`onChange`'s second argument), which is the whole
+   * mechanism that keeps the incoming account's refresh from running under
+   * the outgoing account's bearer.
+   */
+  currentAuthEra(): AuthEra {
+    return {
+      identity: this.currentProfile?.userId ?? null,
+      credentialGeneration: this.getCredentialGeneration(),
+    };
   }
 
   /**
@@ -1311,12 +1376,14 @@ export class AuthService {
       currentUserId === session.user.user.id &&
       this.currentBearer !== session.token
     ) {
+      // COMMIT BEFORE EMIT (see `applySignedIn`) - the rotation notification
+      // below is synchronous, and this projection path rotates just as often
+      // as the local ones.
+      this.commitLiveCredential(session.token, session.profile);
       this.contextProvider.rotateCurrentBearer({
         userId: currentUserId,
         bearerToken: session.token,
       });
-      this.currentBearer = session.token;
-      this.currentProfile = session.profile;
       const contextMetadata =
         useAuthStore.getState().contextMetadata ??
         this.contextMetadataFromUser(session.user);
@@ -1476,19 +1543,125 @@ export class AuthService {
    *
    *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
    *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
-   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              refresh keeps the bearer fresh and the ~60s poll
    *                              recovers on the next tick — no forced sign-out
    *                              from a background list poll).
    *   - `network-error`        → throws so TanStack Query surfaces a retriable
    *                              error instead of a misleading empty list.
+   *   - superseded `era`       → throws {@link SupersededAuthEraError} WITHOUT
+   *                              fetching (see below). Deliberately not `null`:
+   *                              `null` means signed-out, which the directory
+   *                              treats as an authoritative CLEAR, and "I
+   *                              refused to ask" is not evidence of anything.
+   *                              A throw takes the retain-last-known path.
+   *
+   * `era` is the credential era the caller is asking on behalf of — threaded
+   * from the `onChange` emission for a transition-driven refresh, or
+   * {@link currentAuthEra} for an ambient one.
    */
-  async fetchRegisteredHosts(): Promise<HostListResponse | null> {
+  async fetchRegisteredHosts(era: AuthEra): Promise<HostListResponse | null> {
+    // THE ISSUE-TIME CREDENTIAL CHECK, and it lives here because this is where
+    // the credential is read. Every previous attempt to fence this refresh put
+    // the check one layer up — on the memo, on the commit — and each time the
+    // request still went out under a bearer belonging to somebody else,
+    // because the layer doing the checking never saw which credential the
+    // fetch would actually use.
+    //
+    // `era` names the credential era this refresh was ISSUED FOR; the pair
+    // below is the era the live bearer actually belongs to, written together
+    // in `commitLiveCredential`. If they disagree, this call is about to send
+    // a credential from a different era than the one it is answering for —
+    // refuse instead, and let the caller take its retain-last-known path.
+    //
+    // The identity half is what makes the ordering contract fail CLOSED: if a
+    // future edit moves an assignment back after its emission, this sees a
+    // bearer still belonging to A while being asked for B and stops, rather
+    // than fetching A's hosts and committing them under B. The generation
+    // half catches the same mismatch within one identity, where the user id
+    // is identical and only the token has been replaced.
+    const liveEra = this.currentAuthEra();
+    if (
+      liveEra.identity !== era.identity ||
+      liveEra.credentialGeneration !== era.credentialGeneration
+    ) {
+      appLogger.debug("[auth] refusing a hosts read for a superseded era", {
+        requestedIdentity: era.identity,
+        requestedGeneration: era.credentialGeneration,
+        liveGeneration: liveEra.credentialGeneration,
+      });
+      throw new SupersededAuthEraError();
+    }
     if (this.currentBearer === null) {
       return null;
     }
-    const result = await this.runnerHost.listRegisteredHosts(
-      this.currentBearer,
-    );
+    // Two independent callers reach this endpoint: the globally-mounted
+    // `HostDirectoryService` poll and the Settings liveness query, plus their
+    // event triggers (focus refetch, picker open, context change). They are
+    // on different sides of the TanStack cache, so nothing above this point
+    // can deduplicate them, and their triggers genuinely coincide — a window
+    // regaining focus fires both at once.
+    //
+    // In-flight coalescing only, deliberately: callers that arrive together
+    // share one request, and a caller that arrives after it settles gets a
+    // real fetch. A result memo would have been the way to halve the steady
+    // rate too, but `directory.refresh()` on picker-open is a correctness
+    // path — it exists to be current at that instant — and handing it a
+    // seconds-old answer to save a request is the wrong trade.
+    // KEYED BY BEARER, and that is the whole safety property. An unkeyed memo
+    // hands whoever arrives next the answer to somebody else's question: sign
+    // out of A and into B while A's request is in flight, and B is served A's
+    // host list — another account's machine names, ids and platforms rendered
+    // as B's own. The same slot would also let B await a request whose bearer
+    // is already invalid and inherit its 401.
+    //
+    // Losing the coalescing across a token rotation is an acceptable cost (one
+    // extra request); serving one identity's data to another is not, so the
+    // comparison is on the exact bearer rather than on user id — a rotated
+    // token for the SAME user is still a different request than the one in
+    // flight, and cheap to just re-issue.
+    const bearer = this.currentBearer;
+    const inFlight = this.registeredHostsInFlight;
+    if (inFlight !== null && inFlight.bearer === bearer) {
+      return inFlight.request;
+    }
+    const request = this.performFetchRegisteredHosts(bearer);
+    this.registeredHostsInFlight = { bearer, request };
+    try {
+      return await request;
+    } finally {
+      this.releaseRegisteredHostsSlot(request);
+    }
+  }
+
+  /**
+   * Clears the in-flight slot, but only if it is still OURS.
+   *
+   * Called whether the request resolved or threw: a failed read must not pin a
+   * rejected promise that every later caller re-awaits. Guarded because a
+   * request superseded by an identity change must not clear the NEWER slot
+   * when it finally settles — the superseding caller has its own request in
+   * there, and clearing it would drop the coalescing for everyone waiting on
+   * it.
+   *
+   * A separate method rather than an inline `finally` body on purpose: inside
+   * `fetchRegisteredHosts`, TypeScript still has the slot narrowed to the
+   * object assigned a few lines above and reports the null check as
+   * unnecessary. It is not — reentrancy across the `await` is exactly what it
+   * guards — and narrowing that is wrong about concurrency is not a reason to
+   * delete a live guard.
+   */
+  private releaseRegisteredHostsSlot(
+    request: Promise<HostListResponse | null>,
+  ): void {
+    if (this.registeredHostsInFlight?.request === request) {
+      this.registeredHostsInFlight = null;
+    }
+  }
+
+  private async performFetchRegisteredHosts(
+    bearer: string,
+  ): Promise<HostListResponse | null> {
+    const result = await this.runnerHost.listRegisteredHosts(bearer);
     if (result.kind === "unauthorized") {
       return null;
     }
@@ -1813,8 +1986,12 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
+    // COMMIT BEFORE EMIT (see `applySignedIn`): `rotateCurrentBearer` notifies
+    // its rotation listeners synchronously. The profile is unchanged - a
+    // rotation is the same account with a new token - and passing the live one
+    // back through the single commit site keeps the pair written together.
+    this.commitLiveCredential(bearerToken, this.currentProfile);
     this.contextProvider.rotateCurrentBearer({ userId, bearerToken });
-    this.currentBearer = bearerToken;
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
   }
@@ -2474,9 +2651,8 @@ export class AuthService {
     this.reconcileQueued = false;
     this.currentReconcile = null;
     this.authStoreUnsubscribe();
+    this.commitLiveCredential(null, null);
     this.contextProvider.dispose();
-    this.currentBearer = null;
-    this.currentProfile = null;
     this.listeners.clear();
     this.errorListeners.clear();
     this.sessionSnapshotListeners.clear();
@@ -2604,6 +2780,27 @@ export class AuthService {
     this.setLastError(null);
     this.setDeviceProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
+    const profile = profileOverride ?? this.profileFromUser(user);
+    const contextMetadata = this.contextMetadataFromUser(user);
+    // COMMIT BEFORE EMIT — the ordering contract for this whole class of bug.
+    //
+    // Every provider call below announces this transition SYNCHRONOUSLY, and
+    // its listeners fetch: the host runtime answers a context change by
+    // refreshing the host directory, which runs all the way down to
+    // `fetchRegisteredHosts` and puts a bearer on the wire. So every ambient
+    // auth read those listeners can reach must already hold its
+    // post-transition value by the time the announcement goes out.
+    //
+    // These two assignments used to sit at the END of this method. That left
+    // `currentBearer` holding the OUTGOING account's token while the incoming
+    // account's mandatory refresh was being issued — the refresh whose entire
+    // job is to load the new account fetched with the old one's credential,
+    // and then committed those rows under the new identity, which by then had
+    // caught up enough to pass the commit guard.
+    //
+    // The rotate branch needs it just as much: `rotateCurrentBearer` notifies
+    // its own listeners, and they are entitled to the same guarantee.
+    this.commitLiveCredential(bearerToken, profile);
     let rotatedInPlace = false;
     if (liveUserId !== undefined && liveUserId === user.user.id) {
       try {
@@ -2631,10 +2828,6 @@ export class AuthService {
         externalAbortSignal: undefined,
       });
     }
-    const profile = profileOverride ?? this.profileFromUser(user);
-    const contextMetadata = this.contextMetadataFromUser(user);
-    this.currentBearer = bearerToken;
-    this.currentProfile = profile;
     useAuthStore
       .getState()
       .setSignedIn(profile, contextMetadata, projectShareableTeams(user));
@@ -2656,11 +2849,44 @@ export class AuthService {
     }
     this.setDeviceProgress(null);
     this.refreshScheduler.stop();
+    // COMMIT BEFORE EMIT (see `applySignedIn`). `signOut()` announces the
+    // null context synchronously and the runtime refreshes the directory
+    // inside that announcement; a bearer still readable here would be sent on
+    // behalf of a signed-out session, and — if the registry happened to
+    // accept it — would re-commit the signed-out user's hosts as the
+    // signed-out directory.
+    this.commitLiveCredential(null, null);
     this.contextProvider.signOut();
-    this.currentBearer = null;
-    this.currentProfile = null;
     useAuthStore.getState().setSignedOut();
     this.emitSessionSnapshot();
+  }
+
+  /**
+   * THE single assignment site for the live credential pair.
+   *
+   * `currentBearer` and `currentProfile` are one fact — a bearer and the
+   * account it belongs to — and every consumer that has to tell "the current
+   * credential" apart from "the credential this request is for" reads them as
+   * a pair (see `fetchRegisteredHosts`). Writing them anywhere else, or in
+   * two steps, re-opens the window where the bearer says A and the profile
+   * says B.
+   *
+   * Callers assign through this BEFORE announcing the transition that made it
+   * true. That is the ordering contract, and it is restated at each call site
+   * because the failure it prevents is invisible from here — nothing about
+   * these two lines shows that somebody is about to fetch.
+   *
+   * The store projection (`useAuthStore`) deliberately stays where it is,
+   * after the announcement: no synchronous listener path reads auth state
+   * from there. The directory's identity accessor reads `currentProfile`
+   * through `getCurrentSessionSnapshot()`, which is why THAT one is here.
+   */
+  private commitLiveCredential(
+    bearer: string | null,
+    profile: AuthProfile | null,
+  ): void {
+    this.currentBearer = bearer;
+    this.currentProfile = profile;
   }
 
   /**
