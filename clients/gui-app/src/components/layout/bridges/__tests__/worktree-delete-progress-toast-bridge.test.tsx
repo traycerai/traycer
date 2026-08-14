@@ -174,6 +174,55 @@ describe("<WorktreeDeleteProgressToastBridge />", () => {
     screen.getByText("1/8 deleted");
   });
 
+  it("does not suppress an undismissed batch after hiding combined progress", async () => {
+    const view = renderBridge();
+
+    await screen.findByText("0/6 deleted");
+    await dismissProgressToast();
+
+    rerenderWithSummary(
+      view,
+      progressSummary({
+        scopeKeys: ["batch-a", "batch-b"],
+        total: 8,
+        deleted: 0,
+        failed: 0,
+        active: 8,
+      }),
+    );
+    await screen.findByText("Deleting worktrees");
+
+    // Batch B settles before A. The bridge programmatically hides the
+    // combined progress toast because A remains dismissed.
+    rerenderWithSummary(
+      view,
+      progressSummary({
+        scopeKeys: ["batch-a"],
+        total: 6,
+        deleted: 0,
+        failed: 0,
+        active: 6,
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByText("Deleting worktrees")).toBeNull();
+    });
+
+    // Once A settles, the most recent terminal group is B. Its success must
+    // remain visible because the user never dismissed B.
+    rerenderWithSummary(
+      view,
+      progressSummary({
+        scopeKeys: ["batch-b"],
+        total: 2,
+        deleted: 2,
+        failed: 0,
+        active: 0,
+      }),
+    );
+    await screen.findByText("Deleted 2 worktrees");
+  });
+
   it("does not revive progress when one of several dismissed batches settles", async () => {
     mocked.summary = progressSummary({
       scopeKeys: ["batch-a", "batch-b"],

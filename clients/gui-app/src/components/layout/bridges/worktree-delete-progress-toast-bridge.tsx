@@ -69,6 +69,10 @@ export function WorktreeDeleteProgressToastBridge(): null {
 
     lastToastPersistentRef.current = summary.active > 0 || summary.failed > 0;
     showWorktreeDeleteProgressToast(summary, () => {
+      // Sonner also invokes `onDismiss` for programmatic `toast.dismiss`.
+      // Those paths clear this ref before Sonner runs its asynchronous
+      // callback, so only a user closing a live toast suppresses its scope.
+      if (!lastToastPersistentRef.current) return;
       summary.scopeKeys.forEach((key) => {
         dismissedProgressScopeKeysRef.current.add(key);
       });
@@ -99,6 +103,7 @@ function showWorktreeDeleteProgressToast(
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       cancel: null,
+      onDismiss: undefined,
     });
     return;
   }
@@ -111,6 +116,7 @@ function showWorktreeDeleteProgressToast(
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
+      onDismiss: undefined,
     },
     WORKTREE_DELETE_REPORT_CONTEXT,
   );
