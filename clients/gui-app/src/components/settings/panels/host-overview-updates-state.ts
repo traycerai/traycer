@@ -77,16 +77,25 @@ export function useHostOverviewUpdates(input: {
   // check's equivalents are no longer state at all — they are read straight off
   // the query's latest answer below.
   //
-  // `installDiscoveredDegrade` is STICKY: `cli-unavailable` and
-  // `externally-managed` are facts about how this host is set up, not about
-  // this attempt, and neither is knowable before we try. Once either is seen
-  // the whole region retires and says so, because for an externally-managed
-  // host there is no fallback control left to point at: it skips the update
-  // reconciler outright, so neither this list nor the auto-update switch
-  // reaches it. Leaving Check-now behind would keep offering the one action we
-  // have just been told can never lead anywhere.
-  const [installDiscoveredDegrade, setInstallDiscoveredDegrade] =
-    useState<OverviewDegradeReason | null>(null);
+  // `installDiscovered` is STICKY: `cli-unavailable` and `externally-managed`
+  // are facts about how this host is set up, not about this attempt, and
+  // neither is knowable before we try. Once either is seen the whole region
+  // retires and says so, because for an externally-managed host there is no
+  // fallback control left to point at: it skips the update reconciler
+  // outright, so neither this list nor the auto-update switch reaches it.
+  // Leaving Check-now behind would keep offering the one action we have just
+  // been told can never lead anywhere.
+  //
+  // Sticky is not PERMANENT, though — `HostScopeGate` keeps this subtree
+  // mounted across disconnect/reconnect, so a latch that nothing refutes
+  // would outlive the CLI being installed and the host restarted. The
+  // `discoveredAt` stamp is what lets a check answer that arrived AFTER the
+  // refusal clear it below; the ok answer TanStack retained from before the
+  // install must not count as fresh evidence.
+  const [installDiscovered, setInstallDiscovered] = useState<{
+    readonly reason: OverviewDegradeReason;
+    readonly discoveredAt: number;
+  } | null>(null);
   // NOT sticky: `cli-failed` and `invalid-output` say this attempt went wrong,
   // not that the mechanism is unavailable, so the controls stay.
   const [installFailure, setInstallFailure] = useState<CliShellFailure | null>(
@@ -109,14 +118,28 @@ export function useHostOverviewUpdates(input: {
   // refreshed successfully. What the host last said is the whole truth here.
   const check = readCheckResponse(checkQuery.data ?? null);
   const manifest = check.manifest;
+  // A check that SUCCEEDED after the refusal was discovered refutes
+  // `cli-unavailable` — installing the CLI and restarting the host must not
+  // leave the region retired until the user leaves the scope and returns.
+  // Adjust-during-render, same as the panel's other derived corrections.
+  if (
+    checkRefutesDiscoveredRefusal({
+      discovered: installDiscovered,
+      manifest: check.manifest,
+      checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+    })
+  ) {
+    setInstallDiscovered(null);
+  }
   // Any one of these retires the region. `installDegrade` counts even though
   // checking would still work: learning about a version this host can never
   // install is not a capability, it is a tease.
-  const degrade =
-    installDiscoveredDegrade ??
-    check.sticky ??
-    input.checkDegrade ??
-    input.installDegrade;
+  const degrade = resolveRegionDegrade({
+    installDiscovered: installDiscovered?.reason ?? null,
+    checkSticky: check.sticky,
+    checkDegrade: input.checkDegrade,
+    installDegrade: input.installDegrade,
+  });
   const transientFailure = installFailure ?? check.transient;
   // `isFetching`, not `isPending`: a forced Check now over an answer already in
   // hand leaves `isPending` false, and the button would never show it was busy.
@@ -142,7 +165,18 @@ export function useHostOverviewUpdates(input: {
             outcome: response.outcome,
             hostName,
             version,
-            onSticky: setInstallDiscoveredDegrade,
+            // `Date.now()` here, in the settle, is what "after the refusal"
+            // means for the render-time clear above: a retained ok answer
+            // has an OLDER `dataUpdatedAt` and cannot refute this discovery.
+            onSticky: (reason) => {
+              setInstallDiscovered({ reason, discoveredAt: Date.now() });
+              // One immediate re-ask puts the CLI's absence INTO the check's
+              // own answer, where the table-owned condition poll
+              // (`host-method-policy-table.ts`) owns recovery from there —
+              // and if the CLI is somehow already back, this same ask is the
+              // fresh ok that clears the latch above.
+              if (reason === "cli-unavailable") void checkQuery.refetch();
+            },
             onTransient: setInstallFailure,
             onAccepted: () => setInstallFailure(null),
           });
@@ -450,6 +484,48 @@ function assetUnavailableReason(asset: PlatformAsset | null): string | null {
  * mechanism intact. Retiring the region for those would take the retry away
  * from the person best placed to use it.
  */
+/**
+ * Whether a check answer refutes the install-discovered refusal.
+ *
+ * `host.update.check` shells the very CLI the install could not find, so an
+ * ok answer NEWER than the discovery proves the CLI is back. The stamp
+ * comparison is what keeps the ok answer TanStack retained from BEFORE the
+ * install from counting as fresh evidence. `externally-managed` deliberately
+ * never clears here: the check's outcome union has no externally-managed arm
+ * (schemas.ts), so an ok check is what an externally-managed host answers
+ * TOO — it says nothing about that refusal.
+ */
+function checkRefutesDiscoveredRefusal(input: {
+  readonly discovered: {
+    readonly reason: OverviewDegradeReason;
+    readonly discoveredAt: number;
+  } | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly checkDataUpdatedAt: number;
+}): boolean {
+  return (
+    input.discovered !== null &&
+    input.discovered.reason === "cli-unavailable" &&
+    input.manifest !== null &&
+    input.checkDataUpdatedAt > input.discovered.discoveredAt
+  );
+}
+
+/** Precedence over the region's four retirement sources, first one wins. */
+function resolveRegionDegrade(input: {
+  readonly installDiscovered: OverviewDegradeReason | null;
+  readonly checkSticky: OverviewDegradeReason | null;
+  readonly checkDegrade: OverviewDegradeReason | null;
+  readonly installDegrade: OverviewDegradeReason | null;
+}): OverviewDegradeReason | null {
+  return (
+    input.installDiscovered ??
+    input.checkSticky ??
+    input.checkDegrade ??
+    input.installDegrade
+  );
+}
+
 function stickyDegradeFor(
   outcome: CliShellFailure | "externally-managed",
 ): OverviewDegradeReason | null {

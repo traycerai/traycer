@@ -363,6 +363,17 @@ export function HostOverviewPanel(props: {
   });
   const anyPending = updateGatePending || updates.summary.installing;
 
+  // The restart confirmation has the same stale-open window the OS-service
+  // confirms do (`host-overview-advanced.tsx`): opened while idle, it stays
+  // answerable while an automatic install or another lifecycle write arms the
+  // page-wide gate under it. Close it for every arming EXCEPT its own
+  // dispatch — this dialog deliberately stays open through `restart.mutate`
+  // to show its spinner and route the busy verdict. Adjust-during-render so
+  // the close lands in the arming commit.
+  if (restartConfirmOpen && anyPending && !restart.isPending) {
+    setRestartConfirmOpen(false);
+  }
+
   // The name edits in place, exactly as a tab title does — same hook, so Enter
   // commits, Escape reverts, blur settles once, and the input can never commit
   // an empty string. That last rule is why "Reset name to default" is a menu

@@ -579,6 +579,54 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     ).toBe(false);
   });
 
+  it("an install arming the page-wide gate CLOSES an already-open deregister confirmation — its question is stale and its confirm would dispatch mid-swap", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(["1.6.0"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", [
+      ...ALL_OVERVIEW_METHODS,
+      "host.service.status",
+      "host.service.register",
+      "host.service.deregister",
+    ]);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    // Grab the Install button BEFORE the dialog opens: Radix marks the page
+    // behind an open dialog aria-hidden, which removes the rows from the
+    // accessibility tree that role queries search.
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    const installButton = within(rowFor(rows, "1.6.0")).getByRole("button", {
+      name: "Install 1.6.0",
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-service-deregister"),
+    );
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    fireEvent.click(installButton);
+
+    // The accepted install arms the gate; the open confirmation must go with
+    // it — a confirm click after this point would re-register/deregister a
+    // host that is swapping its installation.
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+
   it("an ACCEPTED install locks the rename pencil and Run doctor with the rest of the page — neither may dispatch against a host mid-swap", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",

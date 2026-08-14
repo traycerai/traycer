@@ -280,7 +280,10 @@ export function useHostUpdateCheckQuery(input: {
       enabled: input.enabled,
       // Long, deliberately. This is the one read on the page that costs a
       // process on the host, and what it returns — which versions the registry
-      // publishes — changes on a release cadence, not a browsing one.
+      // publishes — changes on a release cadence, not a browsing one. The one
+      // exception — re-asking while the answer is `cli-unavailable`, so a
+      // reinstalled CLI revives the retired region — is table-owned condition
+      // polling (`host-method-policy-table.ts`), not an option here.
       staleTime: 5 * 60_000,
       refetchOnWindowFocus: false,
       // Keeps the PREVIOUS filter's list on screen while the new one loads.

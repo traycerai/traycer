@@ -260,6 +260,20 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
   const anyPending =
     props.registerPending || props.deregisterPending || props.busy;
 
+  // A confirmation that outlives the state it asked about is a stale
+  // question: these dialogs close BEFORE dispatching, so an armed page-wide
+  // gate while one is open can only mean some OTHER lifecycle operation
+  // (an automatic install, a restart) began after it opened. Its description
+  // — session counts included — no longer describes the world, and its
+  // confirm button would dispatch into the very operation the gate protects.
+  // Close it; the reopen path is a button `anyPending` already disables.
+  // Adjust-during-render, not an effect: the close must land in the same
+  // commit the gate arms in, not a frame later.
+  if (anyPending && (confirmRegister || confirmDeregister)) {
+    setConfirmRegister(false);
+    setConfirmDeregister(false);
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <OsServiceHeading description={props.description} />

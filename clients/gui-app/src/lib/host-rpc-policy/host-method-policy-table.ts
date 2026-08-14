@@ -280,6 +280,31 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 30 * SECOND_MS,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * `host.update.check` answered `cli-unavailable`. That answer retires the
+ * whole update region and the retired region hides Check now, so with no
+ * focus/reconnect refetch in production nothing would ever notice the Traycer
+ * CLI being reinstalled — the region stayed retired until the user left the
+ * host scope and came back. The probe fails fast on the host while the CLI is
+ * genuinely absent, and the first ok answer revives the region and ends the
+ * lane.
+ */
+export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.cli-recovery",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 60 * SECOND_MS,
+};
+/**
+ * The check itself failed — a transport fault, not an answer. Same recovery
+ * reasoning as the lane above ("Couldn't ask …" has no retry button either),
+ * on a quieter cadence: reachability is the scope's problem first, this query
+ * only needs to catch up once the host is back.
+ */
+export const UPDATE_CHECK_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.error",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 5 * 60 * SECOND_MS,
+};
 
 const NO_RESET_LANES: ReadonlySet<string> = new Set();
 export const PROVIDERS_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
@@ -331,7 +356,20 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.doctor": { ...LATEST_SCHEDULING, poll: null },
-  "host.update.check": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.check": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("host.update.check", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        return data.outcome === "cli-unavailable"
+          ? UPDATE_CHECK_CLI_RECOVERY_POLL_LANE
+          : false;
+      },
+      initialErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      staleDataErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   "host.update.install": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
