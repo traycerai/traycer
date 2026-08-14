@@ -248,48 +248,7 @@ export function HostOverviewPanel(props: {
     );
   };
 
-  // The name edits in place, exactly as a tab title does — same hook, so Enter
-  // commits, Escape reverts, blur settles once, and the input can never commit
-  // an empty string. That last rule is why "Reset name to default" is a menu
-  // item rather than a third button under the input: clearing the override is a
-  // DIFFERENT write (`null`), not an empty save, and the editor deliberately has
-  // no way to express it.
   const renameDegrade = identitySetDegrade ?? identityDegrade;
-  const rename = useInlineRename({
-    value: failedRename?.draft ?? view.persistedNameDraft,
-    // `!identitySet.isPending`: the editor closes on commit BEFORE the write
-    // settles, and an editor reopened in that window enqueues a second
-    // `host.identity.set` the first one's failure callback would then clobber.
-    canEdit:
-      usable &&
-      renameDegrade === null &&
-      identity !== null &&
-      !identitySet.isPending,
-    onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
-  });
-  // Ref-carried so the reopen effect below always calls THIS render's
-  // `startEditing` - the closure that captured the failed draft as value.
-  useEffect(() => {
-    reopenRenameRef.current = rename.startEditing;
-  });
-  // Reopen AFTER the failed draft is the hook's current value (see onError).
-  useEffect(() => {
-    if (failedRename === null) return;
-    reopenRenameRef.current();
-  }, [failedRename]);
-
-  // Focus restoration: the pencil unmounts while the input is up and comes back
-  // on close, so the trigger is refocused on that true->false transition only —
-  // never on mount, where it would steal focus from the page. Same pattern (and
-  // the same `wasEditingRef`) the summary card uses for the same reason.
-  const editNameRef = useRef<HTMLButtonElement>(null);
-  const wasEditingRef = useRef(rename.isEditing);
-  useEffect(() => {
-    if (wasEditingRef.current && !rename.isEditing) {
-      editNameRef.current?.focus();
-    }
-    wasEditingRef.current = rename.isEditing;
-  }, [rename.isEditing]);
 
   // An accepted `host.update.install` returns the moment the CLI takes the job;
   // the swap itself continues DETACHED and is reported only through
@@ -403,6 +362,51 @@ export function HostOverviewPanel(props: {
     busy: updateGatePending,
   });
   const anyPending = updateGatePending || updates.summary.installing;
+
+  // The name edits in place, exactly as a tab title does — same hook, so Enter
+  // commits, Escape reverts, blur settles once, and the input can never commit
+  // an empty string. That last rule is why "Reset name to default" is a menu
+  // item rather than a third button under the input: clearing the override is a
+  // DIFFERENT write (`null`), not an empty save, and the editor deliberately has
+  // no way to express it.
+  const rename = useInlineRename({
+    value: failedRename?.draft ?? view.persistedNameDraft,
+    // `!anyPending` covers the identity write itself (via `corePending`) — the
+    // editor closes on commit BEFORE the write settles, and an editor reopened
+    // in that window enqueues a second `host.identity.set` the first one's
+    // failure callback would then clobber — and the page-wide gate with it: a
+    // rename must not dispatch while the host is swapping versions, restarting,
+    // or rewriting its OS service, where the expected transport drop would
+    // reject the write and strand its retry draft on an unusable scope. This is
+    // why the hook lives BELOW the gate chain rather than with the other
+    // identity wiring above.
+    canEdit:
+      usable && renameDegrade === null && identity !== null && !anyPending,
+    onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
+  });
+  // Ref-carried so the reopen effect below always calls THIS render's
+  // `startEditing` - the closure that captured the failed draft as value.
+  useEffect(() => {
+    reopenRenameRef.current = rename.startEditing;
+  });
+  // Reopen AFTER the failed draft is the hook's current value (see onError).
+  useEffect(() => {
+    if (failedRename === null) return;
+    reopenRenameRef.current();
+  }, [failedRename]);
+
+  // Focus restoration: the pencil unmounts while the input is up and comes back
+  // on close, so the trigger is refocused on that true->false transition only —
+  // never on mount, where it would steal focus from the page. Same pattern (and
+  // the same `wasEditingRef`) the summary card uses for the same reason.
+  const editNameRef = useRef<HTMLButtonElement>(null);
+  const wasEditingRef = useRef(rename.isEditing);
+  useEffect(() => {
+    if (wasEditingRef.current && !rename.isEditing) {
+      editNameRef.current?.focus();
+    }
+    wasEditingRef.current = rename.isEditing;
+  }, [rename.isEditing]);
   if (host === null) return null;
 
   const registryItem = host.item;
@@ -473,6 +477,11 @@ export function HostOverviewPanel(props: {
             <HostOverviewNameAction
               hostName={displayName}
               pendingWrite={identitySet.isPending}
+              // The page-wide gate, distinct from `pendingWrite`: it locks the
+              // trigger during ANY lifecycle write (install, restart, service
+              // register/deregister) without claiming an identity write is in
+              // flight — only `pendingWrite` swaps the pencil for the spinner.
+              locked={anyPending}
               // The WRITE capability gates the rename affordance, not the read.
               // The pencil and "Retry name" both lead to `host.identity.set`,
               // so a host that can be read but not written must degrade them -

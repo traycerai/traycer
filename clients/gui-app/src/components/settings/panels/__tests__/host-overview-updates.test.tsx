@@ -56,6 +56,7 @@ import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings
 import {
   buildOverviewHostFixture,
   openHostOverviewAdvanced,
+  openHostOverviewMenu,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -168,6 +169,45 @@ function multiVersionManifest(
         },
       },
     })),
+  };
+}
+
+/**
+ * A one-version manifest whose entry carries exactly ONE platform key — the
+ * ambiguous shape `platformAssetFor` must judge: a current CLI's projected
+ * answer and a legacy single-platform release both look like this, and only
+ * the registry's platform string says which host the key belongs to.
+ */
+function soleKeyManifest(
+  version: string,
+  soleKey: string,
+): HostAvailableManifest {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-12T00:00:00Z",
+    latest: version,
+    versions: [
+      {
+        version,
+        releasedAt: "2026-08-12T00:00:00Z",
+        releaseNotesUrl: "https://example.invalid/notes",
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          [soleKey]: {
+            available: true,
+            unavailableReason: null,
+            url: "https://example.invalid/host.tar.gz",
+            sizeBytes: 1024,
+            sha256: "a".repeat(64),
+            signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+            signatureAlgorithm: "minisign" as const,
+            publicKeyId: "key-1",
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -415,6 +455,179 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       }),
     );
     expect(attempted).toEqual([]);
+  });
+
+  it("a YANKED latest is never offered by the summary — the row disables it and the CLI's resolveAsset refuses it, so an offer would dispatch a guaranteed rejection", async () => {
+    const manifest = multiVersionManifest(["1.7.0", "1.6.0"]);
+    const yankedLatest = {
+      ...manifest,
+      versions: manifest.versions.map((entry) =>
+        entry.version === "1.7.0" ? { ...entry, yanked: true } : entry,
+      ),
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({ outcome: "ok" as const, manifest: yankedLatest }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The summary tells the truth instead of advertising a version the CLI
+    // would refuse: no plain "available", no Update now.
+    await screen.findByText(
+      "v1.7.0 is available, but host-a can't install it.",
+    );
+    expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    expect(
+      within(rowFor(rows, "1.7.0"))
+        .getByRole("button", { name: "Install 1.7.0" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("a sole platform key belonging to ANOTHER OS is a legacy one-platform release, not the host's projected answer — nothing is offered", async () => {
+    // The fixture scope's registry platform is darwin-arm64; a legacy
+    // (pre-projection) CLI hands back the full map, and a version released
+    // only for linux gives that map exactly one key. Trusting it as "the
+    // host's own answer" would offer an install the host CLI then refuses
+    // during asset resolution.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: soleKeyManifest("1.7.0", "linux-x64"),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.7.0 is available, but host-a can't install it.",
+    );
+    expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
+
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    await waitFor(() => {
+      const rows = within(picker).getAllByRole("listitem");
+      expect(
+        within(rowFor(rows, "1.7.0"))
+          .getByRole("button", { name: "Install 1.7.0" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(rowFor(rows, "1.7.0").textContent).toContain(
+        "No asset for this platform.",
+      );
+    });
+  });
+
+  it("a win32-arm64 host's sole win32-x64 key IS its projected answer — the emulated build the CLI itself resolves to stays installable", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: soleKeyManifest("1.7.0", "win32-x64"),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      // `currentHostPlatformKey()` maps win32/arm64 to the emulated x64 build,
+      // so this registry row and that manifest key describe the SAME host.
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        connectable: true,
+        platform: "win32-arm64",
+      }),
+    };
+    renderPanel();
+
+    await screen.findByText("v1.7.0 is available.");
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    expect(
+      within(rowFor(rows, "1.7.0"))
+        .getByRole("button", { name: "Install 1.7.0" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("an ACCEPTED install locks the rename pencil and Run doctor with the rest of the page — neither may dispatch against a host mid-swap", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(["1.6.0"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Enabled BEFORE the install — so the lock below is caused by the click,
+    // not by a fixture that never let the pencil load.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    fireEvent.click(
+      within(rowFor(rows, "1.6.0")).getByRole("button", {
+        name: "Install 1.6.0",
+      }),
+    );
+
+    // `accepted` returns at spawn and progress never surfaces in this fixture,
+    // so what holds the page is the dispatch-armed accepted latch — the same
+    // gate every other Overview verb consumes.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    await openHostOverviewMenu();
+    expect(
+      screen
+        .getByTestId("host-overview-run-doctor")
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 
   it(`more than VERSION_LIST_PREVIEW (${VERSION_LIST_PREVIEW}) versions shows only the preview slice plus a toggle; clicking it reveals the rest and relabels to "Show recent"`, async () => {

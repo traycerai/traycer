@@ -195,6 +195,7 @@ export function useHostOverviewUpdates(input: {
         unreachable: checkQuery.isError,
         hostName,
         upToDate,
+        offerable: updatableVersion !== null,
       }),
       transientFailure,
       checking,
@@ -292,11 +293,13 @@ function visibleVersionRows(input: {
 /**
  * The version the summary's Update now may offer, or `null`.
  *
- * Three gates, all of which the picker enforces per row and the summary must
+ * Four gates, all of which the picker enforces per row and the summary must
  * therefore enforce for its one target: the manifest must be from a check the
  * host CONFIRMED (not error-retained data), `latest` must be strictly newer
- * than what is installed, and the latest entry must resolve a usable asset
- * for this host's platform.
+ * than what is installed, the latest entry must not be YANKED (the row
+ * disables it and the CLI's `resolveAsset` refuses it before download, so an
+ * offer here would dispatch an install the host is guaranteed to reject), and
+ * the entry must resolve a usable asset for this host's platform.
  */
 function offerableLatestVersion(input: {
   readonly manifest: HostAvailableManifest | null;
@@ -316,6 +319,7 @@ function offerableLatestVersion(input: {
     (candidate) => candidate.version === latest,
   );
   if (entry === undefined) return null;
+  if (entry.yanked) return null;
   const asset = platformAssetFor(entry.platforms, input.platformKey);
   return assetUnavailableReason(asset) === null ? latest : null;
 }
@@ -361,12 +365,15 @@ function supersededReason(
 /**
  * Which platform's asset this row is about — the host's, never this computer's.
  *
- * A SOLE entry is authoritative and is taken as-is: the host's CLI projects
+ * A sole entry is USUALLY the host's own answer: the host's CLI projects
  * every entry to `currentHostPlatformKey()` before emitting it
- * (`host-available.ts`), so the one key present IS the host's own answer, and
- * second-guessing it with a key derived here would get win32-arm64 wrong — that
- * host resolves to the emulated `win32-x64` build, which the registry row does
- * not know.
+ * (`host-available.ts`). But an OLDER CLI emits the whole map, and a version
+ * released for a single platform gives that map exactly one key too — one
+ * that can belong to another OS entirely. The two shapes are not
+ * distinguishable from the entry alone, so a sole key is VALIDATED against
+ * the registry's platform string rather than trusted outright; the
+ * validation must still accept the emulated `win32-x64` answer a win32-arm64
+ * host projects, which a key derived here would get wrong.
  *
  * More than one key means an OLDER CLI that emitted the whole map. Then the
  * registry's platform string is the only thing available to pick with, and a
@@ -377,7 +384,11 @@ function platformAssetFor(
   platformKey: string | null,
 ): PlatformAsset | null {
   const keys = Object.keys(platforms);
-  if (keys.length === 1) return platforms[keys[0]] ?? null;
+  if (keys.length === 1) {
+    return soleKeyBelongsToHost(keys[0], platformKey)
+      ? (platforms[keys[0]] ?? null)
+      : null;
+  }
   if (platformKey === null) return null;
   if (platformKey in platforms) return platforms[platformKey] ?? null;
   // A registry row can carry an OS-only key ("darwin") while an older CLI's
@@ -388,6 +399,30 @@ function platformAssetFor(
   const prefixed = keys.filter((key) => key.startsWith(`${platformKey}-`));
   if (prefixed.length === 1) return platforms[prefixed[0]] ?? null;
   return null;
+}
+
+/**
+ * Whether a manifest entry's SOLE platform key can be this host's answer.
+ *
+ * Accepts the same shapes the multi-key path accepts — an exact match, or an
+ * arch-qualified key under an OS-only registry string — plus the one mapping
+ * the host CLI itself applies: `currentHostPlatformKey()` resolves
+ * win32-arm64 to the emulated `win32-x64` build, so that pair is a genuine
+ * projected answer, not a foreign asset. With no registry platform to check
+ * against, the sole key is taken as-is — rejecting it would blank every row
+ * for hosts whose registry record predates the platform field. Anything else
+ * is a legacy single-platform release for some OTHER host, and refusing it
+ * here mirrors the refusal the host CLI's own `resolveAsset` would produce
+ * at install time.
+ */
+function soleKeyBelongsToHost(
+  soleKey: string,
+  platformKey: string | null,
+): boolean {
+  if (platformKey === null) return true;
+  if (soleKey === platformKey) return true;
+  if (soleKey.startsWith(`${platformKey}-`)) return true;
+  return platformKey === "win32-arm64" && soleKey === "win32-x64";
 }
 
 type PlatformAsset =
@@ -458,6 +493,8 @@ function describeCheckState(input: {
   readonly unreachable: boolean;
   readonly hostName: string;
   readonly upToDate: boolean;
+  /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
+  readonly offerable: boolean;
 }): string {
   // Ordered so a stale answer never outranks what is happening NOW: a refetch
   // keeps the previous manifest on screen, so "vX is available." would otherwise
@@ -476,6 +513,12 @@ function describeCheckState(input: {
   // No answer yet and nothing wrong: the first load, which now starts by itself.
   if (input.manifest === null) return "Checking for updates…";
   if (input.upToDate) return "This host is running the latest version.";
+  // A latest this host cannot act on — yanked, or no asset for its platform.
+  // Claiming plain availability here would put the sentence at odds with the
+  // absent button; the version list carries the specific reason.
+  if (!input.offerable) {
+    return `v${input.manifest.latest} is available, but ${input.hostName} can't install it.`;
+  }
   return `v${input.manifest.latest} is available.`;
 }
 

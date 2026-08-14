@@ -458,8 +458,17 @@ export function useHostServiceDeregister(
           latchStore.releaseDeregisterAccepted(context.hostId);
         }
       },
-      onError: (_error, _variables, context) => {
+      onError: (error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
+        // A transport DROP is deregister's probable-dispatch shape, exactly as
+        // it is register's: the request can reach the host and start the
+        // detached CLI just as the supervised process exits, losing the
+        // `accepted` answer. Releasing here would re-enable lifecycle controls
+        // over a host that is shutting down, so the dispatch-armed latch stays
+        // held — its bounded timer backstops the case where nothing was
+        // dispatched at all. Only an error that definitively PRECEDED
+        // execution refutes the dispatch.
+        if (error instanceof HostTransportFailureError) return;
         useHostServiceWriteLatchStore
           .getState()
           .releaseDeregisterAccepted(context.hostId);

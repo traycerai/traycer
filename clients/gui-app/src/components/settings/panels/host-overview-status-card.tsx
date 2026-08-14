@@ -119,6 +119,13 @@ export function HostOverviewNameAction(props: {
   readonly hostName: string;
   /** A `host.identity.set` is unresolved; a second editor would race it. */
   readonly pendingWrite: boolean;
+  /**
+   * The page-wide lifecycle gate: an install, restart, or OS-service write is
+   * in flight, so a rename must not dispatch against a host that is swapping
+   * versions or shutting down. Disables the trigger WITHOUT the pending
+   * spinner — only `pendingWrite` claims an identity write is running.
+   */
+  readonly locked: boolean;
   readonly degrade: OverviewDegradeReason | null;
   /** The identity read has answered, so there is a name to edit. */
   readonly loaded: boolean;
@@ -163,7 +170,9 @@ export function HostOverviewNameAction(props: {
       // finding: block the TRIGGER while there is no name data to edit - and
       // while a write is still settling, since the editor closes before the
       // settle and a second editor would race it.
-      disabled={degrade !== null || !props.loaded || props.pendingWrite}
+      disabled={
+        degrade !== null || !props.loaded || props.pendingWrite || props.locked
+      }
       onClick={props.onEdit}
       aria-label="Edit name"
       data-testid="host-overview-edit-name"
@@ -507,7 +516,10 @@ export function HostOverviewHeaderActions(props: {
             icon={<Stethoscope className="size-3.5" aria-hidden />}
             degrade={props.doctorDegrade}
             pending={false}
-            busy={false}
+            // Same page-wide gate as Restart: opening the sheet mounts
+            // `HostDoctorRpcCard`, which dispatches `host.doctor` immediately —
+            // another CLI process against a host mid-install or mid-shutdown.
+            busy={props.anyPending}
             testId="host-overview-run-doctor"
             onSelect={props.onOpenDoctor}
           />

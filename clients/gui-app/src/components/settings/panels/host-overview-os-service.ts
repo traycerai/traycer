@@ -146,8 +146,18 @@ export function useOverviewOsService(input: {
           }
           toast.error(describeServiceDeregisterFailure(response, hostName));
         },
-        onError: (error) =>
-          toastFromHostError(error, "Couldn't deregister the service."),
+        // Same expected-disconnect split as register above: a deregister that
+        // reached the host kills that host, so the dropped connection is the
+        // PROBABLE shape of success, not a failure to report as one.
+        onError: (error) => {
+          if (error instanceof HostTransportFailureError) {
+            toast.info(
+              `Lost contact with ${hostName} while deregistering — it is probably shutting down.`,
+            );
+            return;
+          }
+          toastFromHostError(error, "Couldn't deregister the service.");
+        },
       });
     },
   };
