@@ -1,16 +1,16 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostListItem,
-  HostPresenceHealth,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   deriveHostHealth,
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
 import type { ViewerReachabilityCheckLike } from "@/components/settings/panels/my-hosts-model";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -54,7 +54,6 @@ export interface HostScopeOption {
   readonly version: string | null;
   readonly health: HostHealth;
   readonly updateState: HostUpdateState | null;
-  readonly busySessionCount: number;
   /** The directory entry, when there is one — needed to build a client. */
   readonly entry: HostDirectoryEntry | null;
   /** The registry row, when there is one — needed for update policy writes. */
@@ -64,7 +63,6 @@ export interface HostScopeOption {
 export interface BuildHostScopeOptionsInput {
   readonly directory: readonly HostDirectoryEntry[];
   readonly registry: readonly HostListItem[];
-  readonly presenceHealth: HostPresenceHealth;
   readonly localHostId: string | null;
   readonly activeHostId: string | null;
   /** Local service truth, used only for the local machine's row. */
@@ -96,17 +94,21 @@ export function buildHostScopeOptions(
       name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      connectable: isAdministrableRoute(entry, input.remoteHostsPlanRestricted),
+      connectable: isAdministrableRoute(
+        entry,
+        input.remoteHostsPlanRestricted,
+        input.hasLiveSession(hostId),
+      ),
       planRestricted: isPlanRestrictedRoute(
         entry,
         input.remoteHostsPlanRestricted,
+        input.hasLiveSession(hostId),
       ),
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,
       health: deriveHostHealth({
         item,
-        presenceHealth: input.presenceHealth,
         isLocalMachine,
         hasLiveSession: input.hasLiveSession(hostId),
         viewerCheck: input.viewerCheck(hostId),
@@ -114,7 +116,6 @@ export function buildHostScopeOptions(
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
-      busySessionCount: item?.status.busySessionCount ?? 0,
       entry,
       item,
     };
@@ -130,15 +131,19 @@ export function buildHostScopeOptions(
  * `buildTransientHostClient` returns null for it, so offering it as an
  * administrable target would produce a picker row that can never load.
  *
- * `status` is half of that question, not a detail. The repository's canonical
- * dialability rule lives in `dialableHostEndpoint` / `hostTransportKey`, and
- * BOTH refuse an entry that is not `available` even when it still carries a
- * URL — a stale address left behind by a host that went away.
- * `buildTransientHostClient` does not re-check it, so a URL-only test handed
- * back a live-looking client whose every call hangs: the scope read `ready`,
- * panels mounted, and the Add-host dialog announced a machine as connected and
- * ready to run agents. Asking the same question the transport asks is what
- * keeps this model from disagreeing with the layer that actually dials.
+ * Dialability is half of that question, not a detail — so this now CALLS the
+ * canonical rule (`dialableHostEndpointFor`, with the caller-subscribed
+ * ready-session answer — the ambient form's cache read is a frozen answer in
+ * a memoized model) instead of restating it. It used to
+ * restate it as `status === "available"`, which was the same answer only for as
+ * long as the two definitions happened to agree; they stopped agreeing when the
+ * transport was taught that a failed liveness read still dials, and a
+ * hand-copied predicate cannot be told that.
+ *
+ * The URL check matters on its own: `buildTransientHostClient` does not
+ * re-check it, so a URL-only test handed back a live-looking client whose every
+ * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
+ * announced a machine as connected and ready to run agents.
  *
  * The plan gate is the same kind of claim. A remote host on a plan without
  * remote hosts advertises a relay URL the server refuses to attach
@@ -149,29 +154,57 @@ export function buildHostScopeOptions(
 function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
+  hasLiveSession: boolean,
 ): boolean {
-  if (entry === null || entry.websocketUrl === null) return false;
-  // Reachable, not "answering this instant": a busy host is still the host
-  // this route administers, and disabling its settings for the duration of an
-  // epic open would be the same false-death read this ticket removes.
-  if (!isHostReachable(entry.status)) return false;
-  return !(remoteHostsPlanRestricted && entry.kind === "remote");
+  if (entry === null || dialableHostEndpointFor(entry, hasLiveSession) === null)
+    return false;
+  // A READY session also outranks the CLIENT-side plan gate, matching the
+  // transport's own mid-downgrade rule ("the existing session survives, the
+  // next dial refuses"): the RPC route works over the surviving session, and
+  // unmounting the panels here while every other layer keeps routing over it
+  // would report a working host as unreachable. With no session the gate
+  // refuses exactly as before.
+  return !(
+    remoteHostsPlanRestricted &&
+    entry.kind === "remote" &&
+    !hasLiveSession
+  );
 }
 
 /**
  * The one case where `connectable: false` is a BILLING fact rather than a
- * connectivity one: the route is present and live, and only the plan gate
- * refuses it. Recorded separately because the boolean alone erased the
- * distinction — the deleted My Hosts notice said "requires a paid plan —
- * Upgrade", and rendering these rows as generically "unreachable" replaced
- * that remedy with a retry that can never work.
+ * connectivity one: only the plan gate refuses this route. Recorded separately
+ * because the boolean alone erased the distinction — the deleted My Hosts
+ * notice said "requires a paid plan — Upgrade", and rendering these rows as
+ * generically "unreachable" replaced that remedy with a retry that can never
+ * work.
+ *
+ * There are now TWO ways to learn it, and requiring only the first is what
+ * lost the reason:
+ *
+ *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
+ *     live and the server would refuse the attach;
+ *   - the CLOUD's verdict (`connectivity: "local-only"` ⇒ `plan-restricted`) —
+ *     the host never attaches to a relay at all, because the owner's plan does
+ *     not include remote hosts.
+ *
+ * The old body demanded a dialable entry, which the second case can never
+ * satisfy: a `local-only` host is exactly the one the mapper marks
+ * not-dialable. So a free-tier user's own host came back non-connectable AND
+ * non-plan-restricted, and every surface downstream fell through to its
+ * generic connection-failure copy — the upgrade path invisible precisely to
+ * the person who needed it.
  */
 function isPlanRestrictedRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
+  hasLiveSession: boolean,
 ): boolean {
-  if (entry === null || entry.websocketUrl === null) return false;
-  if (!isHostReachable(entry.status)) return false;
+  if (entry === null) return false;
+  if (hostUnavailability(entry) === "plan-restricted") return true;
+  // The CLIENT-side gate only applies to a route that otherwise exists, so it
+  // asks the transport's own question rather than a second copy of it.
+  if (dialableHostEndpointFor(entry, hasLiveSession) === null) return false;
   return remoteHostsPlanRestricted && entry.kind === "remote";
 }
 
@@ -214,7 +247,7 @@ function resolveHostName(
  * Stable ordering: this machine, then the active host, then everything else
  * alphabetically. Deliberately NOT sorted by health — a list that reorders
  * itself when a host blinks would move a row out from under the pointer mid-
- * click, and the registry polls every ~15s.
+ * click, and the registry keeps polling underneath it.
  */
 function compareHostOptions(a: HostScopeOption, b: HostScopeOption): number {
   if (a.isLocalMachine !== b.isLocalMachine) return a.isLocalMachine ? -1 : 1;

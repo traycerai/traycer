@@ -13,13 +13,12 @@ import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useEpicAgentReference, useOpenEpicId } from "@/lib/epic-selectors";
 import {
   resolveToolInputDetail,
   type ToolInputDetail,
 } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import type {
-  ArtifactProjection,
   ChatProjection,
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
@@ -104,7 +103,7 @@ interface ToolSegmentBodyProps {
   readonly toolName: string;
 }
 
-type ReceiverNode = ArtifactProjection | ChatProjection | TuiAgentProjection;
+type ReceiverNode = ChatProjection | TuiAgentProjection;
 
 interface ReceiverOpenTarget {
   readonly type: "chat" | "terminal-agent";
@@ -139,7 +138,6 @@ function receiverOpenTarget(
   if ("harnessId" in receiverNode) {
     return { type: "terminal-agent", hostId: receiverNode.hostId };
   }
-  if ("kind" in receiverNode) return null;
   const hostId = receiverNode.hostId ?? fallbackHostId;
   if (hostId === null) return null;
   return { type: "chat", hostId };
@@ -627,16 +625,16 @@ function A2ASendToolSegment(
     isStreaming,
     isStopped: false,
   });
-  const receiverNode = useEpicArtifact(send.receiverAgentId);
+  const receiverNode = useEpicAgentReference(send.receiverAgentId);
   const activeHostId = useReactiveActiveHostId();
   const epicId = useOpenEpicId();
   const tileNavigation = useEpicTileNavigation();
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
-    if (openTarget === null) return;
+    if (openTarget === null || receiverNode === null) return;
     tileNavigation.openTileInEpic(epicId, {
-      id: send.receiverAgentId,
+      id: receiverNode.id,
       instanceId: uuidv4(),
       type: openTarget.type,
       name: receiverName,

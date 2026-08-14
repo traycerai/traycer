@@ -25,7 +25,7 @@ const LOCAL_TARGET: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: null,
   version: null,
-  status: "available",
+  transportDialability: "dialable",
 };
 
 function makeClient() {

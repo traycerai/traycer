@@ -18,6 +18,11 @@ import {
 } from "@/stores/chats/chat-find-force-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
+const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTileInEpic: vi.fn(),
+}));
+
 function render(ui: ReactNode) {
   return rtlRender(
     <ChatExpansionTestProviders tileInstanceId="tool-segment-test-tile">
@@ -38,8 +43,8 @@ function inputProps(toolName: string, input: unknown) {
 }
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) => {
-    if (artifactId === "agent-receiver-1") {
+  useEpicAgentReference: (referenceId: string) => {
+    if (referenceId === "agent-receiver-1") {
       return {
         id: "agent-receiver-1",
         parentId: null,
@@ -47,7 +52,7 @@ vi.mock("@/lib/epic-selectors", () => ({
         hostId: "host-1",
       };
     }
-    if (artifactId === "agent-receiver-optimistic") {
+    if (referenceId === "agent-receiver-optimistic") {
       return {
         id: "agent-receiver-optimistic",
         parentId: null,
@@ -55,9 +60,23 @@ vi.mock("@/lib/epic-selectors", () => ({
         hostId: null,
       };
     }
+    if (referenceId === PREFIX_RECEIVER_ID || referenceId === "9600b202") {
+      return {
+        id: PREFIX_RECEIVER_ID,
+        parentId: null,
+        title: "Prefix Receiver",
+        hostId: "host-1",
+      };
+    }
     return null;
   },
   useOpenEpicId: () => "epic-1",
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTileInEpic: tileNavigationMocks.openTileInEpic,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -97,6 +116,7 @@ function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
     useToolOpenStore.getState().reset("default");
+    tileNavigationMocks.openTileInEpic.mockClear();
     cleanup();
   });
 
@@ -288,6 +308,45 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(
       screen.getByRole("button", { name: "Optimistic Receiver" }),
     ).toBeTruthy();
+  });
+
+  it("resolves a unique receiver prefix and opens the canonical agent id", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-prefix"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "9600b202",
+          message: "Please inspect the prefix resolution.",
+          responseId: null,
+          expectReply: false,
+        }}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prefix Receiver" }));
+
+    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
+      "epic-1",
+      expect.objectContaining({
+        id: PREFIX_RECEIVER_ID,
+        type: "chat",
+        name: "Prefix Receiver",
+        hostId: "host-1",
+      }),
+    );
   });
 });
 

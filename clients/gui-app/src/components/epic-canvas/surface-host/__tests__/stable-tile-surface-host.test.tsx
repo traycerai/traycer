@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -32,6 +32,65 @@ import {
   buildSyntheticTileSurfaceEnvironment,
   createSyntheticTileSurfaceBodyRenderer,
 } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
+
+/**
+ * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a
+ * total no-op - it never invokes its callback, so a rect change after the
+ * initial synchronous registration apply (see
+ * `tile-surface-geometry-coordinator.ts`'s "direct-flush" contract) has no
+ * way to reach an already-mounted record without this. Installing a
+ * controllable replacement at MODULE LOAD TIME (before any test body runs,
+ * matching `tile-surface-geometry-coordinator.test.ts`'s own technique) lets
+ * the geometry-retention-while-hidden suite below fire real RO callbacks on
+ * demand to simulate a slot's rect changing after mount.
+ */
+class ControllableResizeObserver implements ResizeObserver {
+  readonly callback: ResizeObserverCallback;
+  readonly observed = new Set<Element>();
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    controllableResizeObserverInstances.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observed.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observed.delete(target);
+  }
+
+  disconnect(): void {
+    this.observed.clear();
+  }
+}
+
+let controllableResizeObserverInstances: ControllableResizeObserver[] = [];
+
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: ControllableResizeObserver,
+});
+
+function triggerResizeObserverCallbacks(): void {
+  for (const instance of controllableResizeObserverInstances) {
+    instance.callback([], instance);
+  }
+}
+
+function stubElementRect(
+  element: Element,
+  rect: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  },
+): void {
+  element.getBoundingClientRect = () => fakeDomRect(rect);
+}
 
 function chatRef(instanceId: string) {
   return {
@@ -681,6 +740,173 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
       }
       slot.remove();
     }
+  });
+});
+
+describe("StableTileSurfaceHost geometry retention while hidden (confirmed scroll regression)", () => {
+  beforeEach(() => {
+    controllableResizeObserverInstances = [];
+    resetAll();
+  });
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  function seedOneChat(): void {
+    useEpicCanvasStore.setState({
+      tabsById: {
+        "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
+      },
+      canvasByTabId: { "tab-1": canvasWithChats("p1", ["chat-1"]) },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+  }
+
+  function publishWithAnchor(
+    instanceId: string,
+    slot: HTMLElement,
+    presentation: { topLevelVisible: boolean; topLevelFocused: boolean },
+  ): void {
+    publishTileSurfaceEnvironment(
+      buildSyntheticTileSurfaceEnvironment(instanceId, {
+        presentation,
+        services: {
+          openEpicHandle: {} as never,
+          geometryAnchorElement: slot,
+          panePortalContainer: null,
+          isPaneFocusedNow: () => false,
+        },
+      }),
+    );
+  }
+
+  it("a visible record still accepts a legitimate 0x0 rect from its slot", () => {
+    seedOneChat();
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    stubElementRect(slot, { left: 10, top: 20, width: 300, height: 200 });
+
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    act(() => {
+      publishWithAnchor("chat-1", slot, {
+        topLevelVisible: true,
+        topLevelFocused: false,
+      });
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.style.transform).toBe("translate(10px, 20px)");
+    expect(record.style.width).toBe("300px");
+    expect(record.style.height).toBe("200px");
+
+    act(() => {
+      stubElementRect(slot, { left: 10, top: 20, width: 0, height: 0 });
+      triggerResizeObserverCallbacks();
+    });
+
+    // A REAL zero rect from a still-visible record (e.g. a collapsed pane)
+    // must be trusted, not treated as a stale-measurement artifact.
+    expect(record.style.width).toBe("0px");
+    expect(record.style.height).toBe("0px");
+    slot.remove();
+  });
+
+  it("a top-level-hidden record retains its last positive width/height/transform when its slot recomputes as 0x0", () => {
+    seedOneChat();
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    stubElementRect(slot, { left: 10, top: 20, width: 300, height: 200 });
+
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    act(() => {
+      publishWithAnchor("chat-1", slot, {
+        topLevelVisible: true,
+        topLevelFocused: false,
+      });
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.style.transform).toBe("translate(10px, 20px)");
+    expect(record.style.width).toBe("300px");
+    expect(record.style.height).toBe("200px");
+
+    act(() => {
+      publishWithAnchor("chat-1", slot, {
+        topLevelVisible: false,
+        topLevelFocused: false,
+      });
+    });
+
+    act(() => {
+      // Simulates the hidden pane's slot collapsing under a display:none
+      // ancestor and reporting a 0x0 rect at a different position - exactly
+      // what a shared ResizeObserver batch delivers for every currently
+      // registered slot, not only the one that actually moved.
+      stubElementRect(slot, { left: 999, top: 999, width: 0, height: 0 });
+      triggerResizeObserverCallbacks();
+    });
+
+    expect(record.style.transform).toBe("translate(10px, 20px)");
+    expect(record.style.width).toBe("300px");
+    expect(record.style.height).toBe("200px");
+    slot.remove();
+  });
+
+  it("a record born hidden at 0x0 does not invoke renderRecordBody until the first positive rect, then stays mounted and a re-show applies fresh geometry", () => {
+    seedOneChat();
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    stubElementRect(slot, { left: 0, top: 0, width: 0, height: 0 });
+
+    const renderer = createSyntheticTileSurfaceBodyRenderer();
+    const renderRecordBody = vi.fn(renderer.renderRecordBody);
+    render(<StableTileSurfaceHost renderRecordBody={renderRecordBody} />);
+    act(() => {
+      publishWithAnchor("chat-1", slot, {
+        topLevelVisible: false,
+        topLevelFocused: false,
+      });
+    });
+
+    expect(renderRecordBody).not.toHaveBeenCalled();
+    expect(renderer.mountCount("chat-1")).toBe(0);
+    expect(
+      screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
+    ).toBeNull();
+
+    act(() => {
+      stubElementRect(slot, { left: 10, top: 20, width: 300, height: 200 });
+      triggerResizeObserverCallbacks();
+    });
+
+    expect(renderRecordBody).toHaveBeenCalled();
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(
+      screen.getByTestId("synthetic-tile-surface-body-chat-1"),
+    ).not.toBeNull();
+
+    act(() => {
+      stubElementRect(slot, { left: 40, top: 60, width: 500, height: 400 });
+      publishWithAnchor("chat-1", slot, {
+        topLevelVisible: true,
+        topLevelFocused: false,
+      });
+      triggerResizeObserverCallbacks();
+    });
+
+    // Still mounted exactly once - a re-show is a geometry refresh, not a
+    // remount.
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.style.transform).toBe("translate(40px, 60px)");
+    expect(record.style.width).toBe("500px");
+    expect(record.style.height).toBe("400px");
+    slot.remove();
   });
 });
 

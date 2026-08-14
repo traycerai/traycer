@@ -14,6 +14,7 @@ import {
   useEpicChatHarnessId,
   useEpicAgentRoleClaims,
   useEpicAgentRoleClaimsByAgentId,
+  useEpicAgentReference,
   useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
   useRegisteredEpicLiveArtifactTitles,
@@ -222,6 +223,90 @@ describe("useEpicChatHarnessId", () => {
       });
     });
 
+    expect(result.current).toBeNull();
+  });
+});
+
+describe("useEpicAgentReference", () => {
+  const chatId = "9600b202-1111-4111-8111-111111111111";
+  const tuiAgentId = "beefcafe-2222-4222-8222-222222222222";
+
+  function handleWithAgents(epicId: string): OpenEpicStoreHandle {
+    const handle = createHandle(epicId);
+    handle.store.setState({
+      chats: {
+        allIds: [chatId],
+        byId: { [chatId]: chat(chatId, "claude") },
+      },
+      tuiAgents: {
+        allIds: [tuiAgentId],
+        byId: { [tuiAgentId]: tuiAgent(tuiAgentId, "codex") },
+      },
+    });
+    return handle;
+  }
+
+  it("resolves exact ids and unique prefixes across chat and terminal agents", () => {
+    const handle = handleWithAgents("epic-agent-reference");
+    const { result, rerender } = renderHook(
+      ({ referenceId }) => useEpicAgentReference(referenceId),
+      {
+        initialProps: { referenceId: chatId },
+        wrapper: openEpicWrapper(handle),
+      },
+    );
+
+    expect(result.current?.id).toBe(chatId);
+
+    rerender({ referenceId: "9600b202" });
+    expect(result.current?.id).toBe(chatId);
+
+    rerender({ referenceId: "beef" });
+    expect(result.current?.id).toBe(tuiAgentId);
+  });
+
+  it("rejects short, ambiguous, and role-claim prefixes", () => {
+    const handle = handleWithAgents("epic-unresolved-agent-reference");
+    const secondChatId = "9600b202-3333-4333-8333-333333333333";
+    const roleClaimId = "feedface-4444-4444-8444-444444444444";
+    handle.store.setState({
+      chats: {
+        allIds: [chatId, secondChatId],
+        byId: {
+          [chatId]: chat(chatId, "claude"),
+          [secondChatId]: chat(secondChatId, "codex"),
+        },
+      },
+      agentRoles: {
+        byAgentId: {
+          [chatId]: [
+            {
+              claimId: roleClaimId,
+              agentId: chatId,
+              userId: "user-1",
+              role: "Reviewer",
+              scope: "prefix tests",
+              claimedAt: 1,
+            },
+          ],
+        },
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ referenceId }) => useEpicAgentReference(referenceId),
+      {
+        initialProps: { referenceId: "960" },
+        wrapper: openEpicWrapper(handle),
+      },
+    );
+
+    expect(result.current).toBeNull();
+
+    rerender({ referenceId: "9600b202" });
+    expect(result.current).toBeNull();
+
+    rerender({ referenceId: "feed" });
     expect(result.current).toBeNull();
   });
 });

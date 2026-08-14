@@ -4,6 +4,7 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
@@ -49,6 +50,18 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
  */
 const openedRefs: { type: string; id: string; hostId: string }[] = [];
 
+/**
+ * What the tab's active pane is showing, as the two per-row store selectors
+ * read it: the active RECORD-BACKED artifact id (a live chat tile), and the
+ * active raw tile id (which is all a non-record-backed published copy has).
+ * Driven per-test; both hooks answer against this exactly as the real
+ * selectors answer against the store.
+ */
+const activeInTab: { artifactId: string | null; tileId: string | null } = {
+  artifactId: null,
+  tileId: null,
+};
+
 vi.mock("@/stores/epics/canvas/store", () => ({
   // The canvas actions take `(tabId, ref)`; the ref is the second argument.
   useEpicCanvasStore:
@@ -56,12 +69,18 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     (_tabId: string, ref: { type: string; id: string; hostId: string }) => {
       openedRefs.push({ type: ref.type, id: ref.id, hostId: ref.hostId });
     },
+  useIsActiveEpicArtifact: (_tabId: string | undefined, nodeId: string) =>
+    activeInTab.artifactId === nodeId,
+  useIsActiveTile: (_tabId: string | undefined, tileId: string | null) =>
+    tileId !== null && activeInTab.tileId === tileId,
 }));
 
 afterEach(() => {
   cleanup();
   reachability.status = "unreachable";
   openedRefs.length = 0;
+  activeInTab.artifactId = null;
+  activeInTab.tileId = null;
   useSettingsStore.setState({
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
@@ -385,6 +404,65 @@ describe("EpicSidebarCloudChatRow", () => {
       expect(
         screen.getByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
       ).toBeTruthy();
+    });
+  });
+
+  describe("the row highlights when ITS chat is what the tab is showing", () => {
+    // The regression: the row hardcoded `aria-selected={false}` and carried
+    // only the inactive styling arm, so the active chat's own sidebar row sat
+    // unhighlighted while every tree row lit up via the same selectors.
+    function renderRow(): void {
+      render(
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          epicId={CHAT.identity.taskId}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />,
+      );
+    }
+
+    function rowButton(): HTMLElement {
+      return screen.getByTestId(
+        `epic-sidebar-cloud-item-${CHAT.identity.chatId}`,
+      );
+    }
+
+    it("lights up when the LIVE chat tile for this row's chatId is active", () => {
+      // A reachable owner's row opened the ordinary record-backed chat tile,
+      // so it announces through the artifact-id selector like a tree row.
+      reachability.status = "reachable";
+      activeInTab.artifactId = CHAT.identity.chatId;
+      renderRow();
+      expect(rowButton().classList.contains("bg-accent")).toBe(true);
+      expect(rowButton().classList.contains("text-accent-foreground")).toBe(
+        true,
+      );
+      expect(screen.getByRole("treeitem").getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    });
+
+    it("lights up when the PUBLISHED COPY of this row's chat is active", () => {
+      // The published tile is deliberately not record-backed, so the artifact
+      // selector reads null for it; only its composite tile id can match.
+      activeInTab.tileId = publishedChatTileId(CHAT.identity);
+      renderRow();
+      expect(rowButton().classList.contains("bg-accent")).toBe(true);
+      expect(screen.getByRole("treeitem").getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    });
+
+    it("stays on the inactive arm while some OTHER chat is active", () => {
+      activeInTab.artifactId = "0d0aa279-1111-4111-8111-111111111111";
+      renderRow();
+      expect(rowButton().classList.contains("bg-accent")).toBe(false);
+      expect(rowButton().classList.contains("text-foreground/75")).toBe(true);
+      expect(screen.getByRole("treeitem").getAttribute("aria-selected")).toBe(
+        "false",
+      );
     });
   });
 });

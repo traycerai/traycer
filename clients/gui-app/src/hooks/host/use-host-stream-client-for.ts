@@ -53,12 +53,12 @@ const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
  * check needs it to be present.
  */
 const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
-  presenceLease: "expired",
-  hostRelayAttached: false,
+  // `unknown`, not `offline`: this value is never rendered, but if it ever
+  // leaked to a status surface it must not assert something we did not learn.
+  // We are here precisely because the caller had no status DTO to hand.
+  connectivity: "unknown",
   viewerReachability: "unknown",
   clientCloud: "ok",
-  busy: false,
-  busySessionCount: 0,
   updateState: "current",
   appVersion: null,
   lastSeenAt: null,
@@ -351,6 +351,12 @@ export function useHostStreamClientBindingFor(
     // role in transport construction (`buildHostStreamClient` only reads
     // `hostId`/`websocketUrl`/`publicKey`); it is a placeholder purely to
     // satisfy `isRemoteHostDirectoryEntry`'s shape check.
+    //
+    // `transportDialability` is written coarsely here for the same reason: this
+    // is a FABRICATED entry describing an endpoint this effect has already
+    // decided to dial, not a directory row carrying a verdict about a machine.
+    // The gate that decides whether to dial at all ran above this, against the
+    // real entry.
     const memoizedTarget =
       endpointKind === "remote" && endpointPublicKey !== null
         ? ({
@@ -359,9 +365,11 @@ export function useHostStreamClientBindingFor(
             kind: "remote",
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
             publicKey: endpointPublicKey,
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
+            // Fabricated endpoint, not a directory verdict: never in fuse grace.
+            relayFuseGrace: false,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -369,7 +377,7 @@ export function useHostStreamClientBindingFor(
             kind: endpointKind,
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
           } satisfies HostDirectoryEntry);
 
     const client = buildHostStreamClient({

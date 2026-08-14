@@ -3,12 +3,14 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   AGENT_ACTIVITY_AWARENESS_FIELD,
   AGENT_ACTIVITY_HOST_ID_AWARENESS_FIELD,
+  HOST_RUNTIME_STATUS_AWARENESS_FIELD,
   notificationsSubscribeClientFrameSchema,
   notificationsSubscribeServerFrameSchema,
   notificationsSubscribeServerFrameSchemaV10,
   notificationsSubscribeServerFrameSchemaV11,
   notificationsSubscribeV10,
   notificationsSubscribeV11,
+  readHostRuntimeStatusAwareness,
 } from "@traycer/protocol/host/notifications/subscribe";
 
 /**
@@ -189,6 +191,106 @@ describe("agent-activity awareness fields", () => {
   it("pins the frozen field names writer and reader share", () => {
     expect(AGENT_ACTIVITY_AWARENESS_FIELD).toBe("agentActivityByEpic");
     expect(AGENT_ACTIVITY_HOST_ID_AWARENESS_FIELD).toBe("agentActivityHostId");
+  });
+});
+
+describe("readHostRuntimeStatusAwareness", () => {
+  it("returns the parsed value for a well-formed entry", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: true,
+        busySessionCount: 2,
+        updateProgress: null,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: true,
+      busySessionCount: 2,
+      updateProgress: null,
+    });
+  });
+
+  it("returns the parsed value including a populated updateProgress arm", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: { state: "updating", error: null },
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)?.updateProgress).toEqual({
+      state: "updating",
+      error: null,
+    });
+  });
+
+  it("returns null when the field is absent — absence is not zero", () => {
+    expect(readHostRuntimeStatusAwareness({})).toBeNull();
+  });
+
+  it("returns null for a malformed field (wrong types)", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: "yes",
+        busySessionCount: 2,
+        updateProgress: null,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toBeNull();
+  });
+
+  it("returns null for a malformed field (negative session count)", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: false,
+        busySessionCount: -1,
+        updateProgress: null,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toBeNull();
+  });
+
+  it("returns null for a non-object entry", () => {
+    expect(readHostRuntimeStatusAwareness(null)).toBeNull();
+    expect(readHostRuntimeStatusAwareness(undefined)).toBeNull();
+    expect(readHostRuntimeStatusAwareness("not-an-object")).toBeNull();
+    expect(readHostRuntimeStatusAwareness(42)).toBeNull();
+  });
+
+  it("tolerates an unrecognised field a newer host adds to the payload — deliberately non-strict", () => {
+    // Unlike the GET /hosts DTO, awareness entries from old and new hosts
+    // coexist in one room indefinitely, so a field a newer host adds must be
+    // dropped rather than blanking out the rest of the entry — a `.strict()`
+    // parse here would erase a newer host's busy count on every older client.
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: null,
+        someNewerHostField: "unexpected",
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: false,
+      busySessionCount: 0,
+      updateProgress: null,
+    });
+  });
+
+  it("tolerates an unrecognised sibling key alongside the field", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: null,
+      },
+      someOtherAwarenessField: "unrelated",
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: false,
+      busySessionCount: 0,
+      updateProgress: null,
+    });
   });
 });
 

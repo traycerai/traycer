@@ -61,6 +61,20 @@ export function useHostIdentityQuery(input: {
  * Released-floor, so every host answers it: this is what lets the status card
  * report a version and a session count for a host far too old to have any of
  * the methods around it.
+ *
+ * Polled, not merely stale-timed. Its `busySessionCount` is what the drain
+ * affordance names in "Apply now — ends N sessions" and then destroys, so the
+ * question is not "may we reuse this value" but "is this value still true".
+ * Going stale does not refetch on its own, so without an interval a focused
+ * Overview could sit for minutes serving the count it read on mount.
+ *
+ * The interval sits comfortably under this query's `staleTime`, which is the
+ * other half of the same guarantee: the interval keeps a healthy read fresh,
+ * and `isStale` demotes an unhealthy one to `null` rather than letting it look
+ * live.
+ * This is a host RPC over an already-open connection, not a cloud endpoint —
+ * it costs nothing the connection was not already paying, and only while this
+ * panel is mounted.
  */
 export function useHostOverviewStatusQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -71,7 +85,13 @@ export function useHostOverviewStatusQuery(input: {
     client: input.client,
     method: "host.status",
     params: EMPTY_PARAMS,
-    options: { enabled: input.enabled, staleTime: 15_000 },
+    // `staleTime` deliberately EXCEEDS the poll interval. A healthy poll
+    // refreshes at 10s and never lets the data reach 30s, so `isStale` stays
+    // false; if the interval stops firing or refetches keep failing, the value
+    // ages out and `isStale` becomes the signal that demotes the drain count
+    // to `null`. Inverting these two would make a healthy query flicker
+    // between live and unknown on every tick.
+    options: { enabled: input.enabled, staleTime: 30_000, poll: true },
   });
 }
 

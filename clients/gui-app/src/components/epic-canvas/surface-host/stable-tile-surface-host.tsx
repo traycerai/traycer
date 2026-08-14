@@ -42,6 +42,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   useSyncExternalStore,
   Suspense,
   type PointerEvent,
@@ -134,6 +135,10 @@ function applyRectToElement(element: HTMLElement, rect: TileSurfaceRect): void {
   element.style.height = `${rect.height}px`;
 }
 
+function isUsableTileSurfaceRect(rect: TileSurfaceRect): boolean {
+  return rect.width > 0 && rect.height > 0;
+}
+
 function TileSurfaceRecord(props: {
   readonly instanceId: string;
   readonly renderBody: (environment: ReadyTileSurfaceEnvironment) => ReactNode;
@@ -150,18 +155,34 @@ function TileSurfaceRecord(props: {
   );
   const environment = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const elementRef = useRef<HTMLDivElement | null>(null);
+  const [canMountBody, setCanMountBody] = useState(false);
   const slotElement = environment?.services.geometryAnchorElement ?? null;
+  const visible = environment?.presentation.topLevelVisible ?? false;
 
   useLayoutEffect(() => {
     if (slotElement === null) return undefined;
     const element = elementRef.current;
     if (element === null) return undefined;
     return registerTileSurfaceGeometrySlot(instanceId, slotElement, (rect) => {
+      const hasUsableRect = isUsableTileSurfaceRect(rect);
+      // A hidden top-level tab's slot lives below a display:none ancestor and
+      // therefore reports 0x0 when any shared ResizeObserver target changes.
+      // Keep this record's last usable geometry while hidden so its still-
+      // mounted body cannot reflow at zero width and publish bogus item sizes.
+      // Visible records must still accept a real zero rect (for example when a
+      // pane is collapsed) so they do not leave an interactive stale overlay.
+      const currentlyVisible =
+        getTileSurfaceEnvironment(instanceId)?.presentation.topLevelVisible ??
+        false;
+      if (!currentlyVisible && !hasUsableRect) return;
       applyRectToElement(element, rect);
+      if (currentlyVisible || hasUsableRect) setCanMountBody(true);
     });
-  }, [instanceId, slotElement]);
-
-  const visible = environment?.presentation.topLevelVisible ?? false;
+    // Re-register on a visibility transition. Registration synchronously
+    // delivers the current rect, which opens the sticky mount latch for a
+    // visible 0x0 birth without a separate set-state effect. Only records born
+    // hidden wait for usable geometry; once mounted, the body stays mounted.
+  }, [instanceId, slotElement, visible]);
 
   // A hosted record going hidden is a physically distant sibling of
   // `SurfacePresentationBoundary`'s own portal container, so that
@@ -200,7 +221,7 @@ function TileSurfaceRecord(props: {
           }
         : {})}
     >
-      {environment !== null ? (
+      {environment !== null && canMountBody ? (
         <Suspense fallback={null}>{props.renderBody(environment)}</Suspense>
       ) : null}
     </div>

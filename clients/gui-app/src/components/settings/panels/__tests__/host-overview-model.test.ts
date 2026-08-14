@@ -73,7 +73,7 @@ describe("overviewEndpointParts", () => {
           kind: "remote",
           websocketUrl: "wss://relay.traycer.ai/rpc/abc123secret",
           version: "1.5.0",
-          status: "available",
+          transportDialability: "dialable",
         },
       }),
       busySessionCount: 2,

@@ -11,9 +11,10 @@
 /**
  * Bulk chunk cap (audit C2). A logical message larger than this is split across
  * multiple mux frames so a keystroke (interactive class) never queues behind a
- * megabyte frame. Deliberately far under the relay's 1 MiB per-frame cap.
+ * megabyte frame. Single-sourced from the protocol's shared chunking module -
+ * both peers import the same constant, so it can no longer drift by hand.
  */
-export const BULK_CHUNK_SIZE_BYTES = 64 * 1024;
+export { BULK_CHUNK_SIZE_BYTES } from "@traycer/protocol/host-transport/chunking";
 
 /**
  * Initial per-session send credits for the bulk (low-priority) class. Interactive
@@ -100,3 +101,15 @@ export const REMOTE_SESSION_LINGER_MS = 60_000;
  */
 export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
+
+/**
+ * Bounded terminal-stream tombstone frontier, mirroring the host's invariant
+ * (R-2 / `r2-host-stream-tombstone`): once a stream fails or closes, its
+ * streamId is remembered so a relay-delayed genuine frame for that same
+ * streamId can't resurrect a fresh reassembler accumulator after the fact.
+ * StreamIds are monotonic and never reused within a session, so the set only
+ * needs to cover the recent terminal frontier - past this cap, the oldest
+ * tombstone is evicted rather than letting the set grow unboundedly for the
+ * life of a long-lived session.
+ */
+export const MAX_TERMINAL_STREAM_IDS = 256;

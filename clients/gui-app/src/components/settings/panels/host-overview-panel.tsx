@@ -31,6 +31,10 @@ import {
   overviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import {
+  liveBusySessionCount,
+  settledBusySessionCount,
+} from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import {
   managedInstallation,
@@ -154,6 +158,14 @@ export function HostOverviewPanel(props: {
     host,
     identity: identityQuery.data ?? null,
     status: statusQuery.data ?? null,
+    // The drain count is only as trustworthy as the read behind it, so the
+    // read's HEALTH travels with its value. See `liveBusySessionCount`.
+    statusHealth: {
+      isError: statusQuery.isError,
+      fetchStatus: statusQuery.fetchStatus,
+      isStale: statusQuery.isStale,
+      hasLiveSource: usable,
+    },
     localHost: props.localHost,
   });
   const { identity, displayName } = view;
@@ -311,6 +323,8 @@ export function HostOverviewPanel(props: {
         busy={anyPending}
         usable={usable}
         registryItem={registryItem}
+        liveBusySessionCount={view.busySessionCount}
+        settledBusySessionCount={view.settledBusySessionCount}
       />
 
       <HostOverviewInstallationCard
@@ -463,6 +477,22 @@ interface OverviewDisplay {
   readonly endpointParts: readonly string[];
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
+  /**
+   * Live open-session count from `host.status`, or `null` when this client has
+   * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   *
+   * The DISPLAY read: it survives a refetch of stale data so the row does not
+   * blank for a round trip.
+   */
+  readonly busySessionCount: number | null;
+  /**
+   * The same count, but only when the read is SETTLED — what the drain force
+   * may be armed and confirmed against. Diverges from `busySessionCount`
+   * exactly while a fetch is in flight, which is the window in which the
+   * confirm-time equality guard would otherwise compare a retained number to
+   * itself and wave through a force sized to a count nobody was shown.
+   */
+  readonly settledBusySessionCount: number | null;
 }
 
 function useOverviewDisplay(input: {
@@ -471,11 +501,27 @@ function useOverviewDisplay(input: {
   readonly identity: HostIdentity | null;
   /** The negotiated `host.status` response, as this client's registry sees it. */
   readonly status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null;
+  /** Freshness of the read above — retained cache data is not a live read. */
+  readonly statusHealth: {
+    readonly isError: boolean;
+    readonly fetchStatus: "fetching" | "paused" | "idle";
+    readonly isStale: boolean;
+    readonly hasLiveSource: boolean;
+  };
   readonly localHost: LocalHostSnapshot | null;
 }): OverviewDisplay {
-  const { scope, host, identity, status, localHost } = input;
+  const { scope, host, identity, status, statusHealth, localHost } = input;
   const hostVersion = status?.hostVersion ?? null;
-  const busySessionCount = status?.busySessionCount ?? null;
+  // Spelled out at each call rather than hoisted into a shared object: a named
+  // object in scope makes `busySessionCount` look mutable to the React
+  // Compiler, which then refuses to preserve the memo below it.
+  const busySessionCount = liveBusySessionCount({
+    reportedCount: status?.busySessionCount ?? null,
+    isError: statusHealth.isError,
+    fetchStatus: statusHealth.fetchStatus,
+    isStale: statusHealth.isStale,
+    hasLiveSource: statusHealth.hasLiveSource,
+  });
   const endpointParts = useMemo(
     () =>
       host === null
@@ -494,6 +540,14 @@ function useOverviewDisplay(input: {
     endpointParts,
     hostVersion,
     updateProgress: status?.updateProgress ?? null,
+    busySessionCount,
+    settledBusySessionCount: settledBusySessionCount({
+      reportedCount: status?.busySessionCount ?? null,
+      isError: statusHealth.isError,
+      fetchStatus: statusHealth.fetchStatus,
+      isStale: statusHealth.isStale,
+      hasLiveSource: statusHealth.hasLiveSource,
+    }),
   };
 }
 
@@ -516,6 +570,10 @@ function HostOverviewUpdatesCard(props: {
   readonly busy: boolean;
   readonly usable: boolean;
   readonly registryItem: HostListItem | null;
+  /** `host.status`'s live session count; `null` when there is no live read. */
+  readonly liveBusySessionCount: number | null;
+  /** The same count when the read is settled — the drain force's arm gate. */
+  readonly settledBusySessionCount: number | null;
 }): ReactNode {
   const { registryItem } = props;
   return (
@@ -540,7 +598,12 @@ function HostOverviewUpdatesCard(props: {
           // Keyed by host: every piece of state inside — an open drain-gate
           // confirmation, a half-typed version pin — belongs to ONE host, so a
           // scope change must destroy it rather than re-point it.
-          <HostRegistryUpdates key={registryItem.hostId} item={registryItem} />
+          <HostRegistryUpdates
+            key={registryItem.hostId}
+            item={registryItem}
+            liveBusySessionCount={props.liveBusySessionCount}
+            settledBusySessionCount={props.settledBusySessionCount}
+          />
         )}
       </div>
     </SettingsGroup>

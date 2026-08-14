@@ -13,6 +13,34 @@ import type {
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import { TEST_HOST_ID } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 
+/**
+ * jsdom reports every unstubbed element's `getBoundingClientRect()` as all
+ * zeros. `TileSurfaceRecord` now gates its hosted body on the FIRST usable
+ * (positive width/height) rect from `services.geometryAnchorElement` - a
+ * default anchor that stays 0x0 forever would make every test that doesn't
+ * explicitly override `geometryAnchorElement` see a body that never mounts,
+ * which is truthful for a real detached slot but not what most of this
+ * fixture's callers are testing. Stamp a real, positive rect on the default
+ * anchor so "ready" means ready the way it did before the gate existed;
+ * tests exercising the born-hidden/still-zero contract pass their own 0x0
+ * anchor via `overrides.services` instead of relying on this default.
+ */
+function createDefaultGeometryAnchor(): HTMLDivElement {
+  const anchor = document.createElement("div");
+  anchor.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    width: 200,
+    height: 100,
+    right: 200,
+    bottom: 100,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  return anchor;
+}
+
 export function buildSyntheticTileSurfaceEnvironment(
   instanceId: string,
   overrides: Partial<ReadyTileSurfaceEnvironment>,
@@ -42,7 +70,7 @@ export function buildSyntheticTileSurfaceEnvironment(
     services: {
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
-      geometryAnchorElement: document.createElement("div"),
+      geometryAnchorElement: createDefaultGeometryAnchor(),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
     },
