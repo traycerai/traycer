@@ -1914,7 +1914,11 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
-    showTurnCompletion: !notificationOnlyAutonomousResume,
+    // A plain completion/interruption without a matching start remains a
+    // notification-only row. A user Stop is itself a transcript boundary and
+    // must retain its stopped marker even when it lands before `turn.started`.
+    showTurnCompletion:
+      !notificationOnlyAutonomousResume || stopped !== null,
     completedAt: timing.completedAt,
     runState,
     pause,
@@ -2323,28 +2327,34 @@ function withTurnCompletion(
   if (lastAssistantIndex === -1) return rows;
   // The stamped row is sometimes a content-less boundary marker (synthesized
   // after a trailing steer bubble by `attachRunStateToTrailingAssistantSlice`),
-  // so both "did the turn produce output" and "what is the turn's copyable
-  // reply text" must be derived across every row of the turn, not just the
-  // one being stamped - otherwise a turn that DID answer before the steer
-  // would misreport as having produced nothing, and its copy button would
-  // have no text to copy (the boundary row's own segments are empty).
+  // so both "did the turn produce response output", "is this a silent
+  // autonomous resume", and "what is the turn's copyable reply text" must be
+  // derived across every row of the turn, not just the one being stamped -
+  // otherwise a turn that DID answer before the steer would misreport as
+  // having produced nothing, and its copy button would have no text to copy
+  // (the boundary row's own segments are empty).
+  const turnReplySegments = rows.flatMap((row) =>
+    row.role === "assistant" ? row.segments : [],
+  );
+  const turnHasOnlyAutonomousResumeSegments =
+    turnReplySegments.length > 0 &&
+    turnReplySegments.every((segment) => segment.kind === "autonomous_resume");
   const stopped: ChatMessageStoppedInfo | null =
     input.stopped === null
       ? null
       : {
           stoppedAt: input.stopped.stoppedAt,
           reason: input.stopped.reason,
-          turnHadOutput: rows.some(
-            (row) => row.role === "assistant" && row.segments.length > 0,
+          turnHadOutput: turnReplySegments.some(
+            (segment) => segment.kind !== "autonomous_resume",
           ),
-          turnReplySegments: rows.flatMap((row) =>
-            row.role === "assistant" ? row.segments : [],
-          ),
+          turnReplySegments,
         };
   return rows.map((row, index) =>
     index === lastAssistantIndex
       ? {
           ...row,
+          turnHasOnlyAutonomousResumeSegments,
           completedAt: input.completedAt,
           stopped,
         }

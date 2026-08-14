@@ -158,6 +158,9 @@ function ChatMessageImpl(props: ChatMessageProps) {
           runState={message.runState}
           messageId={message.id}
           elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
+          turnHasOnlyAutonomousResumeSegments={
+            message.turnHasOnlyAutonomousResumeSegments ?? false
+          }
           pausedDurationMs={message.pausedDurationMs ?? 0}
           pausedSinceMs={message.pausedSinceMs ?? null}
           completedAt={message.completedAt}

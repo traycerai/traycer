@@ -117,6 +117,7 @@ interface BodyPropsOverrides {
   readonly segments?: ReadonlyArray<MessageSegment>;
   readonly runState?: ChatMessageRunState | null;
   readonly elapsedStartedAt?: number;
+  readonly turnHasOnlyAutonomousResumeSegments?: boolean;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
@@ -129,6 +130,8 @@ function bodyProps(overrides: BodyPropsOverrides) {
     runState: overrides.runState ?? null,
     messageId: "assistant:turn-1",
     elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
+    turnHasOnlyAutonomousResumeSegments:
+      overrides.turnHasOnlyAutonomousResumeSegments ?? false,
     pausedDurationMs: 0,
     pausedSinceMs: null,
     completedAt: overrides.completedAt ?? null,
@@ -159,6 +162,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
           elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: true,
           completedAt: 8_000,
         })}
       />,
@@ -167,6 +171,23 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
       "Resumed · no response · 5s",
     );
+  });
+
+  it("does not infer a silent resume from one autonomous-resume-only slice", () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    expect(footer.textContent).toMatch(/ for 5s$/);
+    expect(footer.textContent).not.toContain("Resumed · no response");
   });
 });
 
@@ -248,6 +269,24 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       note.querySelector('[data-testid="assistant-stop-badge"]'),
     ).not.toBeNull();
     expect(note.classList.contains("text-destructive")).toBe(true);
+  });
+
+  it('renders "Stopped before responding" for an unstarted autonomous resume that was explicitly stopped', () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          completedAt: 5_000,
+          stopped: STOPPED_NO_OUTPUT,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("assistant-stopped-before-responding").textContent,
+    ).toBe("Stopped before responding");
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
   it('renders the full "Stopped · {elapsed}" footer, not "Stopped before responding", on a content-less boundary row whose turn DID produce output elsewhere', () => {

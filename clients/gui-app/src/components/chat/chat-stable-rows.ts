@@ -82,6 +82,9 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
   elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,
+  turnHasOnlyAutonomousResumeSegments: (a, b) =>
+    a.turnHasOnlyAutonomousResumeSegments ===
+    b.turnHasOnlyAutonomousResumeSegments,
   completedAt: (a, b) => a.completedAt === b.completedAt,
   stopped: (a, b) => a.stopped === b.stopped,
   pausedDurationMs: (a, b) => a.pausedDurationMs === b.pausedDurationMs,

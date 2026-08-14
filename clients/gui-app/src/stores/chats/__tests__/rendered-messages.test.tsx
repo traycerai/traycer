@@ -4493,6 +4493,7 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(resumedRow).toMatchObject({
       createdAt: 10_000,
       elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
       completedAt: 15_000,
     });
     expect(
@@ -4544,6 +4545,100 @@ describe("useRenderedMessages turn.stopped", () => {
       completedAt: null,
     });
     expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("retains a stopped boundary on an autonomous-resume notification without a start event", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      completedAt: 15_000,
+      stopped: {
+        stoppedAt: 15_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: false,
+      },
+    });
+  });
+
+  it("checks every assistant slice before classifying an autonomous resume as silent", () => {
+    const steeredUser = userMessageAt("m2", 12_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        textBlock("block-1", 11_000, "Earlier response"),
+        steerBlock("steer-1", steeredUser.messageId, 12_000),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 14_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 10_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    const completedRow = assistantRows.find(
+      (message) => message.completedAt !== null,
+    );
+    expect(completedRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(completedRow?.turnHasOnlyAutonomousResumeSegments).toBe(false);
   });
 
   it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {

@@ -69,6 +69,8 @@ interface AssistantBodyProps {
   messageId: string;
   /** Wall-clock turn start used only for elapsed-duration calculations. */
   elapsedStartedAt: number;
+  /** Whether the complete turn contains only autonomous-resume dividers. */
+  turnHasOnlyAutonomousResumeSegments: boolean;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
@@ -102,6 +104,7 @@ export function AssistantMessageBody({
   runState,
   messageId,
   elapsedStartedAt,
+  turnHasOnlyAutonomousResumeSegments,
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
@@ -138,9 +141,7 @@ export function AssistantMessageBody({
   // row that exists when the provider never resumed (that row has no
   // `completedAt`, and therefore no footer).
   const silentAutonomousResume =
-    stopped === null &&
-    segments.length > 0 &&
-    segments.every((segment) => segment.kind === "autonomous_resume");
+    stopped === null && turnHasOnlyAutonomousResumeSegments;
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -152,7 +153,12 @@ export function AssistantMessageBody({
   // timeline plus just the elapsed footer, which is exactly the "Stopped ·
   // Nm Xs" the turn's true end needs. Any other ended, empty turn renders
   // nothing, NEVER a "Working…" indicator that would stick.
-  if (segments.length === 0) {
+  if (
+    segments.length === 0 ||
+    (stopped !== null &&
+      !stopped.turnHadOutput &&
+      turnHasOnlyAutonomousResumeSegments)
+  ) {
     if (runState !== null) {
       return (
         <AssistantRunIndicator
