@@ -290,6 +290,17 @@ export const hostServiceStatusResponseSchema = z.discriminatedUnion("outcome", [
     /** The plist / unit / scheduled-task path the registration lives at. */
     manifestPath: z.string().min(1),
   }),
+  /**
+   * The host refused to consult the CLI at all: an external supervisor owns
+   * its service lifecycle (`TRAYCER_HOST_UPDATES=external`), and the CANONICAL
+   * label the CLI would inspect is not the unit actually running this host —
+   * the read would answer about the wrong service. Distinct from `ok` with
+   * `state: "externally-managed"`, which is the CLI's own answer about a label
+   * it CAN see (Desktop's SMAppService): here there is no label or manifest
+   * path to report, because the supervising unit is outside the CLI's sight.
+   * Same gate `host.service.register` / `.deregister` already answer with.
+   */
+  z.object({ outcome: z.literal("externally-managed") }),
   z.object({ outcome: z.literal("cli-unavailable") }),
   z.object({ outcome: z.literal("cli-failed") }),
   z.object({ outcome: z.literal("invalid-output") }),

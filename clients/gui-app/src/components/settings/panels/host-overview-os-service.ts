@@ -171,9 +171,12 @@ export function useOverviewOsService(input: {
  *   answer could hide the repair verbs indefinitely, since this query has no
  *   poll. `undefined` routes the description to "couldn't read" while the
  *   verbs keep their repair posture.
- * - `externallyManaged`: a registration someone ELSE owns - Desktop's
- *   SMAppService, or the env-var supervisor. Both verbs are withheld: the CLI
- *   either refuses the write or installs a second unit beside the owner's.
+ * - `externallyManaged`: a registration someone ELSE owns, reported on either
+ *   axis - the CLI's own `state` answer (Desktop's SMAppService owns a label
+ *   the CLI can see) or the host's `externally-managed` OUTCOME (the env-var
+ *   supervisor; the host refused to consult the CLI at all). Both verbs are
+ *   withheld: the CLI either refuses the write or installs a second unit
+ *   beside the owner's.
  * - `cliUnavailable`: the read affirmatively said there is NO CLI. Only the
  *   affirmative answer hides the verbs - ambiguity keeps Re-register exactly
  *   when someone is debugging a flaky host.
@@ -198,7 +201,9 @@ function deriveServiceStatusView(input: {
   return {
     status,
     ok,
-    externallyManaged: ok?.state === "externally-managed",
+    externallyManaged:
+      ok?.state === "externally-managed" ||
+      status?.outcome === "externally-managed",
     cliUnavailable: status?.outcome === "cli-unavailable",
     statusUnresolved: status === undefined && input.loading,
   };
@@ -331,6 +336,12 @@ function describeServiceState(input: {
       return input.status.state === "running"
         ? "Registered and running. The OS service manifest starts the host at user login."
         : "Registered but not running. The OS service manifest starts the host at user login.";
+    case "externally-managed":
+      // The host did not consult the CLI: an external supervisor owns its
+      // service lifecycle, and the canonical label the CLI would inspect is
+      // not the unit actually running this host. No label or manifest line to
+      // show — the supervising unit is outside the CLI's sight.
+      return `${input.hostName}'s service is managed by an external supervisor, which owns its registration.`;
     case "cli-unavailable":
       return `${input.hostName} has no Traycer CLI, so its service registration can't be read from here.`;
     default:
