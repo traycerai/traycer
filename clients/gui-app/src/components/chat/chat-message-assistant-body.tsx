@@ -71,6 +71,8 @@ interface AssistantBodyProps {
   elapsedStartedAt: number;
   /** Whether the complete turn contains only autonomous-resume dividers. */
   turnHasOnlyAutonomousResumeSegments: boolean;
+  /** Whether this terminal row should render its elapsed completion footer. */
+  showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
@@ -105,6 +107,7 @@ export function AssistantMessageBody({
   messageId,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
+  showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
@@ -138,10 +141,11 @@ export function AssistantMessageBody({
   // A completed turn whose only visible segment is the autonomous-resume
   // divider genuinely woke the agent but produced no reply. Give that case
   // explicit footer copy so it cannot be mistaken for the notification-only
-  // row that exists when the provider never resumed (that row has no
-  // `completedAt`, and therefore no footer).
+  // row that exists when the provider never resumed (that row suppresses its
+  // footer while retaining a terminal `completedAt`).
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
+  const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -153,12 +157,7 @@ export function AssistantMessageBody({
   // timeline plus just the elapsed footer, which is exactly the "Stopped ·
   // Nm Xs" the turn's true end needs. Any other ended, empty turn renders
   // nothing, NEVER a "Working…" indicator that would stick.
-  if (
-    segments.length === 0 ||
-    (stopped !== null &&
-      !stopped.turnHadOutput &&
-      turnHasOnlyAutonomousResumeSegments)
-  ) {
+  if (segments.length === 0) {
     if (runState !== null) {
       return (
         <AssistantRunIndicator
@@ -172,17 +171,7 @@ export function AssistantMessageBody({
       );
     }
     if (stopped === null || !stopped.turnHadOutput) {
-      return stopped === null ? null : (
-        <div
-          role="status"
-          aria-label="Stopped before responding"
-          data-testid="assistant-stopped-before-responding"
-          className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
-        >
-          <StopBadge />
-          <span>Stopped before responding</span>
-        </div>
-      );
+      return stopped === null ? null : <StoppedBeforeResponding />;
     }
   }
   return (
@@ -256,7 +245,10 @@ export function AssistantMessageBody({
           meta={meta}
         />
       ) : null}
-      {shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
+      {stoppedBeforeResponding ? (
+        <StoppedBeforeResponding />
+      ) : showCompletionFooter &&
+        shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
         <AssistantElapsedFooter
           messageId={messageId}
           createdAt={elapsedStartedAt}
@@ -312,6 +304,20 @@ function StopBadge() {
     >
       <Square className="size-1.5 rounded-xs fill-destructive text-destructive" />
     </span>
+  );
+}
+
+function StoppedBeforeResponding() {
+  return (
+    <div
+      role="status"
+      aria-label="Stopped before responding"
+      data-testid="assistant-stopped-before-responding"
+      className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
+    >
+      <StopBadge />
+      <span>Stopped before responding</span>
+    </div>
   );
 }
 

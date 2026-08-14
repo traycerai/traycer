@@ -85,6 +85,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   turnHasOnlyAutonomousResumeSegments: (a, b) =>
     a.turnHasOnlyAutonomousResumeSegments ===
     b.turnHasOnlyAutonomousResumeSegments,
+  showCompletionFooter: (a, b) =>
+    a.showCompletionFooter === b.showCompletionFooter,
   completedAt: (a, b) => a.completedAt === b.completedAt,
   stopped: (a, b) => a.stopped === b.stopped,
   pausedDurationMs: (a, b) => a.pausedDurationMs === b.pausedDurationMs,

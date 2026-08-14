@@ -1146,6 +1146,39 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces a footerless background completion without calling it a response", async () => {
+      const userMsg = makeMessage(0, "user");
+      const assistantPending: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, assistantPending],
+        scrollStateKey: "aria-background-complete-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderMessages([
+        userMsg,
+        {
+          ...assistantPending,
+          completedAt: 1_700_000_000_000,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
     it("announces when a pending live row is replaced by its completed persisted row", async () => {
       const userMsg = makeMessage(0, "user");
       const pendingAssistant: ChatMessageModel = {

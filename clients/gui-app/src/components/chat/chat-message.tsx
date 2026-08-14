@@ -161,6 +161,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
           turnHasOnlyAutonomousResumeSegments={
             message.turnHasOnlyAutonomousResumeSegments ?? false
           }
+          showCompletionFooter={message.showCompletionFooter ?? true}
           pausedDurationMs={message.pausedDurationMs ?? 0}
           pausedSinceMs={message.pausedSinceMs ?? null}
           completedAt={message.completedAt}

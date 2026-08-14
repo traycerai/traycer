@@ -590,13 +590,22 @@ export interface ChatMessage {
   /**
    * Whether every assistant segment in this completed turn is an
    * `autonomous_resume` divider. Stamped only on the turn's final assistant
-   * row; `undefined` on live, notification-only, and non-final rows.
+   * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
   /**
+   * Whether this completed row should render the elapsed footer. `false` for
+   * a background-completion notification that no provider turn adopted; its
+   * non-null `completedAt` still records terminal state for transcript
+   * consumers.
+   */
+  showCompletionFooter?: boolean;
+  /**
    * Wall-clock time the assistant turn finished, in ms. Non-null only for
-   * completed assistant rows (drives the "Worked for Nm Xs" footer). Always
-   * `null` for user rows, pending rows, and in-progress assistant turns.
+   * completed assistant rows. It records terminal state; the optional
+   * `showCompletionFooter` flag controls whether that state also renders a
+   * "Worked for Nm Xs" footer. Always `null` for user rows, pending rows, and
+   * in-progress assistant turns.
    */
   completedAt: number | null;
   /** See `ChatMessageStoppedInfo`. */

@@ -4462,7 +4462,8 @@ describe("useRenderedMessages turn.stopped", () => {
     ]);
     expect(notificationRow).toMatchObject({
       createdAt: 10_000,
-      completedAt: null,
+      showCompletionFooter: false,
+      completedAt: 12_000,
     });
     expect(notificationRow?.elapsedStartedAt).toBeUndefined();
 
@@ -4494,6 +4495,7 @@ describe("useRenderedMessages turn.stopped", () => {
       createdAt: 10_000,
       elapsedStartedAt: 13_000,
       turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
       completedAt: 15_000,
     });
     expect(
@@ -4505,7 +4507,7 @@ describe("useRenderedMessages turn.stopped", () => {
     );
   });
 
-  it("keeps an autonomous-resume notification footerless when only a terminal event exists", () => {
+  it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
       timestamp: 12_000,
@@ -4542,7 +4544,8 @@ describe("useRenderedMessages turn.stopped", () => {
     const row = result.current.find((message) => message.role === "assistant");
     expect(row).toMatchObject({
       createdAt: 10_000,
-      completedAt: null,
+      showCompletionFooter: false,
+      completedAt: 12_000,
     });
     expect(row?.elapsedStartedAt).toBeUndefined();
   });
@@ -4639,6 +4642,57 @@ describe("useRenderedMessages turn.stopped", () => {
       "autonomous_resume",
     ]);
     expect(completedRow?.turnHasOnlyAutonomousResumeSegments).toBe(false);
+  });
+
+  it("uses lifecycle timing for a silent autonomous resume that contains a steer", () => {
+    const steeredUser = userMessageAt("m2", 14_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", steeredUser.messageId, 14_000),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const completedRow = result.current.find(
+      (message) => message.role === "assistant" && message.completedAt !== null,
+    );
+    expect(completedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
   });
 
   it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {

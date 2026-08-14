@@ -69,7 +69,19 @@ const TEXT_SEGMENT: MessageSegment = {
 const AUTONOMOUS_RESUME_SEGMENT: MessageSegment = {
   id: "seg-resume",
   kind: "autonomous_resume",
-  triggers: [],
+  triggers: [
+    {
+      kind: "monitor",
+      title: "build watch",
+      status: "completed",
+      live: false,
+      summary: "Build completed.",
+      blockId: "monitor-1",
+      outputFile: null,
+      mcp: null,
+      managedCommand: null,
+    },
+  ],
 };
 
 const ERROR_SEGMENT: MessageSegment = {
@@ -118,6 +130,7 @@ interface BodyPropsOverrides {
   readonly runState?: ChatMessageRunState | null;
   readonly elapsedStartedAt?: number;
   readonly turnHasOnlyAutonomousResumeSegments?: boolean;
+  readonly showCompletionFooter?: boolean;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
@@ -132,6 +145,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
     turnHasOnlyAutonomousResumeSegments:
       overrides.turnHasOnlyAutonomousResumeSegments ?? false,
+    showCompletionFooter: overrides.showCompletionFooter ?? true,
     pausedDurationMs: 0,
     pausedSinceMs: null,
     completedAt: overrides.completedAt ?? null,
@@ -148,7 +162,9 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
-          completedAt: null,
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
         })}
       />,
     );
@@ -271,7 +287,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(note.classList.contains("text-destructive")).toBe(true);
   });
 
-  it('renders "Stopped before responding" for an unstarted autonomous resume that was explicitly stopped', () => {
+  it("retains the resume notification alongside an unstarted stop boundary", () => {
     render(
       <AssistantMessageBody
         {...bodyProps({
@@ -286,6 +302,8 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(
       screen.getByTestId("assistant-stopped-before-responding").textContent,
     ).toBe("Stopped before responding");
+    expect(screen.getByText("Monitor completed")).not.toBeNull();
+    expect(screen.getByText("Build completed.")).not.toBeNull();
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 

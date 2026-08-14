@@ -1772,13 +1772,16 @@ function assistantTurnKey(message: AssistantMessage): string {
   return message.turnId ?? `ts:${message.timestamp}`;
 }
 
-function hasOnlyAutonomousResumeBlocks(
+function hasOnlyAutonomousResumeAssistantBlocks(
   blocks: ReadonlyArray<ContentBlock>,
 ): boolean {
-  return (
-    blocks.length > 0 &&
-    blocks.every((block) => block.type === "autonomous_resume")
-  );
+  let foundAutonomousResume = false;
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    if (block.type !== "autonomous_resume") return false;
+    foundAutonomousResume = true;
+  }
+  return foundAutonomousResume;
 }
 
 function isNotificationOnlyAutonomousResume(
@@ -1787,7 +1790,9 @@ function isNotificationOnlyAutonomousResume(
   blocks: ReadonlyArray<ContentBlock>,
 ): boolean {
   return (
-    turnComplete && !hasTurnStarted && hasOnlyAutonomousResumeBlocks(blocks)
+    turnComplete &&
+    !hasTurnStarted &&
+    hasOnlyAutonomousResumeAssistantBlocks(blocks)
   );
 }
 
@@ -1817,7 +1822,7 @@ function assistantTurnTiming(
   const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
   if (
     input.lifecycle === null ||
-    !hasOnlyAutonomousResumeBlocks(input.blocks) ||
+    !hasOnlyAutonomousResumeAssistantBlocks(input.blocks) ||
     input.lifecycle.startedAt === null
   ) {
     return {
@@ -1917,7 +1922,7 @@ function renderPersistedAssistantMessageTurn(
     // A plain completion/interruption without a matching start remains a
     // notification-only row. A user Stop is itself a transcript boundary and
     // must retain its stopped marker even when it lands before `turn.started`.
-    showTurnCompletion: !notificationOnlyAutonomousResume || stopped !== null,
+    showCompletionFooter: !notificationOnlyAutonomousResume || stopped !== null,
     completedAt: timing.completedAt,
     runState,
     pause,
@@ -2186,7 +2191,7 @@ interface AssistantTurnRenderInput {
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
   /** False for a background notification row that no provider turn adopted. */
-  readonly showTurnCompletion: boolean;
+  readonly showCompletionFooter: boolean;
   /** Wall-clock terminal instant stamped onto the completed assistant row. */
   readonly completedAt: number;
   readonly runState: ChatMessageRunState | null;
@@ -2309,19 +2314,20 @@ function renderAssistantTurnRows(
 }
 
 /**
- * Stamp `completedAt` (and, when the turn ended via a user Stop, `stopped`)
- * onto the LAST assistant row of a completed turn so the elapsed footer
- * renders once, on the turn's final slice, measuring from that row's separate
- * `elapsedStartedAt`. Live turns get `null` for both so the footer stays hidden
- * until completion - `input.stopped` is looked up unconditionally by the
- * caller, but only takes effect here, behind the same `turnComplete` gate as
- * `completedAt`.
+ * Stamp `completedAt`, footer visibility, and (when the turn ended via a user
+ * Stop) `stopped` onto the LAST assistant row of a completed turn. This gives
+ * every completed row terminal state while allowing a notification-only row
+ * to suppress the elapsed footer. When visible, the footer renders once on
+ * the turn's final slice and measures from that row's separate
+ * `elapsedStartedAt`. Live turns get `null` for terminal fields until
+ * completion - `input.stopped` is looked up unconditionally by the caller, but
+ * only takes effect here behind the same `turnComplete` gate as `completedAt`.
  */
 function withTurnCompletion(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  if (!input.turnComplete || !input.showTurnCompletion) return rows;
+  if (!input.turnComplete) return rows;
   const lastAssistantIndex = lastAssistantRowIndex(rows);
   if (lastAssistantIndex === -1) return rows;
   // The stamped row is sometimes a content-less boundary marker (synthesized
@@ -2354,6 +2360,7 @@ function withTurnCompletion(
       ? {
           ...row,
           turnHasOnlyAutonomousResumeSegments,
+          showCompletionFooter: input.showCompletionFooter,
           completedAt: input.completedAt,
           stopped,
         }
@@ -2793,7 +2800,7 @@ function renderLiveAssistant(
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
     turnComplete: false,
-    showTurnCompletion: true,
+    showCompletionFooter: true,
     // Unused while `turnComplete` is false; keep the input total and explicit.
     completedAt: liveAssistant.timestamp,
     // Track the host's run state exactly: a live row lingering for one frame

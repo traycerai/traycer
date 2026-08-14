@@ -2355,7 +2355,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (completedAssistant !== null) {
       const announcement = {
         key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
-        text: `${taskTitle} finished responding.`,
+        text:
+          completedAssistant.showCompletionFooter === false
+            ? `${taskTitle} received a background completion.`
+            : `${taskTitle} finished responding.`,
       };
       // Decision #10/#16: turn completion below the fold stays anchored - no
       // auto-reveal. The pill flips to "New reply" instead, unless the
