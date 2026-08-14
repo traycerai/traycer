@@ -29,7 +29,9 @@ import {
   userMessageSchemaPreInReplyTo,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  type ChatEvent,
   type ChatRunSettings,
+  type Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
   agentModeSchema,
@@ -930,6 +932,46 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
 export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
 >;
+
+/** Cheap structural stand-in for a deep parse: is it a plain object at all? */
+function isStructuralRecord(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * `snapshot` frame schema with the two unbounded arrays — `chat.messages`
+ * and `chat.events` — validated STRUCTURALLY (each element is a plain
+ * object) instead of deeply. Snapshots are the one frame whose size scales
+ * with chat history (10s–100s of MB under full-chat-on-subscribe), and a
+ * deep zod parse over that is seconds of render-thread CPU per snapshot; the
+ * arrays' elements live in the same trust domain as the `blockDelta` frames
+ * that stream the same content, so validating the envelope + every bounded
+ * field deeply and the histories structurally trades no trust for the time.
+ * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
+ * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
+ *
+ * ONLY SOUND ON THE LIVE LINE (`chatSubscribeLiveSchemaVersion`). The deep
+ * message/event schemas carry compatibility defaults (`imageResolutions`,
+ * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
+ * objects; the structural check skips them, so a `1.6` assistant message
+ * would reach consumers with `imageResolutions` genuinely absent while typed
+ * as present. A host serving the client's own live line emits fully live
+ * shapes (its in-memory objects are post-parse normalized and its frame
+ * projection is the identity on the live line), so the shallow path is
+ * exact there — callers MUST fall back to the deep parse for any other
+ * negotiated version.
+ */
+export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchema.extend({
+    chat: chatSchema.extend({
+      messages: z.array(z.custom<Message>(isStructuralRecord)),
+      events: z.array(z.custom<ChatEvent>(isStructuralRecord)).default([]),
+    }),
+  }),
+});
 
 export function createImageResolutionUpdatedFrame(input: {
   readonly epicId: string;
@@ -1910,3 +1952,11 @@ export const chatSubscribeV17 = defineStreamRpcContract({
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
+
+/**
+ * The live line's version, declared HERE (next to the live contract) so a
+ * future line bump cannot miss it. This is the one negotiated version on
+ * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
+ * doc for why any down-negotiated line must take the deep parse instead.
+ */
+export const chatSubscribeLiveSchemaVersion = chatSubscribeV17.schemaVersion;
