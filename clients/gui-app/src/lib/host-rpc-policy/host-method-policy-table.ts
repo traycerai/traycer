@@ -303,7 +303,20 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
-  "host.status": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
+  // affordance. Its `busySessionCount` is the number "Apply now — ends N
+  // sessions" promises and then destroys, so the question is not whether the
+  // cached value may be reused but whether it is still TRUE. Going stale does
+  // not refetch on its own, so without a cadence a focused Overview served the
+  // count it read on mount indefinitely.
+  //
+  // Under the query's `staleTime` (30s), deliberately: this interval keeps a
+  // healthy read fresh while `isStale` demotes an unhealthy one to `null`. The
+  // two numbers are one mechanism and must move together.
+  "host.status": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The host's own name: a bounded read that can coalesce. It has no poll —
@@ -363,7 +376,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Dismissing an attention row resolves it (persists the acknowledgement).
+  // Retained for compatible occurrence-scoped workflow resolution callers.
   "host.notifications.resolve": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -707,6 +720,22 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "epic.prepareArtifactImage": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -894,6 +923,15 @@ export const HOST_METHOD_POLL_TABLE = {
   // No poll: the PR detail stream is what notices a new push, and a re-render
   // off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The composer's PR/issue mention sections. Both are latest-wins with no
+  // poll: the menu is open for seconds at a time and drives every fetch
+  // explicitly (open, refresh click, filter change), so there is no cadence
+  // to keep - and a superseded read has nothing worth waiting for.
+  "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
+  // Latest-wins is load-bearing here rather than incidental: the section
+  // searches as the user types, and a queued query that has already been
+  // retyped past must not be the one that lands.
+  "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.

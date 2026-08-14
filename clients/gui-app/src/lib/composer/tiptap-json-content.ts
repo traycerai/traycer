@@ -5,6 +5,8 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   Attachment,
   EntityMentionContextType,
+  GithubMentionAttachment,
+  GithubMentionContextType,
   ImageAttachment,
   MentionAttachment,
   PathKind,
@@ -12,6 +14,8 @@ import type {
   SlashCommandTrigger,
 } from "@/lib/composer/types";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
+import { DEFAULT_GITHUB_MENTION_HOST } from "@traycer/protocol/common/github-mention-host";
+import { githubMentionTokenReference } from "@/lib/composer/mentions/github-mention-display";
 
 // Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
 // particular matches far more prose than it should (`$20`, `$PATH`), so what a
@@ -167,6 +171,29 @@ export function mentionAttrsFromAttachment(
     };
   }
 
+  if (isGithubMentionAttachment(mention)) {
+    return {
+      contextType: mention.contextType,
+      // The entity token doubles as the node id, exactly as it does for every
+      // other entity mention. `org/repo#123` alone is NOT unique - the same
+      // one can be served by two GitHub hosts - so the token carries the host
+      // whenever it is not the default. See `githubMentionToken`.
+      id: mention.path,
+      path: mention.path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: mention.label,
+      description: mention.description,
+      githubHost: mention.githubHost,
+      organizationLogin: mention.organizationLogin,
+      repositoryName: mention.repositoryName,
+      issueNumber: mention.issueNumber,
+      url: mention.url,
+    };
+  }
+
   if (isEntityMentionAttachment(mention)) {
     return {
       contextType: mention.contextType,
@@ -205,6 +232,9 @@ export function mentionAttachmentFromAttrs(
   }
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
+  }
+  if (contextType === "github_pull_request" || contextType === "github_issue") {
+    return githubMentionAttachmentFromAttrs(attrs, contextType);
   }
   if (
     contextType === "epic" ||
@@ -719,6 +749,65 @@ function gitMentionAttachmentFromAttrs(
   };
 }
 
+/**
+ * Rebuilds a GitHub chip from its node attributes.
+ *
+ * A chip with no `organizationLogin`/`repositoryName`/`issueNumber` cannot be
+ * turned back into a reference at all - `formatMentionForLLMQuery` would emit
+ * `@github-pr:/#` - so it is rejected here and the node falls back to plain
+ * text rather than shipping a broken reference to the agent.
+ */
+function githubMentionAttachmentFromAttrs(
+  attrs: Record<string, unknown>,
+  contextType: GithubMentionContextType,
+): MentionAttachment | null {
+  const organizationLogin = stringValue(attrs.organizationLogin);
+  const repositoryName = stringValue(attrs.repositoryName);
+  const issueNumber = issueNumberValue(attrs.issueNumber);
+  if (
+    organizationLogin === null ||
+    repositoryName === null ||
+    issueNumber === null
+  ) {
+    return null;
+  }
+  const prefix =
+    contextType === "github_pull_request" ? "github-pr" : "github-issue";
+  // github.com is the host a node without the field means; see
+  // `DEFAULT_GITHUB_MENTION_HOST`.
+  const githubHost =
+    stringValue(attrs.githubHost) ?? DEFAULT_GITHUB_MENTION_HOST;
+  const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
+  // Rebuilt through `githubMentionToken`'s own reference builder, so a chip
+  // restored from its node keeps the identity the picker gave it - the rule
+  // lives in one place instead of being restated here. Only reached when the
+  // node carries no `path` of its own.
+  const path =
+    stringValue(attrs.path) ??
+    `${prefix}:${githubMentionTokenReference({
+      githubHost,
+      owner: organizationLogin,
+      repo: repositoryName,
+      number: issueNumber,
+    })}`;
+  return {
+    kind: "mention",
+    contextType,
+    path,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: stringValue(attrs.label) ?? `#${issueNumber}`,
+    description: stringValue(attrs.description) ?? reference,
+    githubHost,
+    organizationLogin,
+    repositoryName,
+    issueNumber,
+    url: stringValue(attrs.url) ?? "",
+  };
+}
+
 function entityMentionAttachmentFromAttrs(
   attrs: Record<string, unknown>,
   contextType: EntityMentionContextType,
@@ -776,6 +865,41 @@ export function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * `issueNumber` after a round-trip through HTML, where it is a STRING.
+ *
+ * The chip is the only mention attribute that is genuinely numeric, and
+ * `dataAttributeMap` parses every attribute back with `getAttribute`, which
+ * only ever returns a string. So the same chip is a `number` when it comes
+ * from the picker or from persisted ProseMirror JSON, and `"123"` when the
+ * user copies it and pastes it back - the editor's ordinary Cmd+C path.
+ * Rejecting the string form left the pasted chip with no attachment at all:
+ * a blank node view, no plain-text projection, and silent omission from the
+ * submitted context.
+ *
+ * Deliberately strict about what it accepts: a bare run of digits, so
+ * `"12abc"`, `"1.5"` and `""` are still rejected rather than being coerced
+ * into a reference that points somewhere else.
+ */
+function issueNumberValue(value: unknown): number | null {
+  // Positive SAFE INTEGER, on both paths. `numberValue` only rejects
+  // non-finite, so the direct path accepted `0`, negatives and fractions, and
+  // the digit-string path accepted `"0"` - each producing an attachment like
+  // `github-pr:org/repo#0` that serializes a reference no catalog or search
+  // response can ever contain. `githubMentionRowBaseSchema` requires a
+  // positive integer on the wire; this is the same rule for the node
+  // reconstruction path, which reaches attachments without passing the query
+  // parser's `referenceNumber`.
+  const direct = numberValue(value);
+  if (direct !== null) return positiveIssueNumber(direct);
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  return positiveIssueNumber(Number(value));
+}
+
+function positiveIssueNumber(parsed: number): number | null {
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function pathKindValue(value: unknown): PathKind | null {
   return value === "file" || value === "folder" ? value : null;
 }
@@ -801,4 +925,13 @@ function isEntityMentionAttachment(
   mention: MentionAttachment,
 ): mention is Extract<MentionAttachment, { readonly epicId: string }> {
   return "epicId" in mention;
+}
+
+function isGithubMentionAttachment(
+  mention: MentionAttachment,
+): mention is GithubMentionAttachment {
+  return (
+    mention.contextType === "github_pull_request" ||
+    mention.contextType === "github_issue"
+  );
 }

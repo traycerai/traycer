@@ -22,7 +22,7 @@ const hostDirectoryMock = vi.hoisted(() => ({
     kind: "remote" as const,
     websocketUrl: `wss://${hostId}.example/stream`,
     version: "1.0.0",
-    status: "available" as const,
+    transportDialability: "dialable" as const,
   }),
   onChange: () => ({ dispose: () => undefined }),
 }));
@@ -187,6 +187,28 @@ function message(
     inReplyTo: null,
     expectReply: false,
     messageText: "review this",
+    noticeReason: null,
+    originKind: null,
+    originChatId: null,
+    originRefId: null,
+    ...overrides,
+  };
+}
+
+function created(
+  overrides: Partial<EpicCommunicationGraphEvent> & {
+    readonly id: number;
+    readonly timestamp: number;
+  },
+): EpicCommunicationGraphEvent {
+  return {
+    kind: "agent_created",
+    senderAgentId: CHAT_ID,
+    receiverAgentId: LATE_CHAT_ID,
+    responseId: null,
+    inReplyTo: null,
+    expectReply: null,
+    messageText: null,
     noticeReason: null,
     originKind: null,
     originChatId: null,
@@ -379,6 +401,36 @@ describe("CommGraphTile projection", () => {
     });
     // The agent that already existed is untouched.
     expect(screen.getByTestId(`comm-graph-node-${CHAT_ID}`)).toBeDefined();
+  });
+
+  it("waits for the ordered creation row when another event shares its timestamp", async () => {
+    await renderTile();
+    deliverSnapshot([
+      message({ id: 1, timestamp: LATE_CREATED_AT }),
+      created({ id: 2, timestamp: LATE_CREATED_AT }),
+    ]);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeDefined();
+    });
+
+    await seekToIndex(0);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeNull();
+    });
+
+    await seekToIndex(1);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
+      ).toBeDefined();
+    });
   });
 
   it("pulses a row that ARRIVES while live, without flashing the initial snapshot", async () => {

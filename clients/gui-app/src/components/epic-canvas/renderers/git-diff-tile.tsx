@@ -1,6 +1,7 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
+import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
 import type {
   GitChangedFile,
   GitGetFileDiffResponse,
@@ -18,8 +19,15 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
-import { gitBundleGroupLabel, gitStageLabel } from "@/lib/git/git-diff-tile";
+import {
+  gitBundleGroupLabel,
+  gitImageDiffRevisionKey,
+  gitImageDiffRouting,
+  gitImageDiffSides,
+  gitStageLabel,
+} from "@/lib/git/git-diff-tile";
 import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-rendering";
+import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import { DiffBundleLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-bundle-loading-skeleton";
 import { DiffContentLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-content-loading-skeleton";
@@ -39,7 +47,7 @@ import { useRegisterDiffTileFindAdapter } from "@/components/diff/use-register-d
 import type { DiffFindMetadataUnitInput } from "@/lib/diff/diff-find";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import { useBundleDiffScrollRestoration } from "@/hooks/scroll/use-bundle-diff-scroll-restoration";
-import { BinaryPlaceholder } from "@/components/epic-canvas/git-diff/binary-placeholder";
+import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { NoLongerChanged } from "@/components/epic-canvas/git-diff/placeholders/no-longer-changed";
 import { SubscriptionErrorState } from "@/components/epic-canvas/git-diff/empty-states/subscription-error-state";
 import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-states/no-changes-in-worktree";
@@ -449,6 +457,9 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   } = useEditorOpenFeedback();
   const openExternallyOpening =
     editorOpen.isPending || openExternallyFeedbackActive;
+
+  const { showImageDiff, svgToggle } = useGitImageDiffRouting(props.file);
+
   const {
     displayedDiff,
     displayedDiffError,
@@ -464,7 +475,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
     surfaceId: `git-diff:${props.node.instanceId}`,
     isActive: props.isActive,
-    queryEnabled: !props.file.isBinary,
+    queryEnabled: !props.file.isBinary && !showImageDiff,
     resumeDetachedDraft: false,
   });
 
@@ -485,6 +496,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
         errored: displayedDiffError !== null,
         headSha: props.headSha,
         ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
+        showingImage: showImageDiff,
       }),
     [
       displayedDiff,
@@ -494,6 +506,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       props.file,
       props.headSha,
       props.node,
+      showImageDiff,
     ],
   );
   useRegisterDiffTileFindAdapter({
@@ -505,6 +518,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       isPending: displayedDiffPending,
       hasError: displayedDiffError !== null,
       diffIsBinary: displayedDiff?.isBinary ?? true,
+      showingImage: showImageDiff,
       findNavigation,
     }),
   });
@@ -532,68 +546,137 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     triggerOpenExternallyFeedback,
   ]);
 
+  if (showImageDiff) {
+    const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
+    return (
+      <>
+        {svgToggle}
+        <ImageDiffView
+          key={revisionKey}
+          revisionKey={revisionKey}
+          runningDir={props.node.diff.runningDir}
+          filePath={props.file.path}
+          previousPath={props.file.previousPath}
+          oldStage={sides.oldStage}
+          newStage={sides.newStage}
+          fileName={props.file.path}
+          conflicted={sides.conflicted}
+          compact={false}
+          onOpenExternally={handleOpenExternally}
+          openExternallyOpening={openExternallyOpening}
+        />
+      </>
+    );
+  }
+
   if (props.file.isBinary) {
     return (
-      <BinaryPlaceholder
-        fileName={props.file.path}
-        sizeBytes={props.file.sizeBytes}
-        onOpenExternally={handleOpenExternally}
-        openExternallyOpening={openExternallyOpening}
-      />
+      <>
+        {svgToggle}
+        <BinaryPlaceholder
+          fileName={props.file.path}
+          sizeBytes={props.file.sizeBytes}
+          reason={null}
+          onOpenExternally={handleOpenExternally}
+          openExternallyOpening={openExternallyOpening}
+          compact={false}
+        />
+      </>
     );
   }
 
   if (displayedDiff === undefined && displayedDiffError !== null) {
-    return <GitErrorBlock error={displayedDiffError} />;
+    return (
+      <>
+        {svgToggle}
+        <GitErrorBlock error={displayedDiffError} />
+      </>
+    );
   }
   if (displayedDiff === undefined) {
     return (
-      <DiffContentLoadingSkeleton
-        mode={props.diffViewerPreferences.mode}
-        sizing="fill"
-        density="full"
-        sectionIndex={0}
-      />
+      <>
+        {svgToggle}
+        <DiffContentLoadingSkeleton
+          mode={props.diffViewerPreferences.mode}
+          sizing="fill"
+          density="full"
+          sectionIndex={0}
+        />
+      </>
     );
   }
 
   if (displayedDiff.isBinary) {
     return (
-      <BinaryPlaceholder
-        fileName={props.file.path}
-        sizeBytes={props.file.sizeBytes}
-        onOpenExternally={handleOpenExternally}
-        openExternallyOpening={openExternallyOpening}
-      />
+      <>
+        {svgToggle}
+        <BinaryPlaceholder
+          fileName={props.file.path}
+          sizeBytes={props.file.sizeBytes}
+          reason={null}
+          onOpenExternally={handleOpenExternally}
+          openExternallyOpening={openExternallyOpening}
+          compact={false}
+        />
+      </>
     );
   }
 
   return (
-    <FileDiffContent
-      diff={displayedDiff}
-      mode={props.diffViewerPreferences.mode}
-      wordWrap={props.diffViewerPreferences.wordWrap}
-      backgrounds={props.diffViewerPreferences.backgrounds}
-      lineNumbers={props.diffViewerPreferences.lineNumbers}
-      indicatorStyle={props.diffViewerPreferences.indicatorStyle}
-      sizing="fill"
-      scrollContainerRef={findScrollContainerRef}
-      onScroll={onScroll}
-      onLoadFull={loadFull}
-      fileIdentity={{
-        findFilePath: props.file.path,
-        bundleFindFileId: gitBundleDiffFindFileId(props.file),
-      }}
-      isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
-      editStatus={
-        <DiffTabHeaderPortal>
-          <GitDiffEditStatusContent editing={editing} appearance="pill" />
-        </DiffTabHeaderPortal>
-      }
-      editAdapter={editing.editAdapter}
-      editSession={editing.editSession}
-    />
+    <>
+      {svgToggle}
+      <FileDiffContent
+        diff={displayedDiff}
+        mode={props.diffViewerPreferences.mode}
+        wordWrap={props.diffViewerPreferences.wordWrap}
+        backgrounds={props.diffViewerPreferences.backgrounds}
+        lineNumbers={props.diffViewerPreferences.lineNumbers}
+        indicatorStyle={props.diffViewerPreferences.indicatorStyle}
+        sizing="fill"
+        scrollContainerRef={findScrollContainerRef}
+        onScroll={onScroll}
+        onLoadFull={loadFull}
+        fileIdentity={{
+          findFilePath: props.file.path,
+          bundleFindFileId: gitBundleDiffFindFileId(props.file),
+        }}
+        isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
+        editStatus={
+          <DiffTabHeaderPortal>
+            <GitDiffEditStatusContent editing={editing} appearance="pill" />
+          </DiffTabHeaderPortal>
+        }
+        editAdapter={editing.editAdapter}
+        editSession={editing.editSession}
+      />
+    </>
   );
+}
+
+/**
+ * SVG keeps a per-tile, non-persisted toggle back to the existing text-diff
+ * path, portaled into the tile's shared header (mirrors `editStatus` below)
+ * - the routing decision itself is shared with bundle sections, see
+ * `gitImageDiffRouting`.
+ */
+function useGitImageDiffRouting(file: GitChangedFile): {
+  readonly showImageDiff: boolean;
+  readonly svgToggle: ReactNode;
+} {
+  const { routeToImageDiff, isSvg } = gitImageDiffRouting(file);
+  const [viewAsSource, setViewAsSource] = useState(false);
+  const showImageDiff = routeToImageDiff && !(isSvg && viewAsSource);
+  const svgToggle = isSvg ? (
+    <DiffTabHeaderPortal>
+      <SvgViewToggleButton
+        switchTo={showImageDiff ? "source" : "image"}
+        onClick={() => setViewAsSource((current) => !current)}
+      />
+    </DiffTabHeaderPortal>
+  ) : null;
+  return { showImageDiff, svgToggle };
 }
 
 function isLoadedGitDiff(
@@ -609,10 +692,13 @@ function gitDiffFindRenderer<T>(args: {
   readonly isPending: boolean;
   readonly hasError: boolean;
   readonly diffIsBinary: boolean;
+  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) - no searchable diff text. */
+  readonly showingImage: boolean;
   readonly findNavigation: T;
 }): T | null {
   if (
     args.fileIsBinary ||
+    args.showingImage ||
     args.isPending ||
     args.hasError ||
     args.diffIsBinary
@@ -644,13 +730,15 @@ function gitFileDiffFindSource(args: {
   readonly errored: boolean;
   readonly headSha: string;
   readonly ignoreWhitespace: boolean;
+  /** Currently showing `ImageDiffView` (raster binary, or `.svg` still on its default image view) - no searchable diff text. */
+  readonly showingImage: boolean;
 }): DiffTileFindSource {
   const metadataUnits = gitFileDiffMetadataUnits({
     node: args.node,
     file: args.file,
   });
 
-  if (args.file.isBinary) {
+  if (args.file.isBinary || args.showingImage) {
     return createMetadataOnlyDiffTileFindSource({
       metadataUnits,
       coverageMessage: GIT_DIFF_BINARY_FIND_MESSAGE,

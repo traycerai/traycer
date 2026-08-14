@@ -22,6 +22,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -47,6 +48,14 @@ export interface SettingsSidebarProps {
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
   const scope = useHostScope();
+  // The host picker below shows a live dot and a health word per row, so this
+  // is a liveness surface and opts into the registry poll. It is also the ONE
+  // place in Settings that has to: the picker is mounted for as long as any
+  // settings panel is, so a per-panel opt-in would poll on exactly the same
+  // schedule while being fifteen times easier to get wrong. Panels that merely
+  // read `useHostScope` for names — Shell, Worktrees, Providers — do not, which
+  // is the point: reading the list no longer implies polling it.
+  useRegisteredHostsPollLiveness();
   // No row is dimmed by host kind any more. Shell and Diagnostics used to be,
   // because both read the on-disk config store through the local CLI bridge and
   // could only ever describe this computer; `config.*` / `diagnostics.*` made

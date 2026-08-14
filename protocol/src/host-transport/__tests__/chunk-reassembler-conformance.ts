@@ -7,22 +7,23 @@ import {
   MuxFrameType,
   QosClass,
 } from "../mux";
+import {
+  BULK_CHUNK_SIZE_BYTES,
+  encodeMuxMessageBody,
+  OutboundChunkSource,
+  type ReassembledMessage,
+} from "../chunking";
 
 /**
- * Structural shape both the client (`clients/shared/host-transport/remote/chunker.ts`)
- * and host (`traycer-host/src/transport/remote/chunker.ts`) `ChunkReassembler`
- * classes satisfy. Defined locally rather than imported: `protocol` is a leaf
- * dependency and must not import from either consumer.
+ * Structural shape of the reassembler under test. The implementation now
+ * lives HERE in `@traycer/protocol` (the two hand-mirrored transport copies
+ * were collapsed after they diverged once already), but the spec stays
+ * factory-shaped so each consumer's own test file can keep running it against
+ * whatever it actually imports — the "guard for the guard" (Architecture §4
+ * fix #1 / S3).
  */
-export interface ReassembledMessageLike {
-  readonly type: MuxFrame["type"];
-  readonly streamId: number;
-  readonly json: Record<string, unknown> | null;
-  readonly binary: Uint8Array | null;
-}
-
 export interface ChunkReassemblerLike {
-  accept(frame: MuxFrame): ReassembledMessageLike | null;
+  accept(frame: MuxFrame): ReassembledMessage | null;
   reset(): void;
 }
 
@@ -33,6 +34,7 @@ function frame(overrides: Partial<EncodeMuxFrameInput>): MuxFrame {
     seq: 0,
     qos: QosClass.BULK,
     chunked: true,
+    chunkFirst: false,
     chunkLast: false,
     json: null,
     binary: new Uint8Array([1]),
@@ -41,31 +43,40 @@ function frame(overrides: Partial<EncodeMuxFrameInput>): MuxFrame {
   return decodeMuxFrame(encodeMuxFrame(input));
 }
 
+/** Splits an encoded body the way a chunk source would, at `chunkSize`. */
+function bodyChunks(body: Uint8Array, chunkSize: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < body.length; offset += chunkSize) {
+    chunks.push(body.subarray(offset, Math.min(offset + chunkSize, body.length)));
+  }
+  return chunks;
+}
+
 /**
- * Runs the same conformance cases against any `ChunkReassemblerLike`
- * implementation - this is the "guard for the guard" (Architecture §4 fix
- * #1 / S3): the host's `seq`-adjacency check silently diverged from the
- * client's despite a comment claiming they mirrored, and a per-copy test
- * would let that happen again. Each consuming repo's own test file imports
- * this factory and passes its own concrete `ChunkReassembler` + its own
- * `ChunkReassemblyError` class - `protocol` never imports either.
+ * Runs the shared conformance cases against any `ChunkReassemblerLike`.
+ * Whole-body semantics: every frame's payload is body bytes
+ * (`[bodyFlags][jsonLen][json][binary]`), frames carry no json section, and
+ * `CHUNK_FIRST` — not an in-band envelope — marks a sequence start.
  */
 export function runChunkReassemblerConformanceSpec(
   createReassembler: () => ChunkReassemblerLike,
   ChunkReassemblyErrorCtor: new (message: string) => Error,
 ): void {
   describe("ChunkReassembler conformance (shared client/host spec)", () => {
-    it("passes an unchunked frame straight through", () => {
+    it("decodes an unchunked frame's body straight through", () => {
       const reassembler = createReassembler();
-      const decoded = frame({
-        streamId: 9,
-        seq: 0,
-        chunked: false,
-        chunkLast: false,
-        json: { requestId: "r", method: "m", result: 1, error: null },
-        binary: null,
-      });
-      const out = reassembler.accept(decoded);
+      const body = encodeMuxMessageBody(
+        { requestId: "r", method: "m", result: 1, error: null },
+        null,
+      );
+      const out = reassembler.accept(
+        frame({
+          streamId: 9,
+          seq: 0,
+          chunked: false,
+          binary: body,
+        }),
+      );
       expect(out).toEqual({
         type: MuxFrameType.STREAM_FRAME,
         streamId: 9,
@@ -74,63 +85,59 @@ export function runChunkReassemblerConformanceSpec(
       });
     });
 
-    it("reassembles in-order chunks back to the original binary + json, json only on the first chunk", () => {
+    it("reassembles in-order chunks back to the original json + binary", () => {
       const reassembler = createReassembler();
-      const chunkA = new Uint8Array([1, 2, 3]);
-      const chunkB = new Uint8Array([4, 5, 6]);
-      const chunkC = new Uint8Array([7]);
-
-      expect(
-        reassembler.accept(
+      const binary = new Uint8Array(7).fill(42);
+      const body = encodeMuxMessageBody({ kind: "snapshot" }, binary);
+      const chunks = bodyChunks(body, 4);
+      expect(chunks.length).toBeGreaterThan(2);
+      for (const [index, chunk] of chunks.entries()) {
+        const isLast = index === chunks.length - 1;
+        const out = reassembler.accept(
           frame({
             streamId: 5,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "snapshot" },
-            binary: chunkA,
+            seq: index,
+            chunkFirst: index === 0,
+            chunkLast: isLast,
+            binary: chunk,
           }),
-        ),
-      ).toBeNull();
-      expect(
-        reassembler.accept(
-          frame({
-            streamId: 5,
-            seq: 1,
-            chunked: true,
-            chunkLast: false,
-            json: null,
-            binary: chunkB,
-          }),
-        ),
-      ).toBeNull();
-      const completed = reassembler.accept(
-        frame({
-          streamId: 5,
-          seq: 2,
-          chunked: true,
-          chunkLast: true,
-          json: null,
-          binary: chunkC,
-        }),
-      );
-      expect(completed).not.toBeNull();
-      expect(completed?.json).toEqual({ kind: "snapshot" });
-      expect(completed?.binary).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7]));
+        );
+        if (!isLast) {
+          expect(out).toBeNull();
+        } else {
+          expect(out?.json).toEqual({ kind: "snapshot" });
+          expect(out?.binary).toEqual(binary);
+        }
+      }
     });
 
-    it("rejects an unchunked frame arriving on a stream with an in-flight chunk sequence", () => {
+    it("round-trips a chunk source's own frames (json-only body over the chunk size)", () => {
+      const reassembler = createReassembler();
+      const json = { kind: "snapshot", blob: "x".repeat(BULK_CHUNK_SIZE_BYTES * 2) };
+      let seq = 7;
+      const source = new OutboundChunkSource(
+        {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 3,
+          qos: QosClass.INTERACTIVE,
+          json,
+          binary: null,
+        },
+        () => seq++,
+      );
+      let out: ReassembledMessage | null = null;
+      while (!source.done) {
+        out = reassembler.accept(decodeMuxFrame(encodeMuxFrame(source.nextFrame())));
+      }
+      expect(out?.json).toEqual(json);
+      expect(out?.binary).toBeNull();
+    });
+
+    it("rejects an unchunked STREAM_FRAME arriving mid-sequence", () => {
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({
-            streamId: 2,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "x" },
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 2, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
         ),
       ).toBeNull();
       expect(() =>
@@ -139,26 +146,43 @@ export function runChunkReassemblerConformanceSpec(
             streamId: 2,
             seq: 99,
             chunked: false,
-            chunkLast: false,
-            json: { kind: "y" },
-            binary: null,
+            binary: encodeMuxMessageBody({ kind: "y" }, null),
           }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
     });
 
-    it("rejects a continuation chunk that arrives without its first envelope", () => {
+    it("lets an unchunked FATAL abort an in-flight sequence and still delivers it", () => {
+      const reassembler = createReassembler();
+      expect(
+        reassembler.accept(
+          frame({ streamId: 4, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+        ),
+      ).toBeNull();
+      const out = reassembler.accept(
+        frame({
+          type: MuxFrameType.FATAL,
+          streamId: 4,
+          seq: 1,
+          chunked: false,
+          binary: encodeMuxMessageBody({ details: { code: "X" } }, null),
+        }),
+      );
+      expect(out?.type).toBe(MuxFrameType.FATAL);
+      expect(out?.json).toEqual({ details: { code: "X" } });
+      // The partial body is abandoned: a fresh sequence on the stream starts clean.
+      expect(
+        reassembler.accept(
+          frame({ streamId: 4, seq: 2, chunkFirst: true, binary: new Uint8Array([9]) }),
+        ),
+      ).toBeNull();
+    });
+
+    it("rejects a continuation chunk that arrives without its starting chunk", () => {
       const reassembler = createReassembler();
       expect(() =>
         reassembler.accept(
-          frame({
-            streamId: 6,
-            seq: 5,
-            chunked: true,
-            chunkLast: false,
-            json: null,
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 6, seq: 5, binary: new Uint8Array([1]) }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
     });
@@ -167,40 +191,19 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({
-            streamId: 7,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "first" },
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 7, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
         ),
       ).toBeNull();
       expect(() =>
         reassembler.accept(
-          frame({
-            streamId: 7,
-            seq: 50,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "second" },
-            binary: new Uint8Array([2]),
-          }),
+          frame({ streamId: 7, seq: 50, chunkFirst: true, binary: new Uint8Array([2]) }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
       // The original sequence's accumulator was dropped by the interleave
       // above - its own continuation must now fail closed too, not resume.
       expect(() =>
         reassembler.accept(
-          frame({
-            streamId: 7,
-            seq: 1,
-            chunked: true,
-            chunkLast: false,
-            json: null,
-            binary: new Uint8Array([3]),
-          }),
+          frame({ streamId: 7, seq: 1, binary: new Uint8Array([3]) }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
     });
@@ -209,27 +212,13 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({
-            streamId: 8,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "snapshot" },
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 8, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
         ),
       ).toBeNull();
       // Expected seq 1; a reordering/splicing relay delivers seq 2 instead.
       expect(() =>
         reassembler.accept(
-          frame({
-            streamId: 8,
-            seq: 2,
-            chunked: true,
-            chunkLast: true,
-            json: null,
-            binary: new Uint8Array([2]),
-          }),
+          frame({ streamId: 8, seq: 2, chunkLast: true, binary: new Uint8Array([2]) }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
     });
@@ -242,9 +231,7 @@ export function runChunkReassemblerConformanceSpec(
             type: MuxFrameType.STREAM_FRAME,
             streamId: 10,
             seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "snapshot" },
+            chunkFirst: true,
             binary: new Uint8Array([1]),
           }),
         ),
@@ -255,10 +242,22 @@ export function runChunkReassemblerConformanceSpec(
             type: MuxFrameType.RESPONSE,
             streamId: 10,
             seq: 1,
-            chunked: true,
-            chunkLast: false,
-            json: null,
             binary: new Uint8Array([2]),
+          }),
+        ),
+      ).toThrow(ChunkReassemblyErrorCtor);
+    });
+
+    it("rejects a frame that still carries a frame-level json section", () => {
+      const reassembler = createReassembler();
+      expect(() =>
+        reassembler.accept(
+          frame({
+            streamId: 11,
+            seq: 0,
+            chunked: false,
+            json: { kind: "legacy" },
+            binary: encodeMuxMessageBody({ kind: "x" }, null),
           }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
@@ -268,14 +267,7 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({
-            streamId: 3,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "x" },
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 3, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
         ),
       ).toBeNull();
       reassembler.reset();
@@ -284,14 +276,7 @@ export function runChunkReassemblerConformanceSpec(
       // flight" - proving reset() actually cleared the prior state.
       expect(
         reassembler.accept(
-          frame({
-            streamId: 3,
-            seq: 0,
-            chunked: true,
-            chunkLast: false,
-            json: { kind: "x" },
-            binary: new Uint8Array([1]),
-          }),
+          frame({ streamId: 3, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
         ),
       ).toBeNull();
     });

@@ -110,15 +110,13 @@ describe("useHostDirectoryEntry", () => {
       kind: "remote",
       websocketUrl: "wss://relay.test/attach",
       version: "1.2.3",
-      status: "available",
+      transportDialability: "dialable",
       publicKey: "pubkey-a",
+      relayFuseGrace: false,
       remoteStatus: {
-        presenceLease: "fresh",
-        hostRelayAttached: true,
+        connectivity: "connectable",
         viewerReachability: "ok",
         clientCloud: "ok",
-        busy: false,
-        busySessionCount: 0,
         updateState: "current",
         appVersion: null,
         lastSeenAt: null,
@@ -142,5 +140,48 @@ describe("useHostDirectoryEntry", () => {
         ? result.current.publicKey
         : null,
     ).toBe("pubkey-b");
+  });
+
+  it("returns a new reference when an offline row's relay-fuse grace expires, even though every other field stays identical", () => {
+    // `relayFuseGrace` is recomputed from `lastSeenAt` recency at every
+    // projection: an `offline` row whose only change is aging past the 4h
+    // fuse cap flips it while hostId/label/kind/url/version, the derived
+    // verdict (still `offline`) and the public key all hold stable. A cache
+    // that ignored the flip pinned `relayFuseGrace: true` on every consumer
+    // forever - recovery dials permitted indefinitely past the documented
+    // cap.
+    const remoteEntry: RemoteHostDirectoryEntry = {
+      hostId: "remote-host-fuse",
+      label: "Remote Host Fuse",
+      kind: "remote",
+      websocketUrl: "wss://relay.test/attach",
+      version: "1.2.3",
+      transportDialability: "not-dialable",
+      publicKey: "pubkey-fuse",
+      relayFuseGrace: true,
+      remoteStatus: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: null,
+        lastSeenAt: "2026-07-03T11:59:50.000Z",
+      },
+    };
+    const directory = new ChurningDirectory(remoteEntry);
+    directoryRef.value = directory;
+    const { result } = renderHook(() =>
+      useHostDirectoryEntry(remoteEntry.hostId),
+    );
+    const first = result.current;
+    expect(first).not.toBeNull();
+
+    act(() => directory.update({ relayFuseGrace: false }));
+    expect(result.current).not.toBe(first);
+    expect(
+      result.current !== null && "relayFuseGrace" in result.current
+        ? result.current.relayFuseGrace
+        : null,
+    ).toBe(false);
   });
 });

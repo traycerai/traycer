@@ -70,7 +70,7 @@ function createBoundHostClient(): HostClient<HostRpcRegistry> {
     kind: "mock",
     websocketUrl: "ws://host.test",
     version: "test",
-    status: "available",
+    transportDialability: "dialable",
   });
   return client;
 }

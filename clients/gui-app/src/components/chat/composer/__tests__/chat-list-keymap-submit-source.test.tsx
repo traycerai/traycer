@@ -76,6 +76,7 @@ describe("ChatListKeymap submit source", () => {
       query: "te",
       commit,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -111,6 +112,7 @@ describe("ChatListKeymap submit source", () => {
       query: "te",
       commit,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -160,6 +162,7 @@ describe("ChatListKeymap submit source", () => {
       query: "pl",
       commit,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -203,6 +206,7 @@ describe("ChatListKeymap submit source", () => {
             query: "zz",
             commit: vi.fn(),
             dismiss: null,
+            focusEditor: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -230,6 +234,7 @@ describe("ChatListKeymap submit source", () => {
             query: "te",
             commit: vi.fn(),
             dismiss: null,
+            focusEditor: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -257,6 +262,7 @@ describe("ChatListKeymap submit source", () => {
             query: "pl",
             commit: vi.fn(),
             dismiss: null,
+            focusEditor: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -319,6 +325,7 @@ describe("ChatListKeymap submit source", () => {
         query: "te",
         commit,
         dismiss: null,
+        focusEditor: null,
         clientRect: null,
       });
       pickerStore.getState().setItems({
@@ -361,6 +368,7 @@ describe("ChatListKeymap submit source", () => {
         query: "te",
         commit,
         dismiss: null,
+        focusEditor: null,
         clientRect: null,
       });
       pickerStore.getState().setItems({

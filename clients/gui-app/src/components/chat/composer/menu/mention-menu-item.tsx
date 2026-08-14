@@ -33,6 +33,13 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
   return (
     <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
       <span className="shrink-0">{entry.icon}</span>
+      {entry.labelPrefix === null ? null : (
+        // Never shrinks: this is the row's identity (`#4917`), and a truncated
+        // reference is worse than no reference. The title beside it gives way.
+        <span className="shrink-0 text-ui-sm font-semibold text-muted-foreground">
+          {entry.labelPrefix}
+        </span>
+      )}
       <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
         {entry.label}
       </span>

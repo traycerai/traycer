@@ -61,3 +61,55 @@ describe("collapsedPromptLength", () => {
     expect(collapsedPromptLength("hello")).toBe(5);
   });
 });
+
+describe("GitHub entity tokens and trailing punctuation", () => {
+  it("keeps a trailing comma out of the token", () => {
+    // The path IS the attachment key. With the comma inside it, the sent
+    // message looks up `github-pr:acme/widgets#123,`, misses the real
+    // attachment, and renders a generic chip that has eaten the punctuation.
+    expect(
+      splitPromptIntoComposerSegments("see @github-pr:acme/widgets#123, then"),
+    ).toEqual([
+      { type: "text", text: "see " },
+      { type: "mention", path: "github-pr:acme/widgets#123" },
+      { type: "text", text: ", then" },
+    ]);
+  });
+
+  it("returns the trimmed punctuation to the text at end of input", () => {
+    expect(
+      splitPromptIntoComposerSegments("fixed by @github-issue:acme/widgets#7."),
+    ).toEqual([
+      { type: "text", text: "fixed by " },
+      { type: "mention", path: "github-issue:acme/widgets#7" },
+      { type: "text", text: "." },
+    ]);
+  });
+
+  it("keeps a host-qualified token whole", () => {
+    // The host segment adds slashes and dots; the terminator is still `#\d+`.
+    expect(
+      splitPromptIntoComposerSegments("@github-pr:ghe.acme.dev/acme/api#42)"),
+    ).toEqual([
+      { type: "mention", path: "github-pr:ghe.acme.dev/acme/api#42" },
+      { type: "text", text: ")" },
+    ]);
+  });
+
+  it("leaves an unpunctuated token exactly as it was", () => {
+    // The control. Trimming must not shorten a token that ends at its
+    // reference already.
+    expect(
+      splitPromptIntoComposerSegments("@github-pr:acme/widgets#123"),
+    ).toEqual([{ type: "mention", path: "github-pr:acme/widgets#123" }]);
+  });
+
+  it("leaves other entity kinds untouched", () => {
+    // The other control, and the deliberate scope: only GitHub tokens state
+    // where they end, so only they are trimmed. The pre-existing behaviour for
+    // every other kind is unchanged rather than guessed at.
+    expect(splitPromptIntoComposerSegments("@spec:epic-1/design,")).toEqual([
+      { type: "mention", path: "spec:epic-1/design," },
+    ]);
+  });
+});

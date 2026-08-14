@@ -21,10 +21,7 @@ import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
 } from "@traycer-clients/shared/host-transport/retrying-messenger";
-import {
-  hostListItemToDirectoryEntry,
-  type RemoteHostFetcher,
-} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { HostBindingAuthorityRegistry } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
 import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host-request-coordinator";
@@ -32,6 +29,7 @@ import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rp
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
+import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   buildRuntimeHostMessenger,
@@ -195,10 +193,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const isDisposed = (): boolean => lifecycle.disposed;
 
       const auth = new AuthService({ runnerHost });
-      const directory = new HostDirectoryService({
+      // The auth-derived wiring lives in `createAuthBoundHostDirectory` so a
+      // test can exercise THESE accessors rather than plausible re-typings of
+      // them; that substitution is how two auth-boundary defects survived four
+      // rounds of green tests.
+      const directory = createAuthBoundHostDirectory({
+        auth,
         runnerHost,
-        remoteFetcher:
-          remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
+        remoteFetcher,
         localHostIdSeeder: () =>
           queryClient.fetchQuery(localHostIdQueryOptions(runnerHost)),
       });
@@ -443,24 +445,6 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
 }
 
 /**
- * The production `RemoteHostFetcher` used whenever a caller does not override
- * one (S2/T14): every shell today passes `remoteFetcher={null}` down through
- * `TraycerApp`, which used to fall back to `HostDirectoryService`'s built-in
- * always-empty stub (S1 - "visible in My Hosts, not in the selectable
- * directory"). Reuses `AuthService.fetchRegisteredHosts()` - the same
- * bearer-gated `GET /api/v3/hosts` call My Hosts already makes - rather than
- * exposing a separate raw-bearer getter (the bearer deliberately never leaves
- * `AuthService`).
- *
- * Maps `fetchRegisteredHosts()`'s contract onto `RemoteHostFetchOutcome`
- * (T20 / audit P4): a `null` return (no bearer, or one the registry
- * rejected - `AuthService` deliberately does not distinguish the two so a
- * background poll never forces a sign-out) becomes `signed-out`; a thrown
- * network error becomes `failed` so `HostDirectoryService.refresh()` retains
- * the last-known remote entries instead of wiping the merged directory and
- * unbinding an active remote selection.
- */
-/**
  * The shell's durable answer to "which host id is THIS machine", the value
  * `HostDirectoryService` seeds itself with before its first emission.
  *
@@ -484,26 +468,4 @@ function localHostIdQueryOptions(runnerHost: IRunnerHost) {
     queryFn: () => runnerHost.getLastKnownLocalHostId(),
     retry: false,
   });
-}
-
-function buildDefaultRemoteFetcher(
-  auth: AuthService,
-  runnerHost: IRunnerHost,
-): RemoteHostFetcher {
-  return async () => {
-    try {
-      const response = await auth.fetchRegisteredHosts();
-      if (response === null) {
-        return { kind: "signed-out" };
-      }
-      return {
-        kind: "hosts",
-        entries: response.hosts.map((item) =>
-          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl),
-        ),
-      };
-    } catch {
-      return { kind: "failed" };
-    }
-  };
 }

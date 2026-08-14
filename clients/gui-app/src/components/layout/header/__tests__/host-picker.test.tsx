@@ -72,18 +72,28 @@ vi.mock("@/hooks/host/use-host-picker-list", () => ({
   useHostPickerList: () => ({
     isLoading: false,
     isError: false,
+    // Whole `HostDirectoryEntry` rows, not the three fields this file happens
+    // to read. An untyped factory is exempt from the excess-property check, so
+    // it kept a `status` key for a field that no longer exists and resolved
+    // `transportDialability` to `undefined` — failing closed into "offline"
+    // for both rows, invisibly, while every assertion here still passed
+    // because they are about invalidation and labels.
     data: [
       {
         hostId: "local-1",
         label: "This Mac",
         kind: "local",
-        status: "available",
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
       },
       {
         hostId: "remote-1",
         label: "Office workstation",
         kind: "remote",
-        status: "available",
+        websocketUrl: "wss://relay.example.test/attach",
+        version: "1.0.0",
+        transportDialability: "dialable",
       },
     ],
   }),

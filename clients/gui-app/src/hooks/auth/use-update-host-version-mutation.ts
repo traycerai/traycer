@@ -12,9 +12,11 @@ import { toastFromAuthError } from "@/lib/auth-error-toast";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface UpdateHostVersionPolicyMutationContext {
   readonly auth: AuthService | null;
+  readonly userId: string | null;
 }
 
 /**
@@ -71,6 +73,7 @@ export function useUpdateHostVersionPolicy(
     mutationKey: authMutationKeys.updateHostVersionPolicy(hostId),
     onMutate: (): UpdateHostVersionPolicyMutationContext => ({
       auth: binding === null ? null : binding.auth,
+      userId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     mutationFn: async (
       input: UpdateHostVersionPolicyInput,
@@ -86,7 +89,7 @@ export function useUpdateHostVersionPolicy(
         return;
       }
       void queryClient.invalidateQueries({
-        queryKey: authQueryKeys.registeredHosts(context.auth),
+        queryKey: authQueryKeys.registeredHosts(context.auth, context.userId),
       });
     },
     onError: (error) => toastFromAuthError(error, "Couldn't update this host."),

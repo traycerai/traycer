@@ -73,7 +73,7 @@ describe("useDeregisterHostFromAccount", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(invalidate).toHaveBeenCalledWith({
-      queryKey: authQueryKeys.registeredHosts(auth as AuthService),
+      queryKey: authQueryKeys.registeredHosts(auth as AuthService, null),
     });
   });
 

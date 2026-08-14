@@ -54,6 +54,7 @@ import {
   DIAL_FAILURE_RESTATE_MS,
   HOST_STANDING_BOUND_MS,
   INITIAL_BULK_SEND_CREDITS,
+  MAX_TERMINAL_STREAM_IDS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
   SESSION_OPEN_ACK_TIMEOUT_MS,
@@ -67,6 +68,7 @@ import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
+  MuxMessageSizeError,
   QosClass,
   SESSION_CONTROL_STREAM_ID,
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
@@ -77,21 +79,44 @@ import {
   sessionOpenAckPayloadSchema,
   unaryResponsePayloadSchema,
   type EncodeMuxFrameInput,
+  type MuxFrame,
   type QosClassValue,
   type SessionManifests,
   type SessionOpenPayload,
 } from "@traycer/protocol/host-transport/mux";
 import {
   ChunkReassembler,
-  chunkOutboundMessage,
+  ChunkReassemblyError,
+  OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
-} from "./chunker";
+} from "@traycer/protocol/host-transport/chunking";
 import { InboundCreditTracker, PriorityScheduler } from "./scheduler";
 import { NoiseChannel } from "./noise-channel";
 import { RelaySocket, type RelayKillReason } from "./relay-socket";
 import type { AttachGrantProvider } from "./grant-client";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
+
+/**
+ * Streaming methods that ride the credit-gated `BULK` mux queue instead of
+ * the default `INTERACTIVE` class. Every other stream method stays
+ * interactive - keystrokes, terminal/chat output, and status polls must
+ * preempt bulk traffic. Today this is only the two asset-fetch streams: a
+ * 20 MiB image must not starve interactive traffic sharing the same
+ * connection. A simple per-method lookup rather than a negotiated QoS
+ * scheme, matching the tech plan's "minimal method-to-QoS policy" - grow
+ * this set, don't build a config system, if a third bulk method shows up.
+ */
+const BULK_QOS_STREAM_METHODS: ReadonlySet<string> = new Set([
+  "workspace.streamAsset",
+  "git.streamFileAsset",
+]);
+
+function qosForStreamMethod(method: string): QosClassValue {
+  return BULK_QOS_STREAM_METHODS.has(method)
+    ? QosClass.BULK
+    : QosClass.INTERACTIVE;
+}
 
 /**
  * The client's persistent, E2E, multiplexed remote session (Architecture §3).
@@ -240,11 +265,6 @@ type SessionPhase =
   | "reconnecting"
   | "closed";
 
-interface OutboundFrame {
-  readonly qos: QosClassValue;
-  readonly frame: EncodeMuxFrameInput;
-}
-
 interface PendingUnary {
   readonly requestId: string;
   readonly method: string;
@@ -260,7 +280,7 @@ interface ActiveConnection {
   readonly generation: number;
   readonly relaySocket: RelaySocket;
   readonly noise: NoiseChannel;
-  readonly scheduler: PriorityScheduler<OutboundFrame>;
+  readonly scheduler: PriorityScheduler;
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
@@ -295,6 +315,18 @@ export class RemoteSession<
   private readonly pendingUnary = new Map<number, PendingUnary>();
   private readonly outboundSeq = new Map<number, number>();
   private readonly restoredStreamIds = new Set<number>();
+  /**
+   * Terminal-stream tombstones, insertion-ordered (mirror of the host's R-2 /
+   * `r2-host-stream-tombstone` frontier): every path that ends a stream —
+   * local close, received FATAL/CLOSE, inbound reassembly failure, outbound
+   * encode failure, unary rejection — records the streamId here, and inbound
+   * frames for a tombstoned stream are dropped BEFORE `reassembler.accept`.
+   * Without this, a relay-delayed genuine `CHUNK_FIRST` for a dead stream
+   * would seed a fresh accumulator nothing ever completes or collects.
+   * Bounded by `MAX_TERMINAL_STREAM_IDS` (streamIds are monotonic and never
+   * reused within a session, so evicting the oldest is safe).
+   */
+  private readonly terminalStreamIds = new Set<number>();
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
   /**
@@ -423,6 +455,16 @@ export class RemoteSession<
       this.connection !== null &&
       this.connection.hostAttached
     );
+  }
+
+  /**
+   * Streams with a partially-accumulated inbound chunk sequence on the
+   * current connection. Mirror of the host session's accessor: the terminal
+   * tombstone regressions pin that a dead stream's delayed chunks can't
+   * park an accumulator here forever.
+   */
+  get pendingReassemblyCount(): number {
+    return this.connection?.reassembler.pendingStreamCount ?? 0;
   }
 
   /**
@@ -743,7 +785,10 @@ export class RemoteSession<
     });
   }
 
-  /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
+  /**
+   * Opens a logical subscribe stream (interactive class by default, bulk
+   * for the methods in `qosForStreamMethod`; see §3 QoS note).
+   */
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
@@ -770,7 +815,7 @@ export class RemoteSession<
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
-      qos: QosClass.INTERACTIVE,
+      qos: qosForStreamMethod(method),
       port: this,
     });
     this.subscriptions.set(streamId, stream);
@@ -866,15 +911,49 @@ export class RemoteSession<
     if (this.phase !== "ready" || connection === null || stream === undefined) {
       return;
     }
-    // Fixed-per-stream class (per-stream FIFO invariant); a large binary is
-    // still chunked at 64 KiB but stays this stream's class.
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.STREAM_FRAME,
-      streamId,
-      qos: stream.qos,
-      json: { ...envelope },
-      binary: binaryPayload,
-    });
+    try {
+      // Fixed-per-stream class (per-stream FIFO invariant); a large binary is
+      // still chunked at 64 KiB but stays this stream's class (the chunk
+      // source overrides >1 MiB bodies to BULK).
+      this.enqueueMessage(connection, {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId,
+        qos: stream.qos,
+        json: { ...envelope },
+        binary: binaryPayload,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof MuxMessageSizeError) &&
+        !(error instanceof RangeError)
+      ) {
+        throw error;
+      }
+      // Deterministic encode failure: this one frame can never be sent, and
+      // stream frames have no per-call reply channel — fail the stream so
+      // the surface shows a typed error instead of hanging on a frame the
+      // transport silently owed it.
+      connection.scheduler.dropStreamOutbound(streamId);
+      connection.reassembler.forget(streamId);
+      this.markStreamTerminal(streamId);
+      this.subscriptions.delete(streamId);
+      this.restoredStreamIds.delete(streamId);
+      this.outboundSeq.delete(streamId);
+      stream.goFatal({
+        code: "STREAM_MESSAGE_TOO_LARGE",
+        reason: error.message,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      });
+      this.enqueueMessage(connection, {
+        type: MuxFrameType.CLOSE,
+        streamId,
+        qos: QosClass.INTERACTIVE,
+        json: { reason: "outbound frame exceeded the message cap" },
+        binary: null,
+      });
+      this.maybeReachReadyBoundary();
+    }
   }
 
   /**
@@ -897,7 +976,15 @@ export class RemoteSession<
     this.subscriptions.delete(streamId);
     this.restoredStreamIds.delete(streamId);
     this.outboundSeq.delete(streamId);
+    // Locally-closed is terminal: clear any partial inbound accumulator and
+    // tombstone the id so an in-flight/delayed server frame can't reseed one.
+    connection?.reassembler.forget(streamId);
+    this.markStreamTerminal(streamId);
     if (this.phase === "ready" && connection !== null) {
+      // Drop the stream's queued/mid-transfer outbound first, or per-stream
+      // FIFO would park this CLOSE behind a transfer nobody wants anymore
+      // (the peer's reassembler accepts a CLOSE mid-sequence as an abort).
+      connection.scheduler.dropStreamOutbound(streamId);
       this.enqueueMessage(connection, {
         type: MuxFrameType.CLOSE,
         streamId,
@@ -954,10 +1041,11 @@ export class RemoteSession<
     }
     const grant = provision.grant;
 
-    const scheduler = new PriorityScheduler<OutboundFrame>({
-      write: (item) => this.writeFrame(generation, item),
+    const scheduler = new PriorityScheduler({
+      write: (frame) => this.writeFrame(generation, frame),
       onWriteError: () => this.handleConnectionLost(generation, "write-failed"),
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
+      now: undefined,
     });
     const noise = await NoiseChannel.begin(this.options.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -989,7 +1077,7 @@ export class RemoteSession<
       relaySocket,
       noise,
       scheduler,
-      reassembler: new ChunkReassembler(),
+      reassembler: new ChunkReassembler(undefined),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
       hostRpcMerged: null,
@@ -1046,6 +1134,13 @@ export class RemoteSession<
       return;
     }
     // Established transport: decrypt → decode → reassemble → dispatch.
+    //
+    // ORDERING INVARIANT (load-bearing once every large message is a long
+    // chunk sequence): `noise.decrypt` is entered SYNCHRONOUSLY here and its
+    // receive mutex admits waiters in call order, so per-frame continuations
+    // resume in arrival order — and nothing below may `await` between decrypt
+    // and `reassembler.accept`, or concurrent inbound delivery could splice
+    // chunk sequences. Pinned by the arrival-order conformance test.
     this.armStandingTimer();
     void (async () => {
       const muxBytes = await connection.noise.decrypt(bytes);
@@ -1053,14 +1148,135 @@ export class RemoteSession<
         return;
       }
       const frame = decodeMuxFrame(muxBytes);
-      const message = connection.reassembler.accept(frame);
+      // Bulk credit accounting is PER FRAME at receipt, symmetric with the
+      // host's spend-per-frame-sent — counting per completed message would
+      // deadlock any transfer longer than the initial credit window at
+      // exactly `INITIAL_BULK_SEND_CREDITS` frames (critique C1).
+      if (frame.qos === QosClass.BULK) {
+        const grant = connection.inboundCredits.onBulkFrameConsumed();
+        if (grant > 0) {
+          this.enqueueMessage(connection, {
+            type: MuxFrameType.CREDIT,
+            streamId: SESSION_CONTROL_STREAM_ID,
+            qos: QosClass.INTERACTIVE,
+            json: { credits: grant },
+            binary: null,
+          });
+        }
+      }
+      if (this.terminalStreamIds.has(frame.streamId)) {
+        // Client mirror of the host's R-2 tombstone check: every terminal
+        // path forgets the reassembler entry for its stream, but a relay can
+        // still deliver a withheld genuine frame for that streamId afterward
+        // — and since `accept()` starts a FRESH accumulator for any
+        // unrecognized stream, letting it through would resurrect an
+        // uncollectable accumulator that lingers to connection teardown.
+        // Runs AFTER credit accounting (the frame was still delivered, so
+        // the grant stays symmetric with the host's per-frame spend).
+        return;
+      }
+      let message: ReassembledMessage | null;
+      try {
+        message = connection.reassembler.accept(frame);
+      } catch (error) {
+        if (this.failStreamOnInboundError(generation, frame, error)) {
+          return;
+        }
+        throw error;
+      }
       if (message === null) {
         return;
       }
-      this.dispatchInbound(generation, connection, frame.qos, message);
+      this.dispatchInbound(generation, connection, message);
     })().catch(() =>
       this.handleConnectionLost(generation, "inbound-decode-failed"),
     );
+  }
+
+  /**
+   * Per-stream routing for deterministic inbound reassembly failures
+   * (Decision 6 of the whole-body-chunking plan): a chunk-sequence fault or
+   * an over-cap message on stream N proves nothing about the session — the
+   * Noise decrypt already succeeded — so it fails that ONE stream (a live
+   * subscription gets its fatal, a pending unary rejects) instead of the
+   * blanket connection drop, which at 100 MB snapshot scale would loop:
+   * reconnect → identical snapshot → identical failure. Returns false for
+   * anything that IS session-level (control-stream faults, unknown errors),
+   * which the caller re-throws into the connection-lost path.
+   */
+  private failStreamOnInboundError(
+    generation: number,
+    frame: MuxFrame,
+    error: unknown,
+  ): boolean {
+    if (
+      !(error instanceof ChunkReassemblyError) &&
+      !(error instanceof MuxMessageSizeError)
+    ) {
+      return false;
+    }
+    if (frame.streamId === SESSION_CONTROL_STREAM_ID) {
+      return false;
+    }
+    if (!this.isCurrent(generation)) {
+      return true;
+    }
+    const details: FatalErrorDetails = {
+      code:
+        error instanceof MuxMessageSizeError
+          ? "STREAM_MESSAGE_TOO_LARGE"
+          : "STREAM_CHUNK_REASSEMBLY_FAILED",
+      reason: error.message,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    const pending = this.pendingUnary.get(frame.streamId);
+    if (pending !== undefined) {
+      // `rejectUnary` is the full terminal transition: drops queued outbound,
+      // forgets the accumulator, tombstones the id, and CLOSEs the stream so
+      // the host stops producing for it.
+      this.rejectUnary(
+        frame.streamId,
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: details.reason,
+          requestId: pending.requestId,
+          method: pending.method,
+          fatalDetails: details,
+        }),
+      );
+      return true;
+    }
+    // Not local-only (S2 of the cold review): without the outbound drop the
+    // stream's own queued frames keep sending, and without the CLOSE the
+    // host keeps its resolver and server-push producer alive — serializing,
+    // pacing, encrypting, and credit-spending for a stream this side already
+    // deleted. Drop the dead transfer FIRST or per-stream FIFO would park
+    // the CLOSE behind it.
+    const connection = this.connection;
+    if (connection !== null) {
+      connection.scheduler.dropStreamOutbound(frame.streamId);
+      connection.reassembler.forget(frame.streamId);
+    }
+    this.markStreamTerminal(frame.streamId);
+    if (this.phase === "ready" && connection !== null) {
+      this.enqueueMessage(connection, {
+        type: MuxFrameType.CLOSE,
+        streamId: frame.streamId,
+        qos: QosClass.INTERACTIVE,
+        json: { reason: `inbound stream failed: ${details.code}` },
+        binary: null,
+      });
+    }
+    const stream = this.subscriptions.get(frame.streamId);
+    if (stream !== undefined) {
+      stream.goFatal(details);
+      this.subscriptions.delete(frame.streamId);
+      this.restoredStreamIds.delete(frame.streamId);
+      this.outboundSeq.delete(frame.streamId);
+      this.maybeReachReadyBoundary();
+    }
+    return true;
   }
 
   private sendOpenFrame(
@@ -1099,22 +1315,8 @@ export class RemoteSession<
   private dispatchInbound(
     generation: number,
     connection: ActiveConnection,
-    qos: QosClassValue,
     message: ReassembledMessage,
   ): void {
-    if (qos === QosClass.BULK) {
-      const grant = connection.inboundCredits.onBulkFrameConsumed();
-      if (grant > 0) {
-        this.enqueueMessage(connection, {
-          type: MuxFrameType.CREDIT,
-          streamId: SESSION_CONTROL_STREAM_ID,
-          qos: QosClass.INTERACTIVE,
-          json: { credits: grant },
-          binary: null,
-        });
-      }
-    }
-
     if (message.streamId === SESSION_CONTROL_STREAM_ID) {
       this.dispatchControl(generation, connection, message);
       return;
@@ -1164,11 +1366,68 @@ export class RemoteSession<
       this.handleUnaryResponse(message.json);
       return;
     }
-    const stream = this.subscriptions.get(message.streamId);
-    if (stream === undefined) {
+    if (message.type === MuxFrameType.FATAL) {
+      const parsed = fatalPayloadSchema.safeParse(message.json);
+      if (!parsed.success) {
+        return;
+      }
+      // A received terminal verdict ends the stream in BOTH directions:
+      // whatever this side still had queued for it (say, a partial upload)
+      // is undeliverable by verdict, and the id is tombstoned so a
+      // relay-delayed chunk can't reseed an accumulator.
+      connection.scheduler.dropStreamOutbound(message.streamId);
+      connection.reassembler.forget(message.streamId);
+      this.markStreamTerminal(message.streamId);
+      const pending = this.pendingUnary.get(message.streamId);
+      if (pending !== undefined) {
+        // Unary requests live in `pendingUnary`, not `subscriptions` — a
+        // host-side per-stream FATAL for a failed request (e.g. the upload
+        // exceeded the host's message cap mid-reassembly) must reject the
+        // caller NOW, not after the 30s unary timeout (S3 of the cold
+        // review).
+        this.rejectUnary(
+          message.streamId,
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message: parsed.data.details.reason,
+            requestId: pending.requestId,
+            method: pending.method,
+            fatalDetails: parsed.data.details,
+          }),
+        );
+        return;
+      }
+      const stream = this.subscriptions.get(message.streamId);
+      if (stream === undefined) {
+        return;
+      }
+      stream.goFatal(parsed.data.details);
+      this.subscriptions.delete(message.streamId);
+      this.restoredStreamIds.delete(message.streamId);
+      this.outboundSeq.delete(message.streamId);
+      this.maybeReachReadyBoundary();
+      return;
+    }
+    if (message.type === MuxFrameType.CLOSE) {
+      connection.scheduler.dropStreamOutbound(message.streamId);
+      connection.reassembler.forget(message.streamId);
+      this.markStreamTerminal(message.streamId);
+      const stream = this.subscriptions.get(message.streamId);
+      if (stream === undefined) {
+        return;
+      }
+      stream.notifyStatus("closed", { kind: "caller" });
+      this.subscriptions.delete(message.streamId);
+      this.restoredStreamIds.delete(message.streamId);
+      this.outboundSeq.delete(message.streamId);
+      this.maybeReachReadyBoundary();
       return;
     }
     if (message.type === MuxFrameType.STREAM_FRAME) {
+      const stream = this.subscriptions.get(message.streamId);
+      if (stream === undefined) {
+        return;
+      }
       const envelope = message.json;
       if (envelope !== null && isStreamEnvelope(envelope)) {
         const delivered = stream.deliverServerFrame(envelope, message.binary);
@@ -1176,25 +1435,7 @@ export class RemoteSession<
           this.markStreamRestored(message.streamId);
         }
       }
-      return;
     }
-    if (message.type === MuxFrameType.FATAL) {
-      const parsed = fatalPayloadSchema.safeParse(message.json);
-      if (parsed.success) {
-        stream.goFatal(parsed.data.details);
-        this.subscriptions.delete(message.streamId);
-        this.restoredStreamIds.delete(message.streamId);
-        this.maybeReachReadyBoundary();
-      }
-      return;
-    }
-    if (message.type === MuxFrameType.CLOSE) {
-      stream.notifyStatus("closed", { kind: "caller" });
-      this.subscriptions.delete(message.streamId);
-      this.restoredStreamIds.delete(message.streamId);
-      this.maybeReachReadyBoundary();
-    }
-    void connection;
   }
 
   /**
@@ -1835,21 +2076,28 @@ export class RemoteSession<
 
   // ---- Wire write + framing helpers -------------------------------------- //
 
+  /**
+   * Encodes one logical message into a pull-based chunk source and queues it
+   * (ONE queue slot regardless of body size; frames materialize, drawing
+   * their per-stream `seq`, as the scheduler pulls). The two deterministic
+   * encode failures — `MuxMessageSizeError` (body over the message cap) and
+   * `RangeError` (`JSON.stringify` past V8's string ceiling) — THROW to the
+   * caller, which owns routing them (a unary rejects its promise, a stream
+   * frame fails its stream).
+   */
   private enqueueMessage(
     connection: ActiveConnection,
     message: OutboundMessage,
   ): void {
-    const frames = chunkOutboundMessage(message, () =>
+    const source = new OutboundChunkSource(message, () =>
       this.nextSeq(message.streamId),
     );
-    for (const frame of frames) {
-      connection.scheduler.enqueue({ qos: frame.qos, frame });
-    }
+    connection.scheduler.enqueue(source);
   }
 
   private async writeFrame(
     generation: number,
-    item: OutboundFrame,
+    frame: EncodeMuxFrameInput,
   ): Promise<void> {
     if (!this.isCurrent(generation)) {
       return;
@@ -1858,7 +2106,7 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    const plaintext = encodeMuxFrame(item.frame);
+    const plaintext = encodeMuxFrame(frame);
     const sealed = await connection.noise.encrypt(plaintext);
     if (!this.isCurrent(generation)) {
       return;
@@ -1911,7 +2159,49 @@ export class RemoteSession<
       return;
     }
     this.clearPendingUnary(streamId);
+    // A rejected unary's stream is terminal. Drop any still-queued request
+    // upload, clear any partial response accumulator, tombstone the id so a
+    // late response chunk (e.g. one landing after the 30s timeout) can't
+    // seed a fresh accumulator, and CLOSE the stream so the host drops its
+    // own queued response instead of finishing a transfer nobody awaits.
+    const connection = this.connection;
+    if (connection !== null) {
+      connection.scheduler.dropStreamOutbound(streamId);
+      connection.reassembler.forget(streamId);
+    }
+    this.markStreamTerminal(streamId);
+    if (this.phase === "ready" && connection !== null) {
+      this.enqueueMessage(connection, {
+        type: MuxFrameType.CLOSE,
+        streamId,
+        qos: QosClass.INTERACTIVE,
+        json: { reason: "unary request rejected" },
+        binary: null,
+      });
+    }
     entry.reject(error);
+  }
+
+  /**
+   * Records `streamId` as terminal (client mirror of the host's R-2 /
+   * `r2-host-stream-tombstone` invariant) so a later relay-delayed frame for
+   * it is dropped before `reassembler.accept` instead of resurrecting a
+   * fresh accumulator. Bounded: streamIds are monotonic and never reused
+   * within a session, so evicting the oldest tombstone (insertion order,
+   * which tracks the terminal frontier) once the cap is hit never re-admits
+   * a still-active stream.
+   */
+  private markStreamTerminal(streamId: number): void {
+    if (this.terminalStreamIds.has(streamId)) {
+      return;
+    }
+    this.terminalStreamIds.add(streamId);
+    if (this.terminalStreamIds.size > MAX_TERMINAL_STREAM_IDS) {
+      const oldest = this.terminalStreamIds.values().next().value;
+      if (oldest !== undefined) {
+        this.terminalStreamIds.delete(oldest);
+      }
+    }
   }
 
   private rejectAllPendingUnary(error: HostRpcError): void {

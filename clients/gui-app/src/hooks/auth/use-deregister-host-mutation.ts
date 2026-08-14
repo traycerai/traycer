@@ -8,10 +8,12 @@ import { toastFromAuthError } from "@/lib/auth-error-toast";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface DeregisterHostMutationContext {
   readonly auth: AuthService | null;
   readonly directory: HostDirectoryService | null;
+  readonly userId: string | null;
 }
 
 /**
@@ -69,6 +71,7 @@ export function useDeregisterHostFromAccount(
     onMutate: (): DeregisterHostMutationContext => ({
       auth: binding === null ? null : binding.auth,
       directory: binding === null ? null : binding.directory,
+      userId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     mutationFn: async (): Promise<void> => {
       if (binding === null) {
@@ -86,7 +89,7 @@ export function useDeregisterHostFromAccount(
         return;
       }
       void queryClient.invalidateQueries({
-        queryKey: authQueryKeys.registeredHosts(context.auth),
+        queryKey: authQueryKeys.registeredHosts(context.auth, context.userId),
       });
     },
     onError: (error) => toastFromAuthError(error, "Couldn't remove this host."),

@@ -36,6 +36,7 @@ function openSlashPicker(store: ComposerPickerStore): void {
     query: "",
     commit: () => {},
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }

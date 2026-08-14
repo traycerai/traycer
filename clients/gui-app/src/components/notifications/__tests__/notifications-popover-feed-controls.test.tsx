@@ -248,7 +248,8 @@ function applyHostSnapshot(input: {
     attention: {
       entries: input.entries.filter(
         (entry) =>
-          entry.severity === "needs_action" || entry.severity === "failure",
+          entry.readAt === null &&
+          (entry.severity === "needs_action" || entry.severity === "failure"),
       ),
       nextCursor: input.attentionCursor,
     },

@@ -59,6 +59,8 @@ export interface ChatTimelineFollowLatch {
   /** Arms an explicit programmatic navigation to publish free-scrolling only
    *  if its live geometry actually leaves the strict bottom. */
   readonly beginOwnedFreeNavigation: () => void;
+  /** Releases a settled no-op free navigation that never left the strict end. */
+  readonly completeOwnedFreeNavigation: () => void;
   /** Resolves owned navigation without letting its intermediate reports flap. */
   readonly completeOwnedEndNavigation: (didLandAtEnd: boolean) => void;
   /** Fresh DOM validation for explicit-navigation settle loops. */
@@ -88,6 +90,17 @@ interface ReaderEndCandidate {
   readonly targetScrollTop: number;
 }
 
+type ArmedReaderDeparture =
+  | {
+      readonly source: "gesture";
+      readonly direction: ChatTimelineReaderScrollDirection;
+      /** False when fresh issue-time geometry proves this gesture cannot move
+       *  in its requested direction (for example, wheel-up at scrollTop=0). */
+      readonly blocksAutomaticCorrection: boolean;
+    }
+  | { readonly source: "owned-navigation" }
+  | null;
+
 /** One immediate issue plus four measured reissues, each after two frames.
  *  Exhaustion ends only the current correction burst; reader intent is never
  *  inferred from a layout operation failing to settle inside this window. */
@@ -107,6 +120,15 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
     scrollHeight: node.scrollHeight,
     clientHeight: node.clientHeight,
   };
+}
+
+function canReaderGestureMove(
+  geometry: ChatTimelineScrollGeometry,
+  direction: ChatTimelineReaderScrollDirection,
+): boolean {
+  if (direction === "indeterminate") return true;
+  if (direction === "away-from-end") return geometry.scrollTop > 0;
+  return geometry.scrollHeight - geometry.clientHeight - geometry.scrollTop > 0;
 }
 
 /**
@@ -140,7 +162,9 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
  * - `permissionRef` is the single live follow authority. Native and LegendList
  *   scroll delivery both route through the same fresh DOM geometry observer.
  *   A non-bottom report revokes permission only when publishing reader input
- *   armed it; layout-owned scroll reports retain the current intent.
+ *   armed it; layout-owned scroll reports retain the current intent. While a
+ *   movable gesture or owned free navigation is armed, maintain callbacks
+ *   cannot create a correction that races and masks its pending scroll.
  *   `initialScrollAtEnd` seeds the ref once and never resets it.
  * - An app-owned correction carries a generation and reader-gesture token.
  *   Its intermediate non-bottom scroll reports cannot revoke permission;
@@ -183,7 +207,7 @@ export function useChatTimelineFollowLatch(
   const onReaderGestureRef = useRef(onReaderGesture);
   const correctionGenerationRef = useRef(0);
   const readerGestureGenerationRef = useRef(0);
-  const readerDepartureArmedRef = useRef(false);
+  const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
@@ -215,7 +239,7 @@ export function useChatTimelineFollowLatch(
       // (genuinely departing) report reads as layout-owned and the latch
       // yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
-      readerDepartureArmedRef.current = false;
+      armedReaderDepartureRef.current = null;
       permissionRef.current = isFollowing;
       onFollowIntentChangeRef.current?.(isFollowing);
     },
@@ -225,10 +249,22 @@ export function useChatTimelineFollowLatch(
   const noteReaderGesture = useCallback(
     (intent: ChatTimelineReaderGestureIntent): void => {
       readerGestureGenerationRef.current += 1;
-      readerDepartureArmedRef.current = intent.publishesReaderPosition;
       cancelActiveCorrection();
       const node = listRef.current?.getScrollableNode();
       const geometry = node ? readScrollGeometry(node) : null;
+      armedReaderDepartureRef.current = intent.publishesReaderPosition
+        ? {
+            source: "gesture",
+            direction: intent.direction,
+            // Unknown/hidden geometry cannot safely prove a no-op. When it is
+            // measurable, an edge-directed gesture that cannot move must not
+            // strand follow if no native scroll event is emitted.
+            blocksAutomaticCorrection:
+              geometry === null ||
+              !isChatTimelineGeometryMeasurable(geometry) ||
+              canReaderGestureMove(geometry, intent.direction),
+          }
+        : null;
       readerEndCandidateRef.current =
         intent.direction === "toward-end" &&
         geometry !== null &&
@@ -328,6 +364,8 @@ export function useChatTimelineFollowLatch(
   const beginOwnedEndNavigation = useCallback((): void => {
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
+    // Explicit go-live supersedes any pending reader/free-navigation arm.
+    armedReaderDepartureRef.current = null;
     setFollowIntent(true);
     createActiveCorrection();
   }, [createActiveCorrection, listRef, setFollowIntent]);
@@ -335,8 +373,14 @@ export function useChatTimelineFollowLatch(
   const beginOwnedFreeNavigation = useCallback((): void => {
     cancelActiveCorrection();
     readerEndCandidateRef.current = null;
-    readerDepartureArmedRef.current = true;
+    armedReaderDepartureRef.current = { source: "owned-navigation" };
   }, [cancelActiveCorrection]);
+
+  const completeOwnedFreeNavigation = useCallback((): void => {
+    if (armedReaderDepartureRef.current?.source === "owned-navigation") {
+      armedReaderDepartureRef.current = null;
+    }
+  }, []);
 
   const completeOwnedEndNavigation = useCallback(
     (didLandAtEnd: boolean): void => {
@@ -346,20 +390,38 @@ export function useChatTimelineFollowLatch(
     [cancelActiveCorrection, setFollowIntent],
   );
 
-  const reconcileStrictBottom = useCallback((): void => {
-    cancelActiveCorrection();
-    readerEndCandidateRef.current = null;
-    const isSuppressed = isCorrectionSuppressed?.() === true;
-    const mayReleaseSuppression =
-      isSuppressed && resolveSuppressedEndLanding?.() === true;
-    const mayFollow = !isSuppressed || mayReleaseSuppression;
-    setFollowIntent(mayFollow);
-  }, [
-    cancelActiveCorrection,
-    isCorrectionSuppressed,
-    resolveSuppressedEndLanding,
-    setFollowIntent,
-  ]);
+  const reconcileStrictBottom = useCallback(
+    (isNativeScrollReport: boolean): void => {
+      cancelActiveCorrection();
+      readerEndCandidateRef.current = null;
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (
+        armedDeparture?.source === "gesture" &&
+        (!armedDeparture.blocksAutomaticCorrection || isNativeScrollReport)
+      ) {
+        // Only issue-time geometry that proved this gesture cannot move can
+        // release on a maintenance observation. A movable wheel/touch gesture
+        // can still be awaiting its native scroll report, so treating unchanged
+        // geometry as a no-op would let a subsequent maintain correction mask
+        // the reader's departure. Once a native report confirms it remained at
+        // the strict edge, though, release the arm so later streaming can follow.
+        // Owned navigation deliberately survives: an animated free jump may
+        // report a sub-epsilon first frame before it genuinely leaves the edge.
+        armedReaderDepartureRef.current = null;
+      }
+      const isSuppressed = isCorrectionSuppressed?.() === true;
+      const mayReleaseSuppression =
+        isSuppressed && resolveSuppressedEndLanding?.() === true;
+      const mayFollow = !isSuppressed || mayReleaseSuppression;
+      setFollowIntent(mayFollow);
+    },
+    [
+      cancelActiveCorrection,
+      isCorrectionSuppressed,
+      resolveSuppressedEndLanding,
+      setFollowIntent,
+    ],
+  );
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
@@ -389,7 +451,7 @@ export function useChatTimelineFollowLatch(
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
-      reconcileStrictBottom();
+      reconcileStrictBottom(true);
       return;
     }
 
@@ -402,8 +464,8 @@ export function useChatTimelineFollowLatch(
     }
     if (tryReattachReader(node, geometry)) return;
     if (!permissionRef.current) return;
-    if (readerDepartureArmedRef.current) {
-      readerDepartureArmedRef.current = false;
+    if (armedReaderDepartureRef.current !== null) {
+      armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
     }
@@ -444,11 +506,21 @@ export function useChatTimelineFollowLatch(
       // leave a jump pill visible when there is no useful bottom to reach.
       // This performs no imperative navigation, preserving destructive-clamp
       // behavior while allowing subsequent streaming growth to stay latched.
-      reconcileStrictBottom();
+      reconcileStrictBottom(false);
       return;
     }
     if (!permissionRef.current) return;
     if (isCorrectionSuppressed?.() === true) return;
+    const armedDeparture = armedReaderDepartureRef.current;
+    if (
+      armedDeparture?.source === "owned-navigation" ||
+      armedDeparture?.blocksAutomaticCorrection === true
+    ) {
+      // Reader/free-navigation intent was published before its native scroll
+      // report. Starting a correction here would inherit that gesture's
+      // generation and then mask the departure as correction-owned.
+      return;
+    }
 
     startEndCorrection(list, node);
   }, [
@@ -500,11 +572,30 @@ export function useChatTimelineFollowLatch(
     const clearTouch = (): void => {
       lastTouchClientYRef.current = null;
     };
+    const clearPointerPreflight = (): void => {
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (
+        armedDeparture?.source === "gesture" &&
+        armedDeparture.direction === "indeterminate"
+      ) {
+        // A scrollbar pointer-down is publishing, but a click/release with no
+        // drag emits no scroll event. Pointer completion deterministically
+        // releases only that indeterminate arm; wheel/touch/keyboard arms do
+        // not share this completion signal.
+        armedReaderDepartureRef.current = null;
+      }
+    };
     node.addEventListener("wheel", handleWheel, { passive: true });
     node.addEventListener("touchstart", handleTouchStart, { passive: true });
     node.addEventListener("touchmove", handleTouchMove, { passive: true });
     node.addEventListener("touchend", clearTouch, { passive: true });
     node.addEventListener("touchcancel", clearTouch, { passive: true });
+    node.addEventListener("pointerup", clearPointerPreflight, {
+      passive: true,
+    });
+    node.addEventListener("pointercancel", clearPointerPreflight, {
+      passive: true,
+    });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
     // ChatTimeline render at all. Like every maintain trigger, it may heal a
     // stale false latch only when fresh geometry is already at the strict
@@ -522,6 +613,8 @@ export function useChatTimelineFollowLatch(
       node.removeEventListener("touchmove", handleTouchMove);
       node.removeEventListener("touchend", clearTouch);
       node.removeEventListener("touchcancel", clearTouch);
+      node.removeEventListener("pointerup", clearPointerPreflight);
+      node.removeEventListener("pointercancel", clearPointerPreflight);
       resizeObserver.disconnect();
       cancelActiveCorrection();
     };
@@ -540,6 +633,7 @@ export function useChatTimelineFollowLatch(
       noteReaderGesture,
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
+      completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       isAtStrictEnd,
       observeLiveGeometry,
@@ -547,6 +641,7 @@ export function useChatTimelineFollowLatch(
     [
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
+      completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,
       isAtStrictEnd,

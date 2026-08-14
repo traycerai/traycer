@@ -25,7 +25,7 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "attention", tier: "blocking" });
   });
 
-  it("moves resolved host prompts to recent", () => {
+  it("keeps unread resolved host prompts in attention", () => {
     expect(
       classifyNotificationLifecycle(
         input({
@@ -35,7 +35,7 @@ describe("classifyNotificationLifecycle", () => {
           readAt: null,
         }),
       ),
-    ).toEqual({ section: "recent" });
+    ).toEqual({ section: "attention", tier: "blocking" });
   });
 
   it("places unread host failures in attention as failure tier", () => {
@@ -101,7 +101,7 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "recent" });
   });
 
-  it("ignores readAt for unresolved prompts (resolvedAt is the gate)", () => {
+  it("moves read unresolved prompts to recent", () => {
     expect(
       classifyNotificationLifecycle(
         input({
@@ -111,30 +111,28 @@ describe("classifyNotificationLifecycle", () => {
           readAt: 10,
         }),
       ),
-    ).toEqual({ section: "attention", tier: "blocking" });
+    ).toEqual({ section: "recent" });
   });
 
-  it("classifies the dismiss transition: read needs_action leaves Attention only once resolvedAt is set", () => {
-    // Navigation can stamp readAt without clearing the blocking tier. Dismiss
-    // is the resolvedAt write that actually moves the row into Recent.
-    const beforeDismiss = input({
+  it("classifies notification awareness independently of workflow resolution", () => {
+    const readUnresolved = input({
       source: "host",
       severity: "needs_action",
       resolvedAt: null,
       readAt: 10,
     });
-    const afterDismiss = input({
+    const unreadResolved = input({
       source: "host",
       severity: "needs_action",
       resolvedAt: 20,
-      readAt: 10,
+      readAt: null,
     });
-    expect(classifyNotificationLifecycle(beforeDismiss)).toEqual({
+    expect(classifyNotificationLifecycle(readUnresolved)).toEqual({
+      section: "recent",
+    });
+    expect(classifyNotificationLifecycle(unreadResolved)).toEqual({
       section: "attention",
       tier: "blocking",
-    });
-    expect(classifyNotificationLifecycle(afterDismiss)).toEqual({
-      section: "recent",
     });
   });
 

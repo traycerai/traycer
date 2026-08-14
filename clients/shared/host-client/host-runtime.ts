@@ -1,7 +1,10 @@
 import type { Disposable } from "../platform/uri-callback";
 import type { IRunnerHost } from "../platform/runner-host";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
-import type { RequestContextProvider } from "../auth/request-context-provider";
+import type {
+  AuthEra,
+  RequestContextProvider,
+} from "../auth/request-context-provider";
 import type { IHostMessenger } from "../host-transport/host-messenger";
 import { HostClient, type IHostQueryInvalidator } from "./host-client";
 import type { HostDirectoryEntry } from "./host-directory";
@@ -21,6 +24,17 @@ export interface IHostDirectoryService {
   list(): Promise<readonly HostDirectoryEntry[]>;
   findById(hostId: string): HostDirectoryEntry | null;
   refresh(): Promise<readonly HostDirectoryEntry[]>;
+  /**
+   * Refresh on behalf of an explicitly named {@link AuthEra}. The
+   * context-change path uses this rather than `refresh()`: an era assembled
+   * from ambient accessors inside an emission is a mix of state that has
+   * already moved and state that has not, and the implementation needs the
+   * SAME era for its memo key, its commit stamp, its destructive fence and
+   * the credential its fetch runs under.
+   */
+  refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]>;
+  /** Drop any in-flight refresh — used when the credential rotates. */
+  invalidateInFlightRefresh(): void;
   getSelected(): HostDirectoryEntry | null;
   selectById(hostId: string | null): void;
   onSelectionChange(
@@ -132,16 +146,34 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.hostClient.setRequestContext(this.requestContextProvider.current());
     this.hostClient.bind(this.directory.getSelected());
 
-    this.contextUnsubscribe = this.requestContextProvider.onChange((ctx) => {
-      this.hostClient.setRequestContext(ctx);
-      void this.directory.refresh();
-    });
+    this.contextUnsubscribe = this.requestContextProvider.onChange(
+      (ctx, era) => {
+        this.hostClient.setRequestContext(ctx);
+        // The era comes FROM the emission and is passed through untouched -
+        // not rebuilt here out of `ctx` plus a generation read, and not left
+        // for the directory to read off its own accessors. Those accessors
+        // answer for a transition that may not have finished landing: this is
+        // the one refresh whose entire job is to load the INCOMING account,
+        // and every previous attempt to key it ambiently picked up one field
+        // from after the switch and another from before it.
+        // On sign-out the era's identity is `null`, which is exactly right:
+        // `null` IS the incoming identity, and stamping it is what lets the
+        // signed-out clear commit instead of being discarded as stale.
+        void this.directory.refreshForEra(era);
+      },
+    );
 
     // Same-user token refresh rotates the lease in place (silent on `onChange`);
     // forward it so stream transports can push the fresh credential onto open
     // connections without a reconnect.
     this.bearerRotationUnsubscribe =
       this.requestContextProvider.onBearerRotated(() => {
+        // A rotation is invisible to a user-id fence — same account, new
+        // credential — so the in-flight refresh is dropped here rather than
+        // joined. The pending request carries the OLD bearer, and if it comes
+        // back 401 its `signed-out` outcome would clear a directory the new
+        // credential had just legitimately filled.
+        this.directory.invalidateInFlightRefresh();
         this.hostClient.notifyBearerRotated();
       });
 

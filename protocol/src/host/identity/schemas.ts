@@ -31,11 +31,16 @@ const emptyRequestSchema = z.object({});
  * `effectiveName` is deliberately not `customName ?? systemName`. On an
  * ordinary machine the label IS `os.hostname()` and the two are identical; on a
  * provisioned host started with `TRAYCER_HOST_LABEL` they differ, and the label
- * is the name the cloud registry already shows. Since the registry's
- * `displayName` follows this exact value over the presence heartbeat, a client
- * that reads a reachable host over RPC and one that falls back to the registry
- * for an unreachable host always name the same host identically — which is the
- * whole point of moving the name onto the host.
+ * is the name the cloud registry already shows. The registry's `displayName`
+ * follows this exact value each time the host republishes it on its periodic
+ * credential refresh (not the deleted presence heartbeat) - so a client that
+ * reads a reachable host over RPC and one that falls back to the registry for
+ * an unreachable host CONVERGE on the same name once that republish lands.
+ * Between a rename and the next refresh the RPC answer leads the registry:
+ * `host.identity.set` writes only the host-mastered store, so a connected
+ * client sees the new name immediately while the registry still shows the
+ * previous one. Single source of truth with bounded registry lag - not
+ * instant agreement - is the contract of moving the name onto the host.
  */
 export const hostIdentitySchema = z.object({
   systemName: z.string().min(1),

@@ -223,7 +223,7 @@ describe("<HostPicker /> directory-change reactivity", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: localSnapshot.version,
-        status: "available",
+        transportDialability: "dialable",
       };
       render(
         <TraycerApp

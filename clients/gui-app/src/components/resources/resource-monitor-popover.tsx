@@ -1054,6 +1054,10 @@ function ResourceSearchInput(props: {
   readonly onChange: (value: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useLayoutEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
   return (
     <InputGroup className="mt-3 h-7">
       <InputGroupAddon align="inline-start">

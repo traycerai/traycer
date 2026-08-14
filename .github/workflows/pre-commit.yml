@@ -23,6 +23,11 @@ jobs:
       # Drive `nx affected` in the workspace-checks hook off the PR base.
       NX_BASE: ${{ github.event.pull_request.base.sha }}
       NX_HEAD: ${{ github.event.pull_request.head.sha }}
+      # gui-app's type-aware lint has outgrown Node's ~4GB default heap (OOM
+      # SIGABRT on two consecutive CI heads, then locally). The headroom lives
+      # in that package's own `lint` script - the one place every invocation
+      # (this hook, the local hook, a bare `bun run lint`) inherits it - so no
+      # per-runner env is set here.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

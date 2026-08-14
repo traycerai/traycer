@@ -236,10 +236,10 @@ describe("HostClient", () => {
     invalidator.options.length = 0;
     events.length = 0;
 
-    const sameIdOffline = {
+    const sameIdOffline: HostDirectoryEntry = {
       ...mockLocalHostEntry,
       websocketUrl: null,
-      status: "unavailable" as const,
+      transportDialability: "not-dialable",
     };
     client.bind(sameIdOffline);
 
@@ -255,48 +255,78 @@ describe("HostClient", () => {
     ]);
   });
 
-  it("treats a same-id host going BUSY as the same transport - no cancel, no sweep, no event", () => {
+  it("treats a coarse flip the directory cannot vouch for as the same transport - no cancel, no sweep, no event", () => {
     const { client, invalidator, events } = buildHostClientWithMock();
-    client.bind(mockLocalHostEntry);
+    // A blind liveness read: `unknown` connectivity, so the entry is
+    // not-dialable but the REASON is `indeterminate` — the absence of an
+    // answer, not a refusal. Everything a caller can act on is unchanged:
+    // same relay URL, same version, same key.
+    //
+    // This is where the shell's `busy` lands too. `busy` says one loopback
+    // probe went unanswered while the process is demonstrably alive, and a
+    // wedged host flaps it for as long as the stall lasts; each flap used to
+    // cancel-then-abort every in-flight request on the bound host, sweep its
+    // query scope with `refetchActive`, and announce `host-updated` to every
+    // subscriber. It can no longer reach this layer at all — the directory
+    // service projects it to `dialable` (pinned in
+    // `host-directory-service.test.ts`) — so what is left to guard here is the
+    // general rule that covered it: a coarse move that is not evidence of a
+    // refusal must not churn the transport.
+    const blind = (
+      transportDialability: "dialable" | "not-dialable",
+    ): RemoteHostDirectoryEntry => ({
+      hostId: "mock-remote",
+      label: "Mock Remote Host",
+      kind: "remote",
+      websocketUrl: "wss://mock-remote.traycer.invalid/rpc",
+      version: "0.0.0-mock",
+      transportDialability,
+      publicKey: "pubkey-a",
+      relayFuseGrace: false,
+      remoteStatus: {
+        connectivity: "unknown",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: null,
+        lastSeenAt: null,
+      },
+    });
+    client.bind(blind("dialable"));
     invalidator.calls.length = 0;
     invalidator.options.length = 0;
     events.length = 0;
 
-    // Everything a caller can act on is unchanged - same process, same
-    // `websocketUrl`, same version - and `busy` only says one loopback probe
-    // went unanswered. A wedged host flaps this field for as long as the stall
-    // lasts, and each flap used to cancel-then-abort every in-flight request on
-    // the bound host, sweep its query scope with `refetchActive`, and announce
-    // `host-updated` to every subscriber.
-    const sameIdBusy = { ...mockLocalHostEntry, status: "busy" as const };
-    client.bind(sameIdBusy);
+    const flipped = blind("not-dialable");
+    client.bind(flipped);
 
-    expect(client.getActiveHost()).toBe(sameIdBusy);
+    expect(client.getActiveHost()).toBe(flipped);
     expect(invalidator.calls).toEqual([]);
     expect(events).toEqual([]);
 
     // ... and back, which is the other half of the flap.
-    client.bind(mockLocalHostEntry);
+    client.bind(blind("dialable"));
     expect(invalidator.calls).toEqual([]);
     expect(events).toEqual([]);
   });
 
-  it("still emits when a same-id host leaves reachability, with every other field held stable", () => {
+  it("still emits when a same-id host is positively refused, with every other field held stable", () => {
     const { client, invalidator, events } = buildHostClientWithMock();
     client.bind(mockLocalHostEntry);
     invalidator.calls.length = 0;
     invalidator.options.length = 0;
     events.length = 0;
 
-    // The sibling that makes the test above mean something: ONLY the status
-    // moves, and it crosses out of reachable. `websocketUrl` is deliberately
-    // held (the directory can mark a host unavailable while still carrying its
-    // last URL), so nothing but the status can be firing this.
-    const sameIdUnavailable = {
+    // The sibling that makes the test above mean something: ONLY the coarse
+    // bit moves, and here it IS a refusal — a local entry that cannot be
+    // dialed is `offline` by derivation. `websocketUrl` is deliberately held
+    // (the directory can refuse a host while still carrying its last URL), so
+    // nothing but the dialability can be firing this.
+    const sameIdRefused: HostDirectoryEntry = {
       ...mockLocalHostEntry,
-      status: "unavailable" as const,
+      transportDialability: "not-dialable",
     };
-    client.bind(sameIdUnavailable);
+    client.bind(sameIdRefused);
 
     expect(invalidator.calls).toEqual(["mock-local"]);
     expect(invalidator.options).toEqual([{ refetchActive: true }]);
@@ -319,15 +349,13 @@ describe("HostClient", () => {
       // a same-URL event by construction, so this must stay identical.
       websocketUrl: "wss://mock-remote.traycer.invalid/rpc",
       version: "0.0.0-mock",
-      status: "available",
+      transportDialability: "dialable",
       publicKey,
+      relayFuseGrace: false,
       remoteStatus: {
-        presenceLease: "fresh",
-        hostRelayAttached: true,
+        connectivity: "connectable",
         viewerReachability: "ok",
         clientCloud: "ok",
-        busy: false,
-        busySessionCount: 0,
         updateState: "current",
         appVersion: null,
         lastSeenAt: null,

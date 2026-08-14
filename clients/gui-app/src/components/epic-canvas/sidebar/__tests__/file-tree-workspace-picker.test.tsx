@@ -38,7 +38,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "local",
         websocketUrl: null,
         version: null,
-        status: "available",
+        transportDialability: "dialable",
       },
     ],
   }),
