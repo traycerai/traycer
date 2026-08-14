@@ -27,13 +27,19 @@
  * whether or not the build happens to be packaged.
  */
 
+// RELATIVE on purpose, not `@traycer-clients/shared/...`: the Vite renderer
+// config transitively loads this module (vite.renderer.config.ts -> the CSP
+// module -> here), and Vite's config loader inlines relative imports while
+// EXTERNALIZING bare specifiers - which Node's require then cannot resolve to
+// this workspace's TypeScript source. The app builds resolve both forms; the
+// config-loader context resolves only this one.
 import {
   DEV_AUTHN_BASE_URL_ENV,
   DEV_CLOUD_UI_BASE_URL_ENV,
   DEV_RELAY_BASE_URL_ENV,
   devBackendUrlFromEnv,
   devRelayBaseUrlFromEnv,
-} from "@traycer-clients/shared/platform/dev-backend-urls";
+} from "../../shared/platform/dev-backend-urls";
 
 export type Environment = string;
 

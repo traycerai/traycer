@@ -45,10 +45,13 @@
  * genuinely required.
  */
 
+// Relative for the same reason `../config`'s own import is: the Vite config
+// loader inlines relative imports and externalizes bare ones it cannot
+// require at load time.
 import {
   DEV_AUTHN_BASE_URL_ENV,
   devBackendUrlFromEnv,
-} from "@traycer-clients/shared/platform/dev-backend-urls";
+} from "../../../shared/platform/dev-backend-urls";
 import { config } from "../config";
 
 /**
