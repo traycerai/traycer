@@ -168,7 +168,11 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
           showAll={props.showAll}
           onToggleShowAll={props.onToggleShowAll}
           installingVersion={props.installingVersion}
-          disabled={props.disabled}
+          // `checking` too, not only the page-wide busy: while a filter toggle
+          // refetches, `keepPreviousData` keeps the OLD filter's rows on
+          // screen — freezing them is what stops an excluded RC from being
+          // installable in the gap after unchecking the option.
+          disabled={props.disabled || props.checking}
           onInstall={props.onInstall}
         />
       )}

@@ -10,6 +10,9 @@
  *  - the `<meta http-equiv="Content-Security-Policy">` injected into the
  *    renderer `index.html` by `vite.renderer.config.ts`'s `transformIndexHtml`
  *
+ * Imports stay electron-free (`../config` is too) so the Vite config can load
+ * this module outside an Electron process.
+ *
  * Non-obvious allowances:
  *  - `sentry-ipc:` (connect-src) lets `@sentry/electron/renderer` reach the
  *    main-process SDK; without it renderer errors silently fail to report.
@@ -41,29 +44,34 @@
  * Intentionally restrictive - extend deliberately when a new remote origin is
  * genuinely required.
  */
-const DEV_AUTHN_BASE_URL_ENV = "TRAYCER_DEV_AUTHN_BASE_URL";
+
+import {
+  DEV_AUTHN_BASE_URL_ENV,
+  devBackendUrlFromEnv,
+} from "@traycer-clients/shared/platform/dev-backend-urls";
+import { config } from "../config";
 
 /**
  * Extra `connect-src` sources for a `make dev-desktop` / `make dev-remote`
  * run: the local authn-v3 origin, which is plain http on a slot-derived
  * loopback port. Empty for packaged builds, where authn is https and already
  * covered - so the shipped policy is byte-for-byte what it was.
+ *
+ * Derived through the SAME validated contract `config.ts` resolves the
+ * application's authn URL with - the baked `environment` gate (a stray env
+ * var cannot broaden a shipped build's policy), the loopback-http-only
+ * restriction, and the throw-on-malformed posture - so the CSP and the app
+ * config can never read one override two ways. An independent parse here is
+ * exactly how the two drifted once.
  */
 export function devConnectSrcExtras(env: NodeJS.ProcessEnv): string {
-  const raw = env[DEV_AUTHN_BASE_URL_ENV];
-  if (raw === undefined || raw.length === 0) return "";
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return "";
-  }
-  // An opaque origin (`file:`, `data:`, …) stringifies to the literal "null",
-  // which is not a source expression - appending it buys a policy parse
-  // warning instead of the admitted origin. Same failure mode as unparseable
-  // input: contribute nothing.
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-  return ` ${url.origin}`;
+  const origin = devBackendUrlFromEnv(
+    config.environment,
+    DEV_AUTHN_BASE_URL_ENV,
+    "",
+    env,
+  );
+  return origin.length === 0 ? "" : ` ${origin}`;
 }
 
 export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
