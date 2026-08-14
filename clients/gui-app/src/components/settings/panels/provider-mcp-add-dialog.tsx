@@ -302,13 +302,13 @@ export function ProviderMcpAddDialog(props: {
   useEffect(() => {
     if (!open) return;
     form.reset(defaultValues);
-    setFormError(null);
   }, [defaultValues, form, open]);
 
   function handleOpenChange(next: boolean): void {
     if (mutate.isPending) return;
     if (!next) {
       form.reset();
+      setFormError(null);
       // M8: clear the TanStack mutation cache immediately on close so a
       // submitted secret (header/env value) doesn't linger in
       // `mutate.variables` after the user is done with the dialog.
@@ -677,7 +677,7 @@ export function ProviderMcpAddDialog(props: {
                       </>
                     )}
 
-                    {visibleError !== undefined && visibleError !== null ? (
+                    {visibleError !== undefined ? (
                       <p className="text-ui-xs text-destructive">
                         {visibleError}
                       </p>
@@ -878,6 +878,11 @@ function SegmentChip(props: {
   readonly disabledReason: string | null;
   readonly onClick: () => void;
 }): ReactNode {
+  let stateClass = "text-muted-foreground hover:text-foreground";
+  if (props.active) stateClass = "bg-background text-foreground shadow-sm";
+  if (props.disabledReason !== null) {
+    stateClass = "cursor-not-allowed text-muted-foreground/50";
+  }
   const button = (
     <button
       type="button"
@@ -886,11 +891,7 @@ function SegmentChip(props: {
       aria-disabled={props.disabledReason === null ? undefined : true}
       className={cn(
         "rounded px-2.5 py-1 text-ui-xs transition-colors",
-        props.disabledReason !== null
-          ? "cursor-not-allowed text-muted-foreground/50"
-          : props.active
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
+        stateClass,
       )}
     >
       {props.label}

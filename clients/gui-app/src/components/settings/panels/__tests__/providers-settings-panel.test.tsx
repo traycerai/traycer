@@ -2704,8 +2704,8 @@ describe("<ProvidersSettingsPanel />", () => {
     const addProfileButton = screen.getByRole("button", {
       name: "Add profile",
     });
-    expect(addProfileButton.getAttribute("data-variant")).toBe("outline");
-    expect(addProfileButton.getAttribute("data-size")).toBe("xs");
+    expect(addProfileButton.getAttribute("data-variant")).toBe("default");
+    expect(addProfileButton.getAttribute("data-size")).toBe("sm");
     expect(screen.getByText("Profiles")).toBeDefined();
     const manageProfileButton = screen.getByRole("button", {
       name: "Manage profile",

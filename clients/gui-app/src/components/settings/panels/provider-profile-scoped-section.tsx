@@ -223,7 +223,7 @@ export function ProviderProfileScopedSection(
                   onClick={onAddProfile}
                 >
                   <Plus className="size-3.5" />
-                  Add Profile
+                  Add profile
                 </Button>
               </span>
             </TooltipWrapper>

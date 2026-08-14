@@ -602,7 +602,7 @@ function SkillEntryButton({
       onClick={onOpen}
     >
       <Plus className="size-3.5" />
-      Add Skill
+      Add skill
     </Button>
   );
 }
@@ -908,7 +908,7 @@ function SkillsEmptyState({
           onClick={onOpenComposer}
         >
           <Plus className="size-3.5" />
-          Add Skill
+          Add skill
         </Button>
       ) : (
         <p className="max-w-prose text-ui-xs text-muted-foreground">
