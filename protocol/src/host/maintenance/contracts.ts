@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   hostDoctorRequestSchema,
   hostDoctorResponseSchema,
@@ -14,6 +17,7 @@ import {
   hostUpdateCheckResponseSchema,
   hostUpdateInstallRequestSchema,
   hostUpdateInstallResponseSchema,
+  hostUpdateInstallResponseV10Schema,
 } from "./schemas";
 
 /** Runs the host's own CLI doctor against the host's local installation. */
@@ -37,7 +41,31 @@ export const hostUpdateInstallV10 = defineRpcContract({
   method: "host.update.install",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostUpdateInstallRequestSchema,
+  responseSchema: hostUpdateInstallResponseV10Schema,
+});
+
+/** Minor 1 adds `already-updating`, which a 1.0 host never returns. */
+export const hostUpdateInstallV11 = defineRpcContract({
+  method: "host.update.install",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostUpdateInstallRequestSchema,
   responseSchema: hostUpdateInstallResponseSchema,
+});
+
+/**
+ * Purely additive, in both directions that matter: the request is unchanged,
+ * and every v1.0 outcome is still a v1.1 outcome. So neither half rewrites
+ * anything — unlike `host.status`, this minor invents no field a v1.0 peer
+ * would have to have defaulted.
+ */
+export const hostUpdateInstallUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostUpdateInstallV10,
+  typeof hostUpdateInstallV11
+>({
+  from: hostUpdateInstallV10.schemaVersion,
+  to: hostUpdateInstallV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Returns this slot's shared on-disk installation records, or tree-run state. */

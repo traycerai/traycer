@@ -212,6 +212,8 @@ import {
   hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownV10,
@@ -3957,11 +3959,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The host reads `ctx.schemaVersion.minor` before returning
+          // `already-updating` and renders `cli-failed` for a 1.0 peer, whose
+          // schema would otherwise refuse the frame.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

@@ -6,6 +6,8 @@ export {
   hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 
 export {

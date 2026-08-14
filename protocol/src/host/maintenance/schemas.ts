@@ -189,11 +189,38 @@ export type HostUpdateInstallRequest = z.infer<
   typeof hostUpdateInstallRequestSchema
 >;
 
+export const hostUpdateInstallResponseV10Schema = z.discriminatedUnion(
+  "outcome",
+  [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({ outcome: z.literal("externally-managed") }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+  ],
+);
+export type HostUpdateInstallResponseV10 = z.infer<
+  typeof hostUpdateInstallResponseV10Schema
+>;
+
+/**
+ * Minor 1 adds `already-updating`: an update this host started is still
+ * running, so this one was not.
+ *
+ * `accepted` means the detached CLI was SPAWNED, not that it finished — the
+ * download, stage, drain and swap all happen after this method has already
+ * answered. Without this arm a caller cannot tell "your update is under way"
+ * from "nothing is happening", and a second request during that window
+ * launches a competing updater: the CLI's lock covers only its brief precheck
+ * and promote phases, so two runs download in parallel and can swap twice in a
+ * row. A host at 1.0 never returns it, which is why the upgrade path is the
+ * identity — every v1.0 response is already a valid v1.1 response.
+ */
 export const hostUpdateInstallResponseSchema = z.discriminatedUnion("outcome", [
   z.object({ outcome: z.literal("accepted") }),
   z.object({ outcome: z.literal("externally-managed") }),
   z.object({ outcome: z.literal("cli-unavailable") }),
   z.object({ outcome: z.literal("cli-failed") }),
+  z.object({ outcome: z.literal("already-updating") }),
 ]);
 export type HostUpdateInstallResponse = z.infer<
   typeof hostUpdateInstallResponseSchema

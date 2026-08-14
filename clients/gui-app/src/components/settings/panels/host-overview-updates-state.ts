@@ -460,7 +460,11 @@ function stickyDegradeFor(
 
 function handleInstallOutcome(input: {
   readonly outcome:
-    "accepted" | "externally-managed" | "cli-unavailable" | "cli-failed";
+    | "accepted"
+    | "externally-managed"
+    | "cli-unavailable"
+    | "cli-failed"
+    | "already-updating";
   readonly hostName: string;
   readonly version: string;
   readonly onSticky: (reason: OverviewDegradeReason) => void;
@@ -470,6 +474,18 @@ function handleInstallOutcome(input: {
   if (input.outcome === "accepted") {
     input.onAccepted();
     toast.success(`Updating ${input.hostName} to v${input.version}`);
+    return;
+  }
+  if (input.outcome === "already-updating") {
+    // Not a failure, and deliberately not sticky: the host refused because it
+    // is BUSY doing the thing this button asks for. The page-wide lock makes
+    // this rare from here, but it cannot be airtight — that lock reads
+    // `host.status.updateProgress`, which the CLI does not write until
+    // download and staging are already done, and it binds only this window.
+    // This arm is what a second window, a direct CLI caller, or a click inside
+    // that blind gap gets told.
+    input.onAccepted();
+    toast.info(`${input.hostName} is already installing an update.`);
     return;
   }
   if (
