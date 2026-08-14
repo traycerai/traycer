@@ -1444,7 +1444,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     clearSelection();
   });
 
-  it("keeps focus preview suppressed until selection clears while clicks remain available", async () => {
+  it("keeps the clicked minimap row active after selection clears", async () => {
     const { onSelect } = renderMinimap({
       messages: makeThreeTurnTranscript(),
     });
@@ -1457,7 +1457,6 @@ describe("ChatTurnMinimap mouse interaction", () => {
     onTestFinished(clearSelection);
 
     fireEvent.click(hitStrip, { clientY: 200 });
-    fireEvent.focus(hitStrip);
     expect(onSelect).toHaveBeenCalledWith("message-2");
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
@@ -1467,9 +1466,9 @@ describe("ChatTurnMinimap mouse interaction", () => {
     clearSelection();
 
     fireEvent.focus(hitStrip);
-    expect(await screen.findByText("Turn alpha")).toBeTruthy();
+    expect(await screen.findByText("Turn beta")).toBeTruthy();
     fireEvent.keyDown(hitStrip, { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledWith("message-0");
+    expect(onSelect).toHaveBeenCalledWith("message-2");
     onSelect.mockClear();
 
     fireEvent.click(hitStrip, { clientY: 200 });

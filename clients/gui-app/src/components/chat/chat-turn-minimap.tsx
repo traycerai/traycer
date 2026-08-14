@@ -909,6 +909,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       const nextIndex = resolveActiveIndexFromPointerY(event.clientY);
       const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
       if (nextItem) {
+        setActiveIndex(nextIndex);
         onSelect(nextItem.id);
       }
       event.currentTarget.blur();
