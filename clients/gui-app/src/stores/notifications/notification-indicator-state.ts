@@ -111,9 +111,7 @@ function selectHostIndicatorState(
  * snapshots, already filtered for cleared/superseded), and every row carries
  * the entity columns, severity, kind and markers, so it can mirror the host's
  * derivation over rows from EVERY host rather than only the connected one.
- * An epic aggregates direct rows plus only its supplied live chats; a chat
- * aggregates only its own rows. Pending prompts are ORed normally. Terminal
- * rows first resolve to the newest
+ * Pending prompts are ORed normally. Terminal rows first resolve to the newest
  * outcome for each lifecycle group and exact entity within one origin host,
  * whose timestamps share a clock domain. Those per-host winners are then
  * rolled into epic state. This lets a later success replace an earlier failure
@@ -198,12 +196,9 @@ function cloudIndicatorEntryIsWanted(
   wantedChatIds: ReadonlySet<string>,
 ): boolean {
   const { epicId, chatId } = row.entry;
-  const isLiveChat = chatId !== null && wantedChatIds.has(chatId);
   return (
-    (epicId !== null &&
-      wantedEpicIds.has(epicId) &&
-      (chatId === null || isLiveChat)) ||
-    isLiveChat
+    (epicId !== null && wantedEpicIds.has(epicId)) ||
+    (chatId !== null && wantedChatIds.has(chatId))
   );
 }
 
