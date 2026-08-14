@@ -207,6 +207,18 @@ function useServiceWriteLatchLifecycle(
       useHostServiceWriteLatchStore.getState().releaseAll(hostId);
     }
   }, [scopeUsable, hostId]);
+  // The structural latch also releases ONCE per mount: the flip release above
+  // only fires for transitions this instance observes, and a disconnect that
+  // happened while nobody had this host's Overview open would otherwise leave
+  // the refusal pinned forever (it has no timer by design). Coming back to
+  // the page is a fresh look at a possibly reconfigured host - re-offer the
+  // verbs; one refused click re-latches at the cost of a toast.
+  useEffect(() => {
+    if (hostId === null) return;
+    useHostServiceWriteLatchStore
+      .getState()
+      .releaseExternallyManagedRefusal(hostId);
+  }, [hostId]);
   const { registerRestartLikelyAt, deregisterAcceptedAt } = latches;
   useEffect(() => {
     if (hostId === null || registerRestartLikelyAt === null) return;

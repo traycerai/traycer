@@ -136,7 +136,11 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
           id="host-overview-include-pre-releases"
           aria-label="Include release candidates"
           checked={props.includePreReleases}
-          disabled={props.checking}
+          // The page-wide gate too, not only the in-flight check: toggling
+          // changes the query key and immediately spawns another
+          // `host.update.check` CLI process - against a host that may be
+          // restarting, shutting down, or mid-swap while the gate is up.
+          disabled={props.checking || props.disabled}
           onCheckedChange={(value) =>
             props.onIncludePreReleasesChange(value === true)
           }

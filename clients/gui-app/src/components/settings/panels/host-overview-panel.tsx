@@ -201,9 +201,10 @@ export function HostOverviewPanel(props: {
   // deliberately kept the editor open with its draft on rejection. Cleared on
   // the next successful write; seeds `value` below so the reopened editor
   // holds the attempted name, not the persisted one.
-  const [failedRenameDraft, setFailedRenameDraft] = useState<string | null>(
-    null,
-  );
+  const [failedRename, setFailedRename] = useState<{
+    readonly draft: string;
+    readonly attempt: number;
+  } | null>(null);
   const reopenRenameRef = useRef<() => void>(() => undefined);
   const submitRename = (customName: string | null): void => {
     // Belt to the Save button's braces. The button is the UI guard against a
@@ -216,12 +217,19 @@ export function HostOverviewPanel(props: {
       { customName },
       {
         onSuccess: (next) => {
-          setFailedRenameDraft(null);
+          setFailedRename(null);
           toast.success(`Renamed to ${next.effectiveName}`);
         },
         onError: (error) => {
-          setFailedRenameDraft(customName ?? "");
-          reopenRenameRef.current();
+          // The reopen happens in the EFFECT below, one render later, not
+          // here: `startEditing` seeds the editor from the value its render
+          // captured, so a same-batch reopen would copy the persisted name in
+          // before the failed draft ever became the hook's value. The attempt
+          // counter makes a repeat failure with identical text re-fire it.
+          setFailedRename((previous) => ({
+            draft: customName ?? "",
+            attempt: (previous?.attempt ?? 0) + 1,
+          }));
           toastFromHostError(error, "Couldn't rename this host.");
         },
       },
@@ -236,15 +244,20 @@ export function HostOverviewPanel(props: {
   // no way to express it.
   const renameDegrade = identitySetDegrade ?? identityDegrade;
   const rename = useInlineRename({
-    value: failedRenameDraft ?? view.persistedNameDraft,
+    value: failedRename?.draft ?? view.persistedNameDraft,
     canEdit: usable && renameDegrade === null && identity !== null,
     onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
   });
-  // Ref-carried so `submitRename` (declared above) can reopen the editor from
-  // an async settle without a use-before-define on `rename`.
+  // Ref-carried so the reopen effect below always calls THIS render's
+  // `startEditing` - the closure that captured the failed draft as value.
   useEffect(() => {
     reopenRenameRef.current = rename.startEditing;
   });
+  // Reopen AFTER the failed draft is the hook's current value (see onError).
+  useEffect(() => {
+    if (failedRename === null) return;
+    reopenRenameRef.current();
+  }, [failedRename]);
 
   // Focus restoration: the pencil unmounts while the input is up and comes back
   // on close, so the trigger is refocused on that true->false transition only —

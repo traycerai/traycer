@@ -47,6 +47,7 @@ interface HostServiceWriteLatchState {
   readonly armExternallyManagedRefusal: (hostId: string) => void;
   readonly releaseDeregisterAccepted: (hostId: string) => void;
   readonly releaseRegisterRestartLikely: (hostId: string) => void;
+  readonly releaseExternallyManagedRefusal: (hostId: string) => void;
   /** The scope-flip release: every latch for this host, structural included. */
   readonly releaseAll: (hostId: string) => void;
 }
@@ -80,6 +81,9 @@ export const useHostServiceWriteLatchStore = create<HostServiceWriteLatchState>(
       },
       releaseRegisterRestartLikely: (hostId) => {
         patch(hostId, { registerRestartLikelyAt: null });
+      },
+      releaseExternallyManagedRefusal: (hostId) => {
+        patch(hostId, { externallyManagedRefusal: false });
       },
       releaseAll: (hostId) => {
         set((state) => {
