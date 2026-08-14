@@ -4,7 +4,7 @@ import type {
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { AttachmentImageFailure } from "./attachment-image";
 import { useSanitizedSvg } from "./use-sanitized-svg";
@@ -126,7 +126,7 @@ function GeneratedImageContent(props: {
   readonly result: ImageGenerationResult;
   readonly fallbackAlt: string;
 }): ReactNode {
-  const image = useAttachmentBlobSrc(
+  const image = useChatAttachmentBlobSrc(
     props.result.attachmentHash,
     props.result.mediaType,
     null,

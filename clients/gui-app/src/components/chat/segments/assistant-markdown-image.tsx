@@ -5,7 +5,7 @@ import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -436,7 +436,7 @@ function ResolvedImage(props: {
   readonly hash: string;
   readonly mediaType: string;
 }): ReactNode {
-  const image = useAttachmentBlobSrc(props.hash, props.mediaType, null);
+  const image = useChatAttachmentBlobSrc(props.hash, props.mediaType, null);
   if (image.status === "loading") {
     return (
       <AttachmentImageLoading

@@ -128,6 +128,10 @@ import {
   listChatRecordsRequestSchema,
   listChatRecordsResponseSchema,
 } from "@traycer/protocol/host/epic/chat-records";
+import {
+  readChatAttachmentRequestSchema,
+  readChatAttachmentResponseSchema,
+} from "@traycer/protocol/host/epic/chat-attachment";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -729,6 +733,20 @@ export const epicListChatRecordsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listChatRecordsRequestSchema,
   responseSchema: listChatRecordsResponseSchema,
+});
+
+// One chat image attachment's bytes, resolved by the VIEWER's tab host (local
+// disk store first, cloud blob pass-through second). Optional and off the
+// released floor like every other read above it: a host that predates it
+// answers `E_HOST_UNSUPPORTED` and the client falls back to the epic
+// doc-replica read, which is that host's only byte source anyway - so the
+// degrade arm is today's behavior, not a degraded one. See
+// `chat-attachment.ts` for why `chatId` is a required request field.
+export const epicReadChatAttachmentV10 = defineRpcContract({
+  method: "epic.readChatAttachment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatAttachmentRequestSchema,
+  responseSchema: readChatAttachmentResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

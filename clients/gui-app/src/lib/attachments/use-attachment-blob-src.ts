@@ -10,6 +10,7 @@ import {
   IMAGE_UNAVAILABLE_GRACE_MS,
   useImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
+import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 
 export type AttachmentBlobSrcState =
   | { readonly status: "loading"; readonly src: null }
@@ -53,13 +54,16 @@ export function useEpicAttachmentBytesPresence():
 }
 
 /**
- * Resolves an image attachment's `src`: persisted images (`hash`) stream their
- * bytes from the epic doc's attachments map into a shared blob URL via the
- * content-addressed cache; draft/optimistic images use their inline `dataUrl`.
- * Persisted images become unavailable after the sync grace window, but the
- * underlying acquisition remains recoverable when bytes arrive later. Used by
- * the sent-message renderer (the composer chip resolves images via the strip's
- * injected fetcher instead).
+ * Resolves an ARTIFACT image attachment's `src`: persisted images (`hash`)
+ * stream their bytes from the epic doc's attachments map into a shared blob URL
+ * via the content-addressed cache; draft/optimistic images use their inline
+ * `dataUrl`. Persisted images become unavailable after the sync grace window,
+ * but the underlying acquisition remains recoverable when bytes arrive later.
+ *
+ * Artifact-referenced images stay doc-resident by design - an artifact is
+ * epic-shared by nature, so doc replication IS its access model - which is why
+ * this keeps the epic byte source while every CHAT render site moved to
+ * `useChatAttachmentBlobSrc` below.
  */
 export function useAttachmentBlobSrc(
   hash: string | null,
@@ -67,6 +71,32 @@ export function useAttachmentBlobSrc(
   dataUrl: string | null,
 ): AttachmentBlobSrcState {
   const fetcher = useEpicImageFetcher();
+  return useResolvedAttachmentBlobSrc(hash, mediaType, dataUrl, fetcher);
+}
+
+/**
+ * The same resolution, for an image rendered inside a CHAT: bytes come off the
+ * chat plane (`epic.readChatAttachment` on the tile's host) with the epic doc
+ * as the legacy fallback. The chat scope comes from
+ * `ChatAttachmentScopeContext`; see `use-chat-image-fetcher.ts` for the chain
+ * and why the chat id is part of it. Outside a chat tile there is no scope, and
+ * this degrades to the doc-replica read those surfaces already used.
+ */
+export function useChatAttachmentBlobSrc(
+  hash: string | null,
+  mediaType: string,
+  dataUrl: string | null,
+): AttachmentBlobSrcState {
+  const fetcher = useChatImageFetcher();
+  return useResolvedAttachmentBlobSrc(hash, mediaType, dataUrl, fetcher);
+}
+
+function useResolvedAttachmentBlobSrc(
+  hash: string | null,
+  mediaType: string,
+  dataUrl: string | null,
+  fetcher: ImageBytesFetcher,
+): AttachmentBlobSrcState {
   const blob = useImageBlobUrlState(
     hash,
     mediaType,

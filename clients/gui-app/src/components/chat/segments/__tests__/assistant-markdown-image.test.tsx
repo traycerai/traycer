@@ -31,9 +31,15 @@ const blobSrcState = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
-  useAttachmentBlobSrc: () => blobSrcState.value,
-}));
+vi.mock(
+  "@/lib/attachments/use-attachment-blob-src",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/attachments/use-attachment-blob-src")
+    >()),
+    useChatAttachmentBlobSrc: () => blobSrcState.value,
+  }),
+);
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
