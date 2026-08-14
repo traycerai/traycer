@@ -4302,7 +4302,7 @@ describe("useRenderedMessages turn.stopped", () => {
   function terminalEvent(input: {
     readonly type: Extract<
       ChatEvent["type"],
-      "turn.stopped" | "turn.interrupted" | "turn.completed"
+      "turn.started" | "turn.stopped" | "turn.interrupted" | "turn.completed"
     >;
     readonly timestamp: number;
     readonly turnId: string | null;
@@ -4432,6 +4432,118 @@ describe("useRenderedMessages turn.stopped", () => {
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
     expect(row?.stopped).toBeNull();
+  });
+
+  it("uses lifecycle timing after an autonomous-resume notification is adopted", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+    const interveningUser = userMessageAt("m2", 12_500);
+
+    const driver = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, interveningUser],
+    });
+
+    const notificationRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(notificationRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(notificationRow).toMatchObject({
+      createdAt: 10_000,
+      completedAt: null,
+    });
+    expect(notificationRow?.elapsedStartedAt).toBeUndefined();
+
+    driver.patch({
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const resumedRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(resumedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      completedAt: 15_000,
+    });
+    expect(
+      driver.result.current.findIndex(
+        (message) => message.id === resumedRow?.id,
+      ),
+    ).toBeLessThan(
+      driver.result.current.findIndex((message) => message.id === "m2"),
+    );
+  });
+
+  it("keeps an autonomous-resume notification footerless when only a terminal event exists", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.interrupted",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "The background continuation ended before producing output.",
+          severity: "info",
+          metadata: {
+            reason:
+              "The background continuation ended before producing output.",
+            code: "AUTONOMOUS_RESUME_LOST",
+            recoverable: true,
+          },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      completedAt: null,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
   });
 
   it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {

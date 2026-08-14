@@ -157,7 +157,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
           backgroundToolBlockIds={backgroundToolBlockIds}
           runState={message.runState}
           messageId={message.id}
-          createdAt={message.createdAt}
+          elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
           pausedDurationMs={message.pausedDurationMs ?? 0}
           pausedSinceMs={message.pausedSinceMs ?? null}
           completedAt={message.completedAt}

@@ -581,6 +581,12 @@ export interface ChatMessage {
   settings: ChatRunSettings | null;
   createdAt: number;
   /**
+   * Wall-clock start used by the assistant elapsed timer. Defaults to
+   * `createdAt`; differs when a persisted notification is adopted by a later
+   * provider run but must keep its original transcript position.
+   */
+  elapsedStartedAt?: number;
+  /**
    * Wall-clock time the assistant turn finished, in ms. Non-null only for
    * completed assistant rows (drives the "Worked for Nm Xs" footer). Always
    * `null` for user rows, pending rows, and in-progress assistant turns.

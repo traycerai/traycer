@@ -67,8 +67,8 @@ interface AssistantBodyProps {
    * share `createdAt` (e.g. multiple turns following one user-send).
    */
   messageId: string;
-  /** Wall-clock turn start; `completedAt - createdAt` is the elapsed duration. */
-  createdAt: number;
+  /** Wall-clock turn start used only for elapsed-duration calculations. */
+  elapsedStartedAt: number;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
@@ -101,7 +101,7 @@ export function AssistantMessageBody({
   backgroundToolBlockIds,
   runState,
   messageId,
-  createdAt,
+  elapsedStartedAt,
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
@@ -132,6 +132,15 @@ export function AssistantMessageBody({
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
+  // A completed turn whose only visible segment is the autonomous-resume
+  // divider genuinely woke the agent but produced no reply. Give that case
+  // explicit footer copy so it cannot be mistaken for the notification-only
+  // row that exists when the provider never resumed (that row has no
+  // `completedAt`, and therefore no footer).
+  const silentAutonomousResume =
+    stopped === null &&
+    segments.length > 0 &&
+    segments.every((segment) => segment.kind === "autonomous_resume");
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -148,7 +157,7 @@ export function AssistantMessageBody({
       return (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
@@ -234,7 +243,7 @@ export function AssistantMessageBody({
       {runState !== null ? (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
@@ -244,13 +253,14 @@ export function AssistantMessageBody({
       {shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
         <AssistantElapsedFooter
           messageId={messageId}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           completedAt={completedAt}
           stopped={stopped}
           meta={meta}
           replyText={replyText}
           forkAction={forkAction}
+          silentAutonomousResume={silentAutonomousResume}
         />
       ) : null}
     </div>
@@ -328,6 +338,7 @@ function AssistantElapsedFooter({
   meta,
   replyText,
   forkAction,
+  silentAutonomousResume,
 }: {
   messageId: string;
   createdAt: number;
@@ -337,6 +348,7 @@ function AssistantElapsedFooter({
   meta: AssistantTurnMeta | null;
   replyText: string;
   forkAction: ChatMessageForkAction | null;
+  silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
   // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
@@ -344,6 +356,9 @@ function AssistantElapsedFooter({
   // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
+  const nonStoppedElapsedLabel = silentAutonomousResume
+    ? `Resumed · no response · ${formatWorkedFor(elapsedMs)}`
+    : `${verb} for ${formatWorkedFor(elapsedMs)}`;
   const elapsedContent = (
     <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
@@ -353,7 +368,7 @@ function AssistantElapsedFooter({
           {` · ${formatWorkedFor(elapsedMs)}`}
         </span>
       ) : (
-        <span className="text-ui-sm leading-5">{`${verb} for ${formatWorkedFor(elapsedMs)}`}</span>
+        <span className="text-ui-sm leading-5">{nonStoppedElapsedLabel}</span>
       )}
     </>
   );

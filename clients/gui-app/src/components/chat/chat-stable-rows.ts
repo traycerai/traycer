@@ -81,6 +81,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   attachments: (a, b) => a.attachments === b.attachments,
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
+  elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,
   completedAt: (a, b) => a.completedAt === b.completedAt,
   stopped: (a, b) => a.stopped === b.stopped,
   pausedDurationMs: (a, b) => a.pausedDurationMs === b.pausedDurationMs,
