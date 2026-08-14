@@ -23,6 +23,7 @@ const WORKTREE_DELETE_REPORT_CONTEXT = createReportIssueContext({
 export function WorktreeDeleteProgressToastBridge(): null {
   const summary = useWorktreeDeleteProgressSummary();
   const lastToastKeyRef = useRef<string | null>(null);
+  const dismissedProgressScopeKeysRef = useRef<Set<string>>(new Set());
   // Whether the toast currently on screen is one that will NOT expire on its
   // own: the in-progress toast and the failure toast both use
   // `duration: Infinity`. A terminal success resets to a short duration.
@@ -37,14 +38,42 @@ export function WorktreeDeleteProgressToastBridge(): null {
       }
       lastToastKeyRef.current = null;
       lastToastPersistentRef.current = false;
+      dismissedProgressScopeKeysRef.current.clear();
       return;
     }
+
+    const currentScopeKeys = new Set(summary.scopeKeys);
+    dismissedProgressScopeKeysRef.current.forEach((key) => {
+      if (!currentScopeKeys.has(key)) {
+        dismissedProgressScopeKeysRef.current.delete(key);
+      }
+    });
 
     const toastKey = worktreeDeleteToastKey(summary);
     if (lastToastKeyRef.current === toastKey) return;
     lastToastKeyRef.current = toastKey;
+
+    const allCurrentScopesDismissed =
+      summary.scopeKeys.length > 0 &&
+      summary.scopeKeys.every((key) =>
+        dismissedProgressScopeKeysRef.current.has(key),
+      );
+    const isTerminalFailure = summary.active === 0 && summary.failed > 0;
+    if (allCurrentScopesDismissed && !isTerminalFailure) {
+      if (lastToastPersistentRef.current) {
+        toast.dismiss(WORKTREE_DELETE_PROGRESS_TOAST_ID);
+      }
+      lastToastPersistentRef.current = false;
+      return;
+    }
+
     lastToastPersistentRef.current = summary.active > 0 || summary.failed > 0;
-    showWorktreeDeleteProgressToast(summary);
+    showWorktreeDeleteProgressToast(summary, () => {
+      summary.scopeKeys.forEach((key) => {
+        dismissedProgressScopeKeysRef.current.add(key);
+      });
+      lastToastPersistentRef.current = false;
+    });
   }, [summary]);
 
   return null;
@@ -52,6 +81,7 @@ export function WorktreeDeleteProgressToastBridge(): null {
 
 function showWorktreeDeleteProgressToast(
   summary: WorktreeDeleteProgressSummary,
+  onProgressDismiss: () => void,
 ): void {
   const description = worktreeDeleteProgressDetail(summary);
   if (summary.active > 0) {
@@ -60,6 +90,7 @@ function showWorktreeDeleteProgressToast(
       description,
       duration: Infinity,
       cancel: null,
+      onDismiss: onProgressDismiss,
     });
     return;
   }
@@ -95,6 +126,7 @@ function worktreeDeleteToastKey(
     summary.deleted,
     summary.failed,
     summary.active,
+    JSON.stringify(summary.scopeKeys),
   ].join(":");
 }
 
