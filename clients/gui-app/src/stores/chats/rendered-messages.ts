@@ -1917,8 +1917,7 @@ function renderPersistedAssistantMessageTurn(
     // A plain completion/interruption without a matching start remains a
     // notification-only row. A user Stop is itself a transcript boundary and
     // must retain its stopped marker even when it lands before `turn.started`.
-    showTurnCompletion:
-      !notificationOnlyAutonomousResume || stopped !== null,
+    showTurnCompletion: !notificationOnlyAutonomousResume || stopped !== null,
     completedAt: timing.completedAt,
     runState,
     pause,
