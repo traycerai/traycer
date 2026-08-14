@@ -487,6 +487,59 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
   });
 });
 
+describe("<HostSettingsPanel /> Overview OS service externally-managed outcome", () => {
+  // The OUTCOME axis, distinct from `ok` + `state: "externally-managed"`: the
+  // host refused to consult the CLI because an external supervisor owns its
+  // service lifecycle, so there is no label or manifest line to show and both
+  // verbs are withheld rather than offered-and-refused.
+  it("withholds both service verbs and names the external supervisor", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.service.status": () =>
+          Promise.resolve({ outcome: "externally-managed" as const }),
+      },
+    });
+    // The service methods too: a host that has not negotiated them has no
+    // service section at all, which would make every absence below vacuous.
+    recordNegotiatedHostMethods("host-a", [
+      ...ALL_OVERVIEW_METHODS,
+      "host.service.status",
+      "host.service.register",
+      "host.service.deregister",
+    ]);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHost()}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewAdvanced();
+    const description = await screen.findByTestId(
+      "host-overview-service-description",
+    );
+    await waitFor(() => {
+      expect(description.textContent).toContain(
+        "managed by an external supervisor",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Re-register" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deregister" })).toBeNull();
+    expect(screen.queryByTestId("host-overview-service-manifest")).toBeNull();
+  });
+});
+
 describe("<HostSettingsPanel /> Overview doctor structured failure", () => {
   it("cli-unavailable renders the structured Doctor message, not an error toast", async () => {
     const fixture = buildOverviewHostFixture({
