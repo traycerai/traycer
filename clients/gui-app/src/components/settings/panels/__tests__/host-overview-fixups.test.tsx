@@ -158,18 +158,31 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
   });
 
   it("install-side cli-unavailable retires the region too — Check-now disappears with it", async () => {
+    // The check TRACKS the install's discovery. Discovering the refusal kicks
+    // an immediate re-check whose fresh answer owns recovery, so a fixture
+    // whose check kept answering ok would model an impossible host — install
+    // and check shell the same CLI — and that re-check's ok would then
+    // LEGITIMATELY un-retire the region, turning this pin into a race on
+    // whether the assertion or the refetch settles first.
+    let cliGone = false;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       hostVersion: "1.5.0",
       overrideHandlers: {
         "host.update.check": () =>
-          Promise.resolve({
-            outcome: "ok" as const,
-            manifest: updateCheckManifest("1.6.0"),
-          }),
-        "host.update.install": () =>
-          Promise.resolve({ outcome: "cli-unavailable" as const }),
+          Promise.resolve(
+            cliGone
+              ? { outcome: "cli-unavailable" as const }
+              : {
+                  outcome: "ok" as const,
+                  manifest: updateCheckManifest("1.6.0"),
+                },
+          ),
+        "host.update.install": () => {
+          cliGone = true;
+          return Promise.resolve({ outcome: "cli-unavailable" as const });
+        },
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
