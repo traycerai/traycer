@@ -57,7 +57,6 @@ export function HostOverviewAdvancedDisclosure(props: {
   readonly service: OsServiceSectionProps | null;
   /** The version picker's whole state, owned by the card so both halves agree. */
   readonly versions: VersionPickerProps | null;
-  readonly busy: boolean;
 }): ReactNode {
   return (
     // No border wrapper. This sits in the Installation group as a sibling of

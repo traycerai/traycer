@@ -466,7 +466,12 @@ export function HostOverviewPanel(props: {
               hostName={displayName}
               registryItem={registryItem}
               policyMutation={policyMutation}
-              service={usable ? service : null}
+              // The FULL gate at render time, not the hook-time `corePending`:
+              // the service verbs must also lock during the install-request
+              // window, and `anyPending` only exists after the updates hook
+              // the service adapter feeds - so the override happens here,
+              // where both are in hand.
+              service={usable ? { ...service, busy: anyPending } : null}
               // Gated on the ROUTE as well as the capability. Picking a version
               // means asking the host which ones exist, so an unreachable host
               // gets no picker at all rather than a checkbox and an invitation
@@ -474,7 +479,6 @@ export function HostOverviewPanel(props: {
               versions={
                 usable && updates.degrade === null ? updates.picker : null
               }
-              busy={anyPending}
             />
           )
         }

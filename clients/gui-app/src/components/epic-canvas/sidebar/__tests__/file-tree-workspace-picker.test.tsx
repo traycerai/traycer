@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -6,6 +7,9 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import type { RenderResult } from "@testing-library/react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { FileTreeWorkspacePicker } from "../file-tree-workspace-picker";
 
@@ -122,11 +126,32 @@ function stubLoadedNonGitWorkspace(): void {
   };
 }
 
+// The host section now opts the window into the registry liveness poll, and
+// that hook stands on TanStack Query - so these boundary-mocked suites need a
+// client even though every query in them is disabled (signed-out auth store).
+function TestProviders(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        })
+      }
+    >
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderWithClient(ui: ReactElement): RenderResult {
+  return render(ui, { wrapper: TestProviders });
+}
+
 function openPicker(
   selectedPath: string | null,
   onSelectPath: (path: string) => void,
 ): void {
-  render(
+  renderWithClient(
     <FileTreeWorkspacePicker
       epicId="epic-1"
       hostId="host-1"
@@ -177,7 +202,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("refreshes the host directory once per picker open", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"
@@ -203,7 +228,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("uses the git-diff picker trigger style without a changes badge", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"
@@ -219,7 +244,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("left-truncates the selected workspace path in the trigger", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"

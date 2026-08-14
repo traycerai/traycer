@@ -6,6 +6,8 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 interface HostSectionProps {
   /**
@@ -46,6 +48,13 @@ interface HostSectionProps {
  */
 export function HostSection(props: HostSectionProps): ReactNode {
   const { openSettings } = useSystemTabModalActions();
+  // The rows' presence dots come from the registry through a deliberately
+  // NON-polling observer; every surface that shows the dots opts the window
+  // into the liveness poll while it is on screen (the Settings sidebar's
+  // rule, then the usage picker's and the shell host dialog's). This section
+  // mounts only inside open pickers and fork dialogs, so the poll runs
+  // exactly while someone is looking at the dots.
+  useRegisteredHostsPollLiveness();
   return (
     <section
       data-testid="host-workspace-selector-host-section"
@@ -67,6 +76,17 @@ export function HostSection(props: HostSectionProps): ReactNode {
         action={{
           kind: "manage-hosts",
           onSelect: () => {
+            // The host this surface is SHOWING travels with the jump - same
+            // transfer as the usage popover's cross-scope links. Without it,
+            // a stale explicit Settings pin lands Manage hosts on a machine
+            // other than the one whose row launched it. In a fixed-scope
+            // dialog `activeHostId` IS the pinned host, so the transfer is
+            // right there too.
+            if (props.activeHostId !== null) {
+              useSettingsHostScopeStore
+                .getState()
+                .setScopedHostId(props.activeHostId);
+            }
             openSettings({ section: "host", resetToGeneral: false });
           },
         }}

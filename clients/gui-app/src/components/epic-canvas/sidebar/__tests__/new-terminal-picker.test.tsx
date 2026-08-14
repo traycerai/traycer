@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -6,6 +7,9 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import type { RenderResult } from "@testing-library/react";
 import type {
   WorktreeBindingSelectorDisabledReason,
   WorktreeBindingSelectorRowV12,
@@ -118,9 +122,30 @@ function resetCanvas(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 }
 
+// The host section now opts the window into the registry liveness poll, and
+// that hook stands on TanStack Query - so these boundary-mocked suites need a
+// client even though every query in them is disabled (signed-out auth store).
+function TestProviders(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        })
+      }
+    >
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderWithClient(ui: ReactElement): RenderResult {
+  return render(ui, { wrapper: TestProviders });
+}
+
 function openPicker(): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-  render(
+  renderWithClient(
     <TooltipProvider>
       <NewTerminalPicker
         epicId="epic-1"
@@ -204,7 +229,7 @@ describe("<NewTerminalPicker />", () => {
         />
       </TooltipProvider>
     );
-    const { rerender } = render(picker("collapsed-header"));
+    const { rerender } = renderWithClient(picker("collapsed-header"));
 
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
     rerender(picker("expanded-header"));
@@ -532,7 +557,7 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
 
   it("dismisses an open picker when its pane loses focus, rather than leaving a logically-open root with reset content", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-    const { rerender } = render(paneUi(true, tabId));
+    const { rerender } = renderWithClient(paneUi(true, tabId));
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
     expect(screen.queryByTestId("new-terminal-picker-popover")).not.toBeNull();
 
