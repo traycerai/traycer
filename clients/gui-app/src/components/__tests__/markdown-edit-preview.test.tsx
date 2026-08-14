@@ -37,6 +37,7 @@ function ControlledMarkdownEditPreview(props: ControlledHarnessProps) {
       placeholder={undefined}
       ariaLabel="Markdown source"
       testId={TEST_ID}
+      showPreview
     />
   );
 }
@@ -125,6 +126,7 @@ describe("MarkdownEditPreview", () => {
             placeholder={undefined}
             ariaLabel="Markdown source"
             testId={TEST_ID}
+            showPreview
           />
         </QueryClientProvider>
       </StrictMode>,
@@ -160,6 +162,7 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
+          showPreview
         />
       </StrictMode>,
     );
@@ -199,6 +202,7 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
+          showPreview
         />
       </StrictMode>,
     );

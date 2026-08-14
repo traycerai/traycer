@@ -4,14 +4,12 @@ import type {
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
-import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import {
   composerErrorMessage,
   isExternalDriftError,
   preselectSkillNames,
   skillNamesFromSourceFlags,
   type SkillComposerStep,
-  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 
 export type ComposerInspectSession = {
@@ -29,7 +27,6 @@ export type ComposerFlowState = {
   readonly inspectSession: ComposerInspectSession | null;
   readonly canInspect: boolean;
   readonly listScope: ProviderNativeScope;
-  readonly editTarget: SkillEditTarget | undefined;
 };
 
 export type ComposerFlowSink = {
@@ -86,24 +83,13 @@ async function submitWrite(
   sink: ComposerFlowSink,
 ): Promise<void> {
   try {
-    if (state.editTarget !== undefined) {
-      await sink.onMutate({
-        action: "edit",
-        path: state.editTarget.path,
-        expectedHash: await fileContentRevision(state.editTarget.baseline),
-        name: state.name.trim(),
-        description: state.description.trim(),
-        body: state.body,
-      });
-    } else {
-      await sink.onMutate({
-        action: "create",
-        name: state.name.trim(),
-        description: state.description.trim(),
-        body: state.body,
-        providerScoped: state.providerScoped,
-      });
-    }
+    await sink.onMutate({
+      action: "create",
+      name: state.name.trim(),
+      description: state.description.trim(),
+      body: state.body,
+      providerScoped: state.providerScoped,
+    });
     sink.onClose();
   } catch (err) {
     sink.setError(composerErrorMessage(err));

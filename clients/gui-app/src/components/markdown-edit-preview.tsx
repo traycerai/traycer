@@ -9,13 +9,35 @@ const MARKDOWN_EDITOR_EXTENSIONS = [
   markdown(),
   EditorView.lineWrapping,
   EditorView.theme({
-    "&": { height: "100%" },
+    "&": {
+      height: "100%",
+      backgroundColor: "transparent",
+      color: "var(--foreground)",
+    },
     ".cm-scroller": {
       height: "100%",
+      backgroundColor: "transparent",
       fontFamily: "var(--font-mono)",
       fontSize: "var(--code-font-size, 0.8rem)",
     },
-    ".cm-content": { minHeight: "100%" },
+    ".cm-content": {
+      minHeight: "100%",
+      caretColor: "var(--foreground)",
+    },
+    ".cm-gutters": {
+      backgroundColor: "color-mix(in oklab, var(--muted) 35%, transparent)",
+      border: "none",
+      color: "var(--muted-foreground)",
+    },
+    ".cm-activeLine, .cm-activeLineGutter": {
+      backgroundColor: "color-mix(in oklab, var(--accent) 55%, transparent)",
+    },
+    ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+      backgroundColor: "color-mix(in oklab, var(--primary) 25%, transparent)",
+    },
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "var(--foreground)",
+    },
   }),
 ];
 
@@ -36,6 +58,7 @@ export type MarkdownEditPreviewProps = {
   readonly placeholder: string | undefined;
   readonly ariaLabel: string;
   readonly testId: string;
+  readonly showPreview: boolean;
 };
 
 export function MarkdownPreview({ value }: { readonly value: string }) {
@@ -61,6 +84,7 @@ export function MarkdownEditPreview({
   placeholder,
   ariaLabel,
   testId,
+  showPreview,
 }: MarkdownEditPreviewProps) {
   const theme = useCodeMirrorTheme();
   const [view, setView] = useState<MarkdownEditPreviewView>("edit");
@@ -76,6 +100,24 @@ export function MarkdownEditPreview({
     ],
     [ariaLabel],
   );
+
+  const editor = (
+    <CodeMirror
+      value={value}
+      onChange={onChange}
+      editable={!readOnly}
+      readOnly={readOnly}
+      height="100%"
+      theme={theme}
+      placeholder={placeholder}
+      basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
+      extensions={extensions}
+      data-testid={testId}
+      className="h-full"
+    />
+  );
+
+  if (!showPreview) return editor;
 
   return (
     <Tabs
@@ -94,19 +136,7 @@ export function MarkdownEditPreview({
         forceMount
         className="min-h-0 overflow-hidden data-[state=inactive]:hidden"
       >
-        <CodeMirror
-          value={value}
-          onChange={onChange}
-          editable={!readOnly}
-          readOnly={readOnly}
-          height="100%"
-          theme={theme}
-          placeholder={placeholder}
-          basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
-          extensions={extensions}
-          data-testid={testId}
-          className="h-full"
-        />
+        {editor}
       </TabsContent>
       <TabsContent
         value="preview"

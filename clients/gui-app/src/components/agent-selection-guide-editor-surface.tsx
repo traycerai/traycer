@@ -72,6 +72,7 @@ export function AgentSelectionGuideEditorSurface({
           placeholder={placeholder}
           ariaLabel={ariaLabel}
           testId={testId}
+          showPreview
         />
       </div>
 

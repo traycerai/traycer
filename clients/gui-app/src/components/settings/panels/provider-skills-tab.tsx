@@ -28,6 +28,7 @@ import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-l
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
+import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
   isExternalDriftError,
@@ -131,9 +132,6 @@ function ProviderSkillsTabBody({
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
-  const [editTarget, setEditTarget] = useState<SkillEditTarget | undefined>(
-    undefined,
-  );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
@@ -146,8 +144,7 @@ function ProviderSkillsTabBody({
   // Bumped after a successful update so the open detail's file query
   // refetches in place. The list row snapshot is replaced separately.
   const [detailFileEpoch, setDetailFileEpoch] = useState(0);
-  // Removal/update errors render inside the skill dialog, which is closed
-  // while the composer is mounted and vice versa.
+  // Skill mutation errors render inside the open detail dialog.
   const [detailError, setDetailError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   // Which source badges are filtered OUT. Empty = everything shown, which is
@@ -182,6 +179,7 @@ function ProviderSkillsTabBody({
   const removePending = isRemovePending(isMutating, pendingKey);
   const composerPending = isComposerPending(isMutating, pendingKey);
   const updatePending = isUpdatePending(isMutating, pendingKey);
+  const editPending = isEditPending(isMutating, pendingKey);
   const canEditHere = skillActionAdvertised(
     caps.actionScopes.edit,
     effectiveScope,
@@ -232,15 +230,46 @@ function ProviderSkillsTabBody({
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
   function openComposer(): void {
-    setEditTarget(undefined);
     setComposerOpen(true);
   }
 
-  function openEdit(target: SkillEditTarget): void {
+  function onEdit(
+    skill: ProviderSkill,
+    target: SkillEditTarget,
+  ): Promise<boolean> {
     setDetailError(null);
-    setOpenSkill(null);
-    setEditTarget(target);
-    setComposerOpen(true);
+    setPendingKey(`edit:${skill.path}`);
+    return fileContentRevision(target.baseline)
+      .then((expectedHash) =>
+        mutate.mutateAsync({
+          providerId,
+          scope: effectiveScope,
+          workspaceRoot: listWorkspaceRoot,
+          mutation: {
+            action: "edit",
+            path: target.path,
+            expectedHash,
+            name: target.name,
+            description: target.description,
+            body: target.body,
+          },
+          suppressToast: true,
+        }),
+      )
+      .then((data) => {
+        const next = skillAfterEdit(data, skill, target.name);
+        if (next !== null) setOpenSkill(next);
+        return true;
+      })
+      .catch((err: unknown) => {
+        setDetailError(
+          err instanceof Error ? err.message : "Couldn't edit this skill.",
+        );
+        return false;
+      })
+      .finally(() => {
+        setPendingKey(null);
+      });
   }
 
   async function onComposerMutate(
@@ -363,9 +392,7 @@ function ProviderSkillsTabBody({
             onMutate={onComposerMutate}
             onClose={() => {
               setComposerOpen(false);
-              setEditTarget(undefined);
             }}
-            editTarget={editTarget}
           />
         ) : null}
 
@@ -385,7 +412,11 @@ function ProviderSkillsTabBody({
             canUpdate={openSkillUpdatable}
             origin={skillOriginDisplay(openSkill)}
             updatePending={updatePending}
-            onRequestEdit={openEdit}
+            editPending={editPending}
+            onStartEdit={() => {
+              setDetailError(null);
+            }}
+            onSave={(target) => onEdit(openSkill, target)}
             onRequestUpdate={() => {
               void onUpdate(openSkill, false);
             }}
@@ -511,6 +542,18 @@ function skillAfterUpdate(
   return null;
 }
 
+function skillAfterEdit(
+  data: SkillsMutateData,
+  previous: ProviderSkill,
+  name: string,
+): ProviderSkill | null {
+  if (data.kind !== "skills") return null;
+  for (const row of data.skills) {
+    if (row.source === previous.source && row.name === name) return row;
+  }
+  return null;
+}
+
 /**
  * Scoped to the remove key so a concurrent create/import spinner never locks
  * the Remove button, and vice versa. A plain function rather than an inline
@@ -530,6 +573,10 @@ function isComposerPending(isMutating: boolean, pendingKey: string | null) {
 
 function isUpdatePending(isMutating: boolean, pendingKey: string | null) {
   return isMutating && pendingKey !== null && pendingKey.startsWith("update:");
+}
+
+function isEditPending(isMutating: boolean, pendingKey: string | null) {
+  return isMutating && pendingKey !== null && pendingKey.startsWith("edit:");
 }
 
 /**

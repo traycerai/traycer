@@ -17,13 +17,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SelectAllToggle } from "@/components/ui/select-all-toggle";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { Textarea } from "@/components/ui/textarea";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { cn } from "@/lib/utils";
 import { submitComposer } from "./provider-skill-composer-flow";
 import {
-  parentDir,
   skillBodyScaffold,
   skillDestination,
   skillFilePath,
@@ -32,8 +32,6 @@ import {
   SKILL_DESCRIPTION_SOFT_LIMIT,
   type SkillAuthoring,
   type SkillComposerStep,
-  type SkillDestination,
-  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 
 /**
@@ -59,11 +57,6 @@ export function ProviderSkillComposerDialog(props: {
     mutation: ProvidersSkillsMutateAction,
   ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
-  /**
-   * When set, the composer opens on the write form prefilled and submits
-   * `edit` instead of `create`. `undefined` is the Add-skill path.
-   */
-  readonly editTarget: SkillEditTarget | undefined;
 }): ReactNode {
   const draft = useComposerDraft(props);
 
@@ -80,11 +73,10 @@ export function ProviderSkillComposerDialog(props: {
             {titleForStep(
               draft.step,
               draft.inspectSession?.candidates.length ?? 0,
-              draft.editing,
             )}
           </DialogTitle>
           <DialogDescription className="text-ui-sm">
-            <ComposerDescription step={draft.step} editing={draft.editing} />
+            <ComposerDescription step={draft.step} />
           </DialogDescription>
         </DialogHeader>
 
@@ -105,7 +97,7 @@ export function ProviderSkillComposerDialog(props: {
               body={draft.body}
               setBody={draft.setBody}
               disabled={props.pending}
-              canImport={!draft.editing && props.authoring.canImport}
+              canImport={props.authoring.canImport}
               onImport={draft.goToImport}
             />
           ) : null}
@@ -131,6 +123,18 @@ export function ProviderSkillComposerDialog(props: {
                         (entry) => entry !== candidateName,
                       )
                     : [...draft.selectedNames, candidateName],
+                );
+              }}
+              onToggleAll={() => {
+                const candidateNames = draft.inspectSession?.candidates.map(
+                  (candidate) => candidate.name,
+                );
+                if (candidateNames === undefined) return;
+                const selected = new Set(draft.selectedNames);
+                draft.setSelectedNames(
+                  candidateNames.every((name) => selected.has(name))
+                    ? []
+                    : candidateNames,
                 );
               }}
               onBack={draft.goToImport}
@@ -185,7 +189,6 @@ export function ProviderSkillComposerDialog(props: {
                 draft.step,
                 draft.selectedNames.length,
                 props.authoring.canInspect,
-                draft.editing,
               )}
             </Button>
           </div>
@@ -206,21 +209,13 @@ function useComposerDraft(props: {
     mutation: ProvidersSkillsMutateAction,
   ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
-  readonly editTarget: SkillEditTarget | undefined;
 }) {
-  const editing = props.editTarget !== undefined;
   const [mode, setMode] = useState<"import" | "write">(
-    editing || !props.authoring.canImport ? "write" : "import",
+    !props.authoring.canImport ? "write" : "import",
   );
-  const [name, setName] = useState(props.editTarget?.name ?? "");
-  const [description, setDescription] = useState(
-    props.editTarget?.description ?? "",
-  );
-  const [body, setBody] = useState(
-    props.editTarget !== undefined
-      ? props.editTarget.body
-      : skillBodyScaffold(),
-  );
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [body, setBody] = useState(skillBodyScaffold);
   const [source, setSource] = useState("");
   const [providerScoped, setProviderScoped] = useState(false);
   const [inspectSession, setInspectSession] = useState<{
@@ -241,15 +236,12 @@ function useComposerDraft(props: {
     source,
     selectedNames,
   });
-  const destination =
-    props.editTarget !== undefined
-      ? destinationForEdit(props.editTarget.path)
-      : skillDestination({
-          providerScoped: effectiveProviderScoped,
-          providerLabel: props.providerLabel,
-          providerRoot: props.providerRoot,
-        });
-  const showScope = step !== "picker" && props.canProviderScope && !editing;
+  const destination = skillDestination({
+    providerScoped: effectiveProviderScoped,
+    providerLabel: props.providerLabel,
+    providerRoot: props.providerRoot,
+  });
+  const showScope = step !== "picker" && props.canProviderScope;
 
   function onSubmit(): void {
     void submitComposer({
@@ -266,7 +258,6 @@ function useComposerDraft(props: {
         inspectSession,
         canInspect: props.authoring.canInspect,
         listScope: props.listScope,
-        editTarget: props.editTarget,
       },
       sink: {
         onMutate: props.onMutate,
@@ -287,7 +278,6 @@ function useComposerDraft(props: {
   }
 
   return {
-    editing,
     name,
     setName,
     nameError,
@@ -322,19 +312,14 @@ function useComposerDraft(props: {
 
 function ComposerDescription({
   step,
-  editing,
 }: {
   readonly step: SkillComposerStep;
-  readonly editing: boolean;
 }): ReactNode {
   if (step === "picker") {
     return "Selecting an installed skill overwrites it from this source.";
   }
   if (step === "import") {
     return "Paste a source. The host clones or copies it and finds every SKILL.md.";
-  }
-  if (editing) {
-    return "Rename is allowed. The folder moves with the name.";
   }
   return (
     <>
@@ -345,18 +330,7 @@ function ComposerDescription({
   );
 }
 
-function destinationForEdit(skillPath: string): SkillDestination {
-  const parent = parentDir(skillPath);
-  if (parent === null) return { display: skillPath, exact: true };
-  return { display: parent, exact: true };
-}
-
-function titleForStep(
-  step: SkillComposerStep,
-  candidateCount: number,
-  editing: boolean,
-): string {
-  if (editing) return "Edit skill";
+function titleForStep(step: SkillComposerStep, candidateCount: number): string {
   if (step === "picker") {
     return candidateCount === 1
       ? "1 skill found"
@@ -369,9 +343,8 @@ function submitLabel(
   step: SkillComposerStep,
   selectedCount: number,
   canInspect: boolean,
-  editing: boolean,
 ): string {
-  if (step === "write") return editing ? "Save skill" : "Create skill";
+  if (step === "write") return "Create skill";
   if (step === "picker") {
     return selectedCount === 1
       ? "Install 1 skill"
@@ -466,6 +439,7 @@ function WriteFields({
             placeholder={undefined}
             ariaLabel="Instructions"
             testId="skill-composer-instructions"
+            showPreview
           />
         </div>
       </div>
@@ -533,6 +507,7 @@ function PickerFields({
   note,
   disabled,
   onToggle,
+  onToggleAll,
   onBack,
 }: {
   readonly candidates: readonly ProviderSkillInspectCandidate[];
@@ -540,6 +515,7 @@ function PickerFields({
   readonly note: string | null;
   readonly disabled: boolean;
   readonly onToggle: (name: string) => void;
+  readonly onToggleAll: () => void;
   readonly onBack: () => void;
 }): ReactNode {
   const selected = new Set(selectedNames);
@@ -550,6 +526,19 @@ function PickerFields({
           {note}
         </div>
       )}
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-ui-xs text-muted-foreground">
+          {selectedNames.length} of {candidates.length} selected
+        </span>
+        <SelectAllToggle
+          accessibleLabel="Select all skills"
+          selectableCount={candidates.length}
+          selectedCount={selectedNames.length}
+          disabled={disabled}
+          testId="skill-picker-select-all"
+          onToggle={onToggleAll}
+        />
+      </div>
       <ul className="flex flex-col gap-2">
         {candidates.map((candidate) => (
           <PickerRow

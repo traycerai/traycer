@@ -101,7 +101,6 @@ function renderDialog(
       pending={overrides.pending ?? false}
       onMutate={onMutate}
       onClose={onClose}
-      editTarget={undefined}
     />,
   );
   return { onMutate, onClose };
@@ -424,6 +423,26 @@ describe("<ProviderSkillComposerDialog />", () => {
     expect(showMe.getAttribute("data-state")).toBe("checked");
     expect(design.getAttribute("data-state")).toBe("checked");
     expect(improve.getAttribute("data-state")).toBe("unchecked");
+
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all skills",
+    });
+    expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
+    await user.click(selectAll);
+    expect(selectAll.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("3 of 3 selected")).toBeDefined();
+    expect(improve.getAttribute("data-state")).toBe("checked");
+
+    await user.click(selectAll);
+    expect(selectAll.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("0 of 3 selected")).toBeDefined();
+    expect(showMe.getAttribute("data-state")).toBe("unchecked");
+    expect(design.getAttribute("data-state")).toBe("unchecked");
+    expect(improve.getAttribute("data-state")).toBe("unchecked");
+
+    await user.click(showMe);
+    await user.click(design);
+    expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
 
     await user.click(improve);
     expect(improve.getAttribute("data-state")).toBe("checked");

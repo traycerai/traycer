@@ -234,7 +234,7 @@ function confirmUpdateAction(): HTMLElement {
 }
 
 function replaceInstructions(markdown: string): void {
-  const editor = screen.getByTestId("skill-composer-instructions");
+  const editor = screen.getByTestId("skill-detail-instructions");
   const view = EditorView.findFromDOM(editor);
   if (view === null) throw new Error("Expected a CodeMirror editor element");
   act(() => {
@@ -387,6 +387,40 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
     expect(skillMocks.readFileCalls.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the same dialog shell while the skill body loads", () => {
+    skillMocks.editScopes = ["global"];
+    skillMocks.readFile = {
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+    };
+    const view = render(<ProviderSkillsTab state={skillsState()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
+
+    const shell = screen.getByRole("dialog");
+    expect(shell.textContent).toContain("Loading skill");
+    expect(shell.className).toContain("h-[min(86dvh,calc(100dvh-2rem))]");
+
+    skillMocks.readFile = {
+      data: {
+        content:
+          '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n\nAsk for a skill.\n',
+        truncated: false,
+        error: null,
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+    };
+    view.rerender(<ProviderSkillsTab state={skillsState()} />);
+
+    expect(screen.getByRole("dialog")).toBe(shell);
+    expect(screen.queryByText("Loading skill")).toBeNull();
+    expect(screen.getByTestId("skill-detail-body-preview")).toBeDefined();
   });
 
   it("gives a skill no icon tile, in the row or the dialog", () => {
@@ -657,23 +691,29 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     );
   });
 
-  it("opens the composer on Edit skill, prefills from the file, and submits edit not create", async () => {
+  it("edits in the existing detail dialog and submits edit not create", async () => {
     const user = userEvent.setup();
     skillMocks.editScopes = ["global"];
+    skillMocks.removeScopes = ["global"];
     renderTab();
     fireEvent.click(
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
+    const detail = screen.getByRole("dialog");
 
     await user.click(screen.getByRole("button", { name: "Edit" }));
 
-    expect(screen.getByText("Edit skill")).toBeDefined();
+    expect(screen.getByRole("dialog")).toBe(detail);
     expect(screen.queryByText("Add a skill")).toBeNull();
-    expect(screen.getByRole("button", { name: "Save skill" })).toBeDefined();
-    // Destination is parentDir(skill.path) plus name/SKILL.md. The path is
-    // split across StartTruncatedText nodes, so assert via the dialog text.
-    expect(screen.getByRole("dialog").textContent).toContain(
-      "/Users/dev/.agents/skills/find-skills/SKILL.md",
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDefined();
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByText("Markdown")).toBeDefined();
+    expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
+    expect(detail.textContent).toContain(
+      "/Users/dev/.agents/skills/find-skills",
     );
     expect(screen.queryByText("Available to")).toBeNull();
     expect(screen.queryByLabelText(/Every provider/)).toBeNull();
@@ -686,12 +726,13 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       "find-skills",
     );
     const descriptionInput = screen.getByRole("textbox", {
-      name: "Description",
+      name: "When to use",
     });
     expect(
       descriptionInput instanceof HTMLTextAreaElement && descriptionInput.value,
     ).toBe("Helps");
-    const editor = screen.getByTestId("skill-composer-instructions");
+    expect(document.activeElement).toBe(nameInput);
+    const editor = screen.getByTestId("skill-detail-instructions");
     const view = EditorView.findFromDOM(editor);
     if (view === null) throw new Error("Expected a CodeMirror editor element");
     expect(view.state.doc.toString()).toBe(
@@ -704,7 +745,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     });
     replaceInstructions("# New body\n");
 
-    await user.click(screen.getByRole("button", { name: "Save skill" }));
+    await user.click(save);
 
     const baseline = skillMocks.readFile.data?.content;
     if (baseline === undefined || baseline === null) {
@@ -724,6 +765,152 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         },
       ]);
     });
+    expect(screen.getByRole("dialog")).toBe(detail);
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(edit).toBeDefined();
+    expect(document.activeElement).toBe(edit);
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
+  it("preserves instruction scroll position when switching modes", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    const preview = screen.getByTestId("skill-detail-body-preview");
+    preview.scrollTop = 137;
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const editor = screen.getByTestId("skill-detail-instructions");
+    const view = EditorView.findFromDOM(editor);
+    if (view === null) throw new Error("Expected a CodeMirror editor element");
+    expect(view.scrollDOM.scrollTop).toBe(137);
+
+    view.scrollDOM.scrollTop = 83;
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(preview.scrollTop).toBe(83);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Edit" }),
+    );
+  });
+
+  it("keeps Save changes available and focuses the first invalid field", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "" } });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(false);
+
+    await user.click(save);
+
+    expect(screen.getByText("Give the skill a name.")).toBeDefined();
+    expect(document.activeElement).toBe(name);
+    expect(skillMocks.mutations).toEqual([]);
+  });
+
+  it("discards a dirty draft or keeps editing without replacing the detail dialog", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    const detail = screen.getByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const warning = screen.getByTestId("skill-unsaved-changes-dialog");
+    await user.click(
+      within(warning).getByRole("button", { name: "Keep editing" }),
+    );
+    expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    expect(name instanceof HTMLInputElement && name.value).toBe("changed-name");
+    expect(screen.getByRole("dialog")).toBe(detail);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(screen.getByTestId("skill-unsaved-changes-dialog")).getByRole(
+        "button",
+        { name: "Discard changes" },
+      ),
+    );
+
+    expect(screen.getByRole("dialog")).toBe(detail);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDefined();
+    expect(name instanceof HTMLInputElement && name.value).toBe("find-skills");
+  });
+
+  it("treats a reverted draft as unchanged and cancels without a warning", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    fireEvent.change(name, { target: { value: "find-skills" } });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDefined();
+  });
+
+  it("guards Escape and closes the detail only after dirty changes are discarded", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    name.focus();
+
+    await user.keyboard("{Escape}");
+    const warning = screen.getByTestId("skill-unsaved-changes-dialog");
+    await user.click(
+      within(warning).getByRole("button", { name: "Discard changes" }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the draft open when saving fails", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    skillMocks.onMutateAsync = () =>
+      Promise.reject(new Error("The skill changed on disk."));
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText("The skill changed on disk.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDefined();
+    expect(name instanceof HTMLInputElement && name.value).toBe("changed-name");
   });
 
   it("asks to overwrite local edits after a dirty-canon update, then resends with confirm", async () => {
