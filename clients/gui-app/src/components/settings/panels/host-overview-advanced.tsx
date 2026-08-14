@@ -225,12 +225,20 @@ export interface OsServiceSectionProps {
   readonly registerPending: boolean;
   readonly deregisterPending: boolean;
   readonly busy: boolean;
+  /**
+   * What the host said about open sessions, `null` while unsettled. The
+   * register CONFIRM names it: on macOS re-registering bootouts the running
+   * job before bootstrapping it again, ending those sessions without ever
+   * consulting the busy-session refusal the restart flow enforces.
+   */
+  readonly settledBusySessionCount: number | null;
   readonly onRegister: () => void;
   readonly onDeregister: () => void;
 }
 
 function OsServiceSection(props: OsServiceSectionProps): ReactNode {
   const [confirmDeregister, setConfirmDeregister] = useState(false);
+  const [confirmRegister, setConfirmRegister] = useState(false);
 
   // One gate for the whole section: without a trustworthy description there is
   // nothing to act on, and acting on a registration you cannot see is how
@@ -268,7 +276,12 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
             size="sm"
             disabled={anyPending}
             data-testid="host-overview-service-register"
-            onClick={props.onRegister}
+            // Confirmed, always: on macOS this bootouts the running job before
+            // bootstrapping it again - a host restart wearing repair clothes -
+            // and it does so WITHOUT the busy-session refusal the restart flow
+            // gets, so the dialog is where the open-session fact is put in
+            // front of the person about to end them.
+            onClick={() => setConfirmRegister(true)}
           >
             {props.registerPending ? (
               <AgentSpinningDots
@@ -301,6 +314,24 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
         )}
       </div>
       <ConfirmDestructiveDialog
+        open={confirmRegister}
+        onOpenChange={(next) => {
+          if (!next) setConfirmRegister(false);
+        }}
+        title="Re-register this host's OS service?"
+        description={describeRegisterConfirm(
+          props.hostName,
+          props.settledBusySessionCount,
+        )}
+        cascadeSummary={null}
+        actionLabel="Re-register"
+        isPending={props.registerPending}
+        onConfirm={() => {
+          setConfirmRegister(false);
+          props.onRegister();
+        }}
+      />
+      <ConfirmDestructiveDialog
         open={confirmDeregister}
         onOpenChange={(next) => {
           if (!next) setConfirmDeregister(false);
@@ -317,6 +348,29 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
       />
     </div>
   );
+}
+
+/**
+ * The register confirm's body, sized to what is known about open sessions.
+ * `null` is NOT zero: a host that has not said it is idle gets the hedged
+ * sentence, never a claim that nothing is running.
+ */
+function describeRegisterConfirm(
+  hostName: string,
+  settledBusySessionCount: number | null,
+): string {
+  const restart = `Re-registering restarts ${hostName}: its OS service is booted out and registered again.`;
+  if (settledBusySessionCount === null) {
+    return `${restart} Any work running on it right now will be interrupted.`;
+  }
+  if (settledBusySessionCount === 0) {
+    return `${restart} It reports no active sessions, so nothing should be interrupted.`;
+  }
+  const sessions =
+    settledBusySessionCount === 1
+      ? "1 active session"
+      : `${settledBusySessionCount} active sessions`;
+  return `${restart} It reports ${sessions}, and re-registering will end ${settledBusySessionCount === 1 ? "it" : "them"}.`;
 }
 
 function OsServiceHeading(props: {

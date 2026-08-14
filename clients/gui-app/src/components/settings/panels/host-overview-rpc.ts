@@ -356,14 +356,18 @@ export function useHostServiceRegister(
         // A dropped connection on this method is the EXPECTED shape of
         // success on macOS — the bootout/bootstrap cycle replaces the very
         // process answering the call — so the caches must not be left
-        // describing the pre-register service. Marked stale rather than
-        // refetched: the refetch happens when the restarted host is next
-        // answerable, not against a socket known to be down.
+        // describing the pre-register service. `refetchType: "none"` is what
+        // actually makes this stale-only: the default refetches active
+        // observers immediately, against a socket this very branch just
+        // proved is down. The refresh arrives through the observers' own
+        // mechanisms (the 10s `host.status` poll, the next mount) once the
+        // restarted host answers.
         if (!(error instanceof HostTransportFailureError)) return;
         if (context === undefined || context.hostId === null) return;
         for (const method of ["host.service.status", "host.status"] as const) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(context.hostId, method),
+            refetchType: "none",
           });
         }
       },

@@ -34,6 +34,14 @@ export function useOverviewOsService(input: {
   readonly registerDegrade: OverviewDegradeReason | null;
   readonly deregisterDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /** Whether the scope still has a live route; releases the accepted latch. */
+  readonly scopeUsable: boolean;
+  /**
+   * What the host said about open sessions, `null` while it has not settled -
+   * the register CONFIRM names it, because re-registering bootouts the very
+   * job running those sessions (macOS) and must not read as a safe repair.
+   */
+  readonly settledBusySessionCount: number | null;
 }): OsServiceSectionProps {
   const { hostName } = input;
   const register = useHostServiceRegister(input.client);
@@ -42,10 +50,19 @@ export function useOverviewOsService(input: {
   // and unregistering the host after the mutation settles, so the moment
   // `isPending` drops is exactly when a restart or update could race the
   // shutdown. The latch keeps this section - and through `deregisterPending`
-  // the page-wide busy gate - locked past acceptance. It never clears within
-  // this page instance on purpose: what comes next is the scope going
-  // unreachable, which remounts the page (scope-keyed) without the latch.
+  // the page-wide busy gate - locked past acceptance, and RELEASES when the
+  // scope loses its route: that disconnect is the terminal state acceptance
+  // promises. Released rather than left to a remount, because the panel is
+  // keyed by host ID - which an unreachable transition does not change - so
+  // a latch that waited for a remount would hold the page for the visit.
   const [deregisterAccepted, setDeregisterAccepted] = useState(false);
+  // The adjust-during-render form rather than an effect: the release must be
+  // part of computing THIS render's answer, not a correction one paint later.
+  const [prevScopeUsable, setPrevScopeUsable] = useState(input.scopeUsable);
+  if (prevScopeUsable !== input.scopeUsable) {
+    setPrevScopeUsable(input.scopeUsable);
+    if (!input.scopeUsable && deregisterAccepted) setDeregisterAccepted(false);
+  }
   const ok = input.status?.outcome === "ok" ? input.status : null;
   // A registration someone ELSE owns — Desktop's SMAppService, or the external
   // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
@@ -77,6 +94,7 @@ export function useOverviewOsService(input: {
     nothingToDeregister: ok?.state === "not-installed",
     registerPending: register.isPending,
     deregisterPending: deregister.isPending || deregisterAccepted,
+    settledBusySessionCount: input.settledBusySessionCount,
     busy: input.busy,
     onRegister: () => {
       register.mutate(undefined, {

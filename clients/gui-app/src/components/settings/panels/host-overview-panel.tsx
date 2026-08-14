@@ -53,6 +53,7 @@ import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
@@ -266,12 +267,14 @@ export function HostOverviewPanel(props: {
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
     busy: corePending,
+    scopeUsable: usable,
+    settledBusySessionCount: view.settledBusySessionCount,
   });
   // The service writes are IN the page-wide gate, not only gated BY it.
   // Re-registering cycles the OS service and replaces this very host process,
   // so a Restart or a detached update launched beside it races that lifecycle;
   // the section locks the page for the same reason the page locks the section.
-  const anyPending =
+  const gatePending =
     corePending || service.registerPending || service.deregisterPending;
 
   // The update story lives at PAGE level because its two halves now render in
@@ -295,8 +298,13 @@ export function HostOverviewPanel(props: {
     enabled: usable,
     checkDegrade: updateCheckDegrade,
     installDegrade: updateInstallDegrade,
-    busy: anyPending,
+    busy: gatePending,
   });
+  // The install REQUEST is in the gate too, not only the detached progress:
+  // between pressing Install and the `accepted` answer, `updateProgress` has
+  // not started yet, and that gap is exactly wide enough for a Restart or a
+  // service write to race the install being granted.
+  const anyPending = gatePending || updates.summary.installing;
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
 
   if (host === null) return null;
@@ -586,13 +594,11 @@ function LocalHostRecoveryActions(props: {
               onSuccess: () => {
                 toast.success(`Starting ${props.hostName}…`);
               },
-              onError: (error) => {
-                toast.error(
-                  error.message.length > 0
-                    ? error.message
-                    : `Couldn't start ${props.hostName}.`,
-                );
-              },
+              onError: (error) =>
+                toastFromRunnerError(
+                  error,
+                  `Couldn't start ${props.hostName}.`,
+                ),
             },
           );
         }}

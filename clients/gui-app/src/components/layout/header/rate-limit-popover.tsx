@@ -893,6 +893,10 @@ function RateLimitHostPickerRow({
           kind: "manage-hosts",
           onSelect: () => {
             onClose();
+            // Same transfer as the provider-settings CTAs: managing hosts
+            // from B's usage view must land on B's page, not on whichever
+            // host Settings last showed.
+            carryUsageHostIntoSettingsScope();
             openSettings({ section: "host", resetToGeneral: false });
           },
         }}

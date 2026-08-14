@@ -15,6 +15,7 @@ import {
   type HostOptions,
 } from "@/components/settings/host-scope/use-host-options";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -112,6 +113,12 @@ interface HostPickerListProps {
  */
 function HostPickerList(props: HostPickerListProps): ReactNode {
   const options = useHostOptions();
+  // The merged rows carry registry-derived health, and that observer is
+  // deliberately NON-polling - a surface showing the dots opts the window into
+  // the liveness poll for as long as it is on screen (the Settings sidebar's
+  // rule, and the usage picker's). Without it, a dialog left open keeps an
+  // Online dot from the last DTO after a shutdown or lease expiry.
+  useRegisteredHostsPollLiveness();
 
   // Readiness is the DIRECTORY's, not the merged list's. This dialog exists to
   // point the window at a host, so the only rows it can act on are dialable
