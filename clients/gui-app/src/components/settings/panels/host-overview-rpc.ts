@@ -540,13 +540,24 @@ export function useHostUpdateInstall(
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
         if (context.hostId === null) return;
-        if (response.outcome !== "accepted") {
+        if (
+          response.outcome !== "accepted" &&
+          response.outcome !== "already-updating"
+        ) {
           // A refusal: no swap was dispatched, nothing to guard.
           useHostServiceWriteLatchStore
             .getState()
             .releaseUpdateInstallAccepted(context.hostId);
           return;
         }
+        // `already-updating` keeps the latch exactly as `accepted` does:
+        // SOMEONE'S swap is running — another window's, a direct CLI
+        // caller's — inside the same blind gap before the CLI writes
+        // `updateProgress`, which is the precise window the latch covers.
+        // Releasing here would re-enable restart and the service verbs
+        // against that active swap. The refresh below is how the progress
+        // row appears once the CLI reports it, and the panel's release
+        // effect (or the bounded timer) unwinds the latch from there.
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
         });

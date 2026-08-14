@@ -39,6 +39,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
@@ -625,6 +626,54 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
     });
+  });
+
+  it("an ALREADY-UPDATING answer keeps the page locked — someone else's swap is running in the same blind window the latch covers", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            manifest: multiVersionManifest(["1.6.0"]),
+          }),
+        "host.update.install": () =>
+          Promise.resolve({ outcome: "already-updating" as const }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    await openHostOverviewAdvanced();
+    const picker = await screen.findByTestId("host-version-rows");
+    const rows = within(picker).getAllByRole("listitem");
+    fireEvent.click(
+      within(rowFor(rows, "1.6.0")).getByRole("button", {
+        name: "Install 1.6.0",
+      }),
+    );
+
+    // Wait for the SETTLE (its toast), not just the dispatch — the dispatch
+    // arms the latch unconditionally, so only the post-settle state proves
+    // the answer RETAINED it rather than releasing it as a refusal.
+    await waitFor(() => {
+      expect(vi.mocked(toast.info)).toHaveBeenCalledWith(
+        "host-a is already installing an update.",
+      );
+    });
+    expect(
+      screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("an ACCEPTED install locks the rename pencil and Run doctor with the rest of the page — neither may dispatch against a host mid-swap", async () => {
