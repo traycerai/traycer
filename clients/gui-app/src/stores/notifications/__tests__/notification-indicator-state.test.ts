@@ -448,22 +448,23 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("does not roll a deleted chat into its epic indicator", () => {
+  it("rolls a retained unread chat completion into its epic without a chat projection", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
-          entryId: "failure-unread",
-          severity: "failure",
+          entryId: "done-unread",
+          severity: "done",
           readAt: null,
           updatedAt: 1,
-          chatId: "deleted-chat",
+          chatId: "chat-not-loaded",
         }),
       ]),
       ["epic-1"],
       [],
     );
 
-    expect(result.epics["epic-1"]).toBeUndefined();
+    expect(result.epics["epic-1"].unreadDone).toBe(true);
+    expect(result.chats).toEqual({});
   });
 
   it("counts a chat-scoped row toward its epic as well", () => {
@@ -477,14 +478,14 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"].unreadDone).toBe(true);
   });
 
-  it("does not bubble a deleted chat's retained notification to its epic", () => {
+  it("rolls a retained unread prompt into its epic without a chat projection", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null)]),
       ["epic-1"],
       [],
     );
 
-    expect(result.epics["epic-1"]).toBeUndefined();
+    expect(result.epics["epic-1"].pendingApproval).toBe(true);
     expect(result.chats).toEqual({});
   });
 
