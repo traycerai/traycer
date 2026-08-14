@@ -334,8 +334,15 @@ A head may not name the same part twice, anywhere across its lists — the serve
 refuses one, because "displaced = previous minus current" stops being
 well-defined exactly where that set drives deletion.
 
-**A part is named by content and nothing else.** The head carries
-`(sha256, byteLength)` per part — no key, no storage generation, no per-part seq.
+**A part is named by content and nothing else in the tenant envelope.** The
+envelope carries `(sha256, byteLength)` per part — no key, no storage
+generation, no per-part seq. The payload's message / event cohort entries
+additionally carry `firstSeq` / `lastSeq` (last-write extrema) and the
+exact membership key `recordCount` / `firstRecordId` / `lastRecordId` (1.1)
+so a publisher can plan the next cut from the predecessor head. Those
+fields are chat-domain data and must not leak into the envelope. `cdc`
+(algorithm, mask, target, min, max) lives on the head payload for the
+same reason.
 The key layout is derived from the hash under a `(task, tenant kind)` prefix and
 is a versioned spec readers never parse. That is what makes a publish a hash-diff
 against the previous head, and what makes upload retries converge on the same

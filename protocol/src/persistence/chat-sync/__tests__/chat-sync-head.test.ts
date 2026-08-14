@@ -1,6 +1,8 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   CHAT_SYNC_READER_VERSION,
+  chatHeadReaderSchema,
+  decodeChatHeadDocument,
   encodeChatHead,
   gateChatHeadVersion,
   listChatHeadParts,
@@ -18,6 +20,7 @@ import {
 } from "@traycer/protocol/persistence/registry";
 import { describe, expect, it } from "vitest";
 import {
+  FIXTURE_CDC,
   knownEvent,
   persistedHostPrivate,
   publishChat,
@@ -37,18 +40,49 @@ const chatHeadSchema = getRecordSchema(
   "latest",
 );
 
-const PART_A = { sha256: "a".repeat(64), byteLength: 120 };
-const PART_B = { sha256: "b".repeat(64), byteLength: 240 };
+const PART_A = {
+  sha256: "a".repeat(64),
+  byteLength: 120,
+  firstSeq: 1,
+  lastSeq: 3,
+  recordCount: 2,
+  firstRecordId: "m-a",
+  lastRecordId: "m-c",
+};
+const PART_B = {
+  sha256: "b".repeat(64),
+  byteLength: 240,
+  firstSeq: 4,
+  lastSeq: 7,
+  recordCount: 2,
+  firstRecordId: "m-d",
+  lastRecordId: "m-g",
+};
 // Distinct from A and B: a head may not name the same part twice, so a
 // graduated section in these fixtures needs an address of its own.
-const PART_C = { sha256: "c".repeat(64), byteLength: 360 };
+const PART_C = {
+  sha256: "c".repeat(64),
+  byteLength: 360,
+  firstSeq: 8,
+  lastSeq: 8,
+  recordCount: 1,
+  firstRecordId: "m-h",
+  lastRecordId: "m-h",
+};
 
 const wireHead: JsonObject = {
-  schemaVersion: { major: 1, minor: 0 },
+  schemaVersion: {
+    major: CHAT_SYNC_SCHEMA_VERSION.major,
+    minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+  },
   parentHeadSha256: null,
   throughRecordSeq: 7,
   capturedAt: 1_700_000_000_000,
-  minReaderVersion: null,
+  minReaderVersion: {
+    major: CHAT_SYNC_SCHEMA_VERSION.major,
+    minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+  },
+  cdc: { ...FIXTURE_CDC },
   core: {
     chatId: "chat-1",
     parentChatId: null,
@@ -73,13 +107,18 @@ function parse(value: JsonObject): ChatHead {
 }
 
 describe("chat-head shape", () => {
-  it("names its parts by content address and nothing else", () => {
+  it("names its payload cohorts by address plus the seq range they cover", () => {
     const head = parse(wireHead);
     expect(head.messageShards).toEqual([PART_A, PART_B]);
-    // No key, no storage generation: the key layout is derived from the hash
-    // and readers never parse keys.
+    // The payload cut plan is chat-domain data. The tenant envelope stays
+    // address-only (see chat-sync-head-document.test.ts).
     expect(Object.keys(head.messageShards[0]).sort()).toEqual([
       "byteLength",
+      "firstRecordId",
+      "firstSeq",
+      "lastRecordId",
+      "lastSeq",
+      "recordCount",
       "sha256",
     ]);
   });
@@ -195,14 +234,17 @@ describe("chat-head section graduation", () => {
 });
 
 describe("chat-head minReaderVersion coherence", () => {
-  it("accepts null - the normal case", () => {
-    expect(parse(wireHead).minReaderVersion).toBeNull();
+  it("accepts this contract's own version - the 1.1 v2-head stamp", () => {
+    expect(parse(wireHead).minReaderVersion).toEqual(CHAT_SYNC_SCHEMA_VERSION);
   });
 
-  it("defaults to null when the key is absent", () => {
+  it("READER defaults to null when the key is absent", () => {
+    // The defaulting is reader tolerance for heads written before the field
+    // existed; the WRITER must stamp the 1.1 floor and refuses absence (see
+    // "the 1.1 writer stamps the reader floor" below).
     const withoutKey: JsonObject = { ...wireHead };
     delete withoutKey.minReaderVersion;
-    expect(parse(withoutKey).minReaderVersion).toBeNull();
+    expect(chatHeadReaderSchema.parse(withoutKey).minReaderVersion).toBeNull();
   });
 
   it("refuses a minimum on another major - no reader could satisfy both", () => {
@@ -282,6 +324,7 @@ describe("chat-head canonical encoding", () => {
       eventShards: wireHead.eventShards,
       events: wireHead.events,
       messageShards: wireHead.messageShards,
+      cdc: wireHead.cdc,
       core: wireHead.core,
       minReaderVersion: wireHead.minReaderVersion,
       capturedAt: wireHead.capturedAt,
@@ -339,8 +382,6 @@ describe("chat-head canonical encoding", () => {
         },
       },
     };
-    delete withoutDefaults.minReaderVersion;
-
     const once = encodeChatHead(parse(withoutDefaults));
     expect(once).not.toEqual(canonicalizeJsonValue(withoutDefaults));
 
@@ -357,7 +398,11 @@ describe("chat-head canonical encoding", () => {
       agentMode: "regular",
       profileId: null,
     });
-    expect(once.minReaderVersion).toBeNull();
+    // The writer refuses an ABSENT minReaderVersion outright (the 1.1 floor
+    // is required), so the defaulted-field walk here exercises the settings
+    // levels; reader-side minReaderVersion defaulting is pinned in the
+    // coherence describe above.
+    expect(once.minReaderVersion).toEqual({ major: 1, minor: 1 });
 
     // Idempotent from there on - so the digest the next head chains to does not
     // move under a reader that merely opened and re-published the chat.
@@ -376,5 +421,120 @@ describe("chat-head canonical encoding", () => {
     expect(() =>
       parse({ ...wireHead, schemaVersion: { major: 99, minor: 77 } }),
     ).toThrow();
+  });
+
+  it("refuses a 1.1 writer head that omits cdc or cohort cut-plan fields", () => {
+    const { cdc: _cdc, ...withoutCdc } = wireHead;
+    expect(() => parse(withoutCdc)).toThrow();
+
+    expect(() =>
+      parse({
+        ...wireHead,
+        messageShards: [{ sha256: "a".repeat(64), byteLength: 1 }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("chat-head 1.0 reader compatibility", () => {
+  it("parses a 1.0 head that has no cdc and no seq ranges", () => {
+    const v10: JsonObject = {
+      ...wireHead,
+      schemaVersion: { major: 1, minor: 0 },
+      minReaderVersion: null,
+      messageShards: [
+        { sha256: "a".repeat(64), byteLength: 120 },
+        { sha256: "b".repeat(64), byteLength: 240 },
+      ],
+    };
+    delete v10.cdc;
+
+    const parsed = chatHeadReaderSchema.parse(v10);
+    expect(parsed.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(parsed.cdc).toBeUndefined();
+    expect(parsed.messageShards[0].firstSeq).toBeUndefined();
+  });
+
+  it("lets a 1.0 reader refuse a 1.1 head that stamps minReaderVersion {1,1}", () => {
+    const refused = gateChatHeadVersion(
+      {
+        schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
+        minReaderVersion: CHAT_SYNC_SCHEMA_VERSION,
+      },
+      { major: 1, minor: 0 },
+    );
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.reason).toBe("reader-below-minimum");
+  });
+});
+
+describe("a claimed 1.1 head must carry its cut plan", () => {
+  // The reader keeps cdc and membership optional FOR 1.0 heads. A payload
+  // whose own schemaVersion says 1.1+ while omitting them is a head no 1.1
+  // writer produced, and admitting it would hand downstream a nominal-1.1
+  // head whose cuts cannot be reproduced.
+  it("reader rejects a claimed-1.1 head that omits cdc", () => {
+    const missingCdc: JsonObject = { ...wireHead };
+    delete missingCdc.cdc;
+    expect(chatHeadReaderSchema.safeParse(missingCdc).success).toBe(false);
+  });
+
+  it("reader rejects a claimed-1.1 head whose cohorts omit membership", () => {
+    const bareParts: JsonObject = {
+      ...wireHead,
+      messageShards: [
+        { sha256: "a".repeat(64), byteLength: 120 },
+        { sha256: "b".repeat(64), byteLength: 240 },
+      ],
+    };
+    expect(chatHeadReaderSchema.safeParse(bareParts).success).toBe(false);
+  });
+
+  it("such a head DECODES as schema-rejected, not ok", () => {
+    const payload: JsonObject = { ...wireHead };
+    delete payload.cdc;
+    // Envelope derived by hand to MATCH the payload, so the refusal below is
+    // the schema's and not the envelope cross-check's.
+    const document = canonicalJsonStringify(
+      canonicalizeJsonValue({
+        ...payload,
+        parts: [
+          { sha256: PART_A.sha256, byteLength: PART_A.byteLength },
+          { sha256: PART_B.sha256, byteLength: PART_B.byteLength },
+        ],
+      }) as JsonObject,
+    );
+
+    const decoded = decodeChatHeadDocument(document);
+    expect(decoded.status).toBe("corrupt");
+    if (decoded.status === "corrupt") {
+      expect(decoded.reason).toBe("schema-rejected");
+    }
+  });
+});
+
+describe("the 1.1 writer stamps the reader floor", () => {
+  // Inherited nullable, an incorrectly-built publication could omit
+  // minReaderVersion, and a 1.0 reader's same-major gate would ADMIT a head
+  // whose cut plan it misreads instead of refusing cleanly.
+  it("rejects a null minReaderVersion", () => {
+    expect(
+      chatHeadSchema.safeParse({ ...wireHead, minReaderVersion: null }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an absent minReaderVersion", () => {
+    const absent: JsonObject = { ...wireHead };
+    delete absent.minReaderVersion;
+    expect(chatHeadSchema.safeParse(absent).success).toBe(false);
+  });
+
+  it("rejects a minReaderVersion below the 1.1 floor", () => {
+    expect(
+      chatHeadSchema.safeParse({
+        ...wireHead,
+        minReaderVersion: { major: 1, minor: 0 },
+      }).success,
+    ).toBe(false);
   });
 });
