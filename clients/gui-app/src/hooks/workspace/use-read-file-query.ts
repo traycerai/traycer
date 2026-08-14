@@ -9,6 +9,7 @@ export function useWorkspaceReadFile(
   client: HostClient<HostRpcRegistry> | null,
   workspacePath: string | null,
   filePath: string | null,
+  cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
 ) {
   const params = useMemo(
     () => ({
@@ -20,7 +21,7 @@ export function useWorkspaceReadFile(
   );
 
   return useHostQuery({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity,
     client,
     method: "workspace.readFile",
     params,

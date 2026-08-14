@@ -4,7 +4,10 @@ import { StrictMode, act, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
+import {
+  MarkdownEditPreview,
+  MarkdownPreview,
+} from "@/components/markdown-edit-preview";
 
 const TEST_ID = "markdown-edit-preview";
 
@@ -34,7 +37,6 @@ function ControlledMarkdownEditPreview(props: ControlledHarnessProps) {
       placeholder={undefined}
       ariaLabel="Markdown source"
       testId={TEST_ID}
-      mode="full"
     />
   );
 }
@@ -120,7 +122,6 @@ describe("MarkdownEditPreview", () => {
             placeholder={undefined}
             ariaLabel="Markdown source"
             testId={TEST_ID}
-            mode="full"
           />
         </QueryClientProvider>
       </StrictMode>,
@@ -156,7 +157,6 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
-          mode="full"
         />
       </StrictMode>,
     );
@@ -173,24 +173,14 @@ describe("MarkdownEditPreview", () => {
     expect(readMarkdown(editor)).toBe("locked draft");
   });
 
-  it("renders preview only when mode is preview-only", () => {
+  it("renders preview only when using MarkdownPreview", () => {
     render(
       <StrictMode>
-        <MarkdownEditPreview
-          value="# Hello from preview"
-          onChange={() => undefined}
-          readOnly
-          placeholder={undefined}
-          ariaLabel="Markdown source"
-          testId={TEST_ID}
-          mode="preview-only"
-        />
+        <MarkdownPreview value="# Hello from preview" />
       </StrictMode>,
     );
 
-    expect(screen.getByTestId(`${TEST_ID}-preview`).textContent).toContain(
-      "Hello from preview",
-    );
+    expect(screen.getByText("Hello from preview")).toBeDefined();
     expect(screen.queryByRole("tab", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
     expect(EditorView.findFromDOM(document.body)).toBeNull();
@@ -206,7 +196,6 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
-          mode="full"
         />
       </StrictMode>,
     );

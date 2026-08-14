@@ -23,6 +23,7 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { cn } from "@/lib/utils";
 import { submitComposer } from "./provider-skill-composer-flow";
 import {
+  parentDir,
   skillBodyScaffold,
   skillDestination,
   skillFilePath,
@@ -31,6 +32,7 @@ import {
   SKILL_DESCRIPTION_SOFT_LIMIT,
   type SkillAuthoring,
   type SkillComposerStep,
+  type SkillDestination,
   type SkillEditTarget,
 } from "./provider-skill-composer-model";
 
@@ -96,27 +98,47 @@ export function ProviderSkillComposerDialog(props: {
             </div>
           )}
 
-          <ComposerStepFields
-            step={draft.step}
-            name={draft.name}
-            setName={draft.setName}
-            nameError={draft.nameError}
-            description={draft.description}
-            setDescription={draft.setDescription}
-            body={draft.body}
-            setBody={draft.setBody}
-            source={draft.source}
-            setSource={draft.setSource}
-            inspectSession={draft.inspectSession}
-            selectedNames={draft.selectedNames}
-            setSelectedNames={draft.setSelectedNames}
-            pickerNote={draft.pickerNote}
-            pending={props.pending}
-            canImport={!draft.editing && props.authoring.canImport}
-            canWrite={props.authoring.canWrite}
-            onImport={draft.goToImport}
-            onWrite={draft.goToWrite}
-          />
+          {draft.step === "write" ? (
+            <WriteFields
+              name={draft.name}
+              setName={draft.setName}
+              nameError={draft.nameError}
+              description={draft.description}
+              setDescription={draft.setDescription}
+              body={draft.body}
+              setBody={draft.setBody}
+              disabled={props.pending}
+              canImport={!draft.editing && props.authoring.canImport}
+              onImport={draft.goToImport}
+            />
+          ) : null}
+          {draft.step === "import" ? (
+            <ImportFields
+              source={draft.source}
+              setSource={draft.setSource}
+              disabled={props.pending}
+              canWrite={props.authoring.canWrite}
+              onWrite={draft.goToWrite}
+            />
+          ) : null}
+          {draft.step === "picker" && draft.inspectSession !== null ? (
+            <PickerFields
+              candidates={draft.inspectSession.candidates}
+              selectedNames={draft.selectedNames}
+              note={draft.pickerNote}
+              disabled={props.pending}
+              onToggle={(candidateName) => {
+                draft.setSelectedNames(
+                  draft.selectedNames.includes(candidateName)
+                    ? draft.selectedNames.filter(
+                        (entry) => entry !== candidateName,
+                      )
+                    : [...draft.selectedNames, candidateName],
+                );
+              }}
+              onBack={draft.goToImport}
+            />
+          ) : null}
 
           {draft.showScope ? (
             <SkillScopeFieldset
@@ -222,7 +244,7 @@ function useComposerDraft(props: {
   });
   const destination =
     props.editTarget !== undefined
-      ? editDestination(props.editTarget.path)
+      ? destinationForEdit(props.editTarget.path)
       : skillDestination({
           providerScoped: effectiveProviderScoped,
           providerLabel: props.providerLabel,
@@ -299,76 +321,6 @@ function useComposerDraft(props: {
   };
 }
 
-function ComposerStepFields(props: {
-  readonly step: SkillComposerStep;
-  readonly name: string;
-  readonly setName: (value: string) => void;
-  readonly nameError: string | null;
-  readonly description: string;
-  readonly setDescription: (value: string) => void;
-  readonly body: string;
-  readonly setBody: (value: string) => void;
-  readonly source: string;
-  readonly setSource: (value: string) => void;
-  readonly inspectSession: {
-    readonly token: string;
-    readonly candidates: readonly ProviderSkillInspectCandidate[];
-  } | null;
-  readonly selectedNames: readonly string[];
-  readonly setSelectedNames: (value: readonly string[]) => void;
-  readonly pickerNote: string | null;
-  readonly pending: boolean;
-  readonly canImport: boolean;
-  readonly canWrite: boolean;
-  readonly onImport: () => void;
-  readonly onWrite: () => void;
-}): ReactNode {
-  if (props.step === "write") {
-    return (
-      <WriteFields
-        name={props.name}
-        setName={props.setName}
-        nameError={props.nameError}
-        description={props.description}
-        setDescription={props.setDescription}
-        body={props.body}
-        setBody={props.setBody}
-        disabled={props.pending}
-        canImport={props.canImport}
-        onImport={props.onImport}
-      />
-    );
-  }
-  if (props.step === "import") {
-    return (
-      <ImportFields
-        source={props.source}
-        setSource={props.setSource}
-        disabled={props.pending}
-        canWrite={props.canWrite}
-        onWrite={props.onWrite}
-      />
-    );
-  }
-  if (props.inspectSession === null) return null;
-  return (
-    <PickerFields
-      candidates={props.inspectSession.candidates}
-      selectedNames={props.selectedNames}
-      note={props.pickerNote}
-      disabled={props.pending}
-      onToggle={(candidateName) => {
-        props.setSelectedNames(
-          props.selectedNames.includes(candidateName)
-            ? props.selectedNames.filter((entry) => entry !== candidateName)
-            : [...props.selectedNames, candidateName],
-        );
-      }}
-      onBack={props.onImport}
-    />
-  );
-}
-
 function ComposerDescription({
   step,
   editing,
@@ -394,18 +346,10 @@ function ComposerDescription({
   );
 }
 
-function editDestination(skillPath: string): {
-  readonly display: string;
-  readonly exact: boolean;
-} {
-  const separator =
-    skillPath.includes("\\") && !skillPath.includes("/") ? "\\" : "/";
-  const trimmed = skillPath.endsWith(separator)
-    ? skillPath.slice(0, -1)
-    : skillPath;
-  const index = trimmed.lastIndexOf(separator);
-  if (index <= 0) return { display: trimmed, exact: true };
-  return { display: trimmed.slice(0, index), exact: true };
+function destinationForEdit(skillPath: string): SkillDestination {
+  const parent = parentDir(skillPath);
+  if (parent === null) return { display: skillPath, exact: true };
+  return { display: parent, exact: true };
 }
 
 function titleForStep(
@@ -523,7 +467,6 @@ function WriteFields({
             placeholder={undefined}
             ariaLabel="Instructions"
             testId="skill-composer-instructions"
-            mode="full"
           />
         </div>
       </div>

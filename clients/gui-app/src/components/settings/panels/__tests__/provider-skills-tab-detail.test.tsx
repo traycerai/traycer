@@ -50,6 +50,7 @@ const skillMocks = vi.hoisted(() => ({
   readFileCalls: [] as Array<{
     workspacePath: string | null;
     filePath: string | null;
+    cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   }>,
   readFile: {
     data: undefined as
@@ -139,8 +140,13 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
     _client: null,
     workspacePath: string | null,
     filePath: string | null,
+    cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
   ) => {
-    skillMocks.readFileCalls.push({ workspacePath, filePath });
+    skillMocks.readFileCalls.push({
+      workspacePath,
+      filePath,
+      cacheKeyIdentity,
+    });
     return skillMocks.readFile;
   },
 }));
@@ -626,14 +632,16 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   });
 
   it("shows Imported from origin in the detail dialog, and omits it when there is none", () => {
-    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
     renderTab();
     fireEvent.click(
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
-    expect(screen.getByRole("dialog").textContent).toContain(
-      "Imported from owner/repo",
-    );
+    const withOrigin = screen.getByRole("dialog").textContent ?? "";
+    expect(withOrigin).toContain("Imported from owner/repo");
+    expect(withOrigin).not.toContain("Imported from Imported from");
 
     cleanup();
     skillMocks.skills = [FIND_SKILLS];
@@ -659,6 +667,11 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(screen.getByText("Edit skill")).toBeDefined();
     expect(screen.queryByText("Add a skill")).toBeNull();
     expect(screen.getByRole("button", { name: "Save skill" })).toBeDefined();
+    // Destination is parentDir(skill.path) plus name/SKILL.md. The path is
+    // split across StartTruncatedText nodes, so assert via the dialog text.
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "/Users/dev/.agents/skills/find-skills/SKILL.md",
+    );
     expect(screen.queryByText("Available to")).toBeNull();
     expect(screen.queryByLabelText(/Every provider/)).toBeNull();
     expect(
@@ -786,7 +799,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   it("hides Edit and Update from source when actionScopes omit those keys", () => {
     // Old-host skew: absent keys, not empty arrays. The fixture must not
     // default edit/update.
-    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
     const caps = skillsState().nativeCapabilities.skills;
     if (caps === null) throw new Error("expected skills capabilities");
     expect("edit" in caps.actionScopes).toBe(false);
@@ -797,9 +812,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
 
-    expect(screen.getByRole("dialog").textContent).toContain(
-      "Imported from owner/repo",
-    );
+    const dialogText = screen.getByRole("dialog").textContent ?? "";
+    expect(dialogText).toContain("Imported from owner/repo");
+    expect(dialogText).not.toContain("Imported from Imported from");
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Update from source" }),
@@ -817,6 +832,75 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     expect(screen.getByTestId("confirm-destructive-dialog").textContent).toMatch(
       /removing a shared skill removes it for every provider/i,
     );
+  });
+
+  it("refreshes the open dialog in place after a successful Update from source", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    const updatedRow: ProviderSkill = {
+      ...FIND_SKILLS,
+      name: "find-skills-v2",
+      description: "Updated from source",
+      origin: "Imported from owner/repo#next",
+    };
+    skillMocks.onMutateAsync = async () => {
+      skillMocks.readFile = {
+        data: {
+          content:
+            '---\nname: find-skills-v2\ndescription: "Updated from source"\n---\n\n# After update\n\nUpdated instructions from source.\n',
+          truncated: false,
+          error: null,
+        },
+        isPending: false,
+        isError: false,
+        error: null,
+      };
+      return { kind: "skills", skills: [updatedRow] };
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    const before = screen.getByRole("dialog").textContent ?? "";
+    expect(before).toContain("find-skills");
+    expect(before).toContain("Helps users discover and install agent skills.");
+    expect(before).toContain("Imported from owner/repo");
+    expect(before).not.toContain("Imported from Imported from");
+    expect(before).toContain("Ask for a skill.");
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 0,
+      ),
+    ).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Update from source" }));
+
+    await waitFor(() => {
+      const after = screen.getByRole("dialog").textContent ?? "";
+      expect(after).toContain("find-skills-v2");
+      expect(after).toContain("Updated from source");
+      expect(after).toContain("Imported from owner/repo#next");
+      expect(after).toContain("Updated instructions from source.");
+    });
+    const after = screen.getByRole("dialog").textContent ?? "";
+    expect(after).not.toContain(
+      "Helps users discover and install agent skills.",
+    );
+    expect(after).not.toContain("Ask for a skill.");
+    expect(after).not.toContain("Imported from Imported from");
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 1,
+      ),
+    ).toBe(true);
   });
 
   it("does not offer Remove on a conflict row, and says why", () => {

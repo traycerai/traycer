@@ -64,7 +64,7 @@ function mount(
   Wrapper: (props: { readonly children: ReactNode }) => ReactNode,
 ) {
   return renderHook(
-    () => useWorkspaceReadFile(client, "/work/repo", "src/index.ts"),
+    () => useWorkspaceReadFile(client, "/work/repo", "src/index.ts", undefined),
     { wrapper: Wrapper },
   ).result;
 }

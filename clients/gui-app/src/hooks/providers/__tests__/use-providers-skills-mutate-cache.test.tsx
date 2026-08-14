@@ -210,4 +210,152 @@ describe("useProvidersSkillsMutate cache", () => {
       });
     });
   });
+
+  it("invalidates the skills list when a multi-name import throws after rows may have landed", async () => {
+    let listCalls = 0;
+    const fixture = createFixture({
+      list: () => {
+        listCalls += 1;
+        return {
+          providers: [],
+          native: { ok: true, kind: "skills", skills: [EXISTING] },
+        };
+      },
+      nativeMutate: () => ({
+        result: {
+          ok: false,
+          code: "external_drift",
+          detail: "Imported show-me, then the source moved",
+        },
+      }),
+    });
+
+    const listRendered = renderHook(
+      () =>
+        useProvidersSkillsList({
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(listRendered.result.current.data?.skills).toEqual([EXISTING]);
+    });
+    const listCallsAfterSeed = listCalls;
+    const listKey = providersNativeQueryKeys.skillsList(fixture.hostId, {
+      providerId: "codex",
+      scope: "global",
+      workspaceRoot: null,
+    });
+    expect(fixture.queryClient.getQueryData(listKey)).toEqual({
+      skills: [EXISTING],
+    });
+
+    const invalidateSpy = vi.spyOn(fixture.queryClient, "invalidateQueries");
+    const mutateRendered = renderHook(() => useProvidersSkillsMutate(), {
+      wrapper: fixture.Wrapper,
+    });
+
+    let thrown: unknown;
+    await act(async () => {
+      try {
+        await mutateRendered.result.current.mutateAsync({
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: {
+            action: "import",
+            source: "owner/repo",
+            providerScoped: false,
+            token: "tok-partial",
+            names: ["show-me", "design-control-loop"],
+          },
+          suppressToast: true,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(thrown).toBeDefined();
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: listKey,
+    });
+    await waitFor(() => {
+      expect(listCalls).toBeGreaterThan(listCallsAfterSeed);
+    });
+  });
+
+  it("does not invalidate the skills list when inspect throws", async () => {
+    let listCalls = 0;
+    const fixture = createFixture({
+      list: () => {
+        listCalls += 1;
+        return {
+          providers: [],
+          native: { ok: true, kind: "skills", skills: [EXISTING] },
+        };
+      },
+      nativeMutate: () => ({
+        result: {
+          ok: false,
+          code: "unsupported_action",
+          detail: "inspect failed",
+        },
+      }),
+    });
+
+    const listRendered = renderHook(
+      () =>
+        useProvidersSkillsList({
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(listRendered.result.current.data?.skills).toEqual([EXISTING]);
+    });
+    const listCallsAfterSeed = listCalls;
+    const listKey = providersNativeQueryKeys.skillsList(fixture.hostId, {
+      providerId: "codex",
+      scope: "global",
+      workspaceRoot: null,
+    });
+
+    const invalidateSpy = vi.spyOn(fixture.queryClient, "invalidateQueries");
+    const mutateRendered = renderHook(() => useProvidersSkillsMutate(), {
+      wrapper: fixture.Wrapper,
+    });
+
+    let thrown: unknown;
+    await act(async () => {
+      try {
+        await mutateRendered.result.current.mutateAsync({
+          providerId: "codex",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: {
+            action: "inspect",
+            source: "owner/repo",
+            scope: "global",
+          },
+          suppressToast: true,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(thrown).toBeDefined();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(listCalls).toBe(listCallsAfterSeed);
+    expect(fixture.queryClient.getQueryData(listKey)).toEqual({
+      skills: [EXISTING],
+    });
+  });
 });

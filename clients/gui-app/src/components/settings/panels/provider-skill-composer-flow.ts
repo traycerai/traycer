@@ -6,7 +6,7 @@ import type {
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import {
   composerErrorMessage,
-  isSkillSourceShaMismatch,
+  isExternalDriftError,
   preselectSkillNames,
   skillNamesFromSourceFlags,
   type SkillComposerStep,
@@ -176,8 +176,12 @@ async function applyInspect(
     sink.setError("No SKILL.md found in that source.");
     return;
   }
-  if (inspectMode === "fresh" && data.candidates.length === 1) {
-    const [only] = data.candidates;
+  const only = data.candidates[0];
+  // An uninstalled singleton is unambiguous and safe to land immediately.
+  // An installed singleton is an overwrite - send it through the picker so
+  // the badge and the "this replaces what is on disk" copy are visible
+  // before Install commits.
+  if (inspectMode === "fresh" && data.candidates.length === 1 && !only.installed) {
     try {
       await installWithToken(data.token, [only.name], state, sink);
     } catch (err) {
@@ -189,9 +193,16 @@ async function applyInspect(
     token: data.token,
     candidates: data.candidates,
   });
-  sink.setSelectedNames(
-    preselectSkillNames(data.candidates, skillNamesFromSourceFlags(state.source)),
-  );
+  if (data.candidates.length === 1) {
+    sink.setSelectedNames([only.name]);
+  } else {
+    sink.setSelectedNames(
+      preselectSkillNames(
+        data.candidates,
+        skillNamesFromSourceFlags(state.source),
+      ),
+    );
+  }
 }
 
 async function handleInstallError(
@@ -199,7 +210,7 @@ async function handleInstallError(
   state: ComposerFlowState,
   sink: ComposerFlowSink,
 ): Promise<void> {
-  if (!isSkillSourceShaMismatch(err) || !state.canInspect) {
+  if (!isExternalDriftError(err) || !state.canInspect) {
     sink.setError(composerErrorMessage(err));
     return;
   }

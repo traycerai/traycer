@@ -64,7 +64,6 @@ function inspectData(
   return {
     kind: "inspect",
     token,
-    commitSha: "abc123def456",
     candidates,
   };
 }
@@ -278,7 +277,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     expect(screen.getByLabelText("Skill source")).toBeDefined();
   });
 
-  it("imports the only candidate immediately after inspect", async () => {
+  it("sends an installed singleton through the picker instead of auto-importing", async () => {
     const { onMutate, onClose } = renderDialog({
       authoring: BOTH,
       listScope: "project",
@@ -286,6 +285,65 @@ describe("<ProviderSkillComposerDialog />", () => {
     onMutate.mockImplementation(async (mutation) => {
       if (mutation.action === "inspect") {
         return inspectData([SHOW_ME], "tok-one");
+      }
+      return { kind: "skills", skills: [] };
+    });
+    await fillSource("owner/repo");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("1 skill found")).toBeDefined();
+    });
+    expect(
+      screen.getByText(
+        "Selecting an installed skill overwrites it from this source.",
+      ),
+    ).toBeDefined();
+    expect(screen.getByText("installed")).toBeDefined();
+    const showMe = screen.getByRole("checkbox", { name: "show-me" });
+    expect(showMe.getAttribute("data-state")).toBe("checked");
+    expect(
+      screen.getByRole("button", { name: "Install 1 skill" }),
+    ).toBeDefined();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onMutate.mock.calls.map((call) => call[0])).toEqual([
+      {
+        action: "inspect",
+        source: "owner/repo",
+        scope: "project",
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Install 1 skill" }));
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(onMutate.mock.calls.map((call) => call[0])).toEqual([
+      {
+        action: "inspect",
+        source: "owner/repo",
+        scope: "project",
+      },
+      {
+        action: "import",
+        source: "owner/repo",
+        providerScoped: false,
+        token: "tok-one",
+        names: ["show-me"],
+      },
+    ]);
+  });
+
+  it("imports an uninstalled singleton immediately after inspect", async () => {
+    const { onMutate, onClose } = renderDialog({
+      authoring: BOTH,
+      listScope: "project",
+    });
+    onMutate.mockImplementation(async (mutation) => {
+      if (mutation.action === "inspect") {
+        return inspectData([DESIGN_LOOP], "tok-fresh");
       }
       return { kind: "skills", skills: [] };
     });
@@ -306,11 +364,12 @@ describe("<ProviderSkillComposerDialog />", () => {
         action: "import",
         source: "owner/repo",
         providerScoped: false,
-        token: "tok-one",
-        names: ["show-me"],
+        token: "tok-fresh",
+        names: ["design-control-loop"],
       },
     ]);
     expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByText("installed")).toBeNull();
   });
 
   it("advances to a picker with preselect, overwrite badge, and batch install", async () => {
@@ -469,7 +528,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     });
   });
 
-  it("hides Available to when the listing cannot honestly name a provider root", () => {
+  it("hides Available to when neither create nor import advertises the scope", () => {
     renderDialog({
       authoring: BOTH,
       canProviderScope: false,
@@ -479,6 +538,24 @@ describe("<ProviderSkillComposerDialog />", () => {
     expect(screen.queryByText("Available to")).toBeNull();
     expect(screen.queryByLabelText(/Codex only/)).toBeNull();
     expect(screen.queryByLabelText(/Every provider/)).toBeNull();
+  });
+
+  it("shows Available to with generic provider destination when no provider root is known", async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      authoring: BOTH,
+      canProviderScope: true,
+      providerRoot: null,
+    });
+
+    expect(screen.getByText("Available to")).toBeDefined();
+    expect(screen.getByLabelText(/Every provider/)).toBeDefined();
+    expect(screen.getByLabelText(/Codex only/)).toBeDefined();
+    expect(screen.getByText("~/.agents/skills")).toBeDefined();
+
+    await user.click(screen.getByLabelText(/Codex only/));
+    expect(screen.getByText("Codex's own skills folder")).toBeDefined();
+    expect(screen.queryByText(/\.codex\/skills/)).toBeNull();
   });
 
   it("shows Available to on import and write when provider scope is honest", async () => {

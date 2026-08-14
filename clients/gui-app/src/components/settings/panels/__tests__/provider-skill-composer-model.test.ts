@@ -7,9 +7,9 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   composerErrorMessage,
-  isSkillSourceShaMismatch,
-  isSkillUpdateDirtyCanon,
+  isExternalDriftError,
   isSkillUpdateNoOp,
+  parentDir,
   previewSkillMd,
   preselectSkillNames,
   providerRootFromSkills,
@@ -152,34 +152,48 @@ describe("skillAuthoring", () => {
 });
 
 describe("skillProviderScopeVisible", () => {
-  it("is always visible at global scope, even before a provider root is known", () => {
+  it("is visible when create or import advertises the selected scope", () => {
     expect(
       skillProviderScopeVisible({
         effectiveScope: "global",
-        providerRoot: null,
+        createScopes: ["global"],
+        importScopes: [],
       }),
     ).toBe(true);
     expect(
       skillProviderScopeVisible({
-        effectiveScope: "global",
-        providerRoot: "/Users/dev/.codex/skills",
+        effectiveScope: "project",
+        createScopes: [],
+        importScopes: ["project"],
       }),
     ).toBe(true);
   });
 
-  it("hides provider-only at project scope until a provider root is known", () => {
+  it("is visible at project with zero implied rows when the host advertises the scope", () => {
     expect(
       skillProviderScopeVisible({
         effectiveScope: "project",
-        providerRoot: null,
+        createScopes: ["project"],
+        importScopes: ["project"],
+      }),
+    ).toBe(true);
+  });
+
+  it("is hidden when neither create nor import advertises the selected scope", () => {
+    expect(
+      skillProviderScopeVisible({
+        effectiveScope: "project",
+        createScopes: ["global"],
+        importScopes: ["global"],
       }),
     ).toBe(false);
     expect(
       skillProviderScopeVisible({
-        effectiveScope: "project",
-        providerRoot: "/Users/dev/app/.codex/skills",
+        effectiveScope: "global",
+        createScopes: [],
+        importScopes: [],
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -421,10 +435,10 @@ function nativeError(
   });
 }
 
-describe("isSkillSourceShaMismatch", () => {
+describe("isExternalDriftError", () => {
   it("matches ProviderNativeRpcError external_drift, including host copy the fuzzy matcher missed", () => {
     expect(
-      isSkillSourceShaMismatch(
+      isExternalDriftError(
         nativeError(
           "external_drift",
           "Inspected commit abc123 no longer matches source (def456); inspect again",
@@ -432,7 +446,7 @@ describe("isSkillSourceShaMismatch", () => {
       ),
     ).toBe(true);
     expect(
-      isSkillSourceShaMismatch(
+      isExternalDriftError(
         nativeError(
           "external_drift",
           "Inspected source changed (abc123 → def456); inspect again",
@@ -443,42 +457,24 @@ describe("isSkillSourceShaMismatch", () => {
 
   it("rejects other native codes, a plain Error with sha/mismatch text, and non-Errors", () => {
     expect(
-      isSkillSourceShaMismatch(
+      isExternalDriftError(
         nativeError("no_change_detected", "Already installed at this SHA"),
       ),
     ).toBe(false);
     expect(
-      isSkillSourceShaMismatch(
+      isExternalDriftError(
         nativeError("unsupported_action", "SHA mismatch is not a verb"),
       ),
     ).toBe(false);
     expect(
-      isSkillSourceShaMismatch(new Error("source SHA mismatch after re-clone")),
+      isExternalDriftError(new Error("source SHA mismatch after re-clone")),
     ).toBe(false);
-    expect(isSkillSourceShaMismatch("sha mismatch")).toBe(false);
-    expect(isSkillSourceShaMismatch({ message: "sha mismatch" })).toBe(false);
-  });
-});
-
-describe("isSkillUpdateDirtyCanon", () => {
-  it("is true only for ProviderNativeRpcError external_drift", () => {
+    expect(isExternalDriftError("sha mismatch")).toBe(false);
+    expect(isExternalDriftError({ message: "sha mismatch" })).toBe(false);
     expect(
-      isSkillUpdateDirtyCanon(
-        nativeError(
-          "external_drift",
-          "Inspected source changed (abc123 → def456); inspect again",
-        ),
-      ),
-    ).toBe(true);
-    expect(
-      isSkillUpdateDirtyCanon(
-        nativeError("no_change_detected", "Already up to date"),
-      ),
+      isExternalDriftError(new Error("local edits will be overwritten")),
     ).toBe(false);
-    expect(
-      isSkillUpdateDirtyCanon(new Error("local edits will be overwritten")),
-    ).toBe(false);
-    expect(isSkillUpdateDirtyCanon("external_drift")).toBe(false);
+    expect(isExternalDriftError("external_drift")).toBe(false);
   });
 });
 
@@ -565,6 +561,12 @@ describe("skillOriginDisplay", () => {
     expect(skillOriginDisplay({ ...row, origin: "  owner/repo  " })).toBe(
       "owner/repo",
     );
+  });
+
+  it("returns the host display line as-is without prefixing Imported from", () => {
+    expect(
+      skillOriginDisplay({ ...row, origin: "Imported from owner/repo" }),
+    ).toBe("Imported from owner/repo");
   });
 });
 
@@ -695,6 +697,25 @@ describe("skillFilePath", () => {
     expect(skillFilePath({ destination, name: "review-pr" })).toBe(
       "Codex's own skills folder",
     );
+  });
+});
+
+describe("parentDir", () => {
+  it("returns the parent of a POSIX skill path", () => {
+    expect(parentDir("/Users/dev/.agents/skills/find-skills")).toBe(
+      "/Users/dev/.agents/skills",
+    );
+  });
+
+  it("honours a Windows-style backslash path", () => {
+    expect(parentDir("C:\\Users\\dev\\.codex\\skills\\deploy")).toBe(
+      "C:\\Users\\dev\\.codex\\skills",
+    );
+  });
+
+  it("returns null when there is no parent segment", () => {
+    expect(parentDir("find-skills")).toBeNull();
+    expect(parentDir("/find-skills")).toBeNull();
   });
 });
 

@@ -5,7 +5,6 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
-  ProviderNativeScope,
   ProviderSkill,
   ProviderSkillsCapabilities,
   ProvidersSkillsMutateAction,
@@ -23,7 +22,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
-  isSkillUpdateDirtyCanon,
+  isExternalDriftError,
   isSkillUpdateNoOp,
   providerRootFromSkills,
   skillActionAdvertised,
@@ -31,14 +30,10 @@ import {
   skillIsEditable,
   skillOriginDisplay,
   skillProviderScopeVisible,
-  type SkillAuthoring,
   type SkillEditTarget,
 } from "./provider-skill-composer-model";
 import { ProviderSkillDetailDialog } from "./provider-skill-detail-dialog";
-import {
-  skillRemovability,
-  type SkillRemovability,
-} from "./provider-skill-removable";
+import { skillRemovability } from "./provider-skill-removable";
 import {
   SKILL_CONFLICT_LABEL,
   SKILL_CONFLICT_TONE,
@@ -137,6 +132,9 @@ function ProviderSkillsTabBody({
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
   const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(null);
+  // Bumped after a successful update so the open detail's file query
+  // refetches in place. The list row snapshot is replaced separately.
+  const [detailFileEpoch, setDetailFileEpoch] = useState(0);
   // Removal/update errors render inside the skill dialog, which is closed
   // while the composer is mounted and vice versa.
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -189,7 +187,8 @@ function ProviderSkillsTabBody({
   const providerRoot = providerRootFromSkills(skills);
   const canProviderScope = skillProviderScopeVisible({
     effectiveScope,
-    providerRoot,
+    createScopes: caps.actionScopes.create,
+    importScopes: caps.actionScopes.import,
   });
 
   const handleBrowse = useCallback(() => {
@@ -253,7 +252,7 @@ function ProviderSkillsTabBody({
     setDetailError(null);
     setPendingKey(`update:${skill.path}`);
     try {
-      await mutate.mutateAsync({
+      const data = await mutate.mutateAsync({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
@@ -269,8 +268,11 @@ function ProviderSkillsTabBody({
       });
       setUpdateConfirm(null);
       toast.success("Updated from source");
+      const next = skillAfterUpdate(data, skill);
+      if (next !== null) setOpenSkill(next);
+      setDetailFileEpoch((epoch) => epoch + 1);
     } catch (err) {
-      if (!confirm && isSkillUpdateDirtyCanon(err)) {
+      if (!confirm && isExternalDriftError(err)) {
         setUpdateConfirm(skill);
         return;
       }
@@ -315,6 +317,80 @@ function ProviderSkillsTabBody({
           setDetailError(err.message);
         },
       },
+    );
+  }
+
+  function renderDialogs(): ReactNode {
+    return (
+      <>
+        {composerOpen ? (
+          <ProviderSkillComposerDialog
+            providerLabel={providerLabel}
+            authoring={authoring}
+            listScope={effectiveScope}
+            providerRoot={providerRoot}
+            canProviderScope={canProviderScope}
+            pending={composerPending}
+            onMutate={onComposerMutate}
+            onClose={() => {
+              setComposerOpen(false);
+              setEditTarget(undefined);
+            }}
+            editTarget={editTarget}
+          />
+        ) : null}
+
+        {openSkill === null ? null : (
+          <ProviderSkillDetailDialog
+            skill={openSkill}
+            removal={skillRemovability({
+              removeScopes: caps.actionScopes.remove,
+              source: openSkill.source,
+              effectiveScope,
+              conflict: openSkill.conflict === true,
+            })}
+            removePending={removePending}
+            removeDisabled={isMutating}
+            actionError={detailError}
+            canEdit={openSkillEditable}
+            canUpdate={openSkillUpdatable}
+            origin={skillOriginDisplay(openSkill)}
+            updatePending={updatePending}
+            onRequestEdit={openEdit}
+            onRequestUpdate={() => {
+              void onUpdate(openSkill, false);
+            }}
+            onRequestRemove={() => {
+              setRemoveTarget(openSkill);
+            }}
+            onClose={() => {
+              setOpenSkill(null);
+              setDetailError(null);
+            }}
+            fileEpoch={detailFileEpoch}
+          />
+        )}
+
+        <SkillRemoveConfirm
+          target={removeTarget}
+          pending={removePending}
+          onCancel={() => {
+            setRemoveTarget(null);
+          }}
+          onConfirm={onRemove}
+        />
+
+        <SkillUpdateConfirm
+          target={updateConfirm}
+          pending={updatePending}
+          onCancel={() => {
+            setUpdateConfirm(null);
+          }}
+          onConfirm={(skill) => {
+            void onUpdate(skill, true);
+          }}
+        />
+      </>
     );
   }
 
@@ -391,148 +467,20 @@ function ProviderSkillsTabBody({
         onOpenSkill={setOpenSkill}
       />
 
-      <SkillsTabDialogs
-        composerOpen={composerOpen}
-        providerLabel={providerLabel}
-        authoring={authoring}
-        listScope={effectiveScope}
-        providerRoot={providerRoot}
-        canProviderScope={canProviderScope}
-        composerPending={composerPending}
-        onComposerMutate={onComposerMutate}
-        onComposerClose={() => {
-          setComposerOpen(false);
-          setEditTarget(undefined);
-        }}
-        editTarget={editTarget}
-        openSkill={openSkill}
-        removal={
-          openSkill === null
-            ? null
-            : skillRemovability({
-                removeScopes: caps.actionScopes.remove,
-                source: openSkill.source,
-                effectiveScope,
-                conflict: openSkill.conflict === true,
-              })
-        }
-        removePending={removePending}
-        isMutating={isMutating}
-        detailError={detailError}
-        openSkillEditable={openSkillEditable}
-        openSkillUpdatable={openSkillUpdatable}
-        updatePending={updatePending}
-        onRequestEdit={openEdit}
-        onRequestUpdate={() => {
-          if (openSkill === null) return;
-          void onUpdate(openSkill, false);
-        }}
-        onRequestRemove={() => {
-          if (openSkill === null) return;
-          setRemoveTarget(openSkill);
-        }}
-        onDetailClose={() => {
-          setOpenSkill(null);
-          setDetailError(null);
-        }}
-        removeTarget={removeTarget}
-        onRemoveCancel={() => {
-          setRemoveTarget(null);
-        }}
-        onRemove={onRemove}
-        updateConfirm={updateConfirm}
-        onUpdateCancel={() => {
-          setUpdateConfirm(null);
-        }}
-        onUpdateConfirm={(skill) => {
-          void onUpdate(skill, true);
-        }}
-      />
+      {renderDialogs()}
     </div>
   );
 }
 
-function SkillsTabDialogs(props: {
-  readonly composerOpen: boolean;
-  readonly providerLabel: string;
-  readonly authoring: SkillAuthoring;
-  readonly listScope: ProviderNativeScope;
-  readonly providerRoot: string | null;
-  readonly canProviderScope: boolean;
-  readonly composerPending: boolean;
-  readonly onComposerMutate: (
-    mutation: ProvidersSkillsMutateAction,
-  ) => Promise<SkillsMutateData>;
-  readonly onComposerClose: () => void;
-  readonly editTarget: SkillEditTarget | undefined;
-  readonly openSkill: ProviderSkill | null;
-  readonly removal: SkillRemovability | null;
-  readonly removePending: boolean;
-  readonly isMutating: boolean;
-  readonly detailError: string | null;
-  readonly openSkillEditable: boolean;
-  readonly openSkillUpdatable: boolean;
-  readonly updatePending: boolean;
-  readonly onRequestEdit: (target: SkillEditTarget) => void;
-  readonly onRequestUpdate: () => void;
-  readonly onRequestRemove: () => void;
-  readonly onDetailClose: () => void;
-  readonly removeTarget: ProviderSkill | null;
-  readonly onRemoveCancel: () => void;
-  readonly onRemove: (skill: ProviderSkill) => void;
-  readonly updateConfirm: ProviderSkill | null;
-  readonly onUpdateCancel: () => void;
-  readonly onUpdateConfirm: (skill: ProviderSkill) => void;
-}): ReactNode {
-  return (
-    <>
-      {props.composerOpen ? (
-        <ProviderSkillComposerDialog
-          providerLabel={props.providerLabel}
-          authoring={props.authoring}
-          listScope={props.listScope}
-          providerRoot={props.providerRoot}
-          canProviderScope={props.canProviderScope}
-          pending={props.composerPending}
-          onMutate={props.onComposerMutate}
-          onClose={props.onComposerClose}
-          editTarget={props.editTarget}
-        />
-      ) : null}
-
-      {props.openSkill === null || props.removal === null ? null : (
-        <ProviderSkillDetailDialog
-          skill={props.openSkill}
-          removal={props.removal}
-          removePending={props.removePending}
-          removeDisabled={props.isMutating}
-          actionError={props.detailError}
-          canEdit={props.openSkillEditable}
-          canUpdate={props.openSkillUpdatable}
-          origin={skillOriginDisplay(props.openSkill)}
-          updatePending={props.updatePending}
-          onRequestEdit={props.onRequestEdit}
-          onRequestUpdate={props.onRequestUpdate}
-          onRequestRemove={props.onRequestRemove}
-          onClose={props.onDetailClose}
-        />
-      )}
-
-      <SkillRemoveConfirm
-        target={props.removeTarget}
-        pending={props.removePending}
-        onCancel={props.onRemoveCancel}
-        onConfirm={props.onRemove}
-      />
-
-      <SkillUpdateConfirm
-        target={props.updateConfirm}
-        pending={props.updatePending}
-        onCancel={props.onUpdateCancel}
-        onConfirm={props.onUpdateConfirm}
-      />
-    </>
-  );
+function skillAfterUpdate(
+  data: SkillsMutateData,
+  previous: ProviderSkill,
+): ProviderSkill | null {
+  if (data.kind !== "skills") return null;
+  for (const row of data.skills) {
+    if (row.path === previous.path) return row;
+  }
+  return null;
 }
 
 /**

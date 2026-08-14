@@ -42,7 +42,6 @@ export type PluginsMutateData = PluginsListData;
 export type SkillsInspectData = {
   readonly kind: "inspect";
   readonly token: string;
-  readonly commitSha: string;
   readonly candidates: readonly ProviderSkillInspectCandidate[];
 };
 
@@ -218,7 +217,6 @@ export function mapNativeMutateToSkillsMutate(args: {
     return {
       kind: "inspect",
       token: result.token,
-      commitSha: result.commitSha,
       candidates: result.candidates,
     };
   }

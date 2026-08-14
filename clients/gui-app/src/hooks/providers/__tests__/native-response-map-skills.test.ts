@@ -45,7 +45,6 @@ describe("mapNativeMutateToSkillsMutate", () => {
     expect(mapped).toEqual({
       kind: "inspect",
       token: "tok-1",
-      commitSha: "deadbeef",
       candidates: [
         {
           name: "show-me",

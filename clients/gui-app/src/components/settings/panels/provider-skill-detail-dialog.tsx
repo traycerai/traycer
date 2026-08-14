@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import { FileWarning, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
-import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
+import { MarkdownPreview } from "@/components/markdown-edit-preview";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,10 +86,17 @@ export function ProviderSkillDetailDialog(props: {
   readonly onRequestUpdate: () => void;
   readonly onRequestRemove: () => void;
   readonly onClose: () => void;
+  /**
+   * Extra cache identity for the SKILL.md read. The tab bumps this after
+   * "Updated from source" so the open dialog refetches the body in place.
+   */
+  readonly fileEpoch: number;
 }): ReactNode {
   const { skill, removal } = props;
   const client = useHostClient();
-  const fileQuery = useWorkspaceReadFile(client, skill.path, SKILL_ENTRY_FILE);
+  const fileQuery = useWorkspaceReadFile(client, skill.path, SKILL_ENTRY_FILE, [
+    props.fileEpoch,
+  ]);
   const content = fileQuery.data?.content ?? null;
   const truncated = fileQuery.data?.truncated ?? false;
   const readError =
@@ -199,7 +206,7 @@ function SkillDetailHeader(props: {
       {props.origin === null ? null : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="min-w-0 text-ui-xs text-muted-foreground">
-            Imported from {props.origin}
+            {props.origin}
           </p>
           {props.canUpdate ? (
             <Button
@@ -325,15 +332,12 @@ function SkillBody(props: {
           This skill has frontmatter but no instructions.
         </p>
       ) : (
-        <MarkdownEditPreview
-          value={body}
-          onChange={() => undefined}
-          readOnly
-          placeholder={undefined}
-          ariaLabel="Skill instructions"
-          testId="skill-detail-body"
-          mode="preview-only"
-        />
+        <div
+          className="h-full min-h-0 overflow-auto"
+          data-testid="skill-detail-body-preview"
+        >
+          <MarkdownPreview value={body} />
+        </div>
       )}
     </>
   );

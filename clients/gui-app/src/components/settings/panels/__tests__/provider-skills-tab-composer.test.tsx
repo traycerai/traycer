@@ -47,7 +47,12 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
 // imported by the tab through `ProviderSkillDetailDialog`, so it needs a
 // well-shaped mock the same way `provider-skills-tab-detail.test.tsx` does.
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
+  useWorkspaceReadFile: (
+    _client: unknown,
+    _workspacePath: string | null,
+    _filePath: string | null,
+    _cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
+  ) => ({
     data: undefined,
     isPending: false,
     isError: false,

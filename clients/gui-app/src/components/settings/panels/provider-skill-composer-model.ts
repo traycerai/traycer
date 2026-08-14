@@ -105,16 +105,21 @@ export function skillAuthoring(
 /**
  * Whether the "<Provider> only" radio is an honest choice for this listing.
  *
- * Global always has a native home root. Project provider-only is only
- * trustworthy once a listed `source: "provider"` row has revealed that root;
- * otherwise the control is hidden and writes stay on Every provider.
+ * Keyed on advertised create/import scopes, not on existing rows: a project
+ * listing with zero provider-sourced skills must still be able to create the
+ * first one. The host already advertises those verbs only where a native
+ * destination exists. Destination copy falls back to a generic label when
+ * no row has revealed the provider root yet.
  */
 export function skillProviderScopeVisible(args: {
   readonly effectiveScope: ProviderNativeScope;
-  readonly providerRoot: string | null;
+  readonly createScopes: readonly ProviderNativeScope[];
+  readonly importScopes: readonly ProviderNativeScope[];
 }): boolean {
-  if (args.effectiveScope === "global") return true;
-  return args.providerRoot !== null;
+  return (
+    args.createScopes.includes(args.effectiveScope) ||
+    args.importScopes.includes(args.effectiveScope)
+  );
 }
 
 export interface SkillDestination {
@@ -311,21 +316,12 @@ export function preselectSkillNames(
 }
 
 /**
- * Host rejects an expired-token install whose re-clone SHA moved by
- * mapping `NativeWriteError("external_drift")` onto the wire. The GUI
- * preserves that as `ProviderNativeRpcError.nativeCode`.
+ * Host maps `NativeWriteError("external_drift")` onto the wire for both
+ * inspect SHA drift (expired-token re-clone moved) and update-from-source
+ * when canon hash ≠ recorded `installedHash`. The GUI preserves that as
+ * `ProviderNativeRpcError.nativeCode`. The verb is what distinguishes them.
  */
-export function isSkillSourceShaMismatch(error: unknown): boolean {
-  return (
-    isProviderNativeRpcError(error) && error.nativeCode === "external_drift"
-  );
-}
-
-/**
- * Update-from-source refused because canon hash ≠ recorded `installedHash`.
- * Same native code as inspect SHA drift; the verb is what distinguishes them.
- */
-export function isSkillUpdateDirtyCanon(error: unknown): boolean {
+export function isExternalDriftError(error: unknown): boolean {
   return (
     isProviderNativeRpcError(error) && error.nativeCode === "external_drift"
   );
@@ -387,7 +383,7 @@ function joinPath(left: string, right: string): string {
  * The parent of a skill directory, honouring whichever separator the host's
  * path already uses. Returns null when there is no parent segment to take.
  */
-function parentDir(path: string): string | null {
+export function parentDir(path: string): string | null {
   const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
   const trimmed = path.endsWith(separator) ? path.slice(0, -1) : path;
   const index = trimmed.lastIndexOf(separator);

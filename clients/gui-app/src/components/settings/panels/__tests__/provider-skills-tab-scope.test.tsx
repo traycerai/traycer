@@ -164,7 +164,12 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
+  useWorkspaceReadFile: (
+    _client: unknown,
+    _workspacePath: string | null,
+    _filePath: string | null,
+    _cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
+  ) => ({
     data: {
       content: '---\nname: find-skills\ndescription: "Helps"\n---\n\n# Body\n',
       truncated: false,
@@ -378,6 +383,30 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
 
     chooseScopeOption(/app/);
     expect(screen.getByRole("button", { name: /Add skill/ })).toBeDefined();
+  });
+
+  it("shows Available to at project with no provider-sourced rows, and hides it when the scope is not advertised", () => {
+    skillMocks.createScopes = ["project"];
+    skillMocks.importScopes = ["project"];
+    skillMocks.skills = [FIND_SKILLS];
+    render(<ProviderSkillsTab state={skillsState()} />);
+
+    expect(screen.queryByRole("button", { name: /Add skill/ })).toBeNull();
+    expect(screen.queryByText("Available to")).toBeNull();
+    expect(screen.queryByLabelText(/Codex only/)).toBeNull();
+
+    chooseScopeOption(/app/);
+    fireEvent.click(screen.getByRole("button", { name: /Add skill/ }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Available to");
+    expect(screen.getByLabelText(/Codex only/)).toBeDefined();
+    expect(screen.getByLabelText(/Every provider/)).toBeDefined();
+    expect(screen.getByText("~/.agents/skills")).toBeDefined();
+
+    fireEvent.click(screen.getByLabelText(/Codex only/));
+    expect(screen.getByText("Codex's own skills folder")).toBeDefined();
+    expect(screen.queryByText(/\.codex\/skills/)).toBeNull();
   });
 
   it("does not present the scope picker as an Available-to / providerScoped control", () => {

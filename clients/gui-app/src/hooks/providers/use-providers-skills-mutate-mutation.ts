@@ -84,7 +84,23 @@ export function useProvidersSkillsMutate(): UseMutationResult<
         { skills: data.skills },
       );
     },
-    onError: (error, variables) => {
+    onError: (error, variables, ctx) => {
+      // A multi-name import can land some trees before the host errors. The
+      // success path rewrites the list cache; the error path must refetch so
+      // those committed rows appear instead of staying hidden behind the
+      // pre-import snapshot.
+      if (
+        variables.mutation.action === "import" &&
+        ctx !== undefined &&
+        ctx.hostId !== null
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: providersNativeQueryKeys.skillsList(
+            ctx.hostId,
+            ctx.listParams,
+          ),
+        });
+      }
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
         return;
       }
