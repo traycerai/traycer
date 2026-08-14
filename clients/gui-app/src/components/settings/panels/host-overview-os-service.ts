@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+/** How long a probable register-restart holds the page without other release. */
+const REGISTER_RESTART_LATCH_MS = 45_000;
 import { toast } from "sonner";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -46,23 +49,14 @@ export function useOverviewOsService(input: {
   const { hostName } = input;
   const register = useHostServiceRegister(input.client);
   const deregister = useHostServiceDeregister(input.client);
-  // `accepted` is a beginning, not an end: the detached CLI is still stopping
-  // and unregistering the host after the mutation settles, so the moment
-  // `isPending` drops is exactly when a restart or update could race the
-  // shutdown. The latch keeps this section - and through `deregisterPending`
-  // the page-wide busy gate - locked past acceptance, and RELEASES when the
-  // scope loses its route: that disconnect is the terminal state acceptance
-  // promises. Released rather than left to a remount, because the panel is
-  // keyed by host ID - which an unreachable transition does not change - so
-  // a latch that waited for a remount would hold the page for the visit.
-  const [deregisterAccepted, setDeregisterAccepted] = useState(false);
-  // The adjust-during-render form rather than an effect: the release must be
-  // part of computing THIS render's answer, not a correction one paint later.
-  const [prevScopeUsable, setPrevScopeUsable] = useState(input.scopeUsable);
-  if (prevScopeUsable !== input.scopeUsable) {
-    setPrevScopeUsable(input.scopeUsable);
-    if (!input.scopeUsable && deregisterAccepted) setDeregisterAccepted(false);
-  }
+  const {
+    deregisterAccepted,
+    setDeregisterAccepted,
+    registerRestartLikely,
+    setRegisterRestartLikely,
+    externallyManagedRefusal,
+    setExternallyManagedRefusal,
+  } = useServiceWriteLatches(input.scopeUsable);
   const ok = input.status?.outcome === "ok" ? input.status : null;
   // A registration someone ELSE owns — Desktop's SMAppService, or the external
   // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
@@ -88,11 +82,17 @@ export function useOverviewOsService(input: {
     manifestLine: ok === null ? null : `${ok.label} · ${ok.manifestPath}`,
     degrade: input.statusDegrade,
     canRegister:
-      input.registerDegrade === null && !externallyManaged && !cliUnavailable,
+      input.registerDegrade === null &&
+      !externallyManaged &&
+      !cliUnavailable &&
+      !externallyManagedRefusal,
     canDeregister:
-      input.deregisterDegrade === null && !externallyManaged && !cliUnavailable,
+      input.deregisterDegrade === null &&
+      !externallyManaged &&
+      !cliUnavailable &&
+      !externallyManagedRefusal,
     nothingToDeregister: ok?.state === "not-installed",
-    registerPending: register.isPending,
+    registerPending: register.isPending || registerRestartLikely,
     deregisterPending: deregister.isPending || deregisterAccepted,
     settledBusySessionCount: input.settledBusySessionCount,
     busy: input.busy,
@@ -102,6 +102,9 @@ export function useOverviewOsService(input: {
           if (response.outcome === "ok") {
             toast.success(`Re-registered ${hostName}'s service`);
             return;
+          }
+          if (response.outcome === "externally-managed") {
+            setExternallyManagedRefusal(true);
           }
           toast.error(describeServiceRegisterFailure(response, hostName));
         },
@@ -116,6 +119,11 @@ export function useOverviewOsService(input: {
         // failure; everything else keeps the generic mapping.
         onError: (error) => {
           if (error instanceof HostTransportFailureError) {
+            // Probable success mid-restart: keep the section and the page
+            // locked (the latch above) until the scope reflects it or the
+            // bounded window expires - `isPending` alone drops right now,
+            // while launchd is still replacing the host.
+            setRegisterRestartLikely(true);
             toast.info(
               `Lost contact with ${hostName} while re-registering — it is probably restarting.`,
             );
@@ -131,6 +139,9 @@ export function useOverviewOsService(input: {
     onDeregister: () => {
       deregister.mutate(undefined, {
         onSuccess: (response) => {
+          if (response.outcome === "externally-managed") {
+            setExternallyManagedRefusal(true);
+          }
           if (response.outcome === "accepted") {
             setDeregisterAccepted(true);
             // Deliberately not "Deregistered". The CLI was dispatched detached
@@ -146,6 +157,68 @@ export function useOverviewOsService(input: {
           toastFromHostError(error, "Couldn't deregister the service."),
       });
     },
+  };
+}
+
+/**
+ * The three latches that keep the section's state honest ACROSS a write's
+ * settle, all releasing on a scope-usability FLIP (dropping means the
+ * restart/shutdown they guarded is now the page's visible state; coming back
+ * means a live, possibly reconfigured process is answering again). Released on
+ * a flip rather than left to a remount, because the panel is keyed by host ID
+ * - which an unreachable transition does not change - so a latch that waited
+ * for a remount would hold the page for the visit.
+ *
+ * - `deregisterAccepted`: `accepted` is a beginning, not an end - the detached
+ *   CLI is still stopping the host after the mutation settles.
+ * - `registerRestartLikely`: on macOS a SUCCESSFUL re-registration can sever
+ *   the connection mid-call; the moment the mutation errors, `isPending` is
+ *   false, releasing the page while launchd is still replacing the host. Also
+ *   released by a bounded timer: a reconnect inside the scope machinery's
+ *   tolerance would otherwise never flip usability, and launchd's cycle is a
+ *   matter of seconds. (Timer-async, so the setState-in-effect rule does not
+ *   apply.)
+ * - `externallyManagedRefusal`: a host-side `externally-managed` refusal is
+ *   STRUCTURAL - the supervisor is configured into the host's environment, so
+ *   retrying cannot answer differently, and the status read may never say so
+ *   itself: the CLI's externally-managed STATE describes Desktop's
+ *   SMAppService, a different owner than the host's env-var supervisor.
+ */
+function useServiceWriteLatches(scopeUsable: boolean): {
+  readonly deregisterAccepted: boolean;
+  readonly setDeregisterAccepted: (value: boolean) => void;
+  readonly registerRestartLikely: boolean;
+  readonly setRegisterRestartLikely: (value: boolean) => void;
+  readonly externallyManagedRefusal: boolean;
+  readonly setExternallyManagedRefusal: (value: boolean) => void;
+} {
+  const [deregisterAccepted, setDeregisterAccepted] = useState(false);
+  const [registerRestartLikely, setRegisterRestartLikely] = useState(false);
+  const [externallyManagedRefusal, setExternallyManagedRefusal] =
+    useState(false);
+  // The adjust-during-render form rather than an effect: the release must be
+  // part of computing THIS render's answer, not a correction one paint later.
+  const [prevScopeUsable, setPrevScopeUsable] = useState(scopeUsable);
+  if (prevScopeUsable !== scopeUsable) {
+    setPrevScopeUsable(scopeUsable);
+    if (!scopeUsable && deregisterAccepted) setDeregisterAccepted(false);
+    if (registerRestartLikely) setRegisterRestartLikely(false);
+    if (externallyManagedRefusal) setExternallyManagedRefusal(false);
+  }
+  useEffect(() => {
+    if (!registerRestartLikely) return;
+    const timer = setTimeout(() => {
+      setRegisterRestartLikely(false);
+    }, REGISTER_RESTART_LATCH_MS);
+    return () => clearTimeout(timer);
+  }, [registerRestartLikely]);
+  return {
+    deregisterAccepted,
+    setDeregisterAccepted,
+    registerRestartLikely,
+    setRegisterRestartLikely,
+    externallyManagedRefusal,
+    setExternallyManagedRefusal,
   };
 }
 
