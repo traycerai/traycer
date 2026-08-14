@@ -228,3 +228,157 @@ describe("linux service install flow", () => {
     ]);
   });
 });
+
+// `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
+// when it returns (the runner caps the subprocess at 15s; the unit inherits
+// systemd's 90s default TimeoutStopSec), so force confirms through the
+// unit's OWN state - `systemctl is-active`, never a pid - and escalates to
+// `systemctl kill --signal=SIGKILL` when the plain stop does not settle it
+// in time. Graces mirror the macOS/desktop-agent force-stop margins
+// (~32s SIGTERM, 10s SIGKILL), so these poll through fake timers exactly
+// the way `macos.test.ts` / `desktop-agent-shutdown.test.ts` already do for
+// the identical wait shape.
+describe("linux service stop --force", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "inactive", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    // The first is-active probe settles immediately - no poll wait, no
+    // kill, ever.
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+  });
+
+  it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, then settles and succeeds", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    let killIssued = false;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "kill") {
+        killIssued = true;
+        return ok();
+      }
+      if (command === "systemctl" && args[1] === "is-active") {
+        return killIssued
+          ? { stdout: "inactive", stderr: "", exitCode: 3 }
+          : { stdout: "active", stderr: "", exitCode: 0 };
+      }
+      return ok();
+    };
+
+    const pending = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
+    // slack for the final poll - the same margin the macOS/desktop-agent
+    // force-stop SIGTERM grace uses for the identical wait shape.
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(calls.map(verbOf)).toContain("kill");
+    const killCall = calls.find(
+      (call) => call.command === "systemctl" && call.args[1] === "kill",
+    );
+    expect(killCall?.args).toEqual([
+      "--user",
+      "kill",
+      "--signal=SIGKILL",
+      "ai.traycer.host.dev.service",
+    ]);
+  });
+
+  it("is still 'active' after the SIGKILL grace too - SERVICE_CONTROL_FAILED, never a false success", async () => {
+    vi.useFakeTimers();
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "active", stderr: "", exitCode: 0 };
+      }
+      return ok();
+    };
+
+    // Attach the rejection matcher BEFORE advancing timers - the promise
+    // settles mid-advance, and asserting after would risk an unhandled
+    // rejection between settling and the `await` below (same discipline
+    // `macos.test.ts`'s CLI-owned stop-timeout test uses).
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("still active after SIGKILL"),
+    });
+    // Both graces back to back: ~32s SIGTERM + 10s SIGKILL, plus slack.
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+  });
+
+  it("'activating' does NOT count as settled - it drives the SIGKILL escalation exactly like 'active' does", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    let killIssued = false;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "kill") {
+        killIssued = true;
+        return ok();
+      }
+      if (command === "systemctl" && args[1] === "is-active") {
+        // A concurrent restart bringing the unit back UP must never read as
+        // a successful stop.
+        return killIssued
+          ? { stdout: "inactive", stderr: "", exitCode: 3 }
+          : { stdout: "activating", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    const pending = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(calls.map(verbOf)).toContain("kill");
+  });
+
+  it("a probe that throws (systemd unreachable) reads as NOT settled, not as a false success", async () => {
+    vi.useFakeTimers();
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "systemctl" && args[1] === "is-active") {
+        return Promise.reject(busError(command, args));
+      }
+      return ok();
+    };
+
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+  });
+
+  it("without --force, a stop never probes is-active or escalates to kill - today's semantics, pinned", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+
+    await createLinuxController(runner).stop(label, { force: false });
+
+    expect(calls.map(verbOf)).toEqual(["stop"]);
+  });
+});

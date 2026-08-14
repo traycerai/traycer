@@ -12,7 +12,7 @@ import {
 import { isProcessAlive } from "../../store/cli-lock";
 import { getPublishedProcessIdentityVerdict } from "../../store/process-identity";
 import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
-import { createCliLogger } from "../../logger";
+import { createCliLogger, type ILogger } from "../../logger";
 import type { Environment } from "../../runner/environment";
 
 // Cooperative shutdown of a Desktop-managed host, through the host's own
@@ -222,6 +222,37 @@ export async function forceStopHostProcess(
   operation: string,
 ): Promise<ForcedShutdownOutcome> {
   const logger = createCliLogger(environment);
+  const outcome = await signalHostForForcedStop(environment, operation, logger);
+  // A force stop's success must not leave a resurrect signal behind. The
+  // desktop health monitor reads pid.json AFTER its endpoint probe fails and
+  // treats ABSENCE as "deliberate stop" - metadata still present with a dead
+  // endpoint is read as a crash and respawned. Only a graceful, un-wedged
+  // shutdown lets the host's own handler unlink the file, so every success
+  // here has to complete the writer contract on the host's behalf: `stopped`
+  // covers a SIGKILL (handler never ran) and a wedged-then-dead SIGTERM;
+  // `no-host` covers the stale record naming a dead or recycled pid, which
+  // is precisely the state that invites the resurrection. The rm is
+  // idempotent, so purging when the host already unlinked costs nothing.
+  // Best-effort either way: the stop itself already succeeded.
+  if (outcome.kind === "stopped" || outcome.kind === "no-host") {
+    try {
+      await removeHostPidMetadata(environment);
+    } catch (error) {
+      logger.warn("Could not remove pid.json after a forced stop", {
+        environment,
+        operation,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return outcome;
+}
+
+async function signalHostForForcedStop(
+  environment: Environment,
+  operation: string,
+  logger: ILogger,
+): Promise<ForcedShutdownOutcome> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) {
     return { kind: "no-metadata" };
@@ -287,23 +318,6 @@ export async function forceStopHostProcess(
     return { kind: "stopped" };
   }
   if (await waitForCooperativeExit(metadata.pid)) {
-    // SIGKILL never lets the host's shutdown handler run, so the writer
-    // contract ("the HOST removes pid.json on graceful shutdown") is broken
-    // here by construction - and a dead pid with pid.json still present is
-    // exactly the signal the desktop's health watchdog reads as a crash and
-    // auto-respawns on, undoing the stop the user just forced. Complete the
-    // contract on the host's behalf, the same way the Windows taskkill stop
-    // path does. Best-effort: the stop itself already succeeded.
-    try {
-      await removeHostPidMetadata(environment);
-    } catch (error) {
-      logger.warn("Could not remove pid.json after a forced SIGKILL stop", {
-        environment,
-        operation,
-        pid: metadata.pid,
-        cause: error instanceof Error ? error.message : String(error),
-      });
-    }
     return { kind: "stopped" };
   }
   return { kind: "hung", pid: metadata.pid };

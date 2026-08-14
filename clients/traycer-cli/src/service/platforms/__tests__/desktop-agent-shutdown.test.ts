@@ -233,9 +233,12 @@ describe("forceStopHostProcess", () => {
     expect(outcome).toEqual({ kind: "no-metadata" });
     expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
     expect(killSpy).not.toHaveBeenCalled();
+    // There is no pid.json to purge, and no-metadata is not one of the two
+    // outcomes the wrapper purges on anyway.
+    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 
-  it("reports no-host without signalling when the recorded pid is PROVEN dead", async () => {
+  it("reports no-host without signalling when the recorded pid is PROVEN dead, and purges the stale pid.json", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(false);
     const killSpy = vi.spyOn(process, "kill");
@@ -244,6 +247,10 @@ describe("forceStopHostProcess", () => {
 
     expect(outcome).toEqual({ kind: "no-host" });
     expect(killSpy).not.toHaveBeenCalled();
+    // A stale pid.json naming a dead pid is exactly the state the desktop
+    // health monitor reads as "crashed" once its own endpoint probe fails -
+    // metadata present + endpoint dead = resurrect. Purge it.
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
   });
 
   it("reports stopped when SIGTERM alone is honored, without ever escalating to SIGKILL", async () => {
@@ -258,10 +265,12 @@ describe("forceStopHostProcess", () => {
     expect(outcome).toEqual({ kind: "stopped" });
     expect(killSpy).toHaveBeenCalledTimes(1);
     expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
-    // pid.json is the HOST's own file to remove on a graceful SIGTERM exit -
-    // only a SIGKILL that skipped the shutdown handler needs the CLI to
-    // finish that contract on the host's behalf.
-    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    // The purge is class-complete on the OUTCOME, not on how "stopped" was
+    // reached: a graceful SIGTERM exit still leaves a race where the host's
+    // own unlink and this check interleave, so the wrapper purges (best
+    // effort, idempotent) on every "stopped"/"no-host" outcome regardless of
+    // which signal actually landed.
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
   });
 
   it("escalates to SIGKILL once SIGTERM is survived through the full exit grace, and reports stopped when SIGKILL lands", async () => {
@@ -348,6 +357,7 @@ describe("forceStopHostProcess", () => {
 
     expect(outcome).toEqual({ kind: "stopped" });
     expect(MOCKS.isProcessAlive).toHaveBeenCalledTimes(1);
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
   });
 
   it("propagates any kill failure OTHER than ESRCH instead of reporting a false stop", async () => {
@@ -382,6 +392,7 @@ describe("forceStopHostProcess", () => {
 
       expect(outcome).toEqual({ kind: "no-host" });
       expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
 
     it("identity 'current' lets the pid be signalled, exactly like a proven-alive legacy pid.json", async () => {
@@ -400,9 +411,10 @@ describe("forceStopHostProcess", () => {
       expect(outcome).toEqual({ kind: "stopped" });
       expect(killSpy).toHaveBeenCalledTimes(1);
       expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
 
-    it("identity 'mismatch' proves the pid was recycled: no-host, and NO signal is ever sent", async () => {
+    it("identity 'mismatch' proves the pid was recycled: no-host, and NO signal is ever sent - but the stale pid.json IS purged", async () => {
       MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
       const killSpy = vi.spyOn(process, "kill");
@@ -414,6 +426,10 @@ describe("forceStopHostProcess", () => {
       // The legacy liveness gate is bypassed entirely once an identity is
       // recorded - it must not run a second, contradictory check.
       expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
+      // A recycled-pid impostor is exactly the resurrection risk: the
+      // record still names a pid, the endpoint behind it is dead, and the
+      // desktop health monitor would read that combination as a crash.
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
 
     it("identity 'dead' also reports no-host without signalling - the other half of the dead-or-mismatch branch", async () => {
@@ -425,9 +441,10 @@ describe("forceStopHostProcess", () => {
 
       expect(outcome).toEqual({ kind: "no-host" });
       expect(killSpy).not.toHaveBeenCalled();
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
     });
 
-    it("identity 'indeterminate' forbids signalling: reports identity-unverified rather than guessing", async () => {
+    it("identity 'indeterminate' forbids signalling: reports identity-unverified rather than guessing, and does NOT purge", async () => {
       MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
         "indeterminate",
@@ -442,6 +459,10 @@ describe("forceStopHostProcess", () => {
       // signal.
       expect(outcome).toEqual({ kind: "identity-unverified", pid: 4242 });
       expect(killSpy).not.toHaveBeenCalled();
+      // "Cannot tell" must not purge either - a live, unverifiable occupant
+      // may still be the real host, and removing pid.json out from under it
+      // is its own resurrection risk if the real host later exits cleanly.
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
     });
 
     // The FIRST identity check only proves the occupant was ours at the
@@ -451,7 +472,7 @@ describe("forceStopHostProcess", () => {
     // re-proven immediately before the irreversible SIGKILL, not assumed to
     // still hold from ~32s earlier.
     describe("pre-SIGKILL revalidation", () => {
-      it("second call 'mismatch': the host already exited after SIGTERM - stopped, and SIGKILL is NEVER sent", async () => {
+      it("second call 'mismatch': the host already exited after SIGTERM - stopped, SIGKILL is NEVER sent, and the stale pid.json IS purged", async () => {
         vi.useFakeTimers();
         MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
         MOCKS.getPublishedProcessIdentityVerdict
@@ -473,10 +494,11 @@ describe("forceStopHostProcess", () => {
         );
         expect(killSpy).toHaveBeenCalledTimes(1);
         expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
-        // No SIGKILL was ever sent, so the "finish the writer contract"
-        // cleanup must not run either - that branch is gated on a CONFIRMED
-        // SIGKILL exit, not merely on the outcome being "stopped".
-        expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+        // The purge is keyed on the FINAL outcome, not on which signal (if
+        // any) actually landed: "stopped" here means the host exited on its
+        // own after SIGTERM, and the wrapper purges on every "stopped"/
+        // "no-host" outcome regardless of how it was reached.
+        expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
       });
 
       it("second call 'indeterminate': the escalation is refused too - identity-unverified, no SIGKILL sent", async () => {
@@ -499,6 +521,7 @@ describe("forceStopHostProcess", () => {
         });
         expect(killSpy).toHaveBeenCalledTimes(1);
         expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+        expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
       });
 
       it("second call 'current': the escalation proceeds and SIGKILL is sent", async () => {

@@ -799,6 +799,107 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     );
     expect(restartHost).toHaveBeenCalledTimes(1);
   });
+
+  it("Force restart armed on host A stays counted after a remount to host B, locking B's lifecycle writes until it settles", async () => {
+    // The regression Codex proved: `forceRestart.isPending` is the LOCAL
+    // `useMutation` observer's flag, and that observer dies with the
+    // scope-keyed remount (`HostSettingsPanel` keys `HostSettingsPanelInner`
+    // by `scopeId`). A swap away mid-flight used to mount a FRESH observer
+    // that starts idle, so the page-wide gate read `false` and reopened every
+    // lifecycle write it exists to hold shut — on host B's brand-new page,
+    // not even the host the bridge respawn is running against.
+    // `forceRestartInFlight` (`useIsMutating` against the shared
+    // `runnerMutationKeys.hostRestart()` key) is CACHE-derived, so it must
+    // stay `true` on host B's fresh mount for as long as the mutation the
+    // stale host-A instance armed is still settling, and drop back to
+    // `false` once it does.
+    let releaseForceRestart: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseForceRestart = resolve;
+    });
+    const restartHost = vi.fn(async () => {
+      await gate;
+      return { kind: "restarted" as const };
+    });
+    const management = buildOverviewManagement({ restartHost });
+    const runnerHost = makeRunnerHostWithManagement(management);
+
+    const fixtureA = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Host A Display",
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 1 },
+          }),
+      },
+    });
+    const fixtureB = buildOverviewHostFixture({
+      hostId: "host-b",
+      isLocalMachine: true,
+      effectiveName: "Host B Display",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixtureA.client };
+    scopeOverrides.current = scopeFromWithLocality("host-a", fixtureA, true);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    await screen.findByText("Host A Display");
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+
+    // Move the scope to host B WHILE the force restart is still killing and
+    // relaunching the local bridge process.
+    hostBindingMock.current = { hostClient: fixtureB.client };
+    scopeOverrides.current = scopeFromWithLocality("host-b", fixtureB, true);
+    view.rerender(makeUi());
+
+    // Wait for host B's identity to load so the lock asserted below is
+    // attributable to `locked` (the page-wide gate) rather than to
+    // `!loaded`, which disables the pencil regardless of the gate.
+    await screen.findByText("Host B Display");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      releaseForceRestart?.();
+      await gate;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+  });
 });
 
 describe("<HostSettingsPanel /> Overview update-install degrade", () => {

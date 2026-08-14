@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -256,6 +256,15 @@ export function HostOverviewPanel(props: {
   // lifecycle write should dispatch beside that regardless of scope.
   const forceRestartPendingHere =
     forceRestart.isPending && forceRestart.variables.hostId === scope.hostId;
+  // CACHE-derived, not observer-derived, for the page-wide gate. The panel's
+  // inner tree is keyed per scope, so switching hosts unmounts this
+  // component and a remounted `useMutation` observer starts idle even while
+  // the bridge respawn it armed is still in flight - `forceRestart.isPending`
+  // would read false and reopen every lifecycle write the gate exists to
+  // exclude. `useIsMutating` counts pending mutations in the shared cache
+  // under this key, which survives any number of remounts.
+  const forceRestartInFlight =
+    useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
   // The id the force offer would act on, or null when no offer can be made.
   // Carrying the id (not a boolean) is what lets the mutate call below pass
   // a `string` without re-narrowing `scope.hostId`'s `string | null`.
@@ -330,7 +339,7 @@ export function HostOverviewPanel(props: {
     // Unscoped on purpose: the forced bridge respawn replaces the LOCAL host
     // process, and no lifecycle write on this page should dispatch beside
     // that regardless of which host the page is currently scoped to.
-    forceRestart.isPending ||
+    forceRestartInFlight ||
     identitySet.isPending ||
     updateInFlight ||
     policyMutation.isPending;

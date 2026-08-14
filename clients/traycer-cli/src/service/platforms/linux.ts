@@ -7,7 +7,11 @@ import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
 import { serviceManifestPath, type ServiceLabel } from "../label";
-import { ProcessRunError, runCommand } from "../process-runner";
+import { ProcessRunError, runCommand, type RunResult } from "../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import type {
   InstallServiceOptions,
   ServiceController,
@@ -37,7 +41,7 @@ export function createLinuxController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
-    stop: (label) => stopService(label, run),
+    stop: (label, options) => stopService(label, run, options.force),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     // There is no Desktop/SMAppService split on Linux, so the restart halves
@@ -45,8 +49,8 @@ export function createLinuxController(
     // named seam only exists so `host restart` has one shape on every
     // platform. `forcedRecycle` is never set: `stopService` is a real
     // systemd stop, so the unit is genuinely down before the start.
-    stopForRestart: async (label) => {
-      await stopService(label, run);
+    stopForRestart: async (label, options) => {
+      await stopService(label, run, options.force);
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) => startService(label, run),
@@ -238,6 +242,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
+  force: boolean,
 ): Promise<void> {
   await run("systemctl", ["--user", "stop", unitName(label)], {
     env: undefined,
@@ -245,6 +250,97 @@ async function stopService(
     timeoutMs: 15_000,
     tolerateNonZeroExit: true,
   });
+  if (!force) return;
+  // `--force` promises the host is DOWN when this returns, and the plain
+  // stop above cannot promise that: the runner caps the subprocess at 15s
+  // while the unit (no TimeoutStopSec) inherits systemd's 90s default, so a
+  // host that survives SIGTERM outlives the subprocess and a bare return
+  // would report a stop that has not happened. Confirm through systemd's own
+  // unit state - never a pid, so a recycled pid.json entry cannot misdirect
+  // this - and escalate with `systemctl kill -s SIGKILL`, which signals the
+  // unit's OWN cgroup.
+  if (await waitForUnitInactive(label, run, FORCE_STOP_SIGTERM_GRACE_MS)) {
+    return;
+  }
+  await run(
+    "systemctl",
+    ["--user", "kill", "--signal=SIGKILL", unitName(label)],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    },
+  );
+  if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
+    return;
+  }
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message: `host stop --force: unit ${unitName(label)} is still active after SIGKILL; stop did not take effect.`,
+    details: { unit: unitName(label) },
+    exitCode: 1,
+  });
+}
+
+// Mirrors the macOS force-stop grace: the host's own force-exit watchdog
+// bounds a graceful SIGTERM shutdown, so waiting any less would escalate
+// over a host that is draining exactly as designed.
+const FORCE_STOP_SIGTERM_GRACE_MS =
+  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+const FORCE_STOP_SIGKILL_GRACE_MS = 10_000;
+const FORCE_STOP_POLL_MS = 500;
+
+/**
+ * Polls `systemctl is-active` until the unit settles out of `active`/
+ * `deactivating` or the deadline passes. `inactive`/`failed`/`unknown` (and
+ * any non-zero-exit answer, which is how is-active reports them) all mean
+ * the unit is no longer running the host. A probe that cannot run at all
+ * reads as NOT settled - the caller escalates or fails loudly rather than
+ * reporting a stop it could not confirm.
+ */
+async function waitForUnitInactive(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const settled = await probeUnitSettled(label, run);
+    if (settled) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, FORCE_STOP_POLL_MS);
+    });
+  }
+}
+
+async function probeUnitSettled(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<boolean> {
+  let result: RunResult;
+  try {
+    result = await run("systemctl", ["--user", "is-active", unitName(label)], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    });
+  } catch {
+    return false;
+  }
+  const state = result.stdout.trim();
+  // "activating" is NOT settled either: it means something (a concurrent
+  // start, a restart) is bringing the unit UP, and reporting the stop
+  // successful while a host is coming to life is the lie this whole wait
+  // exists to prevent. The caller keeps waiting and escalates.
+  return (
+    state !== "active" &&
+    state !== "activating" &&
+    state !== "deactivating" &&
+    state !== "reloading"
+  );
 }
 
 async function startService(
