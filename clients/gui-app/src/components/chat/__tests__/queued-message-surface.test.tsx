@@ -224,6 +224,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(header.className).toContain("items-stretch");
     expect(header.className).not.toContain("border-b");
     expect(toggle.className).toContain("hover:bg-muted/50");
+    expect(count.hasAttribute("aria-live")).toBe(false);
     expect(screen.queryByText("Queue running")).toBeNull();
     expect(
       runningDot.compareDocumentPosition(title) &
@@ -240,6 +241,51 @@ describe("<QueuedMessagePanel />", () => {
       statusIcon.compareDocumentPosition(count) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("lets the user keep a pending queue resume paused", () => {
+    const onPause = vi.fn(() => null);
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-1", "First queued prompt", "paused"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      resumeRequested: true,
+      onPause,
+      onReorder: null,
+    });
+
+    expect(screen.getByText("Will send when ready")).not.toBeNull();
+    expect(
+      screen
+        .getByText("Queued messages will send when ready.")
+        .getAttribute("aria-live"),
+    ).toBe("polite");
+    const keepPaused = screen.getByRole("button", { name: "Keep paused" });
+    expect(keepPaused.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("queue-keep-paused-spinner")).toBeNull();
+    fireEvent.click(keepPaused);
+    expect(onPause).toHaveBeenCalledOnce();
+  });
+
+  it("confirms that the pending resume is being kept paused", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-1", "First queued prompt", "paused"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      resumeRequested: true,
+      keepPausedRequested: true,
+      onReorder: null,
+    });
+
+    expect(screen.getByText("Staying paused")).not.toBeNull();
+    expect(screen.getByTestId("queue-keep-paused-spinner")).not.toBeNull();
+    expect(
+      screen.getByTestId("keep-paused-queue-button").hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("keeps row actions in a sticky glass corner", () => {
@@ -816,6 +862,9 @@ function renderPanel(input: {
   readonly queue: ChatSessionState["queue"];
   readonly readOnly: boolean;
   readonly canAct: boolean;
+  readonly resumeRequested?: boolean;
+  readonly keepPausedRequested?: boolean;
+  readonly onPause?: () => string | null;
   readonly onReorder:
     ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void) | null;
 }) {
@@ -825,10 +874,12 @@ function renderPanel(input: {
         queue={input.queue}
         activeTurnStatus="running"
         canAct={input.canAct}
+        resumeRequested={input.resumeRequested ?? false}
+        keepPausedRequested={input.keepPausedRequested ?? false}
         readOnly={input.readOnly}
         editingQueueItemId={null}
         scrollRegionMaxHeightClass="max-h-96"
-        onPause={() => null}
+        onPause={input.onPause ?? (() => null)}
         onResume={() => null}
         onEdit={vi.fn()}
         onCancel={onCancelSpy}

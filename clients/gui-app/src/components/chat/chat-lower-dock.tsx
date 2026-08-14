@@ -39,6 +39,8 @@ export interface ChatLowerDockProps {
   readonly backgroundStopAllPending: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canAct: boolean;
+  readonly queueResumeRequested: boolean;
+  readonly queueKeepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
   readonly topSpacing: ChatPinnedStackTopSpacing;
@@ -120,6 +122,8 @@ function QueueSection(props: {
       queue={dock.queue}
       activeTurnStatus={dock.activeTurnStatus}
       canAct={dock.canAct}
+      resumeRequested={dock.queueResumeRequested}
+      keepPausedRequested={dock.queueKeepPausedRequested}
       readOnly={dock.readOnly}
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
