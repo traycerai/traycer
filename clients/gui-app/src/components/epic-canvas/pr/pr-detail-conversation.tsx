@@ -1,4 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Check,
   ChevronDown,
@@ -280,46 +286,68 @@ function PrResolvedThreadRow(props: {
   readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
 }): ReactNode {
   const [isOpen, setIsOpen] = useState(false);
+  const swapRef = useRef<HTMLDivElement | null>(null);
+  const movesFocus = useRef(false);
+  // Toggling unmounts the control the keyboard was on - row and chevron are
+  // different elements - so focus would fall back to <body> and the next Tab
+  // would restart at the top of the page instead of entering the thread. Hand
+  // focus to whichever control replaced it, found by the `aria-expanded` that
+  // defines a disclosure and reached through the DOM rather than a ref crossing
+  // into the card, which would read to the React Compiler as this card
+  // touching a ref mid-render. Only on a toggle: the same effect runs on mount,
+  // where stealing focus for every resolved row would be its own bug.
+  useLayoutEffect(() => {
+    if (!movesFocus.current) {
+      return;
+    }
+    movesFocus.current = false;
+    swapRef.current
+      ?.querySelector<HTMLButtonElement>("button[aria-expanded]")
+      ?.focus();
+  }, [isOpen]);
   const anchor = prReviewThreadAnchor(props.thread);
-  if (isOpen) {
-    return (
-      <PrReviewThreadCard
-        thread={props.thread}
-        onQuoteThread={props.onQuoteThread}
-        onCollapse={() => {
-          setIsOpen(false);
-        }}
-      />
-    );
-  }
   return (
-    <button
-      type="button"
-      onClick={() => {
-        setIsOpen(true);
-      }}
-      aria-expanded={false}
-      data-testid="pr-detail-resolved-thread"
-      className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-    >
-      <ChevronRight
-        className="size-3.5 shrink-0 text-muted-foreground"
-        aria-hidden
-      />
-      <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
-        {anchor.label}
-      </StartTruncatedText>
-      <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
-        Resolved
-      </span>
-    </button>
+    <div className="min-w-0" ref={swapRef}>
+      {isOpen ? (
+        <PrReviewThreadCard
+          thread={props.thread}
+          onQuoteThread={props.onQuoteThread}
+          onCollapse={() => {
+            movesFocus.current = true;
+            setIsOpen(false);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            movesFocus.current = true;
+            setIsOpen(true);
+          }}
+          aria-expanded={false}
+          data-testid="pr-detail-resolved-thread"
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <ChevronRight
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+          <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
+            {anchor.label}
+          </StartTruncatedText>
+          <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+            Resolved
+          </span>
+        </button>
+      )}
+    </div>
   );
 }
 
 /**
  * One finding: where it points, the hunk it points at, and the discussion.
- * `onCollapse` is non-null when the card was expanded from a resolved row -
- * it renders the chevron that folds the card back into that row.
+ * `onCollapse` is non-null when the card was expanded from a resolved row - it
+ * renders the chevron that folds the card back into that row.
  */
 function PrReviewThreadCard(props: {
   readonly thread: PrReviewThread;
@@ -345,12 +373,14 @@ function PrReviewThreadCard(props: {
             aria-hidden
           />
         ) : (
+          // The only way to fold the card back, so the hit target has to clear
+          // a fingertip - negative margin buys it without moving the chevron.
           <button
             type="button"
             onClick={props.onCollapse}
             aria-expanded
             aria-label={`Collapse the resolved thread on ${anchor.label}`}
-            className="shrink-0 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            className="-m-1.5 shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             <ChevronDown className="size-3.5" aria-hidden />
           </button>

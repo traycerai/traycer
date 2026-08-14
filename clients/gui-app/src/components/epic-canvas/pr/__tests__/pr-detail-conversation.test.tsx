@@ -455,6 +455,66 @@ describe("PrDetailConversation review threads", () => {
     expect(screen.getAllByTestId("pr-detail-resolved-thread")).toHaveLength(2);
   });
 
+  it("hands keyboard focus to the control that replaces the one it unmounts", () => {
+    // Expanding swaps the row out for the card, so the focused control stops
+    // existing. Without a handover focus falls back to <body> and the next Tab
+    // restarts at the top of the page instead of entering the thread.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 10,
+          body: "Already handled.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    fireEvent.click(screen.getByText("src/domain/git/git-service.ts:10"));
+    const collapse = screen.getByRole("button", {
+      name: /Collapse the resolved thread/u,
+    });
+    expect(document.activeElement).toBe(collapse);
+    fireEvent.click(collapse);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("pr-detail-resolved-thread"),
+    );
+  });
+
+  it("does not steal focus while resolved rows sit collapsed", () => {
+    // The handover effect also runs on mount; firing it there would drag focus
+    // onto the last resolved row of every review the tab renders.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 2")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 10,
+          body: "Already handled.",
+          totalCommentCount: 1,
+        }),
+        thread({
+          id: "t2",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 20,
+          body: "Also handled.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    expect(screen.getAllByTestId("pr-detail-resolved-thread")).toHaveLength(2);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("sizes every date in a card the same, however deep it sits", () => {
     // A comment's timestamp used to inherit from its container, so the same
     // "9 Jul" appeared twice in one card at two different sizes.
