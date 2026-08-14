@@ -335,11 +335,21 @@ function queueHeaderSummary(input: {
   return `${input.count} messages`;
 }
 
-function QueueHeaderActionIcon(props: {
-  readonly showKeepPausedButton: boolean;
-  readonly keepPausedRequested: boolean;
-}) {
-  if (props.keepPausedRequested) {
+function QueueResumeIcon(props: { readonly pending: boolean }) {
+  if (props.pending) {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="queue-resume-spinner"
+        variant={undefined}
+      />
+    );
+  }
+  return <Play className="size-3.5" />;
+}
+
+function KeepPausedIcon(props: { readonly pending: boolean }) {
+  if (props.pending) {
     return (
       <AgentSpinningDots
         className={undefined}
@@ -348,10 +358,7 @@ function QueueHeaderActionIcon(props: {
       />
     );
   }
-  if (props.showKeepPausedButton) {
-    return <Pause className="size-3.5" />;
-  }
-  return <Play className="size-3.5" />;
+  return <Pause className="size-3.5" />;
 }
 
 function QueuedMessageHeader(props: {
@@ -390,6 +397,7 @@ function QueuedMessageHeader(props: {
   const showPauseQueueButton =
     !showResumeQueueButton && canPauseQueue && !readOnly;
   const showKeepPausedButton = resumeRequested || keepPausedRequested;
+  const resumePending = resumeRequested && !keepPausedRequested;
   const announcement = queueHeaderAnnouncement({
     resumeRequested,
     keepPausedRequested,
@@ -466,26 +474,33 @@ function QueuedMessageHeader(props: {
         </span>
       ) : null}
       {showResumeQueueButton ? (
-        <div className="flex shrink-0 items-center pr-1.5">
+        <div className="flex shrink-0 items-center gap-1 pr-1.5">
           <Button
             type="button"
             size="sm"
             variant="outline"
             className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
-            disabled={!canAct || keepPausedRequested}
-            onClick={showKeepPausedButton ? handlePause : handleResume}
-            data-testid={
-              showKeepPausedButton
-                ? "keep-paused-queue-button"
-                : "resume-queue-button"
-            }
+            disabled={!canAct || showKeepPausedButton}
+            onClick={handleResume}
+            data-testid="resume-queue-button"
           >
-            <QueueHeaderActionIcon
-              showKeepPausedButton={showKeepPausedButton}
-              keepPausedRequested={keepPausedRequested}
-            />
-            {showKeepPausedButton ? "Keep paused" : "Resume"}
+            <QueueResumeIcon pending={resumePending} />
+            Resume
           </Button>
+          {showKeepPausedButton ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+              disabled={!canAct || keepPausedRequested}
+              onClick={handlePause}
+              data-testid="keep-paused-queue-button"
+            >
+              <KeepPausedIcon pending={keepPausedRequested} />
+              Keep paused
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {showPauseQueueButton ? (

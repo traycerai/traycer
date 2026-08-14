@@ -245,6 +245,7 @@ describe("<QueuedMessagePanel />", () => {
 
   it("lets the user keep a pending queue resume paused", () => {
     const onPause = vi.fn(() => null);
+    const onResume = vi.fn(() => null);
     renderPanel({
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "paused"),
@@ -253,6 +254,7 @@ describe("<QueuedMessagePanel />", () => {
       canAct: true,
       resumeRequested: true,
       onPause,
+      onResume,
       onReorder: null,
     });
 
@@ -262,10 +264,15 @@ describe("<QueuedMessagePanel />", () => {
         .getByText("Queued messages will send when ready.")
         .getAttribute("aria-live"),
     ).toBe("polite");
+    const resume = screen.getByRole("button", { name: "Resume" });
     const keepPaused = screen.getByRole("button", { name: "Keep paused" });
+    expect(resume.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("queue-resume-spinner")).not.toBeNull();
     expect(keepPaused.hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("queue-keep-paused-spinner")).toBeNull();
+    fireEvent.click(resume);
     fireEvent.click(keepPaused);
+    expect(onResume).not.toHaveBeenCalled();
     expect(onPause).toHaveBeenCalledOnce();
   });
 
@@ -283,6 +290,9 @@ describe("<QueuedMessagePanel />", () => {
 
     expect(screen.getByText("Staying paused")).not.toBeNull();
     expect(screen.getByTestId("queue-keep-paused-spinner")).not.toBeNull();
+    expect(
+      screen.getByTestId("resume-queue-button").hasAttribute("disabled"),
+    ).toBe(true);
     expect(
       screen.getByTestId("keep-paused-queue-button").hasAttribute("disabled"),
     ).toBe(true);
@@ -865,6 +875,7 @@ function renderPanel(input: {
   readonly resumeRequested?: boolean;
   readonly keepPausedRequested?: boolean;
   readonly onPause?: () => string | null;
+  readonly onResume?: () => string | null;
   readonly onReorder:
     ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void) | null;
 }) {
@@ -880,7 +891,7 @@ function renderPanel(input: {
         editingQueueItemId={null}
         scrollRegionMaxHeightClass="max-h-96"
         onPause={input.onPause ?? (() => null)}
-        onResume={() => null}
+        onResume={input.onResume ?? (() => null)}
         onEdit={vi.fn()}
         onCancel={onCancelSpy}
         onAbortSteer={onAbortSteerSpy}
