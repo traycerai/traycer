@@ -122,11 +122,14 @@ function isSkillsListInvalidatePredicate(
 
 function invalidatePredicate(spy: {
   readonly mock: {
-    readonly calls: ReadonlyArray<readonly [{ readonly predicate?: unknown }?]>;
+    readonly calls: ReadonlyArray<readonly unknown[]>;
   };
 }): SkillsListInvalidatePredicate | null {
   for (const [filters] of spy.mock.calls) {
-    const predicate = filters?.predicate;
+    const predicate =
+      typeof filters === "object" && filters !== null && "predicate" in filters
+        ? filters.predicate
+        : undefined;
     if (isSkillsListInvalidatePredicate(predicate)) {
       return predicate;
     }
@@ -169,7 +172,7 @@ const WRITE_FAILURES: readonly ProvidersSkillsMutateAction[] = [
 
 describe("useProvidersSkillsMutate cache", () => {
   it("does not write the list cache on inspect, then writes it on a skills mutation", async () => {
-    let listedSkills: readonly ProviderSkill[] = [EXISTING];
+    let listedSkills: ProviderSkill[] = [EXISTING];
     const fixture = createFixture({
       list: () => ({
         providers: [],
@@ -422,7 +425,7 @@ describe("useProvidersSkillsMutate cache", () => {
   });
 
   it("invalidates every same-host skills list after a shared-scope write", async () => {
-    let listedSkills: readonly ProviderSkill[] = [EXISTING];
+    let listedSkills: ProviderSkill[] = [EXISTING];
     const fixture = createFixture({
       list: () => ({
         providers: [],
