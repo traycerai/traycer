@@ -181,7 +181,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     expect(editor.textContent).toContain("## When to use this");
 
     await user.click(screen.getByRole("tab", { name: "Preview" }));
-    expect(screen.queryByTestId("skill-composer-instructions")).toBeNull();
+    expect(screen.getByTestId("skill-composer-instructions")).toBe(editor);
     expect(
       screen.getByTestId("skill-composer-instructions-preview").textContent,
     ).toContain("When to use this");
