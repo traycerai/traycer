@@ -109,6 +109,7 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { cn } from "@/lib/utils";
 
@@ -861,6 +862,13 @@ function RateLimitHostPickerRow({
   readonly onClose: () => void;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
+  // The registry list this picker renders is served by a NON-polling observer;
+  // the Settings sidebar is normally the surface that opts the window into the
+  // liveness poll. When this popover is the only host-list surface mounted, a
+  // row would otherwise keep an Online dot from the last registry DTO until
+  // something else happened to refetch - so this picker carries the same
+  // opt-in for exactly as long as it is on screen.
+  useRegisteredHostsPollLiveness();
   return (
     // Full-bleed on purpose: the strip's own edges ARE the card's, so the
     // picker's list can drop from it at exactly the card's width. Padding here

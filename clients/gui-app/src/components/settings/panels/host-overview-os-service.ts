@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -37,6 +38,14 @@ export function useOverviewOsService(input: {
   const { hostName } = input;
   const register = useHostServiceRegister(input.client);
   const deregister = useHostServiceDeregister(input.client);
+  // `accepted` is a beginning, not an end: the detached CLI is still stopping
+  // and unregistering the host after the mutation settles, so the moment
+  // `isPending` drops is exactly when a restart or update could race the
+  // shutdown. The latch keeps this section - and through `deregisterPending`
+  // the page-wide busy gate - locked past acceptance. It never clears within
+  // this page instance on purpose: what comes next is the scope going
+  // unreachable, which remounts the page (scope-keyed) without the latch.
+  const [deregisterAccepted, setDeregisterAccepted] = useState(false);
   const ok = input.status?.outcome === "ok" ? input.status : null;
   // A registration someone ELSE owns — Desktop's SMAppService, or the external
   // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
@@ -67,7 +76,7 @@ export function useOverviewOsService(input: {
       input.deregisterDegrade === null && !externallyManaged && !cliUnavailable,
     nothingToDeregister: ok?.state === "not-installed",
     registerPending: register.isPending,
-    deregisterPending: deregister.isPending,
+    deregisterPending: deregister.isPending || deregisterAccepted,
     busy: input.busy,
     onRegister: () => {
       register.mutate(undefined, {
@@ -105,6 +114,7 @@ export function useOverviewOsService(input: {
       deregister.mutate(undefined, {
         onSuccess: (response) => {
           if (response.outcome === "accepted") {
+            setDeregisterAccepted(true);
             // Deliberately not "Deregistered". The CLI was dispatched detached
             // because it kills this host mid-command; nobody here ever learns
             // whether it finished, and claiming otherwise is the one thing that
