@@ -26,4 +26,10 @@ describe("UsageWindowPicker", () => {
       screen.getByRole("tab", { name: "7 days" }).getAttribute("data-state"),
     ).toBe("inactive");
   });
+
+  it("lets the window tabs wrap within a narrow container", () => {
+    render(<UsageWindowPicker windowDays={7} onChange={() => undefined} />);
+    expect(screen.getByRole("tablist").className).toContain("max-w-full");
+    expect(screen.getByRole("tablist").className).toContain("flex-wrap");
+  });
 });
