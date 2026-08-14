@@ -410,7 +410,7 @@ describe("the version gate", () => {
     // Forged at the document level: the major is pinned in both the writer AND
     // the reader schema, so no schema in this build will produce one.
     const foreign = published.headDocument.replace(
-      '"schemaVersion":{"major":1,"minor":0}',
+      '"schemaVersion":{"major":1,"minor":1}',
       '"schemaVersion":{"major":9,"minor":0}',
     );
     const foreignSha = await webCryptoSha256Hex(utf8Bytes(foreign));
