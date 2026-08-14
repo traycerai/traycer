@@ -607,7 +607,10 @@ function SkillSourceFilterMenu({
           </Button>
         </DropdownMenuTrigger>
       </TooltipWrapper>
-      <DropdownMenuContent align="end" className="min-w-40">
+      <DropdownMenuContent
+        align="end"
+        className="w-[min(10rem,calc(100vw-2rem))]"
+      >
         <DropdownMenuLabel className="text-overline uppercase tracking-wide">
           Show
         </DropdownMenuLabel>
