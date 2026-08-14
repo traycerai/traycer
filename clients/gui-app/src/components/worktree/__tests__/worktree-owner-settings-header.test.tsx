@@ -20,6 +20,27 @@ const tuiAgent = vi.hoisted(() => ({
 const wireProfiles = vi.hoisted(() => ({
   current: [] as ReadonlyArray<ProviderProfile>,
 }));
+/** What the host answers `epic.getChatRunSettings` with, and whether it was
+ *  asked at all - the second half matters as much as the first, because the
+ *  read must stay OFF for the owners that still have local settings. */
+const fetchedSettings = vi.hoisted(() => ({
+  current: null as ChatRunSettings | null,
+  /**
+   * Whether the host read has SETTLED successfully, kept separate from
+   * `current` because the header has to tell an answer of `null` apart from no
+   * answer at all. A settled `{ settings: null }` is the host stating the chat
+   * has no persisted tuple, which OUTRANKS a stale local one; an unsettled read
+   * (in flight, errored, unsupported, or no reachable host) must fall back to
+   * local instead. Collapsing the two into "data is null" is exactly the bug
+   * these tests exist to catch.
+   *
+   * Defaults to NOT answered, so the suites below that are about rendering a
+   * LOCAL tuple keep exercising that path; a settled host answer is opted into
+   * per test.
+   */
+  answered: false,
+  lastEnabled: null as boolean | null,
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () =>
@@ -54,6 +75,17 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
             ],
             metadata: {},
           },
+          // A SECOND model, so a host tuple and a local tuple can disagree
+          // visibly - which is the only way to test which one the header trusts.
+          {
+            harnessId: "claude",
+            slug: "opus-4.1",
+            label: "Claude Opus 4.1",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            metadata: {},
+          },
         ],
       },
     ],
@@ -69,6 +101,20 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       ],
     },
   }),
+}));
+// Records `enabled` rather than ignoring it: a mock that always answers would
+// let the header read a fetched tuple it never actually requested, and the
+// "store settings win, no round trip" half of the contract would pass
+// vacuously.
+vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
+  useChatRunSettings: (args: { readonly enabled: boolean }) => {
+    fetchedSettings.lastEnabled = args.enabled;
+    const settled = args.enabled && fetchedSettings.answered;
+    return {
+      data: settled ? { settings: fetchedSettings.current } : undefined,
+      isSuccess: settled,
+    };
+  },
 }));
 
 function profile(
@@ -118,6 +164,7 @@ function renderChatHeader(args: {
     <WorktreeOwnerSettingsHeader
       ownerId="owner-1"
       hostId="host-1"
+      epicId="epic-1"
       ownerKind="chat"
     />,
   );
@@ -140,6 +187,7 @@ function renderTuiHeader(args: {
     <WorktreeOwnerSettingsHeader
       ownerId="owner-1"
       hostId="host-1"
+      epicId="epic-1"
       ownerKind="terminal-agent"
     />,
   );
@@ -175,6 +223,9 @@ describe("WorktreeOwnerSettingsHeader", () => {
     chatSettings.current = null;
     tuiAgent.current = null;
     wireProfiles.current = [];
+    fetchedSettings.current = null;
+    fetchedSettings.answered = false;
+    fetchedSettings.lastEnabled = null;
   });
 
   it("renders a distinct icon for each permission mode", () => {
@@ -351,5 +402,157 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.getByTestId("owner-settings-model").textContent).toContain(
       "Claude Sonnet 4.5",
     );
+  });
+});
+
+/**
+ * The single-write regression: a chat that exists only as a host registry row
+ * has `settings: null` on its projection (`chatProjectionFromRecord`), because
+ * the row carries a harness-id summary and not the tuple. Before the per-chat
+ * read this header returned `null` for such a chat and the whole line - model,
+ * reasoning, permission mode, profile dot and the relative timestamp - simply
+ * vanished from the hover card.
+ */
+describe("chat settings sourced from the host", () => {
+  afterEach(() => {
+    cleanup();
+    chatSettings.current = null;
+    tuiAgent.current = null;
+    wireProfiles.current = [];
+    fetchedSettings.current = null;
+    fetchedSettings.answered = false;
+    fetchedSettings.lastEnabled = null;
+  });
+
+  function renderRegistryOnlyChat(): void {
+    // A registry-only chat: the projection exists (so the row renders and has
+    // an `updatedAt`) but carries no settings tuple.
+    chatSettings.current = null;
+    tuiAgent.current = null;
+    wireProfiles.current = [];
+    render(
+      <WorktreeOwnerSettingsHeader
+        ownerId="owner-1"
+        hostId="host-1"
+        epicId="epic-1"
+        ownerKind="chat"
+      />,
+    );
+  }
+
+  it("renders the full settings line from the fetched tuple", () => {
+    fetchedSettings.answered = true;
+    fetchedSettings.current = {
+      harnessId: "claude",
+      model: "sonnet-4.5",
+      permissionMode: "full_access",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    renderRegistryOnlyChat();
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
+    expect(screen.getByTestId("owner-settings-reasoning").textContent).toBe(
+      "High",
+    );
+    expect(
+      screen.getByTestId("owner-settings-permissions").textContent,
+    ).toContain("Full access");
+  });
+
+  it("renders nothing when the host answers no tuple", () => {
+    // `settings: null` from the host is the honest "no tuple here" - a legacy
+    // record with nothing persisted. With no local tuple either, that must read
+    // as an absent header, never as a half-populated line.
+    fetchedSettings.answered = true;
+    fetchedSettings.current = null;
+
+    renderRegistryOnlyChat();
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.queryByTestId("owner-settings-header")).toBeNull();
+  });
+
+  it("prefers the host tuple over a local one that disagrees", () => {
+    // A pre-pivot chat still has a doc entry, and `unionChatsSlice` deliberately
+    // prefers its `settings` over the record's. But since the single-write pivot
+    // NOTHING rewrites that entry - `epic.updateChatRunSettings` and
+    // `epic.updateChatProfile` reach only the host's own store - so it is frozen
+    // at whatever it held when the doc was last written. Gating the read on its
+    // absence, or letting it win the coalesce, would pin the card to values that
+    // stopped being true at the user's first model change.
+    fetchedSettings.answered = true;
+    fetchedSettings.current = {
+      harnessId: "claude",
+      model: "opus-4.1",
+      permissionMode: "full_access",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Opus 4.1",
+    );
+  });
+
+  it("falls back to the local tuple while the host read has not answered", () => {
+    // In flight, errored, unsupported, or an unreachable owner host whose query
+    // never runs - none of them should blank a row that already had something
+    // true enough to show.
+    fetchedSettings.answered = false;
+    fetchedSettings.current = null;
+
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
+  });
+
+  it("honors a settled null over a frozen local tuple", () => {
+    // The other side of the fallback, and the one that is easy to get wrong: a
+    // SUCCESSFUL `{ settings: null }` is the host saying this chat has no
+    // persisted tuple, not the absence of an answer. Coalescing the two with
+    // `??` would fall through to the frozen doc tuple the host just
+    // contradicted, which is the very staleness this read exists to end.
+    fetchedSettings.answered = true;
+    fetchedSettings.current = null;
+
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.queryByTestId("owner-settings-header")).toBeNull();
+  });
+
+  it("does not ask the host for a terminal agent", () => {
+    renderTuiHeader({ profileId: null, profiles: [] });
+
+    expect(fetchedSettings.lastEnabled).toBe(false);
   });
 });

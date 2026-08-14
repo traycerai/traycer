@@ -3,27 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createImageBlobCache,
   type ImageBlobOps,
+  type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
 
 function makeOps(): {
   ops: ImageBlobOps;
   created: string[];
+  createdTypes: string[];
   revoked: string[];
 } {
   let n = 0;
   const created: string[] = [];
+  const createdTypes: string[] = [];
   const revoked: string[] = [];
   const ops: ImageBlobOps = {
-    create: () => {
+    create: (_bytes, mediaType) => {
       const url = `blob:fake/${n++}`;
       created.push(url);
+      createdTypes.push(mediaType);
       return url;
     },
     revoke: (url) => {
       revoked.push(url);
     },
   };
-  return { ops, created, revoked };
+  return { ops, created, createdTypes, revoked };
 }
 
 describe("image-blob-cache", () => {
@@ -35,7 +39,9 @@ describe("image-blob-cache", () => {
   });
 
   it("fetches bytes once per hash and shares one URL across acquirers", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1, 2, 3])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
+    );
     const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
@@ -43,18 +49,75 @@ describe("image-blob-cache", () => {
     const leaseB = cache.acquire("h1", "image/png", fetcher, "grace");
     const [a, b] = await Promise.all([leaseA.promise, leaseB.promise]);
 
-    expect(a).toBe(b);
+    expect(a.url).toBe(b.url);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(created).toHaveLength(1);
   });
 
+  it("types the blob from the fetcher's verdict, not the caller's claim", async () => {
+    // The caller's `mediaType` is a claim about bytes it has not seen - for a
+    // chat image it is whatever the composer stored on the message. A byte
+    // source that sniffed the delivered bytes (the host, per
+    // `epic.readChatAttachment`) outranks it, or SVG bytes filed as
+    // `image/png` would be handed to the renderer as a PNG and skip the SVG
+    // sanitizer entirely.
+    const fetcher = vi.fn(() =>
+      Promise.resolve({
+        bytes: new Uint8Array([1]),
+        mediaType: "image/svg+xml",
+      }),
+    );
+    const { ops, createdTypes } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const resolution = await cache.acquire("h1", "image/png", fetcher, "grace")
+      .promise;
+
+    expect(createdTypes).toEqual(["image/svg+xml"]);
+    expect(resolution.mediaType).toBe("image/svg+xml");
+  });
+
+  it("keeps the caller's claim when the fetcher has no verdict", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
+    const { ops, createdTypes } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const resolution = await cache.acquire("h1", "image/png", fetcher, "grace")
+      .promise;
+
+    expect(createdTypes).toEqual(["image/png"]);
+    expect(resolution.mediaType).toBe("image/png");
+  });
+
+  it("reports the resolved type to a later acquirer that hits the cache", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve({
+        bytes: new Uint8Array([1]),
+        mediaType: "image/svg+xml",
+      }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    await cache.acquire("h1", "image/png", fetcher, "grace").promise;
+    const onHit = await cache.acquire("h1", "image/png", fetcher, "grace")
+      .promise;
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(onHit.mediaType).toBe("image/svg+xml");
+  });
+
   it("revokes the URL after the grace window once references hit zero", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
     const lease = cache.acquire("h1", "image/png", fetcher, "grace");
-    const url = await lease.promise;
+    const url = (await lease.promise).url;
     lease.release();
     expect(revoked).toHaveLength(0);
 
@@ -64,16 +127,18 @@ describe("image-blob-cache", () => {
   });
 
   it("reuses the live blob when re-acquired within the grace window", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
     const firstLease = cache.acquire("h1", "image/png", fetcher, "grace");
-    const first = await firstLease.promise;
+    const first = (await firstLease.promise).url;
     firstLease.release();
     await vi.advanceTimersByTimeAsync(500);
     const secondLease = cache.acquire("h1", "image/png", fetcher, "grace");
-    const second = await secondLease.promise;
+    const second = (await secondLease.promise).url;
 
     expect(second).toBe(first);
     await vi.advanceTimersByTimeAsync(2000);
@@ -86,7 +151,7 @@ describe("image-blob-cache", () => {
     let aborted = false;
     const fetcher = vi.fn(
       (_hash: string, signal: AbortSignal) =>
-        new Promise<Uint8Array<ArrayBuffer>>((_resolve, reject) => {
+        new Promise<ImageBytesResult>((_resolve, reject) => {
           signal.addEventListener("abort", () => {
             aborted = true;
             reject(new Error("aborted"));
@@ -107,12 +172,16 @@ describe("image-blob-cache", () => {
   });
 
   it("keeps distinct URLs for distinct hashes", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const a = await cache.acquire("h1", "image/png", fetcher, "grace").promise;
-    const b = await cache.acquire("h2", "image/png", fetcher, "grace").promise;
+    const a = (await cache.acquire("h1", "image/png", fetcher, "grace").promise)
+      .url;
+    const b = (await cache.acquire("h2", "image/png", fetcher, "grace").promise)
+      .url;
 
     expect(a).not.toBe(b);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -120,7 +189,9 @@ describe("image-blob-cache", () => {
   });
 
   it("retains session URLs at zero references past the grace window", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
@@ -130,7 +201,7 @@ describe("image-blob-cache", () => {
       fetcher,
       "session",
     );
-    const url = await lease.promise;
+    const url = (await lease.promise).url;
     lease.release();
     await vi.advanceTimersByTimeAsync(2000);
 
@@ -142,12 +213,14 @@ describe("image-blob-cache", () => {
   });
 
   it("clear revokes and removes zero-reference session entries", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
     const lease = cache.acquire("clear-hash", "image/png", fetcher, "session");
-    const url = await lease.promise;
+    const url = (await lease.promise).url;
     lease.release();
     cache.clear();
 
@@ -156,7 +229,9 @@ describe("image-blob-cache", () => {
   });
 
   it("discards a referenced entry immediately, ignoring its ref count", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
@@ -166,7 +241,7 @@ describe("image-blob-cache", () => {
       fetcher,
       "grace",
     );
-    const url = await lease.promise;
+    const url = (await lease.promise).url;
     cache.discard("referenced-hash");
 
     expect(revoked).toEqual([url]);
@@ -182,7 +257,9 @@ describe("image-blob-cache", () => {
   });
 
   it("discards session-retained entries and bypasses retention", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
@@ -192,7 +269,7 @@ describe("image-blob-cache", () => {
       fetcher,
       "session",
     );
-    const url = await lease.promise;
+    const url = (await lease.promise).url;
     lease.release();
     await vi.advanceTimersByTimeAsync(2000);
     expect(revoked).toHaveLength(0);
@@ -203,7 +280,9 @@ describe("image-blob-cache", () => {
   });
 
   it("starts a fresh fetch after discarding an entry", async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
@@ -213,7 +292,7 @@ describe("image-blob-cache", () => {
       fetcher,
       "grace",
     );
-    const first = await firstLease.promise;
+    const first = (await firstLease.promise).url;
     cache.discard("refetch-hash");
     const secondLease = cache.acquire(
       "refetch-hash",
@@ -221,7 +300,7 @@ describe("image-blob-cache", () => {
       fetcher,
       "grace",
     );
-    const second = await secondLease.promise;
+    const second = (await secondLease.promise).url;
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(second).not.toBe(first);
@@ -229,9 +308,11 @@ describe("image-blob-cache", () => {
   });
 
   it("keeps a replacement live when stale leases release after discard", async () => {
-    const oldFetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const oldFetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const replacementFetcher = vi.fn(() =>
-      Promise.resolve(new Uint8Array([2])),
+      Promise.resolve({ bytes: new Uint8Array([2]), mediaType: null }),
     );
     const { ops, created, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
@@ -248,8 +329,8 @@ describe("image-blob-cache", () => {
       oldFetcher,
       "grace",
     );
-    const oldUrl = await oldLeaseA.promise;
-    expect(await oldLeaseB.promise).toBe(oldUrl);
+    const oldUrl = (await oldLeaseA.promise).url;
+    expect((await oldLeaseB.promise).url).toBe(oldUrl);
 
     cache.discard("aba-hash");
     expect(revoked).toEqual([oldUrl]);
@@ -260,7 +341,7 @@ describe("image-blob-cache", () => {
       replacementFetcher,
       "grace",
     );
-    const replacementUrl = await replacementLease.promise;
+    const replacementUrl = (await replacementLease.promise).url;
     expect(replacementUrl).not.toBe(oldUrl);
     expect(created).toHaveLength(2);
 
@@ -276,14 +357,16 @@ describe("image-blob-cache", () => {
   });
 
   it("does not let stale releases abort an in-flight replacement", async () => {
-    const oldFetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const oldFetcher = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
     const resolveReplacementHolder: {
-      current: ((bytes: Uint8Array<ArrayBuffer>) => void) | null;
+      current: ((result: ImageBytesResult) => void) | null;
     } = { current: null };
     let replacementAborted = false;
     const replacementFetcher = vi.fn(
       (_hash: string, signal: AbortSignal) =>
-        new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
+        new Promise<ImageBytesResult>((resolve, reject) => {
           resolveReplacementHolder.current = resolve;
           signal.addEventListener("abort", () => {
             replacementAborted = true;
@@ -320,8 +403,11 @@ describe("image-blob-cache", () => {
     oldLeaseB.release();
 
     expect(replacementAborted).toBe(false);
-    resolveReplacementHolder.current?.(new Uint8Array([2]));
-    const replacementUrl = await replacementLease.promise;
+    resolveReplacementHolder.current?.({
+      bytes: new Uint8Array([2]),
+      mediaType: null,
+    });
+    const replacementUrl = (await replacementLease.promise).url;
     expect(replacementAborted).toBe(false);
     expect(revoked).toHaveLength(1);
 

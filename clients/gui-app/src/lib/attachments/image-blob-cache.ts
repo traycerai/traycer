@@ -35,9 +35,27 @@
 
 export type ImageBlobRetention = "grace" | "session";
 
+/**
+ * The blob URL, plus the media type it was ACTUALLY created with.
+ *
+ * The second field exists because the type a caller declared at `acquire()`
+ * time is a claim about bytes it has not seen: for a chat attachment it comes
+ * off the stored message model, written by whichever composer produced the
+ * message. The byte source can know better - `epic.readChatAttachment` sniffs
+ * the delivered bytes' magic bytes and is documented as host-authoritative -
+ * and when it does, that verdict is what typed the Blob. Consumers that branch
+ * on format (the SVG sanitization gate) must branch on THIS, not on the claim
+ * they passed in, or they decide about one file while the browser renders
+ * another.
+ */
+export interface ImageBlobResolution {
+  readonly url: string;
+  readonly mediaType: string;
+}
+
 export interface ImageBlobLease {
   /** Resolves to the shared blob URL once the fetch (or cache hit) settles. */
-  readonly promise: Promise<string>;
+  readonly promise: Promise<ImageBlobResolution>;
   /**
    * Releases exactly the reference this lease represents. Idempotent, and a
    * no-op once the entry it was issued against is no longer the hash's live
@@ -46,10 +64,26 @@ export interface ImageBlobLease {
   readonly release: () => void;
 }
 
+/**
+ * What a byte source hands back: the bytes, and its own verdict on what they
+ * are when it has one.
+ *
+ * `mediaType: null` means "this source cannot vouch for a type" - the epic
+ * doc replica stores raw bytes with no sniffed header, and the asset stream
+ * already delivered its authoritative type in the stream header (which the
+ * caller passes to `acquire` directly). `null` therefore defers to the
+ * caller's declared type rather than overriding it; a non-null value REPLACES
+ * it, because a source that sniffed the actual bytes outranks a stored claim.
+ */
+export interface ImageBytesResult {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly mediaType: string | null;
+}
+
 export type ImageBytesFetcher = (
   hash: string,
   signal: AbortSignal,
-) => Promise<Uint8Array<ArrayBuffer>>;
+) => Promise<ImageBytesResult>;
 
 /** Object-URL seam. Real impl uses the browser `URL`/`Blob`; tests inject fakes. */
 export interface ImageBlobOps {
@@ -68,8 +102,8 @@ const browserImageBlobOps: ImageBlobOps = {
 
 interface CacheEntry {
   refCount: number;
-  url: string | null;
-  inFlight: Promise<string> | null;
+  resolved: ImageBlobResolution | null;
+  inFlight: Promise<ImageBlobResolution> | null;
   abort: AbortController | null;
   retention: ImageBlobRetention;
   // Cancels the pending revoke timer (null when none is scheduled). We store the
@@ -90,6 +124,12 @@ export interface ImageBlobCache {
    * Returns a lease bound to the exact entry acquired - release it, not a
    * remembered hash, when the caller is done (see the file-level doc
    * comment on why a bare hash is unsafe here).
+   *
+   * `mediaType` is the caller's DECLARED type and only a default: a fetcher
+   * that returns its own (sniffed-from-bytes) type wins, and the lease reports
+   * whichever one actually typed the Blob. Like `retention`, it is read only
+   * when this call creates the entry - the key is content-addressed, so a
+   * later acquirer's claim cannot describe different bytes.
    */
   acquire: (
     hash: string,
@@ -138,7 +178,7 @@ export function createImageBlobCache(
     const handle = setTimeout(() => {
       entry.cancelRevoke = null;
       if (entry.refCount > 0) return;
-      if (entry.url !== null) ops.revoke(entry.url);
+      if (entry.resolved !== null) ops.revoke(entry.resolved.url);
       entries.delete(hash);
     }, graceMs);
     entry.cancelRevoke = () => clearTimeout(handle);
@@ -177,7 +217,7 @@ export function createImageBlobCache(
     if (entry === undefined) {
       entry = {
         refCount: 0,
-        url: null,
+        resolved: null,
         inFlight: null,
         abort: null,
         retention,
@@ -199,8 +239,8 @@ export function createImageBlobCache(
       releaseEntry(hash, target);
     };
 
-    if (target.url !== null) {
-      return { promise: Promise.resolve(target.url), release };
+    if (target.resolved !== null) {
+      return { promise: Promise.resolve(target.resolved), release };
     }
     if (target.inFlight !== null) {
       return { promise: target.inFlight, release };
@@ -211,17 +251,25 @@ export function createImageBlobCache(
     // `entries.get(hash) === target` guards every late callback: once an entry
     // is released/replaced, its stale fetch must not resurrect or clobber it.
     target.inFlight = fetcher(hash, controller.signal).then(
-      (bytes) => {
+      (result) => {
         if (entries.get(hash) !== target) {
           throw new Error("image blob fetch superseded");
         }
-        const url = ops.create(bytes, mediaType);
-        target.url = url;
+        // The byte source's own verdict outranks the caller's declared type:
+        // the caller described bytes it had not seen, the source sniffed the
+        // ones it is handing over. `null` means the source has no verdict, so
+        // the declared type stands.
+        const effectiveMediaType = result.mediaType ?? mediaType;
+        const resolved: ImageBlobResolution = {
+          url: ops.create(result.bytes, effectiveMediaType),
+          mediaType: effectiveMediaType,
+        };
+        target.resolved = resolved;
         target.inFlight = null;
         target.abort = null;
         // Released while the fetch was in flight: revoke once the grace passes.
         if (target.refCount === 0) scheduleRevoke(hash, target);
-        return url;
+        return resolved;
       },
       (error) => {
         if (entries.get(hash) === target) {
@@ -239,7 +287,7 @@ export function createImageBlobCache(
   const dropEntry = (hash: string, entry: CacheEntry): void => {
     entry.cancelRevoke?.();
     entry.abort?.abort();
-    if (entry.url !== null) ops.revoke(entry.url);
+    if (entry.resolved !== null) ops.revoke(entry.resolved.url);
     entries.delete(hash);
   };
 

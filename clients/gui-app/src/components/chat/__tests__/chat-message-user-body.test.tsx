@@ -32,9 +32,13 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 
 const attachmentMocks = vi.hoisted(() => ({
   fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
-    Promise.resolve(new Uint8Array([1, 2, 3])),
+    Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
   ),
   hasBytes: vi.fn(() => true),
+  readChatBytes: vi.fn(
+    (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
+      Promise.resolve(new Uint8Array([1, 2, 3])),
+  ),
 }));
 const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
@@ -111,6 +115,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
+  useMaybeTabHostClient: () => null,
 }));
 
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
@@ -125,6 +130,18 @@ vi.mock(
       ...actual,
       useEpicImageFetcher: () => attachmentMocks.fetcher,
       useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
+    };
+  },
+);
+
+vi.mock(
+  import("@/lib/attachments/use-chat-image-fetcher"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useChatImageFetcher: () => attachmentMocks.fetcher,
+      useChatAttachmentByteReader: () => attachmentMocks.readChatBytes,
     };
   },
 );
@@ -252,10 +269,15 @@ describe("<UserMessageBody /> agent messages", () => {
     vi.restoreAllMocks();
     attachmentMocks.fetcher.mockReset();
     attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
-      Promise.resolve(new Uint8Array([1, 2, 3])),
+      Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
     );
     attachmentMocks.hasBytes.mockReset();
     attachmentMocks.hasBytes.mockReturnValue(true);
+    attachmentMocks.readChatBytes.mockReset();
+    attachmentMocks.readChatBytes.mockImplementation((_hash) =>
+      Promise.resolve(new Uint8Array([1, 2, 3])),
+    );
+
     composerPickerMocks.useComposerPickerItems.mockClear();
     useWorkspaceFoldersStore.setState({ folders: [] });
   });
@@ -779,23 +801,17 @@ describe("<UserMessageBody /> agent messages", () => {
     }
   });
 
-  it("re-inlines hash-only image bytes as b64content on copy when the epic has them", async () => {
+  // The copy path resolves bytes through the CHAT attachment reader
+  // (`useChatAttachmentByteReader`), not through a synchronous doc-map presence
+  // pre-check: chat image bytes live on the chat plane now, so presence is not
+  // answerable without a round trip and the reader's own timeout is what keeps
+  // a Cmd+C from hanging. These two tests pin that mechanism.
+  it("re-inlines hash-only image bytes as b64content on copy when the chat reader resolves them", async () => {
     const imageBytes = new Uint8Array([10, 20, 30]);
     const imageHash = "resolved-image-hash";
-    openEpicHandleMocks.hasAttachmentBytes.mockImplementation(
-      (hash: string) => hash === imageHash,
-    );
-    openEpicHandleMocks.readAttachmentBytes.mockImplementation((hash: string) =>
+    attachmentMocks.readChatBytes.mockImplementation((hash: string) =>
       Promise.resolve(hash === imageHash ? imageBytes : null),
     );
-    openEpicHandleMocks.handle = {
-      store: {
-        getState: () => ({
-          hasAttachmentBytes: openEpicHandleMocks.hasAttachmentBytes,
-          readAttachmentBytes: openEpicHandleMocks.readAttachmentBytes,
-        }),
-      },
-    };
     const clipboard = installRichClipboardMock();
     try {
       render(
@@ -815,13 +831,7 @@ describe("<UserMessageBody /> agent messages", () => {
       await waitFor(() => {
         expect(clipboard.write).toHaveBeenCalledTimes(1);
       });
-      expect(openEpicHandleMocks.hasAttachmentBytes).toHaveBeenCalledWith(
-        imageHash,
-      );
-      expect(openEpicHandleMocks.readAttachmentBytes).toHaveBeenCalledWith(
-        imageHash,
-        expect.any(AbortSignal),
-      );
+      expect(attachmentMocks.readChatBytes).toHaveBeenCalledWith(imageHash);
       const payload = clipboard.payloads[0];
       expect(payload).toBeDefined();
       const copied = parseComposerClipboardHtml(
@@ -850,24 +860,14 @@ describe("<UserMessageBody /> agent messages", () => {
       });
     } finally {
       clipboard.restore();
-      openEpicHandleMocks.handle = null;
-      openEpicHandleMocks.hasAttachmentBytes.mockReset();
-      openEpicHandleMocks.readAttachmentBytes.mockReset();
     }
   });
 
-  it("leaves a dangling hash-only image as hash-only when attachment bytes are absent", async () => {
+  it("leaves a dangling hash-only image as hash-only when the chat reader misses", async () => {
     const imageHash = "dangling-image-hash";
-    openEpicHandleMocks.hasAttachmentBytes.mockReturnValue(false);
-    openEpicHandleMocks.readAttachmentBytes.mockResolvedValue(null);
-    openEpicHandleMocks.handle = {
-      store: {
-        getState: () => ({
-          hasAttachmentBytes: openEpicHandleMocks.hasAttachmentBytes,
-          readAttachmentBytes: openEpicHandleMocks.readAttachmentBytes,
-        }),
-      },
-    };
+    // A miss - the host answered `missing` and the doc replica had nothing
+    // either, which the reader collapses to `null`.
+    attachmentMocks.readChatBytes.mockResolvedValue(null);
     const clipboard = installRichClipboardMock();
     try {
       render(
@@ -887,22 +887,16 @@ describe("<UserMessageBody /> agent messages", () => {
       await waitFor(() => {
         expect(clipboard.write).toHaveBeenCalledTimes(1);
       });
-      expect(openEpicHandleMocks.hasAttachmentBytes).toHaveBeenCalledWith(
-        imageHash,
-      );
-      expect(openEpicHandleMocks.readAttachmentBytes).not.toHaveBeenCalled();
+      expect(attachmentMocks.readChatBytes).toHaveBeenCalledWith(imageHash);
       const payload = clipboard.payloads[0];
       expect(payload).toBeDefined();
       const copied = parseComposerClipboardHtml(
         await payload["text/html"].text(),
       );
-      // Bytes absent → hash-only payload stays hash-only (no b64content).
+      // Bytes unresolvable → hash-only payload stays hash-only (no b64content).
       expect(copied).toEqual(hashOnlyImageMessageContent(imageHash));
     } finally {
       clipboard.restore();
-      openEpicHandleMocks.handle = null;
-      openEpicHandleMocks.hasAttachmentBytes.mockReset();
-      openEpicHandleMocks.readAttachmentBytes.mockReset();
     }
   });
 

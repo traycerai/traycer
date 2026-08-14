@@ -572,16 +572,30 @@ export function useChatTimelineFollowLatch(
     const clearTouch = (): void => {
       lastTouchClientYRef.current = null;
     };
-    const clearPointerPreflight = (): void => {
+    const completePointerPreflight = (): void => {
       const armedDeparture = armedReaderDepartureRef.current;
       if (
         armedDeparture?.source === "gesture" &&
         armedDeparture.direction === "indeterminate"
       ) {
-        // A scrollbar pointer-down is publishing, but a click/release with no
-        // drag emits no scroll event. Pointer completion deterministically
-        // releases only that indeterminate arm; wheel/touch/keyboard arms do
-        // not share this completion signal.
+        const liveNode = listRef.current?.getScrollableNode();
+        const liveGeometry = liveNode ? readScrollGeometry(liveNode) : null;
+        if (
+          liveGeometry !== null &&
+          isChatTimelineGeometryMeasurable(liveGeometry) &&
+          !isChatTimelineAtStrictBottom(liveGeometry)
+        ) {
+          // A scrollbar drag can update live scrollTop before main-thread
+          // pressure allows its coalesced native scroll event through. Publish
+          // the already-visible departure now, while its arm is intact, so an
+          // intervening ResizeObserver cannot classify it as layout-owned and
+          // yank the viewport back to the tail.
+          observeLiveGeometry();
+          return;
+        }
+        // A click/release whose live geometry stayed at the strict edge was a
+        // no-op and may emit no scroll event. Release only that preflight so a
+        // later stream mutation can continue following normally.
         armedReaderDepartureRef.current = null;
       }
     };
@@ -590,10 +604,10 @@ export function useChatTimelineFollowLatch(
     node.addEventListener("touchmove", handleTouchMove, { passive: true });
     node.addEventListener("touchend", clearTouch, { passive: true });
     node.addEventListener("touchcancel", clearTouch, { passive: true });
-    node.addEventListener("pointerup", clearPointerPreflight, {
+    node.addEventListener("pointerup", completePointerPreflight, {
       passive: true,
     });
-    node.addEventListener("pointercancel", clearPointerPreflight, {
+    node.addEventListener("pointercancel", completePointerPreflight, {
       passive: true,
     });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
@@ -613,8 +627,8 @@ export function useChatTimelineFollowLatch(
       node.removeEventListener("touchmove", handleTouchMove);
       node.removeEventListener("touchend", clearTouch);
       node.removeEventListener("touchcancel", clearTouch);
-      node.removeEventListener("pointerup", clearPointerPreflight);
-      node.removeEventListener("pointercancel", clearPointerPreflight);
+      node.removeEventListener("pointerup", completePointerPreflight);
+      node.removeEventListener("pointercancel", completePointerPreflight);
       resizeObserver.disconnect();
       cancelActiveCorrection();
     };
@@ -622,6 +636,7 @@ export function useChatTimelineFollowLatch(
     scrollNode,
     cancelActiveCorrection,
     followEndIfPermitted,
+    listRef,
     noteReaderGesture,
     observeLiveGeometry,
   ]);
