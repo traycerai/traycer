@@ -95,13 +95,16 @@ describe("MarkdownEditPreview", () => {
     );
 
     const editor = screen.getByTestId(TEST_ID);
+    const textbox = screen.getByRole("textbox", { name: "Markdown source" });
     expect(readMarkdown(editor)).toBe("initial draft");
 
     replaceMarkdown(editor, "edited draft");
     expect(readMarkdown(editor)).toBe("edited draft");
 
     await user.click(screen.getByRole("tab", { name: "Preview" }));
-    expect(screen.getByTestId(TEST_ID)).toBe(editor);
+    expect(
+      screen.getByRole("textbox", { name: "Markdown source", hidden: true }),
+    ).toBe(textbox);
     expect(screen.getByTestId(`${TEST_ID}-preview`).textContent).toContain(
       "edited draft",
     );

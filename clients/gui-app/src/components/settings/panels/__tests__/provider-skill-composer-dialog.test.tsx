@@ -177,17 +177,19 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     renderDialog({ authoring: WRITE_ONLY });
 
-    const editor = screen.getByTestId("skill-composer-instructions");
+    const editor = screen.getByRole("textbox", { name: "Instructions" });
     expect(editor.textContent).toContain("## When to use this");
 
     await user.click(screen.getByRole("tab", { name: "Preview" }));
-    expect(screen.getByTestId("skill-composer-instructions")).toBe(editor);
+    expect(
+      screen.getByRole("textbox", { name: "Instructions", hidden: true }),
+    ).toBe(editor);
     expect(
       screen.getByTestId("skill-composer-instructions-preview").textContent,
     ).toContain("When to use this");
 
     await user.click(screen.getByRole("tab", { name: "Edit" }));
-    expect(screen.getByTestId("skill-composer-instructions")).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toBeDefined();
   });
 
   it("disables submit and states a reason until name and description are filled", () => {
