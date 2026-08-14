@@ -737,6 +737,11 @@ function LocalHostRecoveryActions(props: {
         type="button"
         variant="outline"
         size="sm"
+        // Same overlap rule as the live host's page-wide gate: opening the
+        // sheet mounts a doctor card that dispatches immediately, and a CLI
+        // inspecting the installation converge is mid-rewrite would report
+        // (and offer to fix) states that are simply "not done yet".
+        disabled={convergeReady.isPending}
         data-testid="host-overview-recovery-doctor"
         onClick={props.onOpenDoctor}
       >
