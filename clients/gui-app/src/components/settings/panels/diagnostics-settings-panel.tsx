@@ -318,7 +318,6 @@ function HostRecentLogsSection(props: {
     options: { enabled: client !== null, staleTime: 60_000 },
   });
 
-  const hostLogs = listQuery.data?.logs ?? [];
   if (client === null) {
     return (
       <RecentLogsFrame>
@@ -329,6 +328,7 @@ function HostRecentLogsSection(props: {
       </RecentLogsFrame>
     );
   }
+  const hostLogs = listQuery.data?.logs ?? [];
   return (
     <RecentLogsFrame>
       {listQuery.isPending ? <LogInfoLine>Loading logs…</LogInfoLine> : null}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
@@ -252,11 +252,15 @@ describe("<AddHostDialog /> setup instructions", () => {
   it("ends on `host ensure`, not on `login`", () => {
     render(<AddHostDialog />);
 
-    expect(screen.getByTestId("add-host-steps")).not.toBeNull();
-    expect(screen.getByText("npm install -g @traycerai/cli")).not.toBeNull();
-    expect(screen.getByText("traycer login")).not.toBeNull();
+    // The ORDER is the fact under test, not just presence: install, then
+    // sign in, then the command that actually provisions. Presence checks
+    // alone passed with the steps shuffled.
+    const steps = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(steps).toHaveLength(3);
+    expect(steps[0].textContent).toContain("npm install -g @traycerai/cli");
+    expect(steps[1].textContent).toContain("traycer login");
     // The step whose absence made the whole dialog unreachable.
-    expect(screen.getByText("traycer host ensure")).not.toBeNull();
+    expect(steps[2].textContent).toContain("traycer host ensure");
   });
 
   it("no longer prints the curl installer", () => {

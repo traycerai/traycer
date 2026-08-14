@@ -97,6 +97,7 @@ function buildSettingsEntryItem(
 }
 
 function buildSectionItem(section: SettingsSection): CommandItem {
+  const group = groupLabel(section.group);
   return {
     id: `nav:settings/${section.id}`,
     label: section.label,
@@ -109,7 +110,7 @@ function buildSectionItem(section: SettingsSection): CommandItem {
       "settings",
       section.label.toLowerCase(),
       section.id,
-      groupLabel(section.group).toLowerCase(),
+      ...(group === undefined ? [] : [group.toLowerCase()]),
     ],
     group: "navigation",
     scope: "actions",
@@ -120,14 +121,15 @@ function buildSectionItem(section: SettingsSection): CommandItem {
     // section, not just the pair that collides: badging only the ambiguous ones
     // makes the absence of a badge mean something, and the next duplicate label
     // would then ship looking unambiguous.
-    statusBadge: groupLabel(section.group),
+    statusBadge: group,
     run: (ctx) => ctx.router.navigateSettingsSection(section.id),
     subpage: null,
   };
 }
 
-function groupLabel(group: SettingsSectionGroupId): string {
-  return (
-    SETTINGS_SECTION_GROUPS.find((entry) => entry.id === group)?.label ?? ""
-  );
+// `undefined`, not `""`, for a group the registry has never heard of: the
+// palette renders any defined `statusBadge`, so an empty string paints an
+// EMPTY chip on every row of that section.
+function groupLabel(group: SettingsSectionGroupId): string | undefined {
+  return SETTINGS_SECTION_GROUPS.find((entry) => entry.id === group)?.label;
 }

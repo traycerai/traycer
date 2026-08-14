@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
@@ -85,10 +85,29 @@ export function HostOptionList(props: {
       </p>
     );
   }
+  // The keyboard contract `role="radiogroup"` promises: ONE tab stop for the
+  // group, arrows to move between rows. The roving stop is the picked row when
+  // it can be re-chosen here, else the first selectable row. Arrows move FOCUS
+  // only — activation stays on Enter/Space — because choosing a host here can
+  // switch scope or rebind a surface, which select-on-focus would fire on
+  // every arrow press.
+  const rovingHostId =
+    props.hosts.find(
+      (host) =>
+        host.hostId === props.pickedHostId &&
+        isHostOptionSelectable(host, props.intent),
+    )?.hostId ??
+    props.hosts.find((host) => isHostOptionSelectable(host, props.intent))
+      ?.hostId ??
+    null;
   return (
     <div
       role="radiogroup"
       aria-label={props.label}
+      // Focusable for the a11y contract but NOT a tab stop: the roving row
+      // below is the group's single Tab target.
+      tabIndex={-1}
+      onKeyDown={moveRadioFocusOnArrow}
       className={cn("flex min-w-0 flex-col", DENSITY_LIST_CLASS[props.density])}
     >
       {props.hosts.map((host) => (
@@ -101,11 +120,37 @@ export function HostOptionList(props: {
           onSelect={props.onSelect}
           disabled={props.disabled}
           density={props.density}
+          rovingTabStop={host.hostId === rovingHostId}
           testId={`${props.testIdPrefix}-${host.hostId}`}
         />
       ))}
     </div>
   );
+}
+
+/**
+ * Container-level arrow handling, reading the rendered rows rather than
+ * mirroring the selectability rules in state: a disabled button is exactly a
+ * row the rules made unselectable, so the DOM already IS the selectable list.
+ */
+function moveRadioFocusOnArrow(event: KeyboardEvent<HTMLDivElement>): void {
+  const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
+  const backward = event.key === "ArrowUp" || event.key === "ArrowLeft";
+  if (!forward && !backward) return;
+  const rows = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      'button[role="radio"]:enabled',
+    ),
+  );
+  if (rows.length === 0) return;
+  const active = document.activeElement;
+  const current = rows.findIndex((row) => row === active);
+  const next =
+    current === -1
+      ? rows[0]
+      : rows[(current + (forward ? 1 : -1) + rows.length) % rows.length];
+  event.preventDefault();
+  next.focus();
 }
 
 function HostOptionListRow(props: {
@@ -116,6 +161,8 @@ function HostOptionListRow(props: {
   readonly onSelect: (hostId: string) => void;
   readonly disabled: boolean;
   readonly density: HostOptionListDensity;
+  /** The group's single Tab stop; every other row is arrow-reachable only. */
+  readonly rovingTabStop: boolean;
   readonly testId: string;
 }): ReactNode {
   const { host } = props;
@@ -131,6 +178,7 @@ function HostOptionListRow(props: {
       role="radio"
       aria-checked={props.picked}
       disabled={disabled}
+      tabIndex={props.rovingTabStop ? 0 : -1}
       data-testid={props.testId}
       data-selected={props.picked ? "true" : "false"}
       data-plan-restricted={host.planRestricted ? "true" : "false"}

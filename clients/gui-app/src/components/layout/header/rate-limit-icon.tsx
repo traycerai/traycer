@@ -8,7 +8,7 @@ import {
   useHeaderRateLimitBars,
   type HeaderRateLimitBar,
 } from "@/hooks/rate-limits/use-header-rate-limit-bars";
-import { useRateLimitHostScope } from "@/hooks/rate-limits/use-rate-limit-host-scope";
+import { useRateLimitResolveHostScope } from "@/hooks/rate-limits/use-rate-limit-host-scope";
 import {
   useRateLimitProfileSelection,
   type RateLimitProfileSelection,
@@ -57,7 +57,7 @@ const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
  * subtree that is not scoped still sees ambient binding updates.
  */
 export function RateLimitIconButton(): ReactNode {
-  const { scope, hasExplicitPick } = useRateLimitHostScope();
+  const { scope, hasExplicitPick } = useRateLimitResolveHostScope();
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
   return (

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import {
   chooseLogLevelOption,
-  clearLogLevelsBridge,
+  clearRunnerHostBridges,
   defaultSnapshot,
   installCustomLogLevelsBridge,
   installHeapSnapshotBridge,
@@ -69,7 +69,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -79,7 +79,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
 
   afterEach(() => {
     cleanup();
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
   });
 
   it("renders the app's three surfaces: the App log level row, Memory, and the Desktop Log entry", async () => {

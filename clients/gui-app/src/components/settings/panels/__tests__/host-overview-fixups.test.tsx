@@ -105,7 +105,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-async function waitForButton(name: string): Promise<HTMLElement> {
+async function waitForButton(name: string | RegExp): Promise<HTMLElement> {
   return screen.findByRole("button", { name });
 }
 
@@ -177,7 +177,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
 
     fireEvent.click(await waitForButton("Check now"));
     await openHostOverviewAdvanced();
-    fireEvent.click(await waitForButton("Install"));
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
@@ -210,7 +210,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
 
     fireEvent.click(await waitForButton("Check now"));
     await openHostOverviewAdvanced();
-    fireEvent.click(await waitForButton("Install"));
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
@@ -244,7 +244,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
 
     fireEvent.click(await waitForButton("Check now"));
     await openHostOverviewAdvanced();
-    fireEvent.click(await waitForButton("Install"));
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-update-attempt-failed"),
@@ -292,6 +292,14 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
     // an explicit `customName` FREEZES a label that would otherwise keep
     // tracking the host.
     fireEvent.keyDown(input, { key: "Enter" });
+    // The absence must not be read in the same tick it was created: the write
+    // path runs through a mutation, so a regressed guard's `host.identity.set`
+    // reaches the fixture a task later. Settle the editor close, then flush a
+    // full macrotask so a queued write would have LANDED before the zero-read.
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-name-input")).toBeNull();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fixture.identitySetCalls()).toBe(0);
 
     // Must not regress: a genuinely different name writes.
@@ -551,7 +559,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
 
     fireEvent.click(await waitForButton("Check now"));
     await openHostOverviewAdvanced();
-    fireEvent.click(await waitForButton("Install"));
+    fireEvent.click(await waitForButton(/^Install \d/));
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
     });

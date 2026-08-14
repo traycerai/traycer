@@ -37,7 +37,7 @@ export interface RateLimitHostScope {
   readonly hasExplicitPick: boolean;
 }
 
-export function useRateLimitHostScope(): RateLimitHostScope {
+export function useRateLimitResolveHostScope(): RateLimitHostScope {
   const scopedHostId = useRateLimitPopoverStore((state) => state.scopedHostId);
   const setScopedHostId = useRateLimitPopoverStore(
     (state) => state.setScopedHostId,

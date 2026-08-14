@@ -55,7 +55,7 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
   // The client is spread OVER the fixture rather than passed into it: the
   // fixture's type demands a real `HostClient`, and the stub deliberately is
   // not one (see `SCOPE_CLIENT_STUB`).
-  useRateLimitHostScope: () => ({
+  useRateLimitResolveHostScope: () => ({
     scope: { ...scope, client: scopeClient },
     hasExplicitPick,
   }),

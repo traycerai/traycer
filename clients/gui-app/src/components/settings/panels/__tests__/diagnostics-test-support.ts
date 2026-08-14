@@ -99,56 +99,40 @@ export interface LogLevelsBridgeMocks {
   readonly getSnapshot: () => LogLevelsSnapshot;
 }
 
-export function installLogLevelsBridge(
-  initial: LogLevelsSnapshot,
-): LogLevelsBridgeMocks {
-  let snapshot = initial;
-  const getMock = vi.fn(() => Promise.resolve(snapshot));
-  const setMock = vi.fn((scope: LogLevelScope, level: LogLevel) => {
-    snapshot = {
-      ...snapshot,
-      [scopeField(scope)]: level,
-    };
-    return Promise.resolve(snapshot);
-  });
-  const bridge: LogLevelsBridge = {
-    get: getMock,
-    set: setMock,
-  };
-  mergePlatform({ logLevels: bridge });
-  return {
-    bridge,
-    getMock,
-    setMock,
-    getSnapshot: () => snapshot,
-  };
-}
-
 export interface HeldLogLevelsBridgeMocks extends LogLevelsBridgeMocks {
   readonly flushNextSet: () => void;
 }
 
 /**
- * Same as installLogLevelsBridge, but each set() stays pending until
- * flushNextSet() so callers can assert in-flight disable state during reset.
+ * One installer builds BOTH fixtures, so they cannot drift: the suites depend
+ * on the two answering identically apart from WHEN a set() settles, and that
+ * one difference is exactly the `settle` parameter.
  */
-export function installHeldLogLevelsBridge(
+function installLogLevelsBridgeSettling(
   initial: LogLevelsSnapshot,
+  settle: "immediately" | "on-flush",
 ): HeldLogLevelsBridgeMocks {
   let snapshot = initial;
   const pendingFlushes: Array<() => void> = [];
+  const applySet = (
+    scope: LogLevelScope,
+    level: LogLevel,
+  ): LogLevelsSnapshot => {
+    snapshot = {
+      ...snapshot,
+      [scopeField(scope)]: level,
+    };
+    return snapshot;
+  };
   const getMock = vi.fn(() => Promise.resolve(snapshot));
-  const setMock = vi.fn(
-    (scope: LogLevelScope, level: LogLevel) =>
-      new Promise<LogLevelsSnapshot>((resolve) => {
-        pendingFlushes.push(() => {
-          snapshot = {
-            ...snapshot,
-            [scopeField(scope)]: level,
-          };
-          resolve(snapshot);
-        });
-      }),
+  const setMock = vi.fn((scope: LogLevelScope, level: LogLevel) =>
+    settle === "immediately"
+      ? Promise.resolve(applySet(scope, level))
+      : new Promise<LogLevelsSnapshot>((resolve) => {
+          pendingFlushes.push(() => {
+            resolve(applySet(scope, level));
+          });
+        }),
   );
   const bridge: LogLevelsBridge = {
     get: getMock,
@@ -170,12 +154,34 @@ export function installHeldLogLevelsBridge(
   };
 }
 
+export function installLogLevelsBridge(
+  initial: LogLevelsSnapshot,
+): LogLevelsBridgeMocks {
+  return installLogLevelsBridgeSettling(initial, "immediately");
+}
+
+/**
+ * Same as installLogLevelsBridge, but each set() stays pending until
+ * flushNextSet() so callers can assert in-flight disable state during reset.
+ */
+export function installHeldLogLevelsBridge(
+  initial: LogLevelsSnapshot,
+): HeldLogLevelsBridgeMocks {
+  return installLogLevelsBridgeSettling(initial, "on-flush");
+}
+
 /** Installs an arbitrary log-levels bridge — for the failure-shaped cases. */
 export function installCustomLogLevelsBridge(bridge: LogLevelsBridge): void {
   mergePlatform({ logLevels: bridge });
 }
 
-export function clearLogLevelsBridge(): void {
+/**
+ * Drops the WHOLE `runnerHost` — every installed bridge half, not only
+ * `logLevels`. The doc block above names replacing the whole object as how a
+ * heap capture went silently uncovered, so the name states the blast radius
+ * rather than hiding it behind the one slot most callers think about.
+ */
+export function clearRunnerHostBridges(): void {
   globalWithRunnerHost.runnerHost = undefined;
 }
 

@@ -47,6 +47,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogLevel } from "@traycer/protocol/config/log-level";
 import type {
+  ConfigLogLevelsResponse,
   ConfigLogLevelsSetRequest,
   ConfigLogLevelsSetResponse,
 } from "@traycer/protocol/host/config/index";
@@ -67,7 +68,7 @@ import {
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 import {
   chooseLogLevelOption,
-  clearLogLevelsBridge,
+  clearRunnerHostBridges,
   defaultSnapshot,
   installLogLevelsBridge,
   makeHost,
@@ -202,7 +203,9 @@ function renderPanelOverRpc(options: {
 
 interface HeldLogLevels {
   readonly handlers: {
-    readonly "config.logLevels.get": () => ConfigLogLevelsSetResponse;
+    // The GET contract's own type: the SET response aliases the same schema
+    // today, but naming each keeps this fixture honest if they diverge.
+    readonly "config.logLevels.get": () => ConfigLogLevelsResponse;
     readonly "config.logLevels.set": (
       request: ConfigLogLevelsSetRequest,
     ) => Promise<ConfigLogLevelsSetResponse>;
@@ -256,7 +259,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -268,7 +271,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
 
   afterEach(() => {
     cleanup();
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     scopeOverrides.current = {};
     hostBindingMock.current = null;
     resetNegotiatedManifests();
@@ -843,7 +846,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -853,7 +856,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
 
   afterEach(() => {
     cleanup();
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     scopeOverrides.current = {};
     hostBindingMock.current = null;
     resetNegotiatedManifests();

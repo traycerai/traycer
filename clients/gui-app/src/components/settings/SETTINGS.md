@@ -41,8 +41,8 @@ which maps each `SettingsSectionId` to its panel in a `switch`. A new section
 must be added in BOTH places - the route file under `src/routes/` AND the modal
 `switch` - or the modal renders a blank pane for that section.
 
-Six other places enumerate section ids, and only two of them fail loudly when
-one is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
+Six other places enumerate section ids, and four of them fail loudly when one
+is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
 and `report-issue-dialog.tsx`'s `ROUTE_TEMPLATE_LABELS` are exhaustive over a
 union or over `FileRouteTypes["fullPaths"]`, so a compile error catches them.
 `lib/analytics.ts` is exhaustive only because `ANALYTICS_SETTINGS_SECTIONS` is
@@ -2069,7 +2069,7 @@ level`, `Host log level` and the host's log tails described the selected host.
     for both pages), so this page filters it out and the app page takes it.
     `diagnostics.logs.tail`
     answers a discriminated union, so a file that vanished between list and tail
-    reads "This log file is no longer there." rather than an empty tail. A
+    reads "This log file is no longer there." rather than an empty tail.
     Both failures - a tail read and the top-level list load - show inline error
     text plus a report-issue action. They were asymmetric until 2026-08-12,
     which made the panel harder to report from the worse the failure was: one

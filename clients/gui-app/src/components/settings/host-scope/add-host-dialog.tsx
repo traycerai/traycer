@@ -237,7 +237,8 @@ function AddHostDialogBody(): ReactNode {
           <CommandBlock command={CLI_NPM_COMMAND} label="npm" />
           <CommandBlock command={CLI_HOMEBREW_COMMAND} label="brew" />
           <StepNote>
-            npm needs Node 20.18 or newer. Homebrew covers macOS and Linux.
+            Pick one — npm (needs Node 20.18 or newer) or Homebrew (macOS and
+            Linux). Running both installs two competing copies.
           </StepNote>
         </Step>
         <Step index={2} title="Sign in">

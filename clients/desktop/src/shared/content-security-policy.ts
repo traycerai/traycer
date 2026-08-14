@@ -52,13 +52,18 @@ const DEV_AUTHN_BASE_URL_ENV = "TRAYCER_DEV_AUTHN_BASE_URL";
 export function devConnectSrcExtras(env: NodeJS.ProcessEnv): string {
   const raw = env[DEV_AUTHN_BASE_URL_ENV];
   if (raw === undefined || raw.length === 0) return "";
-  let origin: string;
+  let url: URL;
   try {
-    origin = new URL(raw).origin;
+    url = new URL(raw);
   } catch {
     return "";
   }
-  return ` ${origin}`;
+  // An opaque origin (`file:`, `data:`, …) stringifies to the literal "null",
+  // which is not a source expression - appending it buys a policy parse
+  // warning instead of the admitted origin. Same failure mode as unparseable
+  // input: contribute nothing.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+  return ` ${url.origin}`;
 }
 
 export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {

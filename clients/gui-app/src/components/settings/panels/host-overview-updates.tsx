@@ -35,7 +35,10 @@ export function HostOverviewUpdatesRegion(props: {
       data-testid="host-overview-updates"
     >
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 text-ui-sm">
-        <span className="min-w-0 flex-1 text-muted-foreground">
+        {/* `role="status"`: the check runs on its own now, so this sentence
+            changes with no user action to anchor it — a live region is the
+            only way a screen-reader user learns a check started or failed. */}
+        <span role="status" className="min-w-0 flex-1 text-muted-foreground">
           {summary.description}
         </span>
         <div className="flex flex-wrap items-center justify-end gap-2">

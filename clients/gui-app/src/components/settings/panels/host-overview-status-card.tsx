@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { cn } from "@/lib/utils";
 import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
@@ -310,13 +311,31 @@ function HostOverviewMenuAction(props: {
   readonly testId: string;
 }): ReactNode {
   const { degrade, hostName } = props;
+  const degraded = degrade !== null;
+  // Two inert states, two mechanisms. `busy`/`pending` carry no explanation,
+  // so hard `disabled` is honest. A DEGRADED item's whole point is the reason
+  // rendered under it — and Radix's `disabled` removes the item from arrow-key
+  // and typeahead navigation, making the explanation unreachable to exactly
+  // the users who cannot skim it. `aria-disabled` + a swallowed select keeps
+  // it announced, focusable, and inert; preventing default also keeps the
+  // menu open so the reason can actually be read.
   return (
     <DropdownMenuItem
-      disabled={degrade !== null || props.busy || props.pending}
-      onSelect={props.onSelect}
+      disabled={props.busy || props.pending}
+      aria-disabled={degraded || props.busy || props.pending ? true : undefined}
+      onSelect={(event) => {
+        if (degraded) {
+          event.preventDefault();
+          return;
+        }
+        props.onSelect();
+      }}
       data-testid={props.testId}
       data-degraded={degrade ?? undefined}
-      className="flex-col items-start gap-0.5 py-1.5"
+      className={cn(
+        "flex-col items-start gap-0.5 py-1.5",
+        degraded && "text-muted-foreground",
+      )}
     >
       <span className="flex items-center gap-2">
         {/* The spinner takes the icon's place rather than sitting beside it, so
@@ -419,7 +438,15 @@ export function HostOverviewHeaderActions(props: {
         // the sentence rides the control it describes, where it is read at the
         // moment of deciding rather than skimmed past on load.
         <TooltipWrapper
-          label="Switching changes where new work starts. Tabs you already have open stay on the host they started on."
+          // The reason rides the disabled state, same as every other
+          // unavailable control on this card: a greyed Activate with the
+          // switching-scope sentence explains a DIFFERENT decision than the
+          // one the user is blocked on.
+          label={
+            props.connectable
+              ? "Switching changes where new work starts. Tabs you already have open stay on the host they started on."
+              : `${hostName} has no dialable route from this window, so it can't become this window's host.`
+          }
           side="top"
           sideOffset={undefined}
           align={undefined}

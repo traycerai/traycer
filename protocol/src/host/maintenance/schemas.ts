@@ -259,9 +259,9 @@ export const hostServiceStatusResponseSchema = z.discriminatedUnion("outcome", [
     outcome: z.literal("ok"),
     state: hostServiceStateSchema,
     /** The service label (`ai.traycer.host`, …) — identity, not decoration. */
-    label: z.string(),
+    label: z.string().min(1),
     /** The plist / unit / scheduled-task path the registration lives at. */
-    manifestPath: z.string(),
+    manifestPath: z.string().min(1),
   }),
   z.object({ outcome: z.literal("cli-unavailable") }),
   z.object({ outcome: z.literal("cli-failed") }),

@@ -421,20 +421,26 @@ export function HostOverviewPanel(props: {
         loading={installationQuery.isPending}
         readFailed={installationQuery.isError}
         advanced={
-          <HostOverviewAdvancedDisclosure
-            hostName={displayName}
-            registryItem={registryItem}
-            policyMutation={policyMutation}
-            service={usable ? service : null}
-            // Gated on the ROUTE as well as the capability. Picking a version
-            // means asking the host which ones exist, so an unreachable host
-            // gets no picker at all rather than a checkbox and an invitation to
-            // press a Check now that is not on screen.
-            versions={
-              usable && updates.degrade === null ? updates.picker : null
-            }
-            busy={anyPending}
-          />
+          // Withheld entirely when every section inside would be: no registry
+          // row kills the policy switch, and no route kills the service and
+          // version sections. An "Advanced" that opens onto nothing reads as
+          // a broken page, not an empty one.
+          registryItem === null && !usable ? null : (
+            <HostOverviewAdvancedDisclosure
+              hostName={displayName}
+              registryItem={registryItem}
+              policyMutation={policyMutation}
+              service={usable ? service : null}
+              // Gated on the ROUTE as well as the capability. Picking a version
+              // means asking the host which ones exist, so an unreachable host
+              // gets no picker at all rather than a checkbox and an invitation
+              // to press a Check now that is not on screen.
+              versions={
+                usable && updates.degrade === null ? updates.picker : null
+              }
+              busy={anyPending}
+            />
+          )
         }
       />
 

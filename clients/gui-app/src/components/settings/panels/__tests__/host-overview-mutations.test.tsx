@@ -110,7 +110,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-async function waitForButton(name: string): Promise<HTMLElement> {
+async function waitForButton(name: string | RegExp): Promise<HTMLElement> {
   return screen.findByRole("button", { name });
 }
 
@@ -468,7 +468,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
 
     fireEvent.click(await waitForButton("Check now"));
     await openHostOverviewAdvanced();
-    fireEvent.click(await waitForButton("Install"));
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     // The whole REGION retires, not just the install button. This test used to
     // assert a disabled install button beside a live "Check now", which is the

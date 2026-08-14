@@ -323,7 +323,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(rows).toHaveLength(3);
 
     fireEvent.click(
-      within(rowFor(rows, "1.6.0")).getByRole("button", { name: "Install" }),
+      within(rowFor(rows, "1.6.0")).getByRole("button", {
+        name: "Install 1.6.0",
+      }),
     );
 
     await waitFor(() => {
@@ -336,12 +338,12 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     await waitFor(() => {
       expect(
         within(rowFor(rows, "1.7.0"))
-          .getByRole("button", { name: "Install" })
+          .getByRole("button", { name: "Install 1.7.0" })
           .hasAttribute("disabled"),
       ).toBe(true);
       expect(
         within(rowFor(rows, "1.5.0"))
-          .getByRole("button", { name: "Install" })
+          .getByRole("button", { name: "Install 1.5.0" })
           .hasAttribute("disabled"),
       ).toBe(true);
     });
@@ -393,20 +395,22 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // Newer than installed — the one row that can actually do something.
     expect(
       within(rowFor(rows, "1.7.0"))
-        .getByRole("button", { name: "Install" })
+        .getByRole("button", { name: "Install 1.7.0" })
         .hasAttribute("disabled"),
     ).toBe(false);
     // Older than installed — dead, and says why rather than leaving a person
     // to discover it by clicking and watching nothing happen.
     expect(
       within(rowFor(rows, "1.5.0"))
-        .getByRole("button", { name: "Install" })
+        .getByRole("button", { name: "Install 1.5.0" })
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(rowFor(rows, "1.5.0").textContent).toContain("Already on v1.6.0");
 
     fireEvent.click(
-      within(rowFor(rows, "1.5.0")).getByRole("button", { name: "Install" }),
+      within(rowFor(rows, "1.5.0")).getByRole("button", {
+        name: "Install 1.5.0",
+      }),
     );
     expect(attempted).toEqual([]);
   });

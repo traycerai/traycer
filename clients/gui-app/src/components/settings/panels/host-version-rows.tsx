@@ -149,6 +149,9 @@ function VersionRow(props: {
             variant="secondary"
             size="sm"
             disabled={props.disabled || blocked}
+            // The version lives in a SIBLING element, so every row's button
+            // otherwise reads as the same bare "Install" to a screen reader.
+            aria-label={`Install ${row.version}`}
             onClick={() => props.onInstall(row.version)}
           >
             {props.installing ? (
