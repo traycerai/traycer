@@ -501,6 +501,18 @@ function getPersistedActivePanelIds(
   }, {});
 }
 
+function getPersistedMainCollapsedByTabId(
+  mainCollapsedByTabId: Readonly<Record<string, boolean>>,
+): Readonly<Record<string, boolean>> {
+  return Object.entries(mainCollapsedByTabId).reduce<Record<string, boolean>>(
+    (nextCollapsedByTabId, [tabId, collapsed]) => {
+      if (collapsed) nextCollapsedByTabId[tabId] = true;
+      return nextCollapsedByTabId;
+    },
+    {},
+  );
+}
+
 function getPersistedPanelGroups(
   groups: ReadonlyArray<LeftPanelGroup>,
 ): ReadonlyArray<LeftPanelGroup> {
@@ -1437,6 +1449,9 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           state.activePanelIdByTabId,
         ),
         panelGroups: getPersistedPanelGroups(state.panelGroups),
+        mainCollapsedByTabId: getPersistedMainCollapsedByTabId(
+          state.mainCollapsedByTabId,
+        ),
         sidebarWidthPx: state.sidebarWidthPx,
         panelSectionCollapsedByPanelId:
           getPersistedPanelSectionCollapsedByPanelId(
