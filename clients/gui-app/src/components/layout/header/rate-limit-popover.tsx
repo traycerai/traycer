@@ -769,7 +769,10 @@ function RateLimitPopoverScopedBody({
     if (header === null) {
       return (
         <RateLimitPopoverResizeSurface variant="empty">
-          <RateLimitZeroState onClose={onClose} displayedHostId={displayedHostId} />
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
         </RateLimitPopoverResizeSurface>
       );
     }
@@ -777,7 +780,10 @@ function RateLimitPopoverScopedBody({
       <RateLimitPopoverResizeSurface variant="content">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto p-4">
-          <RateLimitZeroState onClose={onClose} displayedHostId={displayedHostId} />
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
         </div>
       </RateLimitPopoverResizeSurface>
     );
