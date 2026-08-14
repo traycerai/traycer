@@ -32,7 +32,7 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 
 const attachmentMocks = vi.hoisted(() => ({
   fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
-    Promise.resolve(new Uint8Array([1, 2, 3])),
+    Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
   ),
   hasBytes: vi.fn(() => true),
   readChatBytes: vi.fn(
@@ -269,7 +269,7 @@ describe("<UserMessageBody /> agent messages", () => {
     vi.restoreAllMocks();
     attachmentMocks.fetcher.mockReset();
     attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
-      Promise.resolve(new Uint8Array([1, 2, 3])),
+      Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
     );
     attachmentMocks.hasBytes.mockReset();
     attachmentMocks.hasBytes.mockReturnValue(true);

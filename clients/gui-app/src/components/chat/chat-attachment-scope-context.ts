@@ -55,6 +55,17 @@ export interface ChatAttachmentScopeValue {
   readonly chatId: string;
   /** The tile's bound host - the one asked for chat-plane bytes. */
   readonly hostId: string;
+  /**
+   * That host's BUILD, from its directory entry; `null` while the directory
+   * has not resolved one.
+   *
+   * Carried alongside the id because a host upgrade keeps its id: Traycer can
+   * install and activate a newer build under the same `hostId` with no
+   * renderer reload, and `use-chat-image-fetcher.ts` remembers the
+   * "this host predates `epic.readChatAttachment`" verdict per BUILD so that
+   * upgrade re-probes instead of staying degraded for the session.
+   */
+  readonly hostVersion: string | null;
   /** Routed to `hostId`; `null` until the directory resolves it. */
   readonly client: ChatAttachmentReadClient | null;
 }

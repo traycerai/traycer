@@ -18,6 +18,7 @@ import {
   imageBlobCache,
   type ImageBlobRetention,
   type ImageBytesFetcher,
+  type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
 
 /**
@@ -653,12 +654,16 @@ export function useImageAsset(
 
         const fetcher: ImageBytesFetcher = (_key, signal) => {
           usedForFetch = true;
-          return new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
+          return new Promise<ImageBytesResult>((resolve, reject) => {
             if (signal.aborted) {
               reject(new Error("Image asset fetch was cancelled."));
               return;
             }
-            settleFetch = resolve;
+            // `mediaType: null` - no verdict to add. The asset stream already
+            // delivered its authoritative type in the header, and that header
+            // type is what this hook passes to `acquire` below, so deferring
+            // to the caller's declared type here IS deferring to the host.
+            settleFetch = (bytes) => resolve({ bytes, mediaType: null });
             rejectFetch = reject;
             signal.addEventListener(
               "abort",
@@ -702,13 +707,13 @@ export function useImageAsset(
         if (!usedForFetch) sharedSubscription?.release();
 
         lease.promise.then(
-          (url) => {
+          (resolution) => {
             if (!active) return;
             setResolved({
               key: requestKey,
               state: {
                 status: "ready",
-                url,
+                url: resolution.url,
                 meta,
                 reason: null,
                 totalBytes: header.sizeBytes,

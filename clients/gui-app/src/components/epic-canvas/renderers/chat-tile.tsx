@@ -119,6 +119,7 @@ import {
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
@@ -790,14 +791,26 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // subscription, and a transcript can hold a hundred thumbnails. Covers the
   // transcript AND the composer/lower surfaces below.
   const attachmentHostClient = useTabHostClient();
+  // The BUILD, not just the id: a host can be upgraded in place under the same
+  // `hostId`, and the attachment fetcher remembers its "predates
+  // `epic.readChatAttachment`" verdict per build so the upgrade re-probes.
+  const attachmentHostEntry = useHostDirectoryEntry(hostId);
+  const attachmentHostVersion = attachmentHostEntry?.version ?? null;
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
     () => ({
       epicId: view.currentEpicId,
       chatId: view.node.id,
       hostId,
+      hostVersion: attachmentHostVersion,
       client: attachmentHostClient,
     }),
-    [attachmentHostClient, hostId, view.currentEpicId, view.node.id],
+    [
+      attachmentHostClient,
+      attachmentHostVersion,
+      hostId,
+      view.currentEpicId,
+      view.node.id,
+    ],
   );
   const systemOverlayActive = useAnySystemOverlayActive();
   const tileNavigation = useEpicTileNavigation();

@@ -6,7 +6,10 @@ import {
   useChatAttachmentScope,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
-import type { ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import type {
+  ImageBytesFetcher,
+  ImageBytesResult,
+} from "@/lib/attachments/image-blob-cache";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -27,15 +30,44 @@ type ImageBytes = Uint8Array<ArrayBuffer>;
 export const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 8_000;
 
 /**
- * Hosts that have answered `E_HOST_UNSUPPORTED` for `epic.readChatAttachment`.
+ * Host BUILDS that have answered `E_HOST_UNSUPPORTED` for
+ * `epic.readChatAttachment`, keyed on the `(hostId, version)` pair.
  *
- * Per host, not per image, and remembered for the session: the answer is a
- * property of the host BUILD, so re-probing it once per image would spend a
- * round trip per thumbnail to re-learn a constant. A host in this set falls
- * straight through to the epic doc-replica read - which is that host's only
- * byte source, so the "degraded" path is exactly its current behavior.
+ * Per build, not per image: the answer is a property of the host binary's
+ * negotiated method set, so re-deriving it once per image would rebuild the
+ * same rejection per thumbnail to re-learn a constant. A build in this set
+ * falls straight through to the epic doc-replica read - which is that build's
+ * only byte source, so the "degraded" path is exactly its current behavior.
+ *
+ * The VERSION is in the key because Traycer can install and activate a newer
+ * host under the SAME `hostId` without the renderer ever reloading. Keyed on
+ * the id alone, that upgrade would leave every attachment read skipping a
+ * method the running host now supports, and chat-plane-only images (whose
+ * bytes are not in the doc replica at all) would stay unavailable until a full
+ * app reload. Keyed on the pair, an upgrade re-probes exactly once.
  */
-const hostsWithoutChatAttachmentRead = new Set<string>();
+const hostBuildsWithoutChatAttachmentRead = new Set<string>();
+
+/**
+ * The key a verdict is remembered under, or `null` when it must not be
+ * remembered at all.
+ *
+ * An unknown version (`null` - the directory has not resolved this host's
+ * build) is deliberately NOT a key. Collapsing every unknown-version state
+ * into one bucket would let a single probe pin a permanent negative verdict
+ * that no later upgrade could clear, which is precisely the failure the
+ * version is here to prevent. Re-deriving instead costs one extra
+ * unsupported-method resolution per image, and that resolution never leaves
+ * the process: the client already knows from the handshake manifest that the
+ * peer does not advertise the method (`resolveUnavailableMethodDegrade`), so
+ * it is an error construction, not a round trip.
+ */
+function hostBuildKey(scope: ChatAttachmentScopeValue): string | null {
+  if (scope.hostVersion === null) return null;
+  // Newline-separated: a host id never contains one, so no two distinct pairs
+  // can collide on a single key.
+  return `${scope.hostId}\n${scope.hostVersion}`;
+}
 
 /**
  * Test-only: forgets every remembered `E_HOST_UNSUPPORTED` verdict. The set is
@@ -43,7 +75,7 @@ const hostsWithoutChatAttachmentRead = new Set<string>();
  * unsupported path would otherwise poison every later test in the same file.
  */
 export function resetChatAttachmentHostSupportForTests(): void {
-  hostsWithoutChatAttachmentRead.clear();
+  hostBuildsWithoutChatAttachmentRead.clear();
 }
 
 function isHostUnsupported(error: unknown): boolean {
@@ -58,14 +90,24 @@ function isHostUnsupported(error: unknown): boolean {
  * no reachable host - so the caller can fall through to the doc replica. It
  * THROWS for transient failures, which is what keeps the image blob cache's
  * retry ladder alive for a blob that is one publish away.
+ *
+ * The response's `mediaType` rides along with the bytes rather than being
+ * dropped: it is derived from the delivered bytes' magic bytes and is the only
+ * non-forgeable statement about what this image IS (see `@traycer/protocol`
+ * `host/epic/chat-attachment.ts`). The alternative - the media type stored on
+ * the message by whichever composer wrote it - is a claim, and the SVG
+ * sanitization gate downstream keys on whichever one reaches it.
  */
 async function readChatAttachmentFromHost(
   scope: ChatAttachmentScopeValue | null,
   hash: string,
   signal: AbortSignal,
-): Promise<ImageBytes | null> {
+): Promise<ImageBytesResult | null> {
   if (scope === null || scope.client === null) return null;
-  if (hostsWithoutChatAttachmentRead.has(scope.hostId)) return null;
+  const buildKey = hostBuildKey(scope);
+  if (buildKey !== null && hostBuildsWithoutChatAttachmentRead.has(buildKey)) {
+    return null;
+  }
   try {
     const response = await scope.client.requestWithSignal(
       "epic.readChatAttachment",
@@ -80,10 +122,12 @@ async function readChatAttachmentFromHost(
       // device" marker, which would report a transport fault as a data loss.
       throw new Error(`Chat attachment ${hash} had an undecodable body`);
     }
-    return bytes;
+    return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (isHostUnsupported(error)) {
-      hostsWithoutChatAttachmentRead.add(scope.hostId);
+      if (buildKey !== null) {
+        hostBuildsWithoutChatAttachmentRead.add(buildKey);
+      }
       return null;
     }
     throw error;
@@ -99,17 +143,23 @@ async function readChatAttachmentFromHost(
  * calling it unguarded here would park the chain forever on exactly the case
  * the chat-plane leg above is supposed to own, and the blob cache would never
  * retry the leg that could actually succeed.
+ *
+ * Answers `mediaType: null`: the doc map holds raw bytes with no sniffed
+ * header, so this leg has no verdict of its own and the caller's declared type
+ * stands - unchanged behavior for every doc-resident image.
  */
 async function readAttachmentFromEpicDoc(
   handle: OpenEpicStoreHandle | null,
   hash: string,
   signal: AbortSignal,
-): Promise<ImageBytes | null> {
+): Promise<ImageBytesResult | null> {
   if (handle === null) return null;
   const state = handle.store.getState();
   if (!state.hasAttachmentBytes(hash)) return null;
   const bytes = await state.readAttachmentBytes(hash, signal);
-  return bytes === null ? null : new Uint8Array(bytes);
+  return bytes === null
+    ? null
+    : { bytes: new Uint8Array(bytes), mediaType: null };
 }
 
 /**
@@ -169,6 +219,10 @@ export type ChatAttachmentByteReader = (
  * behavior verbatim: the clipboard write leaves the image as a bare hash, and
  * the stash reports the image as unavailable.
  *
+ * Bytes only, deliberately: both consumers re-attach the image to a model that
+ * already carries its own media type, so the host's sniffed verdict has no
+ * render-time gate to reach from here.
+ *
  * Deliberately NOT routed through `imageBlobCache`: that cache hands back a
  * blob URL, not bytes, and its entries are reference-counted against mounted
  * renderers. A copy is neither.
@@ -183,7 +237,7 @@ export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
         CHAT_ATTACHMENT_READ_TIMEOUT_MS,
       );
       try {
-        return await fetcher(hash, controller.signal);
+        return (await fetcher(hash, controller.signal)).bytes;
       } catch {
         return null;
       } finally {

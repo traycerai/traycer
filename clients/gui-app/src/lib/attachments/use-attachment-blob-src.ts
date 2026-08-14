@@ -15,7 +15,19 @@ import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 export type AttachmentBlobSrcState =
   | { readonly status: "loading"; readonly src: null }
   | { readonly status: "unavailable"; readonly src: null }
-  | { readonly status: "ready"; readonly src: string };
+  | {
+      readonly status: "ready";
+      readonly src: string;
+      /**
+       * What `src` actually IS, as opposed to what the message model claimed.
+       * For a resolved hash this is the blob's real type - the serving host
+       * sniffs chat-attachment bytes and its verdict is authoritative - and
+       * for an inline `dataUrl` it is the declared type, which is also the
+       * type encoded in the URL itself. Render sites that gate on format
+       * (SVG sanitization) must branch on this, never on the stored claim.
+       */
+      readonly mediaType: string;
+    };
 
 /**
  * The epic-doc byte source for image attachments: streams a hash's bytes from
@@ -35,7 +47,9 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
       if (bytes === null) {
         throw new Error(`Image attachment ${h} unavailable`);
       }
-      return new Uint8Array(bytes);
+      // The doc replica stores raw bytes with no sniffed header of its own, so
+      // it has no verdict to offer and the caller's declared type stands.
+      return { bytes: new Uint8Array(bytes), mediaType: null };
     },
     [handle],
   );
@@ -105,10 +119,10 @@ function useResolvedAttachmentBlobSrc(
   );
   if (hash !== null) {
     return blob.status === "ready"
-      ? { status: "ready", src: blob.url }
+      ? { status: "ready", src: blob.url, mediaType: blob.mediaType }
       : { status: blob.status, src: null };
   }
   return dataUrl === null
     ? { status: "unavailable", src: null }
-    : { status: "ready", src: dataUrl };
+    : { status: "ready", src: dataUrl, mediaType };
 }

@@ -13,6 +13,7 @@ import {
   type ChatAttachmentReadClient,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
+import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
 import {
   resetChatAttachmentHostSupportForTests,
   useChatAttachmentByteReader,
@@ -76,14 +77,25 @@ const stubClient: ChatAttachmentReadClient = {
     request(method, params, signal),
 };
 
+const HOST_VERSION = "1.4.0";
+
 function scopeValue(
   hostId: string,
+  withClient: boolean,
+): ChatAttachmentScopeValue {
+  return scopeAt(hostId, HOST_VERSION, withClient);
+}
+
+function scopeAt(
+  hostId: string,
+  hostVersion: string | null,
   withClient: boolean,
 ): ChatAttachmentScopeValue {
   return {
     epicId: "epic-1",
     chatId: CHAT_ID,
     hostId,
+    hostVersion,
     client: withClient ? stubClient : null,
   };
 }
@@ -110,11 +122,18 @@ function rpcError(code: "E_HOST_UNSUPPORTED" | "RPC_ERROR"): HostRpcError {
 
 function fetchOnce(
   scope: ChatAttachmentScopeValue | null,
-): Promise<Uint8Array> {
+): Promise<ImageBytesResult> {
   const { result } = renderHook(() => useChatImageFetcher(), {
     wrapper: wrapperFor(scope),
   });
   return result.current(HASH, new AbortController().signal);
+}
+
+/** The bytes alone, for the many assertions that do not care about the type. */
+async function bytesOnce(
+  scope: ChatAttachmentScopeValue | null,
+): Promise<Uint8Array> {
+  return (await fetchOnce(scope)).bytes;
 }
 
 beforeEach(() => {
@@ -139,7 +158,7 @@ describe("useChatImageFetcher", () => {
       mediaType: "image/png",
     });
 
-    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual(
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       CHAT_PLANE_BYTES,
     );
 
@@ -158,7 +177,7 @@ describe("useChatImageFetcher", () => {
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
 
-    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual(
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
     expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(
@@ -171,7 +190,7 @@ describe("useChatImageFetcher", () => {
     request.mockResolvedValue({ ok: false, reason: "missing" });
     docMocks.hasAttachmentBytes.mockReturnValue(false);
 
-    await expect(fetchOnce(scopeValue("host-1", true))).rejects.toThrow(
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /unavailable/,
     );
     expect(docMocks.hasAttachmentBytes).toHaveBeenCalledWith(HASH);
@@ -183,7 +202,7 @@ describe("useChatImageFetcher", () => {
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
 
-    await expect(fetchOnce(scopeValue("host-1", true))).rejects.toThrow(
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       "socket died",
     );
     // A dropped socket is not "these bytes moved to the doc" - the fallback
@@ -196,29 +215,102 @@ describe("useChatImageFetcher", () => {
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
 
-    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual(
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Second image, same host: the verdict is cached per host, not re-probed.
-    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual(
+    // Second image, same build: the verdict is cached, not re-derived.
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
     expect(request).toHaveBeenCalledTimes(1);
 
     // A different host is a different build - it gets its own probe.
-    await expect(fetchOnce(scopeValue("host-2", true))).resolves.toEqual(
+    await expect(bytesOnce(scopeValue("host-2", true))).resolves.toEqual(
       DOC_BYTES,
     );
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-probes once the same host id is running a newer build", async () => {
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("host-1", "1.4.0", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    await expect(bytesOnce(scopeAt("host-1", "1.4.0", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Traycer can install and activate a newer host under the SAME id with no
+    // renderer reload. Keyed on the id alone the verdict would outlive the
+    // build that produced it, and chat-plane-only images - whose bytes are not
+    // in the doc replica at all - would stay unavailable until a full reload.
+    request.mockReset();
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    await expect(bytesOnce(scopeAt("host-1", "1.5.0", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never pins a verdict for a host whose build is not yet known", async () => {
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("host-1", null, true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    await expect(bytesOnce(scopeAt("host-1", null, true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+
+    // An unknown version cannot name a build, so remembering under it would be
+    // a verdict no upgrade could ever clear. Re-deriving is the safe answer.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the host's sniffed media type alongside the bytes", async () => {
+    // The host derives this from the delivered bytes' magic bytes and never
+    // echoes a client claim, so it is the only trustworthy statement about
+    // what the image IS - and the SVG sanitization gate downstream keys on it.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/svg+xml",
+    });
+
+    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual({
+      bytes: CHAT_PLANE_BYTES,
+      mediaType: "image/svg+xml",
+    });
+  });
+
+  it("offers no media-type verdict for a doc-replica read", async () => {
+    request.mockResolvedValue({ ok: false, reason: "missing" });
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual({
+      bytes: DOC_BYTES,
+      mediaType: null,
+    });
   });
 
   it("skips the RPC leg entirely with no chat scope", async () => {
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
 
-    await expect(fetchOnce(null)).resolves.toEqual(DOC_BYTES);
+    await expect(bytesOnce(null)).resolves.toEqual(DOC_BYTES);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -226,7 +318,7 @@ describe("useChatImageFetcher", () => {
     docMocks.hasAttachmentBytes.mockReturnValue(true);
     docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
 
-    await expect(fetchOnce(scopeValue("host-1", false))).resolves.toEqual(
+    await expect(bytesOnce(scopeValue("host-1", false))).resolves.toEqual(
       DOC_BYTES,
     );
     expect(request).not.toHaveBeenCalled();
@@ -239,7 +331,7 @@ describe("useChatImageFetcher", () => {
       mediaType: "image/png",
     });
 
-    await expect(fetchOnce(scopeValue("host-1", true))).rejects.toThrow(
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /undecodable/,
     );
   });

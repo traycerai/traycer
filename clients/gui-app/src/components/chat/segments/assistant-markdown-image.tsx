@@ -457,8 +457,13 @@ function ResolvedImage(props: {
     <AttachmentImage
       key={image.src}
       src={image.src}
+      // The resolved blob's OWN type, not `props.mediaType`: the latter is the
+      // claim stored on the message, and `AttachmentImage` gates SVG
+      // sanitization on what it is handed. A host-sniffed type overrides the
+      // claim (see `ImageBlobResolution`), so bytes that are really SVG cannot
+      // slip past the gate behind a stored `image/png`.
+      mediaType={image.mediaType}
       alt={props.alt}
-      mediaType={props.mediaType}
       suggestedName={null}
       fullWidth={false}
     />
