@@ -26,13 +26,13 @@ import { z } from "zod";
  * A new minor adds new contracts with their own literal here (`z.literal(1)`
  * for 1.1, and so on) alongside their registry entries.
  */
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 0 } as const;
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 1 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 
 /**
  * Payload-side schema for `schemaVersion`, pinned to the constant above so the
- * two cannot drift. A payload claiming any other version is not a v1.0 record
+ * two cannot drift. A payload claiming any other version is not a v1.1 record
  * and does not parse as one.
  */
 export const chatSyncSchemaVersionSchema = z.object({

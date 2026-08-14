@@ -27,6 +27,7 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
     "throughRecordSeq",
     "capturedAt",
     "minReaderVersion",
+    "cdc",
     "core",
     "messageShards",
     "events",

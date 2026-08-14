@@ -384,7 +384,7 @@ describe("chat assembly fails closed", () => {
     // Content addressing proves the bytes are the ones the head named; this
     // proves they MEAN what the head assumed.
     const foreign = publishShard({
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       chatId: "chat-somewhere-else",
       section: "messages",
       messages: [unknownMessage],
@@ -406,6 +406,60 @@ describe("chat assembly fails closed", () => {
     if (result.status !== "corrupt") return;
     expect(result.reason).toBe("head-mismatch");
     expect(result.diagnostic).toContain("chat-somewhere-else");
+  });
+
+  it("refuses a shard whose membership claims contradict its records", async () => {
+    // The bytes really are the ones the head named - content addressing
+    // passes - but the head's 1.1 cut-plan claims describe a different
+    // partition. Reading on would hand callers a plan the shard does not
+    // implement; a publisher extending the head independently re-verifies
+    // every claim against its own op log, so this is the read/restore-time
+    // detection of the same lie.
+    const honest = published.head.messageShards[0];
+    const lies = [
+      { ...honest, recordCount: (honest.recordCount ?? 0) + 1 },
+      { ...honest, firstRecordId: "m-imposter" },
+      { ...honest, lastRecordId: "m-imposter" },
+    ];
+    for (const lie of lies) {
+      const tampered: ChatHeadRecord = {
+        ...published.head,
+        messageShards: [lie, published.head.messageShards[1]],
+      };
+      const result = await assembleChat({
+        head: tampered,
+        readerSupports: READER,
+        fetch: published.fetch,
+      });
+      expect(result.status).toBe("corrupt");
+      if (result.status !== "corrupt") continue;
+      expect(result.reason).toBe("head-mismatch");
+      expect(result.diagnostic).toContain("head claims");
+    }
+  });
+
+  it("refuses an event shard whose membership claims contradict its records", async () => {
+    const graduated = publishChat({
+      graduate: { events: true, hostPrivate: false },
+      parentHeadSha256: null,
+    });
+    const honest = graduated.head.eventShards[0];
+    const tampered: ChatHeadRecord = {
+      ...graduated.head,
+      eventShards: [
+        { ...honest, firstRecordId: "e-imposter", lastRecordId: "e-imposter" },
+        graduated.head.eventShards[1],
+      ],
+    };
+
+    const result = await assembleChat({
+      head: tampered,
+      readerSupports: READER,
+      fetch: graduated.fetch,
+    });
+    expect(result.status).toBe("corrupt");
+    if (result.status !== "corrupt") return;
+    expect(result.reason).toBe("head-mismatch");
   });
 
   it("refuses an empty graduated section - the impossible graduation", async () => {
