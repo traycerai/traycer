@@ -148,8 +148,14 @@ function EpicUsageDialogBody(props: {
 
   const { summary, coverage, servedBy } = query.data;
   const days = daysForSummaryWindow(summary);
-  const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
-  const columns = buildUsageChartColumns(days, summary.buckets, scale, "cost");
+  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, "harness");
+  const columns = buildUsageChartColumns({
+    days,
+    buckets: summary.buckets,
+    scale,
+    metric: "cost",
+    groupBy: "harness",
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -163,7 +169,12 @@ function EpicUsageDialogBody(props: {
         size="default"
       />
       {summary.totals.factCount === 0 ? null : (
-        <UsageDailyChart columns={columns} scale={scale} metric="cost" />
+        <UsageDailyChart
+          columns={columns}
+          scale={scale}
+          metric="cost"
+          groupBy="harness"
+        />
       )}
       <div>
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">

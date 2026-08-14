@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import {
   applyUsageSeriesVisibility,
   type UsageChartColumn,
+  type UsageChartGroupBy,
   type UsageMetric,
 } from "@/lib/usage-analytics/usage-chart-data";
 import { buildUsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
@@ -17,6 +18,13 @@ export interface UsageDailyChartProps {
   readonly columns: readonly UsageChartColumn[];
   readonly scale: UsageSeriesScale;
   readonly metric: UsageMetric;
+  /**
+   * The dimension `columns`/`scale` were folded by - names the series
+   * dimension in the accessible data table's caption. Mount with
+   * `key={groupBy}` when it can change, so the legend's hidden-series set
+   * (keyed by the OLD dimension's keys) resets with the series it filtered.
+   */
+  readonly groupBy: UsageChartGroupBy;
 }
 
 /**
@@ -31,7 +39,7 @@ export interface UsageDailyChartProps {
  * documented relief-channel role since the bar version.
  */
 export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
-  const { columns, scale, metric } = props;
+  const { columns, scale, metric, groupBy } = props;
   // Self-contained: which series the legend chips have hidden. Toggling never
   // changes `scale.order` or its color assignment (see
   // `applyUsageSeriesVisibility`'s doc comment) - only which bands render.
@@ -80,6 +88,7 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
         scale={scale}
         metric={metric}
         hiddenSeries={hiddenSeries}
+        groupBy={groupBy}
       />
       {/* The `>= 2` gate keeps a one-chip legend off a single-series chart,
           where filtering is meaningless. It must not apply when that lone
@@ -118,12 +127,17 @@ function UsageDailyChartDataTable(props: {
   readonly scale: UsageSeriesScale;
   readonly metric: UsageMetric;
   readonly hiddenSeries: ReadonlySet<string>;
+  readonly groupBy: UsageChartGroupBy;
 }): ReactNode {
-  const { columns, scale, metric, hiddenSeries } = props;
+  const { columns, scale, metric, hiddenSeries, groupBy } = props;
   const visibleKeys = scale.order.filter((key) => !hiddenSeries.has(key));
   return (
     <table className="sr-only" data-testid="usage-daily-chart-data-table">
-      <caption>Daily usage by harness</caption>
+      <caption>
+        {groupBy === "harness"
+          ? "Daily usage by harness"
+          : "Daily usage by model"}
+      </caption>
       <thead>
         <tr>
           <th scope="col">Day</th>
