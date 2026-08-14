@@ -904,16 +904,9 @@ function RateLimitHostPickerRow({
           kind: "manage-hosts",
           onSelect: () => {
             onClose();
-            // The host this row is DISPLAYING travels with the jump - pinned
-            // OR followed. The provider CTAs transfer only an explicit pin
-            // (null there means both surfaces already agree on "follow"), but
-            // this action is rendered from `scope`, which can be showing the
-            // followed host B while Settings holds a stale explicit pin A.
-            if (scope.hostId !== null) {
-              useSettingsHostScopeStore
-                .getState()
-                .setScopedHostId(scope.hostId);
-            }
+            // The displayed host travels with the jump - one rule, one
+            // implementation, shared with the provider CTAs.
+            carryUsageHostIntoSettingsScope(scope.hostId);
             openSettings({ section: "host", resetToGeneral: false });
           },
         }}
