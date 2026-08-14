@@ -106,7 +106,7 @@ describe("hostSelectRowRefused", () => {
     ).toBe(false);
   });
 
-  it("refuses every remote row under the account-level plan gate, even a connectable one", () => {
+  it("refuses a remote row under the account-level plan gate when this client holds no live session, even a connectable one", () => {
     expect(
       hostSelectRowRefused(
         mappedEntry("connectable", recentLastSeen()),
@@ -114,5 +114,15 @@ describe("hostSelectRowRefused", () => {
         false,
       ),
     ).toBe(true);
+  });
+
+  it("keeps a plan-restricted row selectable while a READY session survives - the same override the Settings route applies", () => {
+    expect(
+      hostSelectRowRefused(
+        mappedEntry("connectable", recentLastSeen()),
+        true,
+        true,
+      ),
+    ).toBe(false);
   });
 });

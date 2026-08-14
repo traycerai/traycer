@@ -25,15 +25,22 @@ import { isConfirmedTransportRefusal } from "@traycer-clients/shared/host-client
  * `useRemoteSessionPollReadiness` exists to prevent - rows subscribe through
  * it and pass the current answer in).
  *
- * The account-level plan gate rides alongside, not inside: `remoteRestricted`
- * refuses every remote row regardless of its verdict (the remedy is an
- * upgrade, and the row renders the "Paid plan" chip saying so).
+ * The account-level plan gate rides alongside, but a READY session overrides
+ * it, exactly as it does for the Settings route (`isAdministrableRoute`): the
+ * gate is a client-side render of the plan, not the enforcement — the server
+ * refuses what the plan actually forbids — and mid-downgrade the surviving
+ * session is the transport this row's pick would ride. Refusing the row while
+ * every layer downstream keeps routing over that session strands the user off
+ * a host that demonstrably works. With no session, the restriction renders as
+ * before (the remedy is an upgrade, and the row's "Paid plan" chip says so).
  */
 export function hostSelectRowRefused(
   host: HostDirectoryEntry,
   remoteRestricted: boolean,
   hasReadySession: boolean,
 ): boolean {
-  if (remoteRestricted && host.kind === "remote") return true;
+  if (remoteRestricted && host.kind === "remote" && !hasReadySession) {
+    return true;
+  }
   return isConfirmedTransportRefusal(host, hasReadySession);
 }
