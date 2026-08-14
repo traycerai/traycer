@@ -42,6 +42,7 @@ function liveness(
   return {
     hasLiveRecord: () => false,
     isCloudKnown: () => false,
+    recordListAuthorizesChatAbsence: true,
     ...overrides,
   };
 }
@@ -94,6 +95,28 @@ describe("isTileRefRecordLive", () => {
         "host-a",
       ),
     ).toBe(false);
+  });
+
+  it("keeps a same-host CHAT live until the local record list answers", () => {
+    expect(
+      isTileRefRecordLive(
+        chatTile("chat-local-unanswered", "host-a"),
+        new Set(),
+        liveness({ recordListAuthorizesChatAbsence: false }),
+        "host-a",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a CHAT live while the projection host identity is unresolved", () => {
+    expect(
+      isTileRefRecordLive(
+        chatTile("chat-host-unresolved", "host-a"),
+        new Set(),
+        liveness({}),
+        null,
+      ),
+    ).toBe(true);
   });
 
   it("still polices a cross-host ARTIFACT ref - artifact records are doc-shared", () => {

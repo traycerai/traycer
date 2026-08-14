@@ -25,7 +25,33 @@ vi.mock("@/hooks/auth/use-update-host-version-mutation", () => ({
   }),
 }));
 
-import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
+import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
+import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+
+/**
+ * The drain gate as the Overview actually mounts it.
+ *
+ * `HostRegistryUpdates` used to own both the policy switch and the drain gate
+ * and to create the mutation itself. Those are now two components — the switch
+ * lives behind Advanced, the gate stays on the identity card — and the caller
+ * owns the mutation. This stands in for that caller so every assertion below
+ * still runs against the mocked mutation, unchanged.
+ */
+function MountedDrainGate(props: {
+  readonly item: HostListItem;
+  readonly liveBusySessionCount: number | null;
+  readonly settledBusySessionCount: number | null;
+}) {
+  const mutation = useHostRegistryUpdateMutation(props.item.hostId);
+  return (
+    <HostUpdateDrainGateRow
+      item={props.item}
+      mutation={mutation}
+      liveBusySessionCount={props.liveBusySessionCount}
+      settledBusySessionCount={props.settledBusySessionCount}
+    />
+  );
+}
 
 function pendingRegistryItem(hostId: string): HostListItem {
   return {
@@ -56,7 +82,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
   it("arms with the current settled count, then refuses to confirm once that count changes — description explains why", () => {
     const item = pendingRegistryItem("host-a");
     const { rerender } = render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={2}
         settledBusySessionCount={2}
@@ -72,7 +98,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
     // The count moves while the dialog stands open — a session opened,
     // or the read simply changed between renders.
     rerender(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={5}
         settledBusySessionCount={5}
@@ -89,7 +115,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
     // Losing the DISPLAY read is still the strongest outcome:
     // `deriveUpdateAffordance` nulls `applyNowLabel` whenever
     // `liveBusySessionCount` is `null` while `updateState` is `pending`, and
-    // `HostRegistryUpdates` gates the ENTIRE block (trigger button,
+    // `HostUpdateDrainGateRow` gates the ENTIRE block (trigger button,
     // `ApplyNowControl`, and therefore any open dialog) on
     // `applyNowLabel !== null`. So this does not leave a stale, unconfirmable
     // dialog behind — it unmounts the affordance outright, dialog included.
@@ -100,7 +126,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
     // numbers.
     const item = pendingRegistryItem("host-b");
     const { rerender } = render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={3}
         settledBusySessionCount={3}
@@ -111,7 +137,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
     expect(screen.getByRole("dialog")).not.toBeNull();
 
     rerender(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={null}
         settledBusySessionCount={null}
@@ -126,7 +152,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
   it("confirms normally when the settled count stays exactly what was armed", () => {
     const item = pendingRegistryItem("host-c");
     render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={4}
         settledBusySessionCount={4}
@@ -158,7 +184,7 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
   it("keeps rendering the retained count while a replacement read is in flight", () => {
     const item = pendingRegistryItem("host-d");
     render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={2}
         settledBusySessionCount={null}
@@ -174,7 +200,7 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
   it("refuses to arm from that same retained count", () => {
     const item = pendingRegistryItem("host-e");
     render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={2}
         settledBusySessionCount={null}
@@ -198,7 +224,7 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
     // agree with, so it refuses.
     const item = pendingRegistryItem("host-f");
     const { rerender } = render(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={2}
         settledBusySessionCount={2}
@@ -209,7 +235,7 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
     const dialog = screen.getByRole("dialog");
 
     rerender(
-      <HostRegistryUpdates
+      <MountedDrainGate
         item={item}
         liveBusySessionCount={2}
         settledBusySessionCount={null}

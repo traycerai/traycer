@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { openHostOverviewAdvanced } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -107,6 +108,10 @@ describe("Overview capability split without host management", () => {
 
     // The regression: the page-wide gate replaced this, so a registered host
     // with no current route had no update-policy UI anywhere in the app.
+    //
+    // Behind the Advanced disclosure now — the policy is a preference, not an
+    // answer — but still PRESENT without a route, which is the whole claim.
+    await openHostOverviewAdvanced();
     expect(
       screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
@@ -120,49 +125,41 @@ describe("Overview capability split without host management", () => {
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
 
-  it("withholds version pinning while an update is already in flight", async () => {
-    const { hostScopeOptionFixture } =
-      await import("@/components/settings/host-scope/host-scope-fixture");
-    const draining: HostListItem = {
-      ...REGISTRY_ITEM,
-      status: {
-        ...REGISTRY_ITEM.status,
-        updateState: "pending",
-      },
-    };
-    const host = hostScopeOptionFixture({
-      hostId: "host-remote",
-      isLocalMachine: false,
-      item: draining,
-    });
-
-    renderOverview({ host, hostId: host.hostId, status: "unreachable" });
-
-    // `deriveUpdateAffordance` withholds the input for `pending` / `updating`,
-    // and this rendered it anyway — so a second desired-version write could
-    // retarget an update mid-drain. The policy toggle stays: it is a standing
-    // preference, not a new target.
-    expect(
-      screen.queryByRole("button", { name: "Update to version…" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("switch", { name: "Turn on auto-update" }),
-    ).not.toBeNull();
-  });
-
-  it("offers version pinning once no update is in flight", async () => {
+  it("offers no version control at all for a host it cannot reach", async () => {
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
     const host = hostScopeOptionFixture({
       hostId: "host-remote",
       isLocalMachine: false,
+      connectable: false,
       item: REGISTRY_ITEM,
     });
 
     renderOverview({ host, hostId: host.hostId, status: "unreachable" });
 
+    // The two tests this replaces pinned a free-text "Update to version…"
+    // popover: shown for `current`/`available`/`required`/`failed`, withheld
+    // while a `desiredVersion` write was already draining toward the host so a
+    // second one could not retarget it mid-flight.
+    //
+    // That control is gone. Choosing a version now means choosing one the HOST
+    // listed, over `host.update.check`, so it needs a route and correctly has
+    // none here — and the mid-flight guard moved to `HostVersionRows`, where an
+    // install in flight freezes every row rather than one state hiding an input.
+    //
+    // The trade is deliberate and this is the assertion that states its cost:
+    // an unreachable host can no longer be pinned to a version at all.
+    //
+    // Asserted with Advanced OPEN, so this is a real absence rather than the
+    // drawer merely being shut: everything the disclosure holds is mounted, and
+    // the picker still is not there.
+    await openHostOverviewAdvanced();
+    expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
+    expect(screen.queryByTestId("host-overview-updates")).toBeNull();
+    // What survives the outage, and the whole reason this card is not gated as
+    // a unit: the standing policy is an account write and needs no host.
     expect(
-      screen.getByRole("button", { name: "Update to version…" }),
+      screen.getByRole("switch", { name: "Turn on auto-update" }),
     ).not.toBeNull();
   });
 

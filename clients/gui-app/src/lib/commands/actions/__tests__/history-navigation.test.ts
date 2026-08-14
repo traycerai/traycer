@@ -140,15 +140,18 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 // Registers a real (no-op-transport) open-Epic session in the module-scoped
 // registry `reopenClosedTilePreview` reads via `getOpenEpicRegistry().peek`,
-// with its projected tree seeded to exactly `liveNodeIds` and `snapshotLoaded`
-// set explicitly (a freshly (re)acquired handle defaults to `false` - callers
-// exercising the "session live, tree authoritative" path must pass `true`).
+// with its projected tree seeded to exactly `liveNodeIds`. Snapshot and chat
+// record-list authority are independent: the shared Epic doc can be current
+// while the host-owned chat registry is still answering after a restart.
 // Tracked and released in `afterEach` so sessions never leak across tests.
 const liveEpicHandles: OpenEpicStoreHandle[] = [];
 function seedLiveEpicSession(
   epicId: string,
   liveNodeIds: ReadonlyArray<string>,
-  snapshotLoaded: boolean,
+  authority: {
+    snapshotLoaded: boolean;
+    chatRecordListAuthoritative: boolean;
+  },
 ): void {
   const handle = createOpenEpicStore({
     epicId,
@@ -157,7 +160,8 @@ function seedLiveEpicSession(
     onAuthError: null,
   });
   handle.store.setState((state) => ({
-    snapshotLoaded,
+    snapshotLoaded: authority.snapshotLoaded,
+    chatRecordListAuthoritative: authority.chatRecordListAuthoritative,
     tree: {
       ...state.tree,
       nodeById: Object.fromEntries(
@@ -857,7 +861,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
 
     // A live, FULLY LOADED session for "e1" exists, and its projected tree
     // does NOT contain SPEC_A's content id - the record is gone.
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -890,7 +897,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
 
-    seedLiveEpicSession("e1", [SPEC_A.id], true);
+    seedLiveEpicSession("e1", [SPEC_A.id], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -920,7 +930,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
         SPEC_A.instanceId
       ]?.pendingCreate,
     ).toBe(true);
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -948,7 +961,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
 
-    seedLiveEpicSession("e1", [], false);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: false,
+      chatRecordListAuthoritative: false,
+    });
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -1034,7 +1050,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
 
     // A live, FULLY LOADED session whose tree does NOT hold the chat: the
     // local record is genuinely absent, which is the whole premise.
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
     seedCloudChatList(hostId, [cloudRow(chat.id, true)]);
 
     const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
@@ -1056,7 +1075,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, chat.instanceId);
 
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
     // The list answered, and this chat is not in it. `epic.listCloudChats`
     // already excludes rows this host has tombstoned, so that IS the deletion.
     seedCloudChatList(hostId, []);
@@ -1081,6 +1103,30 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     ).toBeUndefined();
   });
 
+  it("restores while the local chat-record list has not answered, even when the cloud list is empty", () => {
+    const hostId = bindActiveHost();
+    const chat = chatRef(hostId);
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.openTileInTab(tabId, chat);
+    const paneId = requirePaneId(tabId);
+    store.closeCanvasTab(tabId, paneId, chat.instanceId);
+
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: false,
+    });
+    seedCloudChatList(hostId, []);
+
+    const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+
+    goBack({ history });
+
+    expect(requirePreviewTabId(tabId)).toBe(chat.instanceId);
+  });
+
   it("does not let a COLLABORATOR's row vouch for a record-less chat of the viewer's", () => {
     const hostId = bindActiveHost();
     const chat = chatRef(hostId);
@@ -1090,7 +1136,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, chat.instanceId);
 
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
     // Same host-minted `chatId`, different owner - a genuinely different chat.
     seedCloudChatList(hostId, [cloudRow(chat.id, false)]);
 
@@ -1117,7 +1166,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, chat.instanceId);
 
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
     // No `seedCloudChatList`: the slot is empty, so nothing has produced
     // evidence about this chat. Discarding the payload is permanent; a stale
     // restore is not, so absence of evidence must not authorize the destroy.
@@ -1151,7 +1203,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
 
     // A live, fully loaded session without the chat - the arm that reaches the
     // cloud-known predicate at all.
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
 
     const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
@@ -1170,7 +1225,10 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const paneId = requirePaneId(tabId);
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
 
-    seedLiveEpicSession("e1", [], true);
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
     // A cloud row under the artifact's own id, which must buy it nothing:
     // artifact records live in the SHARED epic doc, so their absence means
     // deleted no matter what the chat list holds.

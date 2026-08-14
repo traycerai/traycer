@@ -91,9 +91,15 @@ export interface CommandItem {
    */
   readonly hostBadge?: string;
   /**
-   * Trailing status text for a non-actionable row. Sub-pages render this in a
-   * badge so a workspace that is still resolving or unavailable cannot be
-   * mistaken for a selectable directory.
+   * Trailing context text, rendered by sub-pages as a badge.
+   *
+   * Two uses, and they are not the same thing. On a NON-ACTIONABLE row it is
+   * the reason ("resolving", "unavailable"), so a workspace that cannot be
+   * opened is not mistaken for a selectable directory — `disabled` is what
+   * makes the row inert, this only says why. On an ACTIONABLE row it is the
+   * qualifier that makes an ambiguous label readable: Settings has two sections
+   * named "Diagnostics", one per scope, and this sub-page renders a flat list
+   * with none of the group headings the sidebar uses to tell them apart.
    */
   readonly statusBadge?: string;
   /**

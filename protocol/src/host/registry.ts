@@ -207,8 +207,13 @@ import {
 import {
   hostDoctorV10,
   hostGetInstallationInfoV10,
+  hostServiceDeregisterV10,
+  hostServiceRegisterV10,
+  hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownV10,
@@ -288,11 +293,13 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicListChatRecordsV10,
+  epicGetChatRunSettingsV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadChatAttachmentV10,
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
@@ -3954,11 +3961,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The host reads `ctx.schemaVersion.minor` before returning
+          // `already-updating` and renders `cli-failed` for a 1.0 peer, whose
+          // schema would otherwise refuse the frame.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -3971,6 +3986,53 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostGetInstallationInfoV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The three OS-service methods: brand-new v1.0, outside
+  // `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade. A host that predates
+  // them simply lacks them and the client hides the OS service section on the
+  // handshake answer rather than offering buttons that cannot land. Registered
+  // separately rather than as one `host.service` method taking a verb, because
+  // the read is safe to run whenever the section is open and the two writes
+  // stop the host — collapsing them would put one capability answer, and one
+  // degrade decision, over three very different risks.
+  "host.service.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.service.register": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceRegisterV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.service.deregister": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceDeregisterV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -5995,6 +6057,46 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicListChatRecordsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // One chat image attachment's bytes off the CHAT plane, resolved by the
+  // viewer's tab host (its own disk store, else a bearer pass-through to the
+  // published cloud blob). Optional for the usual reason - a new method name is
+  // handshake-fatal against a released peer - and the degrade needs no surface
+  // at all: a host without it is a host whose images only ever lived in the
+  // epic doc, and the client's doc-replica fallback is exactly what it already
+  // did. `chatId` rides the request so a LOCAL hit can be gated by the same
+  // per-chat visibility rule as live viewing; see `epic/chat-attachment.ts`.
+  "epic.readChatAttachment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadChatAttachmentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The per-chat run-settings tuple the record row above summarises down to a
+  // harness id. Optional and host-LOCAL for the same reason as the list - it
+  // answers out of this host's own chat store, the only place the tuple lives
+  // once the single-write pivot stopped writing doc chat entries. A client
+  // talking to a host without it renders the harness mark alone, which is what
+  // that host's client already showed.
+  "epic.getChatRunSettings": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV10,
           upgradeFromPreviousVersion: null,
         },
       },

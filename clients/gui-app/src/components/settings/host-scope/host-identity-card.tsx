@@ -1,7 +1,4 @@
 import type { ReactNode } from "react";
-import { Check, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -12,7 +9,6 @@ import {
   formatPlatform,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { cn } from "@/lib/utils";
 
 /**
@@ -55,11 +51,42 @@ export function HostIdentityCard(props: {
    */
   readonly version: string | null;
   /**
-   * The card's action cluster (Restart / Run doctor / Edit name), or `null` for
-   * a surface with nothing to offer. Was a bespoke `onRename` slot that no
-   * caller ever filled; the Overview needs three buttons here, and hard-coding
-   * a second and third would push presentation decisions into a card whose job
-   * is to state an identity.
+   * The rename affordance, rendered inline against the name itself.
+   *
+   * A pencil beside the thing it edits, rather than a third word in the verb
+   * bar: renaming is the only action here whose object is the name, and a
+   * labelled button sitting beside Restart and Run doctor read as its peer —
+   * three equally-weighted maintenance verbs, one of which was cosmetic.
+   */
+  readonly nameAction: ReactNode;
+  /**
+   * The in-place editor, or `null` when not renaming.
+   *
+   * Non-null REPLACES the heading rather than rendering under it. The editor
+   * used to be a band of its own between the header and the host id — opening
+   * it pushed the card taller and moved everything below, so the one thing you
+   * were looking at jumped as you reached for it. Swapping the name for an
+   * input of the same size leaves the card exactly the height it already was,
+   * which is what the tab strips have always done (`useInlineRename`).
+   */
+  readonly nameInput: ReactNode | null;
+  /**
+   * How many sessions the HOST says are open (`host.status`), or `null` when it
+   * has not answered — which is not the same as zero and must not render as it.
+   */
+  readonly sessionCount: number | null;
+  /**
+   * The card's action cluster, or `null` for a surface with nothing to offer.
+   *
+   * Opposite the name, NOT a footer strip. An earlier pass tried exactly this
+   * and reverted it: three worded buttons competing for the name's row wrapped
+   * into a ragged two-column block at every settings width below full screen.
+   * The strip that replaced them then cost a full band for three controls.
+   *
+   * What makes the header work now is width, not placement — the cluster is one
+   * control plus a `⋯` trigger, so it fits beside a truncating name instead of
+   * fighting it. That is why this must stay narrow: put worded buttons back in
+   * here and the wrap returns.
    */
   readonly actions: ReactNode;
   readonly children: ReactNode;
@@ -70,8 +97,7 @@ export function HostIdentityCard(props: {
   const version = formatHostVersion(props.version);
   // One line of provenance, in words a person reads rather than the build
   // target string the registry happens to store. This is the page's ONLY
-  // version, on purpose — the endpoint line below describes the route and the
-  // process, not what they are running.
+  // version, on purpose.
   const facts = [platform, arch, version].filter(
     (part): part is string => part !== null && part.length > 0,
   );
@@ -82,21 +108,42 @@ export function HostIdentityCard(props: {
       data-testid="host-identity-card"
       aria-label={`${props.displayName} overview`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
-            <HostGlyph host={host} className="size-4.5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h2 className="truncate font-semibold text-foreground text-title-sm">
-                {props.displayName}
-              </h2>
-              {host.isLocalMachine ? (
-                <HostTag label="This computer" tone={undefined} />
-              ) : null}
+      <div className="flex min-w-0 items-start gap-3 px-5 py-4">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+          <HostGlyph host={host} className="size-4.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+              {props.nameInput === null ? (
+                <>
+                  <h2 className="min-w-0 truncate font-semibold text-foreground text-title-sm">
+                    {props.displayName}
+                  </h2>
+                  {props.nameAction}
+                </>
+              ) : (
+                props.nameInput
+              )}
+              {/* One vocabulary for one fact. The picker has always called
+                  these Local and Remote; this card said "This computer" for
+                  the same host and said nothing at all for the other kind, so
+                  the two surfaces described one fleet in two languages. A
+                  remote host now gets a tag too — the absence of one was never
+                  a deliberate signal, just the local-only branch showing. */}
+              <HostTag
+                label={host.isLocalMachine ? "Local" : "Remote"}
+                tone={undefined}
+              />
             </div>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-ui-sm">
+            {/* The window binding used to be an `Active` tag here and a verb in
+                the footer, with nothing tying them together. Both are now one
+                slot inside `actions`, so the state and the control that reaches
+                it occupy the same place. */}
+            {props.actions}
+          </div>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="flex items-center gap-1.5 text-ui-sm">
               <HostPresenceDot
                 tone={host.health.tone}
                 animate={host.health.live}
@@ -113,27 +160,39 @@ export function HostIdentityCard(props: {
               >
                 {host.health.label}
               </span>
-              {host.health.detail === null ? null : (
-                <span className="min-w-0 truncate text-muted-foreground">
-                  {host.health.detail}
+            </span>
+            {/* `health.detail` renders for the NON-live states only. Live
+                details are the redundant ones — "Running on this computer."
+                repeats the `Local` tag, and the relay route line was
+                deliberately dropped with the meta row — but an offline or
+                unknown host's detail is the actionable half of its answer:
+                "Last seen 2h ago", when reachability was checked, that remote
+                access needs an upgrade. Suppressing those left them rendered
+                nowhere, since the picker deliberately shows only a dot. */}
+            {host.health.tone === "live" ||
+            (host.health.detail ?? "").length === 0 ? null : (
+              <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+                <span aria-hidden className="mr-2 text-muted-foreground/40">
+                  ·
                 </span>
-              )}
-            </div>
-            {facts.length === 0 ? null : (
-              <p className="mt-1 truncate text-ui-xs text-muted-foreground">
-                {facts.join(" · ")}
-              </p>
+                {host.health.detail}
+              </span>
             )}
+            {facts.length === 0 ? null : (
+              // Folded up from its own line. The card gained a footer verb bar,
+              // and three stacked lines of identity above it pushed Host ID and
+              // everything below off a short settings pane; the separator is
+              // what keeps a merged line from reading as one run-on phrase.
+              <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+                <span aria-hidden className="mr-2 text-muted-foreground/40">
+                  ·
+                </span>
+                {facts.join(" · ")}
+              </span>
+            )}
+            <ActiveSessionsChip count={props.sessionCount} />
           </div>
         </div>
-        {props.actions === null ? null : (
-          <div
-            className="flex shrink-0 flex-wrap items-center justify-end gap-2"
-            data-testid="host-identity-actions"
-          >
-            {props.actions}
-          </div>
-        )}
       </div>
       {props.children}
     </section>
@@ -141,121 +200,43 @@ export function HostIdentityCard(props: {
 }
 
 /**
- * "Which host does this window use?" — answered where the consequence is,
- * and changed only by a verb that states it.
+ * Open sessions, as a state rather than a clause.
  *
- * The old app had exactly one control for this: a modal radiogroup that looked
- * like the four viewing dropdowns and silently rebound the window's bell, rate
- * limits and default landing target. Making the swap a labelled button whose
- * copy names what moves — and what deliberately does not — is the whole
- * separation between a lens and a binding.
+ * This is what is left of the `via relay.dev.traycer.ai · 1 active session`
+ * meta row. The route half is deliberately gone — a relay origin is not
+ * something anyone acts on from this page, and printing it made a monospace
+ * band out of the one fact that IS actionable: whether work is running on this
+ * host right now, which decides whether Restart is safe to press.
+ *
+ * `null` renders nothing. A host that has not answered `host.status` has not
+ * told us it is idle, and "No sessions" is a claim.
  */
-export function ThisWindowCard(props: {
-  readonly scope: HostScope;
-  readonly host: HostScopeOption;
+function ActiveSessionsChip(props: {
+  readonly count: number | null;
 }): ReactNode {
-  const { scope, host } = props;
-  if (host.isActive) {
-    return (
-      <div
-        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 bg-primary/5 px-5 py-3"
-        data-testid="host-this-window-active"
-      >
-        <span className="flex items-center gap-2 font-medium text-ui-sm text-primary">
-          <Check className="size-4" aria-hidden />
-          Active for this window
-        </span>
-        <span className="min-w-0 text-ui-xs text-muted-foreground">
-          Notifications, rate limits and newly started work come from here.
-        </span>
-      </div>
-    );
-  }
+  const { count } = props;
+  if (count === null) return null;
+  const live = count > 0;
   return (
-    <div
-      className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-5 py-3"
-      data-testid="host-this-window-inactive"
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-ui-xs font-medium",
+        live
+          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
+          : "border-border/60 bg-muted/40 text-muted-foreground",
+      )}
+      data-testid="host-active-sessions"
+      data-count={count}
     >
-      <div className="min-w-0">
-        <p className="text-ui-sm text-foreground">
-          This window uses{" "}
-          <span className="font-medium">
-            {scope.activeHost?.name ?? "another host"}
-          </span>
-          .
-        </p>
-        <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          {/* The asymmetry has to be said out loud. Tabs bind to their host for
-              life, so a person who expects "switch" to move their work would
-              otherwise watch nothing happen and conclude the button is broken. */}
-          Switching changes where new work starts. Tabs you already have open
-          stay on the host they started on.
-        </p>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!host.connectable}
-        onClick={() => scope.makeActive(host.hostId)}
-        data-testid="host-make-active"
-      >
-        Use this host in this window
-      </Button>
-    </div>
-  );
-}
-
-/**
- * `ThisWindowCard` for the host on this computer, whose console is the
- * pre-existing summary card rather than `HostIdentityCard`. Same content, same
- * copy — it just brings its own border because it is not nested in a card.
- */
-export function ThisWindowCardStandalone(props: {
-  readonly scope: HostScope;
-  readonly host: HostScopeOption;
-}): ReactNode {
-  return (
-    <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-      <ThisWindowCard scope={props.scope} host={props.host} />
-    </div>
-  );
-}
-
-/**
- * The host id, copyable, in the one place it is genuinely useful (a support
- * report) rather than leading an identity line as it used to.
- */
-export function HostIdRow(props: {
-  readonly hostId: string;
-  readonly onCopy: (value: string) => void;
-}): ReactNode {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border/40 px-5 py-2.5">
-      <span className="text-ui-xs text-muted-foreground">Host ID</span>
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate font-mono text-code-xs text-muted-foreground">
-          {props.hostId}
-        </span>
-        <TooltipWrapper
-          label="Copy host ID"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="size-7 p-0"
-            onClick={() => props.onCopy(props.hostId)}
-            aria-label="Copy host ID"
-          >
-            <Copy className="size-3.5" />
-          </Button>
-        </TooltipWrapper>
-      </span>
-    </div>
+      <HostPresenceDot
+        tone={live ? "live" : "idle"}
+        animate={live}
+        className={undefined}
+      />
+      {live
+        ? `${count} active session${count === 1 ? "" : "s"}`
+        : "No active sessions"}
+    </span>
   );
 }
 

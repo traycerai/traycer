@@ -1,4 +1,8 @@
+import type { ReactNode } from "react";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { formatPackageManagerSource } from "@/components/settings/panels/host-settings-panel-model";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import type { CliInstallManifestSnapshot } from "@traycer-clients/shared/platform/runner-host";
 
 interface PackageManagerUpgradeHintProps {
@@ -7,6 +11,14 @@ interface PackageManagerUpgradeHintProps {
   >;
 }
 
+/**
+ * The remediation for a package-manager-owned CLI that is older than the
+ * bundled one. Desktop deliberately never overwrites a Homebrew/npm/winget
+ * binary; it records the source-specific upgrade command instead, and this is
+ * the surface that renders it. A Desktop-local fact by construction — the
+ * producer writes it into this machine's reconcile state, never the host-side
+ * manifest — so it renders only where the local bridge answers.
+ */
 export function PackageManagerUpgradeHint(
   props: PackageManagerUpgradeHintProps,
 ) {
@@ -31,4 +43,33 @@ export function PackageManagerUpgradeHint(
       </pre>
     </output>
   );
+}
+
+/**
+ * The hint wired to its only possible source: this machine's CLI manifest over
+ * the local management bridge. Renders nothing while there is no bridge, no
+ * manifest, or no hint — which is every machine whose CLI Desktop already
+ * keeps current — so the caller mounts it unconditionally on the local path.
+ */
+export function LocalPackageManagerUpgradeHint(): ReactNode {
+  const management = useRunnerHost().hostManagement;
+  const manifest = useQuery(
+    queryOptions<CliInstallManifestSnapshot | null>({
+      queryKey:
+        management === null
+          ? runnerQueryKeys.hostCliManifestUnavailable()
+          : runnerQueryKeys.hostCliManifest(management),
+      queryFn:
+        management === null ? skipCliManifest : () => management.cliManifest(),
+      enabled: management !== null,
+      staleTime: 5 * 60 * 1000,
+    }),
+  );
+  const hint = manifest.data?.packageManagerUpgrade ?? null;
+  if (hint === null) return null;
+  return <PackageManagerUpgradeHint hint={hint} />;
+}
+
+function skipCliManifest(): Promise<CliInstallManifestSnapshot | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
 }

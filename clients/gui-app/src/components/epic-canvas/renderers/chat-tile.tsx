@@ -51,6 +51,10 @@ import {
   type ChatPlanActionsContextValue,
 } from "@/components/chat/chat-plan-actions-context";
 import {
+  ChatAttachmentScopeContext,
+  type ChatAttachmentScopeValue,
+} from "@/components/chat/chat-attachment-scope-context";
+import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
@@ -115,6 +119,7 @@ import {
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
@@ -781,6 +786,32 @@ function transcriptJumpCardKind(
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
+  // Chat image byte reads are scoped here, once per tile, rather than per
+  // rendered image: resolving the routed client is a directory-query
+  // subscription, and a transcript can hold a hundred thumbnails. Covers the
+  // transcript AND the composer/lower surfaces below.
+  const attachmentHostClient = useTabHostClient();
+  // The BUILD, not just the id: a host can be upgraded in place under the same
+  // `hostId`, and the attachment fetcher remembers its "predates
+  // `epic.readChatAttachment`" verdict per build so the upgrade re-probes.
+  const attachmentHostEntry = useHostDirectoryEntry(hostId);
+  const attachmentHostVersion = attachmentHostEntry?.version ?? null;
+  const attachmentScope = useMemo<ChatAttachmentScopeValue>(
+    () => ({
+      epicId: view.currentEpicId,
+      chatId: view.node.id,
+      hostId,
+      hostVersion: attachmentHostVersion,
+      client: attachmentHostClient,
+    }),
+    [
+      attachmentHostClient,
+      attachmentHostVersion,
+      hostId,
+      view.currentEpicId,
+      view.node.id,
+    ],
+  );
   const systemOverlayActive = useAnySystemOverlayActive();
   const tileNavigation = useEpicTileNavigation();
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
@@ -987,121 +1018,123 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   );
 
   return (
-    <ChatDiffTargetContext.Provider value={diffOpener}>
-      <ChatScrollToBlockContext.Provider value={scrollToBlock}>
-        <div
-          data-testid="chat-tile"
-          data-node-id={view.node.id}
-          data-chat-keyboard-scroll-scope=""
-          data-active={props.isActive ? "true" : "false"}
-          className="flex h-full min-h-0 flex-col"
-        >
-          {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
-           * transcript root relies on `flex-1` from ITS immediate parent to
-           * get a definite height (h-full on LegendList needs a real
-           * containing block all the way up). The overlay dock below is
-           * absolutely positioned, so it does not participate in this flex
-           * layout regardless. */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <ChatSessionMessagesSurface
-              snapshotLoaded={view.snapshotLoaded}
-              fatalClose={view.fatalClose}
-              onRetry={view.onChatRetry}
-              restoreContext={view.restoreContext}
-              node={view.node}
-              epicId={view.currentEpicId}
-              viewTabId={view.viewTabId}
-              tabHostId={view.tabHostId}
-              workspaceRoots={view.linkResolutionRoots}
-              messages={view.messages}
-              backgroundItems={view.lower.backgroundItems}
-              scrollRequest={backgroundScrollRequest}
-              surfaceVisible={view.surfaceVisible}
-              systemOverlayActive={systemOverlayActive}
-              getMessageActions={view.getMessageActions}
-              nextStepActions={view.nextStepActions}
-              planActions={view.planActions}
-              composerOverlayHeight={
-                lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-              }
-            />
-            {/*
-             * SurfaceActivityProvider narrows catalog/provider query subscriptions
-             * to the one focused pane+tab. A visible split partner keeps rendering
-             * its transcript and scroll state, but releases catalog/provider query
-             * observers and cannot own palette/composer-global work.
-             *
-             * Absolutely overlays the transcript (decision log #3) instead of
-             * pushing its height via flex, so streamed replies flow visually
-             * behind it; `lowerSurfacesHeight` (measured here) feeds the
-             * transcript's bottom content inset. The full-width positioning
-             * layer must remain both pointer- and paint-transparent so it
-             * cannot cover the transcript scrollbar or its edge lanes.
-             * Centered lower surfaces opt back into pointer handling and own
-             * their opaque backplates (including the bottom seam seal), so
-             * transcript content cannot show through the actual chrome.
-             */}
-            {view.snapshotLoaded ? (
-              <div
-                ref={setLowerSurfacesElement}
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
-                data-chat-lower-surfaces-overlay=""
-              >
-                <div className="pointer-events-none">
-                  <SurfaceActivityProvider active={view.surfaceFocused}>
-                    <ChatLowerInteractionSurfaces
-                      epicId={view.currentEpicId}
-                      viewTabId={view.viewTabId}
-                      chatId={view.node.id}
-                      hostId={hostId}
-                      runtime={view.lower.runtime}
-                      access={view.lower.access}
-                      turn={view.lower.turn}
-                      interview={view.lower.interview}
-                      approvals={view.lower.approvals}
-                      queue={view.lower.queue}
-                      composer={view.lower.composer}
-                      todo={view.todo}
-                      restoreContext={view.restoreContext}
-                      backgroundItems={view.lower.backgroundItems}
-                      backgroundStopPendingTaskIds={
-                        view.lower.backgroundStopPendingTaskIds
-                      }
-                      backgroundStopAllPending={
-                        view.lower.backgroundStopAllPending
-                      }
-                      onBackgroundItemClick={scrollToBackgroundItem}
-                    />
-                  </SurfaceActivityProvider>
+    <ChatAttachmentScopeContext.Provider value={attachmentScope}>
+      <ChatDiffTargetContext.Provider value={diffOpener}>
+        <ChatScrollToBlockContext.Provider value={scrollToBlock}>
+          <div
+            data-testid="chat-tile"
+            data-node-id={view.node.id}
+            data-chat-keyboard-scroll-scope=""
+            data-active={props.isActive ? "true" : "false"}
+            className="flex h-full min-h-0 flex-col"
+          >
+            {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
+             * transcript root relies on `flex-1` from ITS immediate parent to
+             * get a definite height (h-full on LegendList needs a real
+             * containing block all the way up). The overlay dock below is
+             * absolutely positioned, so it does not participate in this flex
+             * layout regardless. */}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <ChatSessionMessagesSurface
+                snapshotLoaded={view.snapshotLoaded}
+                fatalClose={view.fatalClose}
+                onRetry={view.onChatRetry}
+                restoreContext={view.restoreContext}
+                node={view.node}
+                epicId={view.currentEpicId}
+                viewTabId={view.viewTabId}
+                tabHostId={view.tabHostId}
+                workspaceRoots={view.linkResolutionRoots}
+                messages={view.messages}
+                backgroundItems={view.lower.backgroundItems}
+                scrollRequest={backgroundScrollRequest}
+                surfaceVisible={view.surfaceVisible}
+                systemOverlayActive={systemOverlayActive}
+                getMessageActions={view.getMessageActions}
+                nextStepActions={view.nextStepActions}
+                planActions={view.planActions}
+                composerOverlayHeight={
+                  lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+                }
+              />
+              {/*
+               * SurfaceActivityProvider narrows catalog/provider query subscriptions
+               * to the one focused pane+tab. A visible split partner keeps rendering
+               * its transcript and scroll state, but releases catalog/provider query
+               * observers and cannot own palette/composer-global work.
+               *
+               * Absolutely overlays the transcript (decision log #3) instead of
+               * pushing its height via flex, so streamed replies flow visually
+               * behind it; `lowerSurfacesHeight` (measured here) feeds the
+               * transcript's bottom content inset. The full-width positioning
+               * layer must remain both pointer- and paint-transparent so it
+               * cannot cover the transcript scrollbar or its edge lanes.
+               * Centered lower surfaces opt back into pointer handling and own
+               * their opaque backplates (including the bottom seam seal), so
+               * transcript content cannot show through the actual chrome.
+               */}
+              {view.snapshotLoaded ? (
+                <div
+                  ref={setLowerSurfacesElement}
+                  className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                  data-chat-lower-surfaces-overlay=""
+                >
+                  <div className="pointer-events-none">
+                    <SurfaceActivityProvider active={view.surfaceFocused}>
+                      <ChatLowerInteractionSurfaces
+                        epicId={view.currentEpicId}
+                        viewTabId={view.viewTabId}
+                        chatId={view.node.id}
+                        hostId={hostId}
+                        runtime={view.lower.runtime}
+                        access={view.lower.access}
+                        turn={view.lower.turn}
+                        interview={view.lower.interview}
+                        approvals={view.lower.approvals}
+                        queue={view.lower.queue}
+                        composer={view.lower.composer}
+                        todo={view.todo}
+                        restoreContext={view.restoreContext}
+                        backgroundItems={view.lower.backgroundItems}
+                        backgroundStopPendingTaskIds={
+                          view.lower.backgroundStopPendingTaskIds
+                        }
+                        backgroundStopAllPending={
+                          view.lower.backgroundStopAllPending
+                        }
+                        onBackgroundItemClick={scrollToBackgroundItem}
+                      />
+                    </SurfaceActivityProvider>
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
+            <ChatTileErrorNoticeToasts handle={view.handle} />
+            <ChatTileRestoreResultToasts handle={view.handle} />
+            <RevertOnEditDialog
+              open={view.revertOnEdit.open}
+              onOpenChange={view.revertOnEdit.onOpenChange}
+              onRevert={view.revertOnEdit.onRevert}
+              onDontRevert={view.revertOnEdit.onDontRevert}
+              artifactCount={view.revertOnEdit.artifactCount}
+            />
+            <SteerSettingsConflictDialog
+              open={view.steerRestart.open}
+              onOpenChange={view.steerRestart.onOpenChange}
+              onRestart={view.steerRestart.onRestart}
+              changed={view.steerRestart.changed}
+            />
+            <ChatForkDialog
+              open={view.fork.open}
+              target={view.fork.target}
+              epicId={view.currentEpicId}
+              tabId={view.viewTabId}
+              onOpenChange={view.fork.onOpenChange}
+            />
           </div>
-          <ChatTileErrorNoticeToasts handle={view.handle} />
-          <ChatTileRestoreResultToasts handle={view.handle} />
-          <RevertOnEditDialog
-            open={view.revertOnEdit.open}
-            onOpenChange={view.revertOnEdit.onOpenChange}
-            onRevert={view.revertOnEdit.onRevert}
-            onDontRevert={view.revertOnEdit.onDontRevert}
-            artifactCount={view.revertOnEdit.artifactCount}
-          />
-          <SteerSettingsConflictDialog
-            open={view.steerRestart.open}
-            onOpenChange={view.steerRestart.onOpenChange}
-            onRestart={view.steerRestart.onRestart}
-            changed={view.steerRestart.changed}
-          />
-          <ChatForkDialog
-            open={view.fork.open}
-            target={view.fork.target}
-            epicId={view.currentEpicId}
-            tabId={view.viewTabId}
-            onOpenChange={view.fork.onOpenChange}
-          />
-        </div>
-      </ChatScrollToBlockContext.Provider>
-    </ChatDiffTargetContext.Provider>
+        </ChatScrollToBlockContext.Provider>
+      </ChatDiffTargetContext.Provider>
+    </ChatAttachmentScopeContext.Provider>
   );
 }
 

@@ -6,7 +6,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { useLayoutEffect, type ReactNode } from "react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
@@ -76,6 +84,10 @@ interface TestState {
   /** Chat ids the `useCloudChatList` mock answers as present
    * (chat-sync-v2 ticket 36's same-host cloud-known exemption). */
   readonly cloudKnownChatIds: Set<string>;
+  /** Whether the cloud list is still resolving, answered, or failed. */
+  cloudListState: "pending" | "success" | "error" | "unsupported";
+  /** Whether `epic.listChatRecords` has answered for this epic session. */
+  chatRecordListAuthoritative: boolean;
   /**
    * Per-chat record-plane retraction, as `useEpicChatRetraction` reads it off
    * `OpenEpicState.chatRetractions` (multi-host-chats record layer). Unlisted
@@ -97,6 +109,8 @@ const testState = vi.hoisted((): TestState => ({
   activeHostId: null,
   fatalCloseCodeByChatId: new Map(),
   cloudKnownChatIds: new Set(),
+  cloudListState: "success",
+  chatRecordListAuthoritative: true,
   chatRetractionByChatId: new Map(),
 }));
 
@@ -158,6 +172,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useEpicChatRecordListAuthoritative: () =>
+    testState.chatRecordListAuthoritative,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useRegisteredEpicActiveAgentIds: () => new Set<string>(),
   useRegisteredEpicNodeArchived: () => false,
@@ -213,12 +229,20 @@ vi.mock("@/lib/host", () => ({
 // substitution this suite exists to assert. The return annotation is the
 // gate: the next field the row gains fails `compile` here instead of
 // quietly turning these tests red in CI.
-vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
-  useCloudChatList: () => ({
-    data:
-      testState.cloudKnownChatIds.size === 0
-        ? undefined
-        : {
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatList: (args: { readonly enabled: boolean }) => {
+    const isEnabled = args.enabled;
+    const isSuccess = isEnabled && testState.cloudListState === "success";
+    const isError =
+      isEnabled &&
+      (testState.cloudListState === "error" ||
+        testState.cloudListState === "unsupported");
+    return {
+      data: isSuccess
+        ? {
             chats: [...testState.cloudKnownChatIds].map(
               (chatId): CloudChatSummary => ({
                 identity: { taskId: "epic-1", chatId, ownerUserId: "user-1" },
@@ -237,11 +261,23 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
                 isOwnedByViewer: true,
               }),
             ),
-          },
-    isError: false,
-    isPending: false,
-    isFetching: false,
-  }),
+          }
+        : undefined,
+      error: isError
+        ? {
+            code:
+              testState.cloudListState === "unsupported"
+                ? "E_HOST_UNSUPPORTED"
+                : "E_HOST_UNAVAILABLE",
+          }
+        : null,
+      isEnabled,
+      isError,
+      isSuccess,
+      isPending: isEnabled && testState.cloudListState === "pending",
+      isFetching: false,
+    };
+  },
 }));
 
 // tab-group-view imports ChatDeadTileBannerContainer straight from chat-tile,
@@ -797,6 +833,13 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     testState.unmounts.clear();
     testState.deferredClicks.clear();
     testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
+    testState.cloudListState = "success";
+    testState.chatRecordListAuthoritative = true;
+    testState.chatRetractionByChatId.clear();
+    testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -828,6 +871,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
 
   it("keeps a remote-deleted chat on DeletedArtifactBody (not hosted) even with the switch ON", async () => {
     testState.stableTileSurfaceHostEnabled = true;
+    testState.activeHostId = CHAT.hostId;
     const tabs = [CHAT];
     testState.missingArtifactIds.add(CHAT.id);
     seedCanvas(tabs, CHAT.instanceId);
@@ -848,6 +892,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
 
   it("reports the remote-deletion transition into the shared registry so membership can react", async () => {
     testState.stableTileSurfaceHostEnabled = true;
+    testState.activeHostId = CHAT.hostId;
     const tabs = [CHAT];
     seedCanvas(tabs, CHAT.instanceId);
     const { container, rerender } = render(
@@ -884,6 +929,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
 
   it("design-review F2 residual: a real StableTileSurfaceHost sibling loses the hosted owner in the SAME pre-paint commit as the inline flip", async () => {
     testState.stableTileSurfaceHostEnabled = true;
+    testState.activeHostId = CHAT.hostId;
     const tabs = [CHAT];
     seedCanvas(tabs, CHAT.instanceId);
     // `seedCanvas` does not set `openTabOrder`; `getHeaderTabs()` (the
@@ -1247,6 +1293,8 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
     testState.cloudKnownChatIds.clear();
+    testState.cloudListState = "success";
+    testState.chatRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
@@ -1544,6 +1592,17 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
 // this shape, because ticket 49 widened its record gate to let a cloud-known
 // chat subscribe).
 describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (tickets 36 + 49)", () => {
+  beforeEach(() => {
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
+    testState.cloudListState = "success";
+    testState.chatRecordListAuthoritative = true;
+    testState.chatRetractionByChatId.clear();
+    testState.activeHostId = null;
+  });
+
   afterEach(() => {
     cleanup();
     testState.mounts.clear();
@@ -1670,7 +1729,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     ).toBeNull();
   });
 
-  it("does NOT substitute, and does not render published-chat's DeletedArtifactBody either, when the same-host chat has no local record and is NOT cloud-known", async () => {
+  it("renders the deleted body once both authoritative lists answer without the same-host chat", async () => {
     // Neither reap-exempted (not cloud-known) nor live (no local record) -
     // this is what a stale persisted tab reduces to once nothing anywhere
     // attests to the chat. `computeIsRemoteDeleted` renders
@@ -1687,6 +1746,90 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     });
     expect(
       container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the live surface while the cloud list is still resolving after restart", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudListState = "pending";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+  });
+
+  it("keeps the live surface when the cloud list fails transiently", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudListState = "error";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+  });
+
+  it("treats E_HOST_UNSUPPORTED as authoritative cloud absence on a doc-only host", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudListState = "unsupported";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="deleted-node-body"]'),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the live surface until the local chat-record list answers after restart", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.chatRecordListAuthoritative = false;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+  });
+
+  it("does not convict a chat while the active host identity is unresolved", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = null;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
     ).toBeNull();
   });
 
@@ -1765,6 +1908,8 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
     testState.cloudKnownChatIds.clear();
+    testState.cloudListState = "success";
+    testState.chatRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
@@ -1789,7 +1934,9 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
     // stale transcript of a chat the host has destroyed.
     testState.missingArtifactIds.add(CHAT.id);
     testState.activeHostId = CHAT.hostId;
-    testState.cloudKnownChatIds.add(CHAT.id);
+    // Positive deletion evidence must outrank both unresolved absence gates.
+    testState.cloudListState = "pending";
+    testState.chatRecordListAuthoritative = false;
     seedCanvas([CHAT], CHAT.instanceId);
     const { container, rerender } = render(
       groupView([CHAT], CHAT.instanceId, true),

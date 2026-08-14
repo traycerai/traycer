@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ChevronDown, Check, Plus } from "lucide-react";
+import { ChevronDown, Plus, Settings, type LucideIcon } from "lucide-react";
 import {
   Command,
   CommandEmpty,
@@ -13,10 +13,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { HostPresenceDot } from "@/components/settings/host-scope/host-glyph";
+import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
-  HostGlyph,
-  HostPresenceDot,
-} from "@/components/settings/host-scope/host-glyph";
+  isHostOptionSelectable,
+  type HostPickIntent,
+} from "@/components/settings/host-scope/host-option-model";
+import { HOST_SWITCHER_LIST_ATTRIBUTE } from "@/components/settings/host-scope/host-switcher-portal";
 import {
   formatHostVersion,
   formatPlatform,
@@ -26,8 +29,6 @@ import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-dir
 import { useHostBinding } from "@/lib/host";
 import { cn } from "@/lib/utils";
 
-const ADD_HOST_VALUE = "action:add-host";
-
 /**
  * Search stops being decoration and starts being necessary somewhere around a
  * screenful of rows. Below this, a filter box is one more thing to skip past
@@ -36,8 +37,154 @@ const ADD_HOST_VALUE = "action:add-host";
 const SEARCH_THRESHOLD = 6;
 
 /**
+ * The trigger's accessible name. A `view` surface keeps the wording it has had
+ * since it was Settings' own control; a `bind` surface says what it is.
+ */
+function hostSwitcherLabel(
+  intent: HostPickIntent,
+  selected: HostScopeOption | null,
+): string {
+  const subject = intent === "view" ? "Settings host" : "Host";
+  return selected === null
+    ? `${subject}: none selected`
+    : `${subject}: ${selected.name}`;
+}
+
+export type HostSwitcherActionKind = "add-host" | "manage-hosts";
+
+/**
+ * The picker's trailing action — the one thing that differs between the two
+ * surfaces mounting this component, and a prop rather than a constant because
+ * they cannot honestly offer the same verb.
+ *
+ * Settings owns ADD: the dialog, the known-hosts snapshot it takes and every
+ * failure state it can land in all live there, and this footer is its only
+ * opener. A surface that merely WATCHES a host (the header's usage popover) has
+ * no business growing a second copy of that flow, so it ends the list by
+ * pointing at Settings instead. The rows above are identical either way, which
+ * is the point: one picker, one row vocabulary, two endings.
+ */
+export interface HostSwitcherAction {
+  readonly kind: HostSwitcherActionKind;
+  readonly onSelect: () => void;
+}
+
+interface HostSwitcherActionPresentation {
+  readonly label: string;
+  readonly icon: LucideIcon;
+  /** cmdk needs a stable value that cannot collide with a `hostId`. */
+  readonly commandValue: string;
+  readonly keywords: readonly string[];
+  readonly testId: string;
+  /** The same action as the zero-host branch's button, which is not a row. */
+  readonly emptyTestId: string;
+}
+
+/**
+ * Where this picker sits, which decides how its list ATTACHES — the second
+ * thing that cannot be one constant for both surfaces.
+ *
+ * - `rail`: a control among navigation (Settings' sidebar). The trigger is a
+ *   filled, rounded row and the list floats below it at its own comfortable
+ *   width, because the rail is far too narrow to read host names in.
+ * - `field`: one control among other controls, inside a panel that is already
+ *   open (the workspace and worktree pickers, where a search field sits right
+ *   under it). A quiet fill is not enough there: everything around it is flat,
+ *   so the row read as a heading with a stray chevron rather than something you
+ *   could open. It borrows the search field's own border and fill, which is
+ *   what makes the two read as siblings instead of as a label above a control.
+ * - `panel-header`: the picker IS the top strip of the card it heads (the
+ *   header's usage popover). Here a floating list is actively wrong: a rounded
+ *   panel inset inside a rounded panel puts two borders a few pixels apart on
+ *   every edge, and the result reads as an unrelated menu that happened to land
+ *   there rather than as this row's choices. So the trigger goes full-bleed and
+ *   square, and the list drops flush from its bottom edge at exactly its width
+ *   — one shared edge, one continuous surface.
+ */
+export type HostSwitcherSurface = "rail" | "panel-header" | "field";
+
+interface HostSwitcherSurfacePresentation {
+  /**
+   * On the rail: a filled row, not a bordered card. It has to read as a CONTROL
+   * among navigation — the sections below it are transparent rows, so a quiet
+   * fill separates "this thing opens" from "this thing navigates" without
+   * adding a second vertical edge beside the rail's own border, which is what
+   * made the earlier bordered version look like a panel wedged into the
+   * sidebar. Muted, never accent: the accent is spoken for by the selected
+   * section.
+   *
+   * As a panel header: no resting fill and no radius. The strip already has the
+   * card's own edges around it and a divider under it, so a second rounded fill
+   * inside them is the "panel wedged into a panel" problem again, one level in.
+   * The hover fill still says it opens.
+   */
+  readonly trigger: string;
+  /** Squares off the two corners that would cut back in under the strip. */
+  readonly list: string;
+  /**
+   * Flush against the trigger's bottom edge as a panel header, so the list's
+   * own top edge lands ON the strip's divider instead of drawing a second line
+   * a few pixels under it. On the rail the usual float is right — there is no
+   * card edge for it to double up against.
+   */
+  readonly sideOffsetPx: number;
+}
+
+const HOST_SWITCHER_SURFACES: Record<
+  HostSwitcherSurface,
+  HostSwitcherSurfacePresentation
+> = {
+  rail: {
+    trigger: "rounded-md bg-muted/50 hover:bg-muted/80",
+    list: "",
+    sideOffsetPx: 4,
+  },
+  "panel-header": {
+    trigger: "hover:bg-muted/50",
+    list: "rounded-t-none",
+    sideOffsetPx: 0,
+  },
+  field: {
+    // Deliberately the same tokens as the worktree picker's search input
+    // (`InputGroup`, `border-input/40 bg-input/25`), one control above it.
+    trigger:
+      "rounded-lg border border-input/40 bg-input/25 hover:bg-input/40 dark:hover:bg-input/40",
+    list: "",
+    sideOffsetPx: 4,
+  },
+};
+
+const HOST_SWITCHER_ACTIONS: Record<
+  HostSwitcherActionKind,
+  HostSwitcherActionPresentation
+> = {
+  "add-host": {
+    label: "Add host…",
+    icon: Plus,
+    commandValue: "action:add-host",
+    keywords: ["add", "new", "install", "connect", "host"],
+    testId: "settings-host-switcher-add",
+    emptyTestId: "settings-host-switcher-empty-add",
+  },
+  "manage-hosts": {
+    label: "Manage hosts…",
+    icon: Settings,
+    commandValue: "action:manage-hosts",
+    keywords: ["manage", "settings", "add", "install", "host", "hosts"],
+    testId: "settings-host-switcher-manage",
+    emptyTestId: "settings-host-switcher-empty-manage",
+  },
+};
+
+/**
  * THE host selector. There is exactly one of these in Settings, and it heads
- * the sidebar group whose sections it scopes.
+ * the sidebar group whose sections it scopes. The header's usage popover
+ * mounts the same component to head ITS panes (`rate-limit-popover.tsx`) —
+ * reuse, not a second picker: two controls over one concept is precisely the
+ * fragmentation the next paragraph describes, and it does not stop being that
+ * because the second one lives outside Settings. What differs between the two
+ * is only the SELECTION each writes to (`HostScopeSelection`), never the row
+ * vocabulary or the scoping mechanism.
  *
  * It replaced four separate `Select`s (Providers' header, Worktrees' toolbar,
  * the snapshots row, the agent-instructions strip) that differed in width,
@@ -61,7 +208,23 @@ export function HostSwitcher(props: {
   readonly selected: HostScopeOption | null;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
-  readonly onAddHost: () => void;
+  /** How this list ends — see `HostSwitcherAction`. */
+  readonly action: HostSwitcherAction;
+  /** Where this picker sits — see `HostSwitcherSurface`. */
+  readonly surface: HostSwitcherSurface;
+  /**
+   * What choosing a host here DOES. `bind` surfaces (the composer, the worktree
+   * pickers) point the whole window at the host, so a host this client cannot
+   * dial is not a legal answer and its row goes inert; `view` surfaces may
+   * point at one regardless. See `HostPickIntent`.
+   */
+  readonly intent: HostPickIntent;
+  /**
+   * The surface owns the selection right now — a submission is in flight, or it
+   * is pinned to one host. The trigger goes inert rather than opening a list
+   * whose every row would be refused.
+   */
+  readonly disabled: boolean;
   readonly isLoading: boolean;
   /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
@@ -71,23 +234,26 @@ export function HostSwitcher(props: {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
   const { hosts, selected } = props;
+  const action = HOST_SWITCHER_ACTIONS[props.action.kind];
+  const ActionIcon = action.icon;
+  const surface = HOST_SWITCHER_SURFACES[props.surface];
 
   // The empty state keys on the LIST, not on the selection.
   //
   // Keying it on `selected === null` conflated two opposite situations: "you
   // own no hosts" and "the host you were viewing was deregistered". The second
   // one still has hosts, and this early return replaced the picker with a dead
-  // div — removing the only way back to a working host, and taking `Add host…`
-  // with it, since this popover's footer is its sole opener. So the one moment
+  // div — removing the only way back to a working host, and taking Settings'
+  // `Add host…` with it, since that footer is its sole opener. So the one moment
   // a person most needs the picker was the one moment it disappeared.
   if (hosts.length === 0) {
     // A FAILED list is not an empty account, here as much as in the gate — the
     // same rule, at its second consumer. This branch used to claim "No hosts
-    // yet" and offer Add host over a union that was empty because a request
-    // never came back: contradicting the panel beside it, and letting Add
-    // record an empty known-hosts snapshot that a later successful retry
+    // yet" and offer the trailing action over a union that was empty because a
+    // request never came back: contradicting the panel beside it, and letting
+    // Add record an empty known-hosts snapshot that a later successful retry
     // turned into "your existing host just connected". Retry is the honest
-    // action; Add returns the moment the claim can be made.
+    // action; the rest returns the moment the claim can be made.
     if (props.listsFailed && !props.isLoading) {
       return (
         <div
@@ -116,18 +282,18 @@ export function HostSwitcher(props: {
         <span className="text-ui-xs text-muted-foreground">
           {props.isLoading ? "Finding your hosts…" : "No hosts yet"}
         </span>
-        {/* Genuinely zero hosts is exactly when Add matters most, and it used
-            to be unreachable here — the only opener lived in a popover this
-            branch returned before rendering. */}
+        {/* Genuinely zero hosts is exactly when this action matters most, and
+            it used to be unreachable here — the only opener lived in a popover
+            this branch returned before rendering. */}
         {props.isLoading ? null : (
           <button
             type="button"
-            onClick={props.onAddHost}
+            onClick={props.action.onSelect}
             className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            data-testid="settings-host-switcher-empty-add"
+            data-testid={action.emptyTestId}
           >
-            <Plus className="size-3.5 shrink-0" />
-            Add host…
+            <ActionIcon className="size-3.5 shrink-0" />
+            {action.label}
           </button>
         )}
       </div>
@@ -140,22 +306,18 @@ export function HostSwitcher(props: {
         // The DESTINATION belongs in the accessible name, not just the role.
         // A bare "Host" would tell a screen-reader user what the control is
         // for while withholding the one thing it displays.
-        aria-label={
-          selected === null
-            ? "Settings host: none selected"
-            : `Settings host: ${selected.name}`
-        }
+        // Named for what choosing DOES here. "Settings host" is the viewing
+        // scope; a `bind` surface is choosing the host the window runs on, and
+        // a screen reader that hears "Settings host" in the composer is being
+        // told about a different control than the one it is on.
+        aria-label={hostSwitcherLabel(props.intent, selected)}
+        disabled={props.disabled}
         data-testid="settings-host-switcher"
-        // A filled row, not a bordered card. It has to read as a CONTROL among
-        // navigation — the sections below it are transparent rows, so a quiet
-        // fill separates "this thing opens" from "this thing navigates"
-        // without adding a second vertical edge beside the rail's own border,
-        // which is what made the earlier bordered version look like a panel
-        // wedged into the sidebar. Muted, never accent: the accent is spoken
-        // for by the selected section.
         className={cn(
-          "flex w-full items-center gap-3 rounded-md bg-muted/50 px-3 py-2 text-left transition-colors",
-          "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+          "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors",
+          "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+          "disabled:pointer-events-none disabled:opacity-60",
+          surface.trigger,
         )}
       >
         {/* `selected` is null while the scoped host is gone but others remain.
@@ -185,8 +347,19 @@ export function HostSwitcher(props: {
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[min(90vw,20rem)] p-0"
+        sideOffset={surface.sideOffsetPx}
+        // Never narrower than the row it drops out of. A list floating at its
+        // own width under a wider trigger reads as an unrelated panel that
+        // happened to land there — the connection between "this row" and "these
+        // choices" is carried by the shared left edge AND the shared width. The
+        // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
+        // too narrow to read host names in), not a size.
+        className={cn(
+          "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)] p-0",
+          surface.list,
+        )}
         data-testid="settings-host-switcher-list"
+        {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
       >
         <Command>
           {hosts.length >= SEARCH_THRESHOLD ? (
@@ -201,6 +374,7 @@ export function HostSwitcher(props: {
                   host={host}
                   scoped={selected !== null && host.hostId === selected.hostId}
                   active={host.hostId === props.activeHostId}
+                  intent={props.intent}
                   onSelect={() => {
                     props.onSelect(host.hostId);
                     setOpen(false);
@@ -210,17 +384,17 @@ export function HostSwitcher(props: {
             </CommandGroup>
             <CommandGroup>
               <CommandItem
-                value={ADD_HOST_VALUE}
-                keywords={["add", "new", "install", "connect", "host"]}
+                value={action.commandValue}
+                keywords={[...action.keywords]}
                 onSelect={() => {
                   setOpen(false);
-                  props.onAddHost();
+                  props.action.onSelect();
                 }}
-                data-testid="settings-host-switcher-add"
+                data-testid={action.testId}
               >
-                <Plus className="size-4 shrink-0 text-muted-foreground" />
+                <ActionIcon className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-ui-sm">
-                  Add host…
+                  {action.label}
                 </span>
               </CommandItem>
             </CommandGroup>
@@ -256,23 +430,26 @@ export function HostSwitcher(props: {
 }
 
 /**
- * One row: glyph · name · [ACTIVE] · status dot · check.
- *
- * Single-line by design. The old two-line row restated health as words under
- * every name, which at six hosts read as a log rather than a list; the dot
- * carries it, and the full sentence lives on Overview where there is room for
- * it to be useful.
+ * The combobox's interaction shell around the shared row: a cmdk item, its
+ * search keywords, and the assistive-tech mark for "this is the one you are
+ * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
+ * embedded sections and the Select host dialog draw too.
  */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
   readonly scoped: boolean;
   readonly active: boolean;
+  readonly intent: HostPickIntent;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
   return (
     <CommandItem
       value={host.hostId}
+      // One predicate, asked here exactly as the button list asks it, so a row
+      // that explains why it cannot be picked is also a row that cannot be
+      // picked — on both kinds of container.
+      disabled={!isHostOptionSelectable(host, props.intent)}
       keywords={[
         host.name,
         formatPlatform(host.platform) ?? "",
@@ -281,52 +458,18 @@ function HostSwitcherRow(props: {
       onSelect={props.onSelect}
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
-      // The check mark below is aria-hidden and `data-scoped` reaches no
-      // assistive tech, so without this a screen reader heard the scoped row
+      // The check mark inside the row is aria-hidden and `data-scoped` reaches
+      // no assistive tech, so without this a screen reader heard the scoped row
       // and every other row as the same text.
       aria-current={props.scoped ? "true" : undefined}
+      className="text-ui-sm"
     >
-      <HostGlyph
+      <HostOptionRow
         host={host}
-        className="size-4 shrink-0 text-muted-foreground"
+        picked={props.scoped}
+        active={props.active}
+        intent={props.intent}
       />
-      <span className="min-w-0 flex-1 truncate text-ui-sm">{host.name}</span>
-      {props.scoped ? <span className="sr-only">Currently viewing</span> : null}
-      {props.active ? <ActiveTag /> : null}
-      {/* A host this client cannot dial is still worth listing — it is the
-          account's host and its status is real — but saying so up front
-          prevents a click that could only ever fail. Plan-gated is named
-          apart from unreachable: the first is fixed by an upgrade, the
-          second maybe by waiting, and one word covering both sends people
-          debugging their network over a billing limit. */}
-      {host.connectable ? null : (
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          {host.planRestricted ? "requires upgrade" : "unreachable"}
-        </span>
-      )}
-      <HostPresenceDot
-        tone={host.health.tone}
-        animate={host.health.live}
-        className={undefined}
-      />
-      {props.scoped ? (
-        <Check className="size-3.5 shrink-0 text-primary" aria-hidden />
-      ) : (
-        <span className="size-3.5 shrink-0" aria-hidden />
-      )}
     </CommandItem>
-  );
-}
-
-/**
- * The accent is reserved for the BINDING — which host this window uses. It
- * never marks the viewing selection, so the two can always be told apart at a
- * glance even when they happen to be the same host.
- */
-function ActiveTag(): ReactNode {
-  return (
-    <span className="shrink-0 rounded-sm bg-primary/15 px-1 py-px text-[0.625rem] font-medium uppercase tracking-wide text-primary">
-      Active
-    </span>
   );
 }

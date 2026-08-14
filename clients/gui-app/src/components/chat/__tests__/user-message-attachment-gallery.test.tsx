@@ -2,11 +2,17 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UserMessageAttachmentGallery } from "@/components/chat/user-message-attachment-gallery";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 
-vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
-  useAttachmentBlobSrc: vi.fn(),
-}));
+vi.mock(
+  "@/lib/attachments/use-attachment-blob-src",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/attachments/use-attachment-blob-src")
+    >()),
+    useChatAttachmentBlobSrc: vi.fn(),
+  }),
+);
 
 afterEach(() => {
   cleanup();
@@ -15,7 +21,7 @@ afterEach(() => {
 
 describe("UserMessageAttachmentGallery", () => {
   it("surfaces an unavailable image in both the thumbnail and dialog", async () => {
-    vi.mocked(useAttachmentBlobSrc).mockReturnValue({
+    vi.mocked(useChatAttachmentBlobSrc).mockReturnValue({
       status: "unavailable",
       src: null,
     });

@@ -67,6 +67,7 @@ interface TestState {
   activePanelId: "chats" | "artifacts";
   artifactFilterKinds: ReadonlyArray<string>;
   chatFilterOrigin: "all" | "gui" | "tui";
+  chatFilterOwnership: "all" | "mine" | "others";
   collapsedPanelIds: ReadonlySet<string>;
   expandedIds: ReadonlySet<string>;
   unreadArtifactIds: ReadonlySet<string>;
@@ -163,6 +164,7 @@ const testState = vi.hoisted<TestState>(() => ({
   activePanelId: "chats",
   artifactFilterKinds: [],
   chatFilterOrigin: "all",
+  chatFilterOwnership: "all",
   collapsedPanelIds: new Set<string>(),
   expandedIds: new Set<string>(),
   unreadArtifactIds: new Set<string>(),
@@ -649,9 +651,27 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
     Archived: "archived",
     All: "all",
   },
+  CHAT_OWNERSHIP: {
+    All: "all",
+    Mine: "mine",
+    Others: "others",
+  },
+  CHAT_ORIGIN: {
+    All: "all",
+    Gui: "gui",
+    Tui: "tui",
+  },
   DEFAULT_LEFT_PANEL_ID: "chats",
   isArtifactFilterActive: () => testState.artifactFilterKinds.length > 0,
-  isChatFilterActive: () => testState.chatFilterOrigin !== "all",
+  isChatFilterActive: () =>
+    testState.chatFilterOrigin !== "all" ||
+    testState.chatFilterOwnership !== "all",
+  matchesChatOwnershipFilter: (
+    isOwnedByViewer: boolean,
+    ownership: "all" | "mine" | "others",
+  ) =>
+    ownership === "all" ||
+    (ownership === "mine" ? isOwnedByViewer : !isOwnedByViewer),
   useAcknowledgedRootCreatePending: () => null,
   useActiveLeftPanelId: () => testState.activePanelId,
   useArtifactFilter: () => ({
@@ -660,7 +680,10 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
     read: "all",
   }),
   useArtifactSort: () => ({ field: "updated", direction: "desc" }),
-  useChatFilter: () => ({ origin: testState.chatFilterOrigin }),
+  useChatFilter: () => ({
+    origin: testState.chatFilterOrigin,
+    ownership: testState.chatFilterOwnership,
+  }),
   useChatArchiveVisibility: () => testState.archiveVisibility,
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
@@ -934,6 +957,7 @@ describe("epic sidebar selection mode", () => {
     testState.activePanelId = "chats";
     testState.artifactFilterKinds = [];
     testState.chatFilterOrigin = "all";
+    testState.chatFilterOwnership = "all";
     testState.collapsedPanelIds = new Set<string>();
     testState.expandedIds = new Set<string>();
     testState.unreadArtifactIds = new Set<string>();
@@ -1509,6 +1533,20 @@ describe("epic sidebar selection mode", () => {
       screen.getByText("The Interface filter is hiding the other agents."),
     ).not.toBeNull();
     expect(screen.queryByText("No agents yet.")).toBeNull();
+  });
+
+  it("hides local agents as Mine when the Ownership filter selects Others", () => {
+    seedChatTree();
+    testState.chatFilterOwnership = "others";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+    expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).toBeTruthy();
+    expect(
+      screen.getByText("The Ownership filter is hiding the other agents."),
+    ).toBeTruthy();
   });
 
   it("shows the empty artifact panel state when there are no artifacts", () => {

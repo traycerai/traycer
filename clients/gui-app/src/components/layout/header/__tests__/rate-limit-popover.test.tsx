@@ -30,6 +30,11 @@ import type {
 } from "@traycer/protocol/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
@@ -244,6 +249,12 @@ vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
     mocks.enqueueBatch(...args),
   enqueueRateLimitFetchForScope: (...args: unknown[]) =>
     mocks.enqueue(...args.slice(1)),
+  // The scope argument is dropped so the batch assertions keep asserting what
+  // they always did - WHICH targets are enqueued. That the scope is this
+  // subtree's rather than the app-shell default is a different claim, proved
+  // by `use-rate-limit-queue-scope`'s own suite.
+  enqueueRateLimitFetchBatchForScope: (...args: unknown[]) =>
+    mocks.enqueueBatch(...args.slice(1)),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -268,6 +279,13 @@ import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover"
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 
 const NOW = Date.now();
+
+/**
+ * One host, followed. The picker row only appears when there is a choice to
+ * make, so this is the scope under which every assertion in this suite about
+ * the rail/detail layout is the same one it made before the picker existed.
+ */
+const SINGLE_HOST_SCOPE = hostScopeFixture({});
 
 function resultKey(providerId: string, profileId: string | null): string {
   return profileId === null ? providerId : `${providerId}:${profileId}`;
@@ -527,6 +545,16 @@ function traycerUsageQueryKey(accountContext: AccountContext) {
 let onClose: () => void;
 
 function renderPopover() {
+  return renderPopoverWithScope(SINGLE_HOST_SCOPE, false);
+}
+
+/**
+ * `hasExplicitPick` is required, not defaulted: every caller states outright
+ * whether it is testing the "following the active host" world (unaffected by
+ * a pick) or the "someone picked a host" world (where an unusable scope earns
+ * the unavailable notice instead of the rail/detail panes).
+ */
+function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
   const client = new QueryClient();
   const rendered = render(
     <QueryClientProvider client={client}>
@@ -536,12 +564,31 @@ function renderPopover() {
           <RateLimitPopover
             onClose={onClose}
             profileSelection={mocks.profileSelection}
+            scope={scope}
+            hasExplicitPick={hasExplicitPick}
           />
         </Popover>
       </TooltipProvider>
     </QueryClientProvider>,
   );
   return { ...rendered, client };
+}
+
+/**
+ * A second host beside `SINGLE_HOST_SCOPE`'s lone one, still following (no
+ * pick) unless a test overrides it - the picker row's own presence only
+ * depends on host count, not on a pick having been made.
+ */
+function twoHostScope(overrides: Partial<HostScope>): HostScope {
+  const hostA = hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" });
+  const hostB = hostScopeOptionFixture({ hostId: "host-b", name: "Bravo" });
+  return hostScopeFixture({
+    host: hostA,
+    hosts: [hostA, hostB],
+    activeHostId: hostA.hostId,
+    activeHost: hostA,
+    ...overrides,
+  });
 }
 
 function pointerEvent(
@@ -1038,11 +1085,18 @@ describe("<RateLimitPopover /> rail", () => {
     });
     expect(surface.style.width).toBe("540px");
     expect(surface.style.height).toBe("460px");
-    expect(surface.className).toContain("grid-rows-[minmax(0,1fr)]");
     expect(surface.className).toContain(
       "min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))]",
     );
     expect(surface.className).toContain("overflow-hidden");
+    // The surface owns the height; the rail/detail row is pinned to it one
+    // level down, below the host picker row. Both halves are asserted because
+    // dropping either one is what lets a pane grow past the popover instead of
+    // scrolling inside it.
+    expect(surface.className).toContain("flex-col");
+    expect(screen.getByTestId("rate-limit-popover-panes").className).toContain(
+      "grid-rows-[minmax(0,1fr)]",
+    );
 
     geometry.rectSpy.mockRestore();
     first.unmount();
@@ -1545,6 +1599,8 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
             <RateLimitPopover
               onClose={onClose}
               profileSelection={mocks.profileSelection}
+              scope={SINGLE_HOST_SCOPE}
+              hasExplicitPick={false}
             />
           </Popover>
         </TooltipProvider>
@@ -2657,5 +2713,131 @@ describe("<RateLimitPopover /> Traycer tab", () => {
       screen.getByRole("button", { name: "Refresh Traycer Inference" }),
     );
     expect(authUser.refetch).toHaveBeenCalled();
+  });
+});
+
+describe("<RateLimitPopover /> host picker", () => {
+  it("shows no host picker row when there is only one host", () => {
+    renderPopover();
+    expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
+  });
+
+  it("shows a host picker row when there is more than one host", () => {
+    renderPopoverWithScope(twoHostScope({}), false);
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+  });
+
+  // The `vanished` exception: a pick that no longer resolves is not a choice,
+  // it's the way OUT, so the row must stay reachable even though the account
+  // is back down to one host.
+  it("keeps the host picker row reachable when the pick vanished, even with only one host left", () => {
+    const remaining = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Alpha",
+    });
+    const scope = hostScopeFixture({
+      host: null,
+      hosts: [remaining],
+      vanishedHostId: "host-gone",
+      hostLabel: "host-gone",
+      status: "vanished",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+  });
+
+  it("scopes the view without making the picked host active", () => {
+    const setHostId = vi.fn();
+    const makeActive = vi.fn();
+    renderPopoverWithScope(twoHostScope({ setHostId, makeActive }), false);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    expect(setHostId).toHaveBeenCalledWith("host-b");
+    expect(makeActive).not.toHaveBeenCalled();
+  });
+});
+
+describe("<RateLimitPopover /> unusable explicit host pick", () => {
+  it("shows the vanished notice and returns to the active host from it", () => {
+    const returnToActive = vi.fn();
+    const scope = hostScopeFixture({
+      host: null,
+      hosts: [hostScopeOptionFixture({ hostId: "host-a" })],
+      vanishedHostId: "host-gone",
+      hostLabel: "Old Laptop",
+      status: "vanished",
+      isViewingActive: false,
+      returnToActive,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+    expect(
+      screen.getByTestId("rate-limit-host-unavailable").textContent,
+    ).toContain("Old Laptop is no longer connected");
+
+    fireEvent.click(screen.getByTestId("rate-limit-host-return-to-active"));
+    expect(returnToActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the unreachable notice for an explicitly picked host this client cannot dial", () => {
+    const scope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      ],
+      hostLabel: "Office Linux",
+      status: "unreachable",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+    expect(
+      screen.getByTestId("rate-limit-host-unavailable").textContent,
+    ).toContain("Can't reach Office Linux");
+  });
+
+  it("shows a connecting indicator while an explicit pick resolves", () => {
+    const scope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-b" }),
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b" }),
+      ],
+      hostLabel: "Office Linux",
+      status: "connecting",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+    expect(
+      screen.getByTestId("rate-limit-host-connecting").textContent,
+    ).toContain("Finding Office Linux");
+  });
+
+  // The no-regression case: following the active host (no explicit pick),
+  // an `unreachable` status is the routine blip the rate-limit envelope's own
+  // lastGood/degraded retention already rides out - it must not be traded for
+  // a notice that would leave every single-host user worse off.
+  it("keeps rendering the rail and detail panes while following the active host, even when its status looks unreachable", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    const scope = hostScopeFixture({
+      status: "unreachable",
+      isViewingActive: true,
+    });
+    renderPopoverWithScope(scope, false);
+
+    expect(screen.getByTestId("rate-limit-popover-panes")).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-host-unavailable")).toBeNull();
+    expect(screen.queryByTestId("rate-limit-host-connecting")).toBeNull();
   });
 });

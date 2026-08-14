@@ -118,7 +118,15 @@ function SettingsSidebarHostPicker(props: {
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
-        onAddHost={() => openAddHost(scope.hosts.map((host) => host.hostId))}
+        // Settings is where the add-host dialog lives, so here the list ends in
+        // the verb itself rather than in a link to this very page.
+        action={{
+          kind: "add-host",
+          onSelect: () => openAddHost(scope.hosts.map((host) => host.hostId)),
+        }}
+        surface="rail"
+        intent="view"
+        disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}

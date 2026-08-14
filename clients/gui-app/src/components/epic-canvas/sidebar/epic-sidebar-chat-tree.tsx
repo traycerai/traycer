@@ -83,8 +83,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
+  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
   isChatFilterActive,
+  matchesChatOwnershipFilter,
   useAcknowledgedRootCreatePending,
   useChatArchiveVisibility,
   useChatFilter,
@@ -551,9 +553,10 @@ function usePanelRootIds(
 }
 
 /**
- * Visible-id set for an active chat origin filter (GUI chats vs TUI terminal
- * agents), expanded to include ancestors so filtered nodes stay reachable.
- * `null` when no filter is active.
+ * Visible-id set for active interface and ownership filters, expanded to
+ * include ancestors so filtered nodes stay reachable. Every local agent is
+ * owned by the viewer; collaborators' agents arrive only as cloud rows.
+ * `null` when neither filter is active.
  */
 function useChatVisibleIds(epicId: string): ReadonlySet<string> | null {
   const filter = useChatFilter(epicId);
@@ -561,9 +564,15 @@ function useChatVisibleIds(epicId: string): ReadonlySet<string> | null {
   const tree = useEpicTreeIndex();
   return useMemo(() => {
     if (!isChatFilterActive(filter)) return null;
-    const wantType = filter.origin === "gui" ? "chat" : "terminal-agent";
+    const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
     const matches = liveRecords.flatMap((record): string[] =>
-      record.type === wantType ? [record.id] : [],
+      includeLocal &&
+      CHATS_TREE_FILTER(record.type) &&
+      (filter.origin === CHAT_ORIGIN.All ||
+        (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
+        (filter.origin === CHAT_ORIGIN.Tui && record.type === "terminal-agent"))
+        ? [record.id]
+        : [],
     );
     return collectWithAncestors(matches, tree.nodeById);
   }, [filter, liveRecords, tree]);
@@ -596,8 +605,26 @@ function cloudRowMatchesArchiveVisibility(
  * expressible per row has an obvious place to go.
  */
 function cloudRowMatchesOriginFilter(filter: ChatFilter): boolean {
-  if (!isChatFilterActive(filter)) return true;
   return filter.origin !== CHAT_ORIGIN.Tui;
+}
+
+function cloudRowMatchesOwnershipFilter(
+  chat: CloudChatSummary,
+  filter: ChatFilter,
+): boolean {
+  return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
+}
+
+function chatFilterEmptyStateDescription(filter: ChatFilter): string {
+  const interfaceActive = filter.origin !== CHAT_ORIGIN.All;
+  const ownershipActive = filter.ownership !== CHAT_OWNERSHIP.All;
+  if (interfaceActive && !ownershipActive) {
+    return "The Interface filter is hiding the other agents.";
+  }
+  if (ownershipActive && !interfaceActive) {
+    return "The Ownership filter is hiding the other agents.";
+  }
+  return "The current filters are hiding the other agents.";
 }
 
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
@@ -613,12 +640,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [sort],
   );
   const allRootIds = usePanelRootIds(panelId, comparator);
-  const originVisibleIds = useChatVisibleIds(epicId);
+  const filterVisibleIds = useChatVisibleIds(epicId);
   const tree = useEpicTreeIndex();
   const archiveVisibility = useChatArchiveVisibility(epicId);
-  // The origin filter's own value, for the cloud rows. The local tree consumes
-  // it as the id set `useChatVisibleIds` expands it into; a cloud row is not in
-  // the tree, so it answers the filter directly.
+  // The filter's own value, for the cloud rows. The local tree consumes it as
+  // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
+  // tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
   const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
@@ -633,9 +660,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     staleTime: undefined,
   });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
-  const originRootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, originVisibleIds),
-    [allRootIds, originVisibleIds],
+  const filterRootIds = useMemo(
+    () => applyVisibleFilter(allRootIds, filterVisibleIds),
+    [allRootIds, filterVisibleIds],
   );
 
   // Indicators must be fetched BEFORE archive hiding is applied. Archived
@@ -648,10 +675,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .filter(
           (id) =>
             CHATS_TREE_FILTER(tree.nodeById[id].type) &&
-            (originVisibleIds === null || originVisibleIds.has(id)),
+            (filterVisibleIds === null || filterVisibleIds.has(id)),
         )
         .sort(),
-    [tree, originVisibleIds],
+    [tree, filterVisibleIds],
   );
   const epicSessionHostId = useEpicSessionHostId();
   const notificationIndicators = useNotificationIndicators({
@@ -692,22 +719,22 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [baseArchiveHiddenIds, alwaysVisibleIds, tree],
   );
 
-  // Two independent narrowings, kept separate on purpose. `originRootIds` is
-  // the origin filter's result and feeds the "no matches" empty state and
-  // forced expansion; `rootIds` additionally drops archived roots and is what
-  // actually renders. Collapsing them would make an all-archived tree show the
-  // Interface-filter empty state instead of the archived one, blaming a filter
-  // that is not hiding anything.
+  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
+  // the interface/ownership filter result and feeds the "no matches" empty
+  // state and forced expansion; `rootIds` additionally drops archived roots
+  // and is what actually renders. Collapsing them would make an all-archived
+  // tree show the filter-empty state instead of the archived one, blaming a
+  // filter that is not hiding anything.
   const rootIds = useMemo(
     () =>
       archiveHiddenIds.size === 0
-        ? originRootIds
-        : originRootIds.filter((id) => !archiveHiddenIds.has(id)),
-    [originRootIds, archiveHiddenIds],
+        ? filterRootIds
+        : filterRootIds.filter((id) => !archiveHiddenIds.has(id)),
+    [filterRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(originVisibleIds, archiveHiddenIds, tree),
-    [originVisibleIds, archiveHiddenIds, tree],
+    () => combineSidebarVisibleIds(filterVisibleIds, archiveHiddenIds, tree),
+    [filterVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
@@ -784,14 +811,21 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // No attention-reveal exception, unlike the local side's `alwaysVisibleIds`:
   // that exists so a row whose activity THIS device tracks cannot be archived
   // into invisibility, and a cloud row's indicators belong to its owner.
-  const visibleCloudChats = useMemo(
+  const filterMatchingCloudChats = useMemo(
     () =>
       unfoldedCloudChats.filter(
         (chat) =>
-          cloudRowMatchesArchiveVisibility(chat, archiveVisibility) &&
-          cloudRowMatchesOriginFilter(chatFilter),
+          cloudRowMatchesOriginFilter(chatFilter) &&
+          cloudRowMatchesOwnershipFilter(chat, chatFilter),
       ),
-    [unfoldedCloudChats, archiveVisibility, chatFilter],
+    [unfoldedCloudChats, chatFilter],
+  );
+  const visibleCloudChats = useMemo(
+    () =>
+      filterMatchingCloudChats.filter((chat) =>
+        cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
+      ),
+    [filterMatchingCloudChats, archiveVisibility],
   );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
@@ -821,7 +855,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [pendingRootCreates, rootIds],
   );
   const showPendingRootRows =
-    archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Archived;
+    archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Archived &&
+    matchesChatOwnershipFilter(true, chatFilter.ownership);
   const renderedLocalRootPending = showPendingRootRows
     ? localRootPending
     : null;
@@ -836,11 +871,11 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Origin-only: see `combineSidebarVisibleIds`. Archive hiding must never
+  // Filter-only: see `combineSidebarVisibleIds`. Archive hiding must never
   // reach here.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, originVisibleIds),
-    [ancestorIdsOfActive, originVisibleIds],
+    () => mergeForcedExpanded(ancestorIdsOfActive, filterVisibleIds),
+    [ancestorIdsOfActive, filterVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -901,18 +936,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     renderedAcknowledgedRootPending !== null ||
     renderedPreAckRootCreates.length > 0 ||
     renderedPendingRootCreates.length > 0;
-  // Local-tree emptiness AND no surviving cloud row: a GUI-origin filter over a
-  // task whose only chats are remote leaves the tree empty and the list full, so
-  // asking the tree alone would announce "no matches" over rows on screen.
+  // Local-tree emptiness AND no cloud row surviving the interface/ownership
+  // filters. Asking the local tree alone would announce "no matches" over a
+  // matching remote row still rendered on screen.
   const filteredTreeEmpty =
     isFilteredTreeEmpty({
-      visibleIds: originVisibleIds,
-      rootIds: originRootIds,
+      visibleIds: filterVisibleIds,
+      rootIds: filterRootIds,
       localRootPending: renderedLocalRootPending,
       acknowledgedRootPending: renderedAcknowledgedRootPending,
       preAckRootCreates: renderedPreAckRootCreates,
       visiblePendingRootCreates: renderedPendingRootCreates,
-    }) && visibleCloudChats.length === 0;
+    }) && filterMatchingCloudChats.length === 0;
   // One list: local roots and unreachable-host rows, interleaved. Nested local
   // children still render under their parents through `ChatNode`; only ROOTS
   // take part in the interleave, and a cloud row is always a leaf.
@@ -937,21 +972,21 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // ask. Pre-filter on purpose: this arm means the task HAS nothing, so a row
   // the user's own filter is hiding still counts as something.
   const showEmptyState =
-    originVisibleIds === null &&
+    filterVisibleIds === null &&
     allRootIds.length === 0 &&
     unfoldedCloudChats.length === 0 &&
     isCloudChatListSettled(cloudChats) &&
     !hasPendingRootRows;
-  // Rows exist and survive the origin filter, yet archiving hid every one of
-  // them. Distinct from both other arms: the tree is neither empty nor filtered
-  // down to nothing, and the user needs to be told where the rows went. Cloud
-  // rows count on both sides of that sentence, or an all-archived remote list
-  // would fall through to "No agents yet."
+  // Rows exist and survive the interface/ownership filters, yet archiving hid
+  // every one of them. Distinct from both other arms: the tree is neither empty
+  // nor filtered down to nothing, and the user needs to be told where the rows
+  // went. Cloud rows count on both sides of that sentence, or an all-archived
+  // remote list would fall through to "No agents yet."
   const archiveHidEverything =
     !hasPendingRootRows &&
     rootIds.length === 0 &&
     visibleCloudChats.length === 0 &&
-    (originRootIds.length > 0 || unfoldedCloudChats.length > 0);
+    (filterRootIds.length > 0 || filterMatchingCloudChats.length > 0);
   const archiveEmptyState = archiveEmptyStateCopy(
     archiveVisibility,
     canArchive,
@@ -971,11 +1006,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        // Names the INTERFACE as the thing with no matches. "No agents match"
-        // would imply the Task has none at all, when the filter is only hiding
-        // the other interface.
         title="No matches for the current filters."
-        description="The Interface filter is hiding the other agents."
+        description={chatFilterEmptyStateDescription(chatFilter)}
         testId="epic-chat-sidebar-filter-empty"
       />
     );

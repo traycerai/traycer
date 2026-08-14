@@ -3,7 +3,6 @@ import type {
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
-import { HOST_VERSION_PATTERN } from "@traycer/protocol/host/version";
 
 /**
  * Pure status derivation for a host row. Every row is a pure function of the
@@ -157,27 +156,19 @@ export function deriveUpdatePill(
 // auto-policy toggle, and the "Apply now — ends N sessions" drain-gate force.
 // -----------------------------------------------------------------------------
 
-/**
- * Validates a user-typed "Update now" target version client-side before
- * submit. Trims surrounding whitespace (a pasted value commonly carries it)
- * before matching. The pattern is shared with authn-v3's server-side check via
- * `@traycer/protocol/host/version`, so a client-accepted value never bounces
- * off the server's 400.
- */
-export function isValidHostVersion(value: string): boolean {
-  return HOST_VERSION_PATTERN.test(value.trim());
-}
+// `isValidHostVersion` and `showUpdateNowInput` lived here and are gone with the
+// free-text "Update to version…" pin they served.
+//
+// Both existed only because that control let someone name a version nothing had
+// confirmed: the regex mirrored authn-v3's server-side check so a typo failed
+// here instead of as a 400, and the flag hid the input while a `desiredVersion`
+// write was already draining toward the host, so a second one could not
+// retarget an update mid-flight. The Overview now lists the versions the host
+// itself reports and installs the one that was clicked, which makes the first
+// unnecessary and moves the second into `HostVersionRows` — where an install in
+// flight freezes every row, not just the one it belongs to.
 
 export interface HostUpdateAffordanceView {
-  /**
-   * Whether to show the "Update now" target-version input + button. Hidden
-   * only while a `desiredVersion` write is already in flight toward the host
-   * (`pending` — approved, draining; `updating` — swap in progress); shown
-   * for `current`/`available`/`required`, and also for `failed` (the failed
-   * swap's `desiredVersion` stays approved, so re-submitting "Update now" is
-   * a legitimate retry, not a redundant action).
-   */
-  readonly showUpdateNowInput: boolean;
   /**
    * "Waiting for N sessions" — populated only when the host is actually
    * gated on open sessions (`updateState === "pending"` AND a LIVE session
@@ -314,12 +305,12 @@ function pluralizeSessions(count: number): string {
  * Derives the update affordances (Architecture §13) from two sources with
  * deliberately different reliability, and the split is the whole point.
  *
- * `showUpdateNowInput` is registry-backed: the version pin is stored on the
- * account and the host picks it up on its next check-in, so it stays offered
- * for a host nothing can currently reach. That is exactly when someone wants
- * it.
+ * The registry-backed half of this — the free-text "Update to version…" pin and
+ * the `showUpdateNowInput` flag that hid it mid-drain — is gone; see the note
+ * above `HostUpdateAffordanceView`. What is left is drain state only.
  *
- * The drain affordances are not. "Waiting for N sessions" and, far more
+ * The drain affordances are not registry-backed. "Waiting for N sessions" and,
+ * far more
  * seriously, "Apply now — ends N sessions" both NAME A COUNT and, in the second
  * case, destroy that many sessions on click. The count therefore has to come
  * from a live read of the host, and `null` — no live source — must render
@@ -339,27 +330,19 @@ export function deriveUpdateAffordance(
   options: DeriveUpdateAffordanceOptions,
 ): HostUpdateAffordanceView {
   const { updateState, liveBusySessionCount } = options;
-  const showUpdateNowInput =
-    updateState !== "pending" && updateState !== "updating";
+  const noDrainAffordance = {
+    waitingForSessionsLabel: null,
+    showApplyNowForce: false,
+    applyNowLabel: null,
+  } as const;
+  // `null` is NOT zero: no live source means nothing to state, so the notice
+  // and the force both withhold rather than naming a count nobody read.
   if (updateState !== "pending" || liveBusySessionCount === null) {
-    return {
-      showUpdateNowInput,
-      waitingForSessionsLabel: null,
-      showApplyNowForce: false,
-      applyNowLabel: null,
-    };
+    return noDrainAffordance;
   }
-  if (liveBusySessionCount === 0) {
-    return {
-      showUpdateNowInput,
-      waitingForSessionsLabel: null,
-      showApplyNowForce: false,
-      applyNowLabel: null,
-    };
-  }
+  if (liveBusySessionCount === 0) return noDrainAffordance;
   const sessionsWord = pluralizeSessions(liveBusySessionCount);
   return {
-    showUpdateNowInput,
     waitingForSessionsLabel: `Waiting for ${liveBusySessionCount} ${sessionsWord}`,
     showApplyNowForce: true,
     applyNowLabel: `Apply now — ends ${liveBusySessionCount} ${sessionsWord}`,

@@ -428,3 +428,41 @@ export function formatHostVersion(version: string | null): string | null {
   if (/^\d+\.\d+\.\d+/.test(version)) return `v${version}`;
   return "Preview build";
 }
+
+/**
+ * The stand-in row for a host a surface is PINNED to but the merged list has
+ * never heard of — a terminal agent's own host, in a window that has since lost
+ * sight of it.
+ *
+ * Deliberately a real `HostScopeOption` rather than a special case in the
+ * picker: the row that says "this is the machine, and it cannot be reached
+ * right now" already exists and is drawn identically everywhere. A one-off
+ * shape for this case is how the fixed surface would drift back into having its
+ * own vocabulary for "offline".
+ */
+export function unavailableHostOption(
+  hostId: string,
+  name: string,
+): HostScopeOption {
+  return {
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: false,
+    planRestricted: false,
+    registered: false,
+    platform: null,
+    version: null,
+    health: {
+      state: "offline",
+      label: "Offline",
+      detail: null,
+      tone: "idle",
+      live: false,
+    },
+    updateState: null,
+    entry: null,
+    item: null,
+  };
+}

@@ -898,26 +898,22 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const handleHitStripClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>): void => {
       if (isInert) return;
-      if (chatTurnMinimapHasActiveTextSelection()) {
-        closeInteraction();
-        return;
-      }
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
-      setInteractionStarted(true);
+      // A positive-width hit strip is capped to the real side gutter, so a
+      // hand-cursor click cannot be part of transcript text selection. Keep
+      // navigation available without disturbing the selection.
+      if (!chatTurnMinimapHasActiveTextSelection()) {
+        setInteractionStarted(true);
+      }
       const nextIndex = resolveActiveIndexFromPointerY(event.clientY);
       const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
       if (nextItem) {
+        setActiveIndex(nextIndex);
         onSelect(nextItem.id);
       }
       event.currentTarget.blur();
     },
-    [
-      closeInteraction,
-      isInert,
-      items,
-      onSelect,
-      resolveActiveIndexFromPointerY,
-    ],
+    [isInert, items, onSelect, resolveActiveIndexFromPointerY],
   );
 
   const handleHitStripKeyDown = useCallback(
@@ -1112,10 +1108,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
             onMouseDown={handleHitStripMouseDown}
             onMouseMove={(event) => {
               if (expanded || isInert) return;
-              if (
-                event.buttons !== 0 ||
-                chatTurnMinimapHasActiveTextSelection()
-              ) {
+              // Reaching this positive-width button means the pointer is in
+              // the real side gutter, where hover cannot alter transcript
+              // selection. Passive zero-gutter hover remains selection-safe.
+              if (event.buttons !== 0) {
                 closeInteraction();
                 return;
               }

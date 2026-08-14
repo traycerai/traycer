@@ -239,6 +239,38 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 
+// This suite is about the composer's workspace/folder handling, not the host
+// list, so it mocks `useHostOptions` at the boundary (the same pattern panel
+// suites use for `useHostScope`) rather than standing up the six hooks it
+// composes.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({ hostId: "host-home", name: "Home Mac" }),
+        ],
+        activeHostId: "host-home",
+      }),
+  };
+});
+
+// `HostSection`'s embedded `HostSwitcher` ends its list with "Manage
+// hosts…", which calls this instead of navigating a real router. This suite
+// never opens that list, so a no-op stub is enough - standing up a
+// `RouterProvider` would pull the whole route tree in for a control this
+// suite never exercises.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
+
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => mocks.resolvedWorkspace.current,
 }));

@@ -25,6 +25,12 @@ export type SettingsSectionId =
   | "worktrees"
   | "host"
   | "devices"
+  // Two sections, both labelled "Diagnostics", and the group they sit in is
+  // what distinguishes them — `app-diagnostics` is this window's own logging
+  // and heap, `diagnostics` is the selected host's. The host one keeps the
+  // bare id because ids are a compatibility surface (see below) and it is the
+  // one already in remembered tab paths and `/settings/diagnostics` bookmarks.
+  | "app-diagnostics"
   | "diagnostics"
   | "usage";
 
@@ -88,9 +94,19 @@ export interface SettingsSection {
  * heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`); Shell and Diagnostics are the
- * eleventh and twelfth and go without, which are the right two to lose —
- * both are support surfaces and the rarest destinations here.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now thirteen. Agent
+ * selection, Shell and the host's Diagnostics are the eleventh through
+ * thirteenth and go without.
+ *
+ * Agent selection is the one that lost a digit to the app-scoped Diagnostics
+ * entry below, and that is a genuine cost rather than a tidy outcome: the rule
+ * this list follows is that support surfaces are the rarest destinations and
+ * so the right ones to lose digits, and this trade runs the other way. It is
+ * forced by position, not chosen — an Application-group entry lands in the
+ * first four whatever it is, so anything added there pushes the tenth slot out.
+ * The alternative, appending it to this array while it renders fourth in the
+ * rail, buys the digit back by splitting reading order from index order, and
+ * that divergence would then govern the command palette's row order too.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal switch, the command palette and remembered tab paths all key
@@ -113,6 +129,18 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "keybindings",
     label: "Keybindings",
     icon: Keyboard,
+    group: "app",
+  },
+  // Application, not Host, and it is the same word as the host section on
+  // purpose: both pages ARE diagnostics, and the group heading above each is
+  // what says whose. The split exists because this half never varied by host —
+  // the app's log verbosity, its log file and its heap describe one window —
+  // so under the picker it was drawn once per host in the account, offering the
+  // same single setting from N places.
+  {
+    id: "app-diagnostics",
+    label: "Diagnostics",
+    icon: Activity,
     group: "app",
   },
   {
@@ -182,6 +210,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: TerminalSquare,
     group: "host",
   },
+  // The host half: `cli`/`host` log verbosity and that machine's own log
+  // files. Everything left here answers differently per host, which is what
+  // earns it a place under the picker.
   {
     id: "diagnostics",
     label: "Diagnostics",

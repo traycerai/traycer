@@ -55,7 +55,9 @@ import {
   ARTIFACT_STATUS,
   artifactFilterCount,
   CHAT_ARCHIVE_VISIBILITY,
+  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
+  chatFilterCount,
   DEFAULT_CHAT_ARCHIVE_VISIBILITY,
   isArtifactFilterActive,
   isChatFilterActive,
@@ -69,6 +71,7 @@ import {
   type ArtifactReadFilter,
   type ArtifactStatusFilter,
   type ChatArchiveVisibility,
+  type ChatOwnershipFilter,
   type ChatOriginFilter,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
@@ -82,13 +85,14 @@ const VIEW_MENU_CONTENT_CLASS =
   "w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto";
 const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
 
-type ChatViewDetail = "ordering" | "show" | "interface";
+type ChatViewDetail = "ordering" | "show" | "interface" | "ownership";
 type ArtifactViewDetail = "ordering" | "status" | "type" | "read";
 
 const CHAT_DETAIL_LABELS: Readonly<Record<ChatViewDetail, string>> = {
   ordering: "Ordering",
   show: "Show",
   interface: "Interface",
+  ownership: "Ownership",
 };
 
 const ARTIFACT_DETAIL_LABELS: Readonly<Record<ArtifactViewDetail, string>> = {
@@ -105,6 +109,15 @@ const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
   { value: CHAT_ORIGIN.All, label: "All" },
   { value: CHAT_ORIGIN.Gui, label: "Chat" },
   { value: CHAT_ORIGIN.Tui, label: "Terminal" },
+];
+
+const CHAT_OWNERSHIP_OPTIONS: ReadonlyArray<{
+  readonly value: ChatOwnershipFilter;
+  readonly label: string;
+}> = [
+  { value: CHAT_OWNERSHIP.All, label: "All" },
+  { value: CHAT_OWNERSHIP.Mine, label: "Mine" },
+  { value: CHAT_OWNERSHIP.Others, label: "Others" },
 ];
 
 const CHAT_ARCHIVE_VISIBILITY_OPTIONS: ReadonlyArray<{
@@ -436,9 +449,11 @@ function selectedSummary(labels: readonly string[]): string {
 function ChatDetailContent(props: {
   readonly detail: ChatViewDetail;
   readonly filterOrigin: ChatOriginFilter;
+  readonly filterOwnership: ChatOwnershipFilter;
   readonly sort: SortMode;
   readonly archiveVisibility: ChatArchiveVisibility;
   readonly setChatOrigin: (origin: ChatOriginFilter) => void;
+  readonly setChatOwnership: (ownership: ChatOwnershipFilter) => void;
   readonly setArchiveVisibility: (visibility: ChatArchiveVisibility) => void;
   readonly setSortField: (field: SortField) => void;
   readonly toggleSortDirection: () => void;
@@ -501,6 +516,28 @@ function ChatDetailContent(props: {
           ))}
         </DropdownMenuRadioGroup>
       );
+    case "ownership":
+      return (
+        <DropdownMenuRadioGroup
+          value={props.filterOwnership}
+          onValueChange={(next) => {
+            const match = CHAT_OWNERSHIP_OPTIONS.find(
+              (option) => option.value === next,
+            );
+            if (match !== undefined) props.setChatOwnership(match.value);
+          }}
+        >
+          {CHAT_OWNERSHIP_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              onSelect={(event) => event.preventDefault()}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      );
   }
 }
 
@@ -516,6 +553,7 @@ export function ChatFilterMenu(props: {
   const sort = useChatSort(epicId);
   const archiveVisibility = useChatArchiveVisibility(epicId);
   const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
+  const setChatOwnership = useLeftPanelStore((state) => state.setChatOwnership);
   const setChatArchiveVisibility = useLeftPanelStore(
     (state) => state.setChatArchiveVisibility,
   );
@@ -525,7 +563,7 @@ export function ChatFilterMenu(props: {
   );
   const resetChatView = useLeftPanelStore((state) => state.resetChatView);
   const filterActive = isChatFilterActive(filter);
-  const filterCount = filterActive ? 1 : 0;
+  const filterCount = chatFilterCount(filter);
   const archiveVisibilityChanged =
     archiveVisibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY;
   const active =
@@ -538,9 +576,12 @@ export function ChatFilterMenu(props: {
 
   const detailProps = {
     filterOrigin: filter.origin,
+    filterOwnership: filter.ownership,
     sort,
     archiveVisibility,
     setChatOrigin: (origin: ChatOriginFilter) => setChatOrigin(epicId, origin),
+    setChatOwnership: (ownership: ChatOwnershipFilter) =>
+      setChatOwnership(epicId, ownership),
     setArchiveVisibility: (visibility: ChatArchiveVisibility) =>
       setChatArchiveVisibility(epicId, visibility),
     setSortField: (field: SortField) => setChatSortField(epicId, field),
@@ -548,6 +589,9 @@ export function ChatFilterMenu(props: {
   };
   const currentInterface =
     CHAT_ORIGIN_OPTIONS.find((option) => option.value === filter.origin)
+      ?.label ?? "All";
+  const currentOwnership =
+    CHAT_OWNERSHIP_OPTIONS.find((option) => option.value === filter.ownership)
       ?.label ?? "All";
   const triggerLabel = viewTriggerLabel({
     base: "Filter agents",
@@ -613,6 +657,15 @@ export function ChatFilterMenu(props: {
               onOpenDetail={menu.openDetail}
             >
               <ChatDetailContent detail="interface" {...detailProps} />
+            </ViewDetailEntry>
+            <ViewDetailEntry
+              detail="ownership"
+              drillIn={menu.drillIn}
+              label="Ownership"
+              summary={currentOwnership}
+              onOpenDetail={menu.openDetail}
+            >
+              <ChatDetailContent detail="ownership" {...detailProps} />
             </ViewDetailEntry>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={props.onCollapseAll}>
