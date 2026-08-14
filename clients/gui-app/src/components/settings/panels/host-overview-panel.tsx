@@ -51,6 +51,10 @@ import { newTransitionId } from "@/components/settings/panels/host-overview-tran
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  hostServiceWriteLatches,
+  useHostServiceWriteLatchStore,
+} from "@/components/settings/panels/host-service-write-latch-store";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -62,6 +66,9 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
+
+/** How long an accepted install may hold the page before progress appears. */
+const UPDATE_INSTALL_ACCEPTED_LATCH_MS = 60_000;
 
 /**
  * ONE Overview, for every host.
@@ -339,8 +346,39 @@ export function HostOverviewPanel(props: {
   // The install REQUEST is in the gate too, not only the detached progress:
   // between pressing Install and the `accepted` answer, `updateProgress` has
   // not started yet, and that gap is exactly wide enough for a Restart or a
-  // service write to race the install being granted.
-  const anyPending = gatePending || updates.summary.installing;
+  // service write to race the install being granted. The ACCEPTED latch then
+  // bridges the second gap - after the answer, before the detached updater
+  // publishes progress - and releases the moment progress appears, on a scope
+  // flip, or by its bounded timer (the host-keyed store survives remounts).
+  const updateInstallAcceptedAt = useHostServiceWriteLatchStore(
+    (state) =>
+      hostServiceWriteLatches(state.byHost, scope.hostId)
+        .updateInstallAcceptedAt,
+  );
+  useEffect(() => {
+    if (scope.hostId === null || updateInstallAcceptedAt === null) return;
+    const hostId = scope.hostId;
+    if (view.updateProgress !== null) {
+      useHostServiceWriteLatchStore
+        .getState()
+        .releaseUpdateInstallAccepted(hostId);
+      return;
+    }
+    const remaining = Math.max(
+      0,
+      updateInstallAcceptedAt + UPDATE_INSTALL_ACCEPTED_LATCH_MS - Date.now(),
+    );
+    const timer = setTimeout(() => {
+      useHostServiceWriteLatchStore
+        .getState()
+        .releaseUpdateInstallAccepted(hostId);
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [scope.hostId, updateInstallAcceptedAt, view.updateProgress]);
+  const anyPending =
+    gatePending ||
+    updates.summary.installing ||
+    updateInstallAcceptedAt !== null;
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
 
   if (host === null) return null;

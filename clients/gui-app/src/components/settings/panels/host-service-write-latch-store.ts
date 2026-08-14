@@ -31,12 +31,20 @@ import { create } from "zustand";
 export interface HostServiceWriteLatches {
   readonly deregisterAcceptedAt: number | null;
   readonly registerRestartLikelyAt: number | null;
+  /**
+   * An accepted `host.update.install`: the detached swap is starting but has
+   * not yet published `host.status.updateProgress`, and that gap is wide
+   * enough for a restart or service write to race the install being granted.
+   * Released when progress appears, on a scope flip, or by a bounded timer.
+   */
+  readonly updateInstallAcceptedAt: number | null;
   readonly externallyManagedRefusal: boolean;
 }
 
 const EMPTY_LATCHES: HostServiceWriteLatches = {
   deregisterAcceptedAt: null,
   registerRestartLikelyAt: null,
+  updateInstallAcceptedAt: null,
   externallyManagedRefusal: false,
 };
 
@@ -44,9 +52,11 @@ interface HostServiceWriteLatchState {
   readonly byHost: Readonly<Record<string, HostServiceWriteLatches>>;
   readonly armDeregisterAccepted: (hostId: string) => void;
   readonly armRegisterRestartLikely: (hostId: string) => void;
+  readonly armUpdateInstallAccepted: (hostId: string) => void;
   readonly armExternallyManagedRefusal: (hostId: string) => void;
   readonly releaseDeregisterAccepted: (hostId: string) => void;
   readonly releaseRegisterRestartLikely: (hostId: string) => void;
+  readonly releaseUpdateInstallAccepted: (hostId: string) => void;
   readonly releaseExternallyManagedRefusal: (hostId: string) => void;
   /** The scope-flip release: every latch for this host, structural included. */
   readonly releaseAll: (hostId: string) => void;
@@ -73,6 +83,9 @@ export const useHostServiceWriteLatchStore = create<HostServiceWriteLatchState>(
       armRegisterRestartLikely: (hostId) => {
         patch(hostId, { registerRestartLikelyAt: Date.now() });
       },
+      armUpdateInstallAccepted: (hostId) => {
+        patch(hostId, { updateInstallAcceptedAt: Date.now() });
+      },
       armExternallyManagedRefusal: (hostId) => {
         patch(hostId, { externallyManagedRefusal: true });
       },
@@ -81,6 +94,9 @@ export const useHostServiceWriteLatchStore = create<HostServiceWriteLatchState>(
       },
       releaseRegisterRestartLikely: (hostId) => {
         patch(hostId, { registerRestartLikelyAt: null });
+      },
+      releaseUpdateInstallAccepted: (hostId) => {
+        patch(hostId, { updateInstallAcceptedAt: null });
       },
       releaseExternallyManagedRefusal: (hostId) => {
         patch(hostId, { externallyManagedRefusal: false });

@@ -154,6 +154,12 @@ export function useHostOverviewUpdates(input: {
   };
 
   const latest = manifest?.latest ?? null;
+  // While the CURRENT ask is in error, the retained manifest is display
+  // history, not an actionable catalog: TanStack keeps the previous data
+  // beside `isError`, and deriving install affordances from it would offer
+  // versions the failed check could not confirm - under a summary that says
+  // the host could not be checked.
+  const actionableManifest = checkQuery.isError ? null : manifest;
   // PRECEDENCE, not equality: a host running a hotfix or RC AHEAD of the
   // stable channel is not outdated, and offering Update now there submits a
   // target the CLI short-circuits as `installed-up-to-date` - an update that
@@ -165,6 +171,15 @@ export function useHostOverviewUpdates(input: {
     latest !== null &&
     installedVersion !== null &&
     !latestIsStrictlyNewer(installedVersion, latest);
+  // The summary action resolves through the SAME availability checks as the
+  // picker rows: a latest with no usable asset for this host is advertised
+  // nowhere rather than installable in one surface and unavailable in the
+  // other.
+  const updatableVersion = offerableLatestVersion({
+    manifest: actionableManifest,
+    installedVersion,
+    platformKey: input.platformKey,
+  });
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
@@ -186,17 +201,17 @@ export function useHostOverviewUpdates(input: {
       // Offered only for a latest that is BOTH known and not already installed,
       // and never while the row is still reporting a failed attempt. "Update
       // now" is a promise that pressing it changes something.
-      updatableVersion: latest !== null && !upToDate ? latest : null,
+      updatableVersion,
       installing: installingVersion !== null,
       busy: input.busy,
       onCheck: runCheck,
       onUpdateLatest: () => {
-        if (latest !== null) install(latest);
+        if (updatableVersion !== null) install(updatableVersion);
       },
     },
     picker: {
       rows: visibleVersionRows({
-        manifest,
+        manifest: actionableManifest,
         installedVersion,
         platformKey: input.platformKey,
         showAll: showAllVersions,
@@ -212,7 +227,7 @@ export function useHostOverviewUpdates(input: {
       installingVersion,
       disabled: input.busy,
       onInstall: install,
-      awaitingFirstCheck: manifest === null,
+      awaitingFirstCheck: actionableManifest === null,
       checking,
     },
   };
@@ -272,6 +287,37 @@ function visibleVersionRows(input: {
           : supersededReason(input.installedVersion, entry.version)),
     };
   });
+}
+
+/**
+ * The version the summary's Update now may offer, or `null`.
+ *
+ * Three gates, all of which the picker enforces per row and the summary must
+ * therefore enforce for its one target: the manifest must be from a check the
+ * host CONFIRMED (not error-retained data), `latest` must be strictly newer
+ * than what is installed, and the latest entry must resolve a usable asset
+ * for this host's platform.
+ */
+function offerableLatestVersion(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly installedVersion: string | null;
+  readonly platformKey: string | null;
+}): string | null {
+  const { manifest } = input;
+  if (manifest === null) return null;
+  const latest = manifest.latest;
+  if (
+    input.installedVersion !== null &&
+    !latestIsStrictlyNewer(input.installedVersion, latest)
+  ) {
+    return null;
+  }
+  const entry = manifest.versions.find(
+    (candidate) => candidate.version === latest,
+  );
+  if (entry === undefined) return null;
+  const asset = platformAssetFor(entry.platforms, input.platformKey);
+  return assetUnavailableReason(asset) === null ? latest : null;
 }
 
 /**

@@ -161,11 +161,23 @@ export function HostIdentityCard(props: {
                 {host.health.label}
               </span>
             </span>
-            {/* `health.detail` is deliberately NOT rendered here. On a local
-                host it reads "Running on this computer." — which the `Local`
-                tag one line above already says, in two words instead of four.
-                The status line's job is the facts nothing else on the card
-                carries; anything it repeats is what made it read as clumsy. */}
+            {/* `health.detail` renders for the NON-live states only. Live
+                details are the redundant ones — "Running on this computer."
+                repeats the `Local` tag, and the relay route line was
+                deliberately dropped with the meta row — but an offline or
+                unknown host's detail is the actionable half of its answer:
+                "Last seen 2h ago", when reachability was checked, that remote
+                access needs an upgrade. Suppressing those left them rendered
+                nowhere, since the picker deliberately shows only a dot. */}
+            {host.health.tone === "live" ||
+            (host.health.detail ?? "").length === 0 ? null : (
+              <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+                <span aria-hidden className="mr-2 text-muted-foreground/40">
+                  ·
+                </span>
+                {host.health.detail}
+              </span>
+            )}
             {facts.length === 0 ? null : (
               // Folded up from its own line. The card gained a footer verb bar,
               // and three stacked lines of identity above it pushed Host ID and

@@ -501,7 +501,18 @@ export function useHostUpdateInstall(
     }),
     options: {
       mutationKey: hostMaintenanceMutationKeys.updateInstall(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // Same dispatch-arm / settle-release inversion as the service writes:
+      // `accepted` settles before `updateProgress` exists, and that gap must
+      // stay locked even if the settle is lost to a host-keyed unmount.
+      onMutate: () => {
+        const hostId = client?.getActiveHostId() ?? null;
+        if (hostId !== null) {
+          useHostServiceWriteLatchStore
+            .getState()
+            .armUpdateInstallAccepted(hostId);
+        }
+        return { hostId };
+      },
       // HOOK-level, not in the caller's per-`mutate` callbacks.
       //
       // The swap is detached and outlives this response, so
@@ -516,11 +527,23 @@ export function useHostUpdateInstall(
       // Uses the ARM-TIME host id, so the refresh lands on the host that is
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
-        if (response.outcome !== "accepted") return;
         if (context.hostId === null) return;
+        if (response.outcome !== "accepted") {
+          // A refusal: no swap was dispatched, nothing to guard.
+          useHostServiceWriteLatchStore
+            .getState()
+            .releaseUpdateInstallAccepted(context.hostId);
+          return;
+        }
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
         });
+      },
+      onError: (_error, _variables, context) => {
+        if (context === undefined || context.hostId === null) return;
+        useHostServiceWriteLatchStore
+          .getState()
+          .releaseUpdateInstallAccepted(context.hostId);
       },
     },
   });
