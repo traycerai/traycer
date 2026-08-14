@@ -293,6 +293,9 @@ describe("forceStopHostProcess", () => {
     // still present reads as a crash to the desktop's health watchdog and
     // gets auto-respawned, undoing the stop the user just forced.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
+    // The null-identity fallback skips revalidation entirely, before SIGTERM
+    // AND before SIGKILL - a pre-identity pid.json never calls the verdict.
+    expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
   });
 
   it("still reports stopped even when removing pid.json after a confirmed SIGKILL fails", async () => {
@@ -439,6 +442,101 @@ describe("forceStopHostProcess", () => {
       // signal.
       expect(outcome).toEqual({ kind: "identity-unverified", pid: 4242 });
       expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    // The FIRST identity check only proves the occupant was ours at the
+    // moment before SIGTERM. The host can exit in the last instants of the
+    // ~32s exit grace and the OS can hand the pid to a stranger before the
+    // final liveness poll observes it - so the same invariant has to be
+    // re-proven immediately before the irreversible SIGKILL, not assumed to
+    // still hold from ~32s earlier.
+    describe("pre-SIGKILL revalidation", () => {
+      it("second call 'mismatch': the host already exited after SIGTERM - stopped, and SIGKILL is NEVER sent", async () => {
+        vi.useFakeTimers();
+        MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
+        MOCKS.getPublishedProcessIdentityVerdict
+          .mockResolvedValueOnce("current") // pre-SIGTERM check
+          .mockResolvedValueOnce("mismatch"); // pre-SIGKILL revalidation
+        // Alive throughout the SIGTERM wait, so it survives to the
+        // revalidation point instead of exiting cleanly first.
+        MOCKS.isProcessAlive.mockReturnValue(true);
+        const killSpy = vi
+          .spyOn(process, "kill")
+          .mockImplementation(() => true);
+
+        const pending = forceStopHostProcess("production", "stop");
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        await expect(pending).resolves.toEqual({ kind: "stopped" });
+        expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledTimes(
+          2,
+        );
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+        // No SIGKILL was ever sent, so the "finish the writer contract"
+        // cleanup must not run either - that branch is gated on a CONFIRMED
+        // SIGKILL exit, not merely on the outcome being "stopped".
+        expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+      });
+
+      it("second call 'indeterminate': the escalation is refused too - identity-unverified, no SIGKILL sent", async () => {
+        vi.useFakeTimers();
+        MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
+        MOCKS.getPublishedProcessIdentityVerdict
+          .mockResolvedValueOnce("current")
+          .mockResolvedValueOnce("indeterminate");
+        MOCKS.isProcessAlive.mockReturnValue(true);
+        const killSpy = vi
+          .spyOn(process, "kill")
+          .mockImplementation(() => true);
+
+        const pending = forceStopHostProcess("production", "stop");
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        await expect(pending).resolves.toEqual({
+          kind: "identity-unverified",
+          pid: 4242,
+        });
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+      });
+
+      it("second call 'current': the escalation proceeds and SIGKILL is sent", async () => {
+        vi.useFakeTimers();
+        MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
+        // Both the pre-SIGTERM check and the pre-SIGKILL revalidation answer
+        // "current" - the occupant is proven to still be the host at each
+        // gate.
+        MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
+        let sigkillSent = false;
+        const killSpy = vi
+          .spyOn(process, "kill")
+          .mockImplementation((_pid, signal) => {
+            if (signal === "SIGKILL") sigkillSent = true;
+            return true;
+          });
+        MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+
+        const pending = forceStopHostProcess("production", "stop");
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        await expect(pending).resolves.toEqual({ kind: "stopped" });
+        // Both gates were actually consulted with the SAME recorded
+        // identity - the first before SIGTERM, the second before SIGKILL.
+        expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledTimes(
+          2,
+        );
+        expect(
+          MOCKS.getPublishedProcessIdentityVerdict,
+        ).toHaveBeenNthCalledWith(1, 4242, "darwin:1699999999.123456");
+        expect(
+          MOCKS.getPublishedProcessIdentityVerdict,
+        ).toHaveBeenNthCalledWith(2, 4242, "darwin:1699999999.123456");
+        expect(killSpy).toHaveBeenCalledTimes(2);
+        expect(killSpy).toHaveBeenNthCalledWith(1, 4242, "SIGTERM");
+        expect(killSpy).toHaveBeenNthCalledWith(2, 4242, "SIGKILL");
+        expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
+      });
     });
   });
 });

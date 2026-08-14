@@ -191,7 +191,9 @@ export type ForcedShutdownOutcome =
   // read/compared right now. Something holds the pid and we cannot prove it
   // is the host, so nothing may be signalled: the error directions are not
   // symmetric - a refused force stop is retryable, a SIGKILL delivered to a
-  // recycled pid's unrelated occupant is not.
+  // recycled pid's unrelated occupant is not. Can arise before the first
+  // signal OR at the pre-SIGKILL revalidation (SIGTERM was already delivered
+  // to a then-verified occupant; only the escalation is refused).
   | { readonly kind: "identity-unverified"; readonly pid: number }
   // The process survived SIGTERM through the exit grace AND a follow-up
   // SIGKILL - it is unkillable from here (uninterruptible sleep, or not ours).
@@ -262,6 +264,25 @@ export async function forceStopHostProcess(
     "Host survived SIGTERM through the exit grace; escalating to SIGKILL",
     { environment, operation, pid: metadata.pid },
   );
+  // The invariant that gated the first signal gates the second. The host can
+  // exit in the last instants of the SIGTERM grace and the OS can hand its
+  // pid to a stranger before the final liveness poll - at which point "still
+  // alive" describes the STRANGER, and this SIGKILL is the irreversible one.
+  // Revalidate immediately before it: "dead"/"mismatch" mean the host DID
+  // exit after SIGTERM (the occupant, if any, is not ours), and an occupant
+  // that cannot be verified must not be killed.
+  if (metadata.processStartIdentity !== null) {
+    const verdict = await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      metadata.processStartIdentity,
+    );
+    if (verdict === "dead" || verdict === "mismatch") {
+      return { kind: "stopped" };
+    }
+    if (verdict === "indeterminate") {
+      return { kind: "identity-unverified", pid: metadata.pid };
+    }
+  }
   if (!signalPid(metadata.pid, "SIGKILL")) {
     return { kind: "stopped" };
   }
