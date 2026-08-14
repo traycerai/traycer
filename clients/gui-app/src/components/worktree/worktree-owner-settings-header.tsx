@@ -14,6 +14,7 @@ import {
 } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
@@ -58,6 +59,7 @@ interface TuiHeaderFields {
 export function WorktreeOwnerSettingsHeader(props: {
   readonly ownerId: string;
   readonly hostId: string;
+  readonly epicId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
 }): ReactNode {
   const chat = useChatById(props.ownerId);
@@ -65,7 +67,41 @@ export function WorktreeOwnerSettingsHeader(props: {
     selectTuiAgent(state.tuiAgents.byId, props.ownerId),
   );
   const isChat = props.ownerKind === "chat";
-  const chatSettings = ownerChatSettings(isChat, chat?.settings ?? null);
+  const localChatSettings = ownerChatSettings(isChat, chat?.settings ?? null);
+  // Pinned to the OWNER's host, not the tab's or the app-active one - shared
+  // with the provider-list read below, which needs the same host for the same
+  // reason. A chat on another of the viewer's hosts is served by that host.
+  const hostClient = useHostClientForHostId(props.hostId);
+  // Terminal agents still carry their settings on the store projection, so this
+  // is CHAT-ONLY: the single-write pivot took the doc chat entry away and left
+  // the registry row's harness-id summary, which is not a tuple.
+  //
+  // Runs for EVERY chat, including one that already has a local tuple, because
+  // that tuple can be stale in a way nothing here can detect. `unionChatsSlice`
+  // deliberately prefers a surviving doc entry's `settings` over the record's,
+  // but since the pivot `epic.updateChatRunSettings` and `epic.updateChatProfile`
+  // write only the host's authoritative store - nothing re-writes that doc entry
+  // ever again. So a pre-pivot chat's frozen tuple survives every subsequent
+  // model, profile and permission change, and gating the read on its absence
+  // would pin the card to values that stopped being true the first time the user
+  // changed anything. The host is the authority; local is the fallback.
+  const runSettingsQuery = useChatRunSettings({
+    client: hostClient,
+    epicId: props.epicId,
+    chatId: props.ownerId,
+    enabled: isChat,
+  });
+  // Keyed on whether the read SETTLED, not on whether it produced a tuple.
+  // `{ settings: null }` is a successful answer - the host stating this chat has
+  // no persisted tuple - and it has to outrank a stale local one, so coalescing
+  // with `??` would be wrong: it would fall through to a frozen doc tuple the
+  // host just contradicted. Local carries the card only while there is no answer
+  // to prefer: in flight, errored, `E_HOST_UNSUPPORTED`, or no reachable host to
+  // ask (the query is disabled and never settles). That keeps every fallback
+  // that matters without letting absence-of-answer impersonate an answer.
+  const chatSettings = runSettingsQuery.isSuccess
+    ? runSettingsQuery.data.settings
+    : localChatSettings;
   const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
@@ -84,7 +120,6 @@ export function WorktreeOwnerSettingsHeader(props: {
   // harness mark; a managed id needs the live list for its label and accent,
   // while an unknown/tombstoned id silently stays bare.
   const profileActivity = ownerProfileActivity(isChat, tuiAgent);
-  const hostClient = useHostClientForHostId(props.hostId);
   // Chats preserve their cache-only behavior. A managed terminal profile
   // actively resolves against this owner's fixed host, so the hover card is
   // self-sufficient even if no other profile surface warmed the query first.
