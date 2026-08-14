@@ -169,7 +169,15 @@ export function HostOverviewNameAction(props: {
       data-testid="host-overview-edit-name"
       data-degraded={degrade ?? undefined}
     >
-      <Pencil className="size-3.5" />
+      {props.pendingWrite ? (
+        <AgentSpinningDots
+          className="size-3.5"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : (
+        <Pencil className="size-3.5" />
+      )}
     </Button>
   );
   return (
