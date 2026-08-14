@@ -2537,7 +2537,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     selectTab("Skills");
     expect(
-      screen.getByText(/Invoked by the agent when relevant/),
+      screen.getByRole("textbox", { name: "Search skills" }),
     ).toBeDefined();
     expect(
       screen.getByRole("button", { name: /^Skills location/ }),

@@ -101,7 +101,7 @@ describe("MarkdownEditPreview", () => {
     expect(readMarkdown(editor)).toBe("edited draft");
 
     await user.click(screen.getByRole("tab", { name: "Preview" }));
-    expect(screen.queryByTestId(TEST_ID)).toBeNull();
+    expect(screen.getByTestId(TEST_ID)).toBe(editor);
     expect(screen.getByTestId(`${TEST_ID}-preview`).textContent).toContain(
       "edited draft",
     );
