@@ -263,13 +263,31 @@ export const chatHeadRecordShape = {
 } as const;
 
 /**
+ * The reader floor the 1.1 reshape imposes, as a value: a 1.0 reader meeting
+ * a 1.1 head would misread the cut plan it cannot see, so every 1.1 head
+ * must gate readers below 1.1. Pinned literally rather than derived from
+ * `CHAT_SYNC_SCHEMA_VERSION`, because a future ADDITIVE minor (1.2+) keeps
+ * this floor - raising it is a deliberate act reserved for a change an older
+ * reader cannot safely interpret, exactly as `minReaderVersion`'s own doc
+ * says.
+ */
+export const CHAT_SYNC_1_1_READER_FLOOR = { major: 1, minor: 1 } as const;
+
+/**
  * Writer shape for the registered 1.1 contract: CDC params and per-cohort
- * seq ranges plus membership are required. The reader shape above stays
- * additive so a 1.0 head still opens.
+ * seq ranges plus membership are required, and `minReaderVersion` must be
+ * exactly the 1.1 floor - inherited nullable, an incorrectly-built
+ * publication could omit it, and a 1.0 reader's same-major gate would then
+ * ADMIT a head whose cut plan it misreads instead of refusing cleanly. The
+ * reader shape above stays additive so a 1.0 head still opens.
  */
 export const chatHeadWriterRecordShape = {
   ...chatHeadRecordShape,
   cdc: chatHeadCdcParamsSchema,
+  minReaderVersion: z.object({
+    major: z.literal(CHAT_SYNC_1_1_READER_FLOOR.major),
+    minor: z.literal(CHAT_SYNC_1_1_READER_FLOOR.minor),
+  }),
   messageShards: z.array(chatHeadCohortPartSchema),
   eventShards: z.array(chatHeadCohortPartSchema),
 } as const;
@@ -481,10 +499,61 @@ export function refineChatHeadPartRanges(
   }
 }
 
+/**
+ * A head CLAIMING 1.1 or later must actually carry the 1.1 cut plan.
+ *
+ * The reader schema keeps `cdc` and the per-cohort membership fields optional
+ * so a 1.0 head still opens - but that tolerance is FOR 1.0. A payload whose
+ * own `schemaVersion` says 1.1+ while omitting them is not a head any 1.1
+ * writer produced: downstream would hold a nominal-1.1 head it cannot
+ * reproduce cuts for, and every consumer of the claimed minor would have to
+ * re-check field presence itself. Such a head decodes as schema-rejected, not
+ * ok. Per-part all-or-none and ordering stay with
+ * {@link refineChatHeadPartRanges}; this adds only the version-conditional
+ * PRESENCE obligation.
+ */
+export function refineClaimedCutPlanCompleteness(
+  head: {
+    readonly schemaVersion: SchemaVersion;
+    readonly cdc?: ChatHeadCdcParams;
+    readonly messageShards: readonly ChatHeadPart[];
+    readonly eventShards: readonly ChatHeadPart[];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (head.schemaVersion.minor < CHAT_SYNC_1_1_READER_FLOOR.minor) return;
+
+  if (head.cdc === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["cdc"],
+      message: `A head claiming ${head.schemaVersion.major}.${head.schemaVersion.minor} must record its CDC parameters; without them its cut is not reproducible`,
+    });
+  }
+
+  const check = (part: ChatHeadPart, path: (string | number)[]): void => {
+    // One field stands for all five: refineChatHeadPartRanges already
+    // rejects a partial group, so presence of any is presence of every.
+    if (part.recordCount !== undefined) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: `A head claiming ${head.schemaVersion.major}.${head.schemaVersion.minor} must carry the cut-plan membership fields on every cohort`,
+    });
+  };
+  head.messageShards.forEach((part, index) =>
+    check(part, ["messageShards", index]),
+  );
+  head.eventShards.forEach((part, index) =>
+    check(part, ["eventShards", index]),
+  );
+}
+
 function refineChatHead(
   head: {
     readonly schemaVersion: SchemaVersion;
     readonly minReaderVersion: SchemaVersion | null;
+    readonly cdc?: ChatHeadCdcParams;
     readonly events: readonly unknown[] | null;
     readonly hostPrivate: unknown;
     readonly hostPrivateShard: ChatHeadPart | null;
@@ -497,6 +566,7 @@ function refineChatHead(
   refineChatHeadSections(head, ctx);
   refineChatHeadPartUniqueness(head, ctx);
   refineChatHeadPartRanges(head, ctx);
+  refineClaimedCutPlanCompleteness(head, ctx);
 }
 
 /**

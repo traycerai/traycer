@@ -43,30 +43,20 @@ export const chatSyncSchemaSurfaceBaseline = {
           "type": "number"
         },
         "minReaderVersion": {
-          "default": null,
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "major": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "minor": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "major",
-                "minor"
-              ]
+          "type": "object",
+          "properties": {
+            "major": {
+              "type": "number",
+              "const": 1
             },
-            {
-              "type": "null"
+            "minor": {
+              "type": "number",
+              "const": 1
             }
+          },
+          "required": [
+            "major",
+            "minor"
           ]
         },
         "cdc": {
@@ -434,6 +424,7 @@ export const chatSyncSchemaSurfaceBaseline = {
         "parentHeadSha256",
         "throughRecordSeq",
         "capturedAt",
+        "minReaderVersion",
         "cdc",
         "core",
         "messageShards",
@@ -486,32 +477,22 @@ export const chatSyncSchemaSurfaceBaseline = {
           "type": "number"
         },
         "minReaderVersion": {
-          "default": null,
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "major": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "minor": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "major",
-                "minor"
-              ],
-              "additionalProperties": false
+          "type": "object",
+          "properties": {
+            "major": {
+              "type": "number",
+              "const": 1
             },
-            {
-              "type": "null"
+            "minor": {
+              "type": "number",
+              "const": 1
             }
-          ]
+          },
+          "required": [
+            "major",
+            "minor"
+          ],
+          "additionalProperties": false
         },
         "cdc": {
           "type": "object",

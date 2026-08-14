@@ -301,7 +301,10 @@ const RUN_SETTINGS: JsonObject = {
 export const DEFAULT_PUBLISH: PublishOptions = {
   cohorts: [FIRST_COHORT, SECOND_COHORT],
   payloadMinor: CHAT_SYNC_SCHEMA_VERSION.minor,
-  minReaderVersion: null,
+  // The floor the 1.1 writer REQUIRES: a null here no longer parses through
+  // the registered writer schema, exactly so an incorrectly-built publication
+  // cannot slip past a 1.0 reader's same-major gate.
+  minReaderVersion: { major: 1, minor: 1 },
   parentHeadSha256: null,
   withFutureFields: false,
   lifecycleState: "active",
@@ -355,14 +358,30 @@ export async function publishCloudChat(
         : null,
       ...future("core", "core-level"),
     },
-    messageShards: parts.map((part, index) => ({
-      ...part.address,
-      firstSeq: index + 1,
-      lastSeq: index + 1,
-      recordCount: 1,
-      firstRecordId: `m-${index + 1}`,
-      lastRecordId: `m-${index + 1}`,
-    })),
+    // Membership stamps derived from the ACTUAL cohorts: assembly now
+    // cross-checks these claims against the parsed shard, so a fixture that
+    // stamped placeholders would refuse its own publication.
+    messageShards: parts.map((part, index) => {
+      const cohort = options.cohorts[index] ?? [];
+      const first = cohort[0];
+      const last = cohort[cohort.length - 1];
+      const firstRecordId =
+        first !== undefined && typeof first.messageId === "string"
+          ? first.messageId
+          : `m-first-${index}`;
+      const lastRecordId =
+        last !== undefined && typeof last.messageId === "string"
+          ? last.messageId
+          : `m-last-${index}`;
+      return {
+        ...part.address,
+        firstSeq: index + 1,
+        lastSeq: index + 1,
+        recordCount: cohort.length,
+        firstRecordId,
+        lastRecordId,
+      };
+    }),
     events: [knownEvent],
     eventShards: [],
     hostPrivate: {
