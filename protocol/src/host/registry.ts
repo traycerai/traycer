@@ -293,6 +293,7 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicListChatRecordsV10,
+  epicGetChatRunSettingsV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -6055,6 +6056,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicListChatRecordsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The per-chat run-settings tuple the record row above summarises down to a
+  // harness id. Optional and host-LOCAL for the same reason as the list - it
+  // answers out of this host's own chat store, the only place the tuple lives
+  // once the single-write pivot stopped writing doc chat entries. A client
+  // talking to a host without it renders the harness mark alone, which is what
+  // that host's client already showed.
+  "epic.getChatRunSettings": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -292,6 +292,7 @@ describe("worktree PR metadata", () => {
           worktrees={[entry]}
           workspaces={[]}
           pending={false}
+          hostUnavailable={false}
           error={false}
           openPrInApp={null}
         />
@@ -386,6 +387,7 @@ describe("worktree PR metadata", () => {
         worktrees={[entry]}
         workspaces={[]}
         pending={false}
+        hostUnavailable={false}
         error={false}
         openPrInApp={null}
       />,
@@ -420,6 +422,7 @@ describe("worktree PR metadata", () => {
         worktrees={[worktree({})]}
         workspaces={[]}
         pending={false}
+        hostUnavailable={false}
         error={false}
         openPrInApp={(reference) => opened.push(reference)}
       />,
@@ -451,6 +454,7 @@ describe("worktree PR metadata", () => {
             worktrees={[entry]}
             workspaces={[]}
             pending={false}
+            hostUnavailable={false}
             error={false}
             openPrInApp={null}
           />
@@ -510,6 +514,7 @@ describe("worktree PR metadata", () => {
           worktrees={[entry]}
           workspaces={[]}
           pending={false}
+          hostUnavailable={false}
           error={false}
           openPrInApp={null}
         />,
@@ -602,5 +607,87 @@ describe("worktree PR metadata", () => {
       expect(stateTokens(glyphTokens)).toHaveLength(2);
       cleanup();
     }
+  });
+});
+
+/**
+ * The three ways this block can have nothing to show, and why they must not
+ * collapse into one message.
+ *
+ * "No workspace linked" is a CLAIM ABOUT THE OWNER - that it runs nowhere. It
+ * was previously printed whenever the binding happened to be null at render
+ * time, which made it the answer for two states it has no right to speak for:
+ * a read still in flight, and a read that could not be issued at all.
+ */
+describe("owner workspace metadata empty states", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderEmpty(props: {
+    readonly pending: boolean;
+    readonly hostUnavailable: boolean;
+    readonly error: boolean;
+  }): void {
+    renderWithProviders(
+      <OwnerWorkspaceMetadataContent
+        binding={null}
+        worktrees={[]}
+        workspaces={[]}
+        pending={props.pending}
+        hostUnavailable={props.hostUnavailable}
+        error={props.error}
+        openPrInApp={null}
+      />,
+    );
+  }
+
+  it("says loading while a read is in flight, not 'No workspace linked'", () => {
+    renderEmpty({ pending: true, hostUnavailable: false, error: false });
+
+    expect(screen.getByText("Loading workspace…")).toBeDefined();
+    expect(screen.queryByText("No workspace linked")).toBeNull();
+  });
+
+  it("claims no workspace only once the read has settled", () => {
+    renderEmpty({ pending: false, hostUnavailable: false, error: false });
+
+    expect(screen.getByText("No workspace linked")).toBeDefined();
+    expect(screen.queryByText("Loading workspace…")).toBeNull();
+  });
+
+  it("reports an unreachable host instead of spinning forever", () => {
+    // The dead end: with no client the query is gated off, so it holds
+    // TanStack's `pending` status with nothing in flight. A spinner here waits
+    // on an event that never arrives, so this state outranks it.
+    renderEmpty({ pending: true, hostUnavailable: true, error: false });
+
+    expect(
+      screen.getByText("Workspace unknown — host unreachable"),
+    ).toBeDefined();
+    expect(screen.queryByText("Loading workspace…")).toBeNull();
+    expect(screen.queryByText("No workspace linked")).toBeNull();
+  });
+
+  it("keeps showing folders through a refetch rather than flashing a spinner", () => {
+    // The other half of gating on items rather than on `binding === null`: an
+    // owner that HAS folders must not lose them to a loading state every time
+    // the card re-asks the host.
+    renderWithProviders(
+      <OwnerWorkspaceMetadataContent
+        binding={BINDING}
+        worktrees={[]}
+        workspaces={[]}
+        pending
+        hostUnavailable={false}
+        error={false}
+        openPrInApp={null}
+      />,
+    );
+
+    expect(screen.queryByText("Loading workspace…")).toBeNull();
+    expect(
+      screen.getByTestId("owner-workspace-metadata-content"),
+    ).toBeDefined();
   });
 });
