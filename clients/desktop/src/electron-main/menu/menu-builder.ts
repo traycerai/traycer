@@ -52,7 +52,7 @@ function buildAppMenu(
             actions.command("app.aboutDetails", browserWindow ?? null),
         },
         { type: "separator" },
-        settingsItem(actions),
+        settingsItem(state.platform, actions),
         authItem(state, actions),
         { type: "separator" },
         ...hostUpdateItems(state, actions),
@@ -79,7 +79,7 @@ function buildFileMenu(
     state.platform === "darwin"
       ? []
       : [
-          settingsItem(actions),
+          settingsItem(state.platform, actions),
           authItem(state, actions),
           { type: "separator" } satisfies MenuItemConstructorOptions,
         ];
@@ -103,6 +103,9 @@ function buildFileMenu(
       {
         label: "Close Tab",
         accelerator: "CmdOrCtrl+W",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         enabled: state.canCloseTab,
         click: (_item, browserWindow) =>
           actions.command("epic.closeTab", browserWindow ?? null),
@@ -134,12 +137,18 @@ function buildEditMenu(
       {
         label: "Find",
         accelerator: "CommandOrControl+F",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         click: (_menuItem, browserWindow) =>
           actions.command("view.findInPage", browserWindow ?? null),
       },
       {
         label: "Find Next",
         accelerator: "CommandOrControl+G",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         click: (_menuItem, browserWindow) =>
           actions.command("view.findNext", browserWindow ?? null),
       },
@@ -231,6 +240,9 @@ function buildWindowMenu(
       {
         label: "Minimize",
         accelerator: "CmdOrCtrl+M",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
         enabled: state.windows.length > 0,
         click: (_item, browserWindow) =>
           actions.command("window.minimizeWindow", browserWindow ?? null),
@@ -308,13 +320,23 @@ function buildHelpMenu(
   };
 }
 
-function settingsItem(actions: MenuBuildActions): MenuItemConstructorOptions {
+function settingsItem(
+  platform: NodeJS.Platform,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   return {
     label: "Settings...",
     accelerator: "CmdOrCtrl+,",
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
     click: (_item, browserWindow) =>
       actions.command("app.openSettings", browserWindow ?? null),
   };
+}
+
+function registerTerminalConflictingAccelerator(
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "darwin";
 }
 
 function authItem(
