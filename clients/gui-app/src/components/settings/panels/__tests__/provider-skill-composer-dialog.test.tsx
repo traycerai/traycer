@@ -8,7 +8,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillComposerDialog } from "@/components/settings/panels/provider-skill-composer-dialog";
 import type { SkillAuthoring } from "@/components/settings/panels/provider-skill-composer-model";
-import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
+import {
+  ProviderNativeRpcError,
+  type SkillsMutateData,
+} from "@/hooks/providers/native-response-map";
 
 const BOTH: SkillAuthoring = {
   canWrite: true,
@@ -92,6 +95,7 @@ function renderDialog(
       pending={overrides.pending ?? false}
       onMutate={onMutate}
       onClose={onClose}
+      editTarget={undefined}
     />,
   );
   return { onMutate, onClose };
@@ -429,7 +433,12 @@ describe("<ProviderSkillComposerDialog />", () => {
         }
         return inspectData([SHOW_ME, DESIGN_LOOP, IMPROVE_MD], "tok-fresh");
       }
-      throw new Error("source SHA mismatch after re-clone");
+      throw new ProviderNativeRpcError({
+        code: "external_drift",
+        detail:
+          "Inspected commit abc123 no longer matches source (def456); inspect again",
+        method: "providers.nativeMutate",
+      });
     });
     await fillSource("owner/repo");
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));

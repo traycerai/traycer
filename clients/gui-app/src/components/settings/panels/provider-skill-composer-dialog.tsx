@@ -31,6 +31,7 @@ import {
   SKILL_DESCRIPTION_SOFT_LIMIT,
   type SkillAuthoring,
   type SkillComposerStep,
+  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 
 /**
@@ -56,13 +57,149 @@ export function ProviderSkillComposerDialog(props: {
     mutation: ProvidersSkillsMutateAction,
   ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
+  /**
+   * When set, the composer opens on the write form prefilled and submits
+   * `edit` instead of `create`. `undefined` is the Add-skill path.
+   */
+  readonly editTarget: SkillEditTarget | undefined;
 }): ReactNode {
-  const [mode, setMode] = useState<"import" | "write">(
-    props.authoring.canImport ? "import" : "write",
+  const draft = useComposerDraft(props);
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !props.pending) props.onClose();
+      }}
+    >
+      <DialogContent className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,44rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,44rem)]">
+        <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
+          <DialogTitle className="text-ui-lg">
+            {titleForStep(
+              draft.step,
+              draft.inspectSession?.candidates.length ?? 0,
+              draft.editing,
+            )}
+          </DialogTitle>
+          <DialogDescription className="text-ui-sm">
+            <ComposerDescription
+              step={draft.step}
+              editing={draft.editing}
+            />
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
+          {draft.error === null ? null : (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
+              {draft.error}
+            </div>
+          )}
+
+          <ComposerStepFields
+            step={draft.step}
+            name={draft.name}
+            setName={draft.setName}
+            nameError={draft.nameError}
+            description={draft.description}
+            setDescription={draft.setDescription}
+            body={draft.body}
+            setBody={draft.setBody}
+            source={draft.source}
+            setSource={draft.setSource}
+            inspectSession={draft.inspectSession}
+            selectedNames={draft.selectedNames}
+            setSelectedNames={draft.setSelectedNames}
+            pickerNote={draft.pickerNote}
+            pending={props.pending}
+            canImport={!draft.editing && props.authoring.canImport}
+            canWrite={props.authoring.canWrite}
+            onImport={draft.goToImport}
+            onWrite={draft.goToWrite}
+          />
+
+          {draft.showScope ? (
+            <SkillScopeFieldset
+              providerLabel={props.providerLabel}
+              providerScoped={draft.effectiveProviderScoped}
+              disabled={props.pending}
+              onChange={draft.setProviderScoped}
+            />
+          ) : null}
+        </div>
+
+        <DialogFooter className="mx-0 mb-0 flex-col items-stretch gap-2 rounded-none border-t border-border/40 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <DestinationLine
+            step={draft.step}
+            destination={draft.destination.display}
+            exact={draft.destination.exact}
+            filePath={skillFilePath({
+              destination: draft.destination,
+              name: draft.name,
+            })}
+          />
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {draft.blocker === null ? null : (
+              <span className="text-ui-xs text-muted-foreground">
+                {draft.blocker}
+              </span>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={props.pending}
+              onClick={props.onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={props.pending || draft.blocker !== null}
+              onClick={() => {
+                void draft.onSubmit();
+              }}
+            >
+              {props.pending ? <MutedAgentSpinner /> : null}
+              {submitLabel(
+                draft.step,
+                draft.selectedNames.length,
+                props.authoring.canInspect,
+                draft.editing,
+              )}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [body, setBody] = useState(skillBodyScaffold);
+}
+
+function useComposerDraft(props: {
+  readonly authoring: SkillAuthoring;
+  readonly listScope: ProviderNativeScope;
+  readonly providerLabel: string;
+  readonly providerRoot: string | null;
+  readonly canProviderScope: boolean;
+  readonly pending: boolean;
+  readonly onMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
+  readonly onClose: () => void;
+  readonly editTarget: SkillEditTarget | undefined;
+}) {
+  const editing = props.editTarget !== undefined;
+  const [mode, setMode] = useState<"import" | "write">(
+    editing || !props.authoring.canImport ? "write" : "import",
+  );
+  const [name, setName] = useState(props.editTarget?.name ?? "");
+  const [description, setDescription] = useState(
+    props.editTarget?.description ?? "",
+  );
+  const [body, setBody] = useState(
+    props.editTarget !== undefined ? props.editTarget.body : skillBodyScaffold(),
+  );
   const [source, setSource] = useState("");
   const [providerScoped, setProviderScoped] = useState(false);
   const [inspectSession, setInspectSession] = useState<{
@@ -73,10 +210,8 @@ export function ProviderSkillComposerDialog(props: {
   const [pickerNote, setPickerNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const step: SkillComposerStep =
-    inspectSession !== null ? "picker" : mode;
-  const effectiveProviderScoped =
-    props.canProviderScope && providerScoped;
+  const step: SkillComposerStep = inspectSession !== null ? "picker" : mode;
+  const effectiveProviderScoped = props.canProviderScope && providerScoped;
   const nameError = useMemo(() => skillNameError(name), [name]);
   const blocker = skillSubmitBlocker({
     step,
@@ -85,11 +220,15 @@ export function ProviderSkillComposerDialog(props: {
     source,
     selectedNames,
   });
-  const destination = skillDestination({
-    providerScoped: effectiveProviderScoped,
-    providerLabel: props.providerLabel,
-    providerRoot: props.providerRoot,
-  });
+  const destination =
+    props.editTarget !== undefined
+      ? editDestination(props.editTarget.path)
+      : skillDestination({
+          providerScoped: effectiveProviderScoped,
+          providerLabel: props.providerLabel,
+          providerRoot: props.providerRoot,
+        });
+  const showScope = step !== "picker" && props.canProviderScope && !editing;
 
   function onSubmit(): void {
     void submitComposer({
@@ -106,6 +245,7 @@ export function ProviderSkillComposerDialog(props: {
         inspectSession,
         canInspect: props.authoring.canInspect,
         listScope: props.listScope,
+        editTarget: props.editTarget,
       },
       sink: {
         onMutate: props.onMutate,
@@ -118,148 +258,132 @@ export function ProviderSkillComposerDialog(props: {
     });
   }
 
-  function goToWrite(): void {
-    setMode("write");
+  function resetTransient(): void {
     setInspectSession(null);
     setSelectedNames([]);
     setPickerNote(null);
     setError(null);
   }
 
-  function goToImport(): void {
-    setMode("import");
-    setInspectSession(null);
-    setSelectedNames([]);
-    setPickerNote(null);
-    setError(null);
-  }
+  return {
+    editing,
+    name,
+    setName,
+    nameError,
+    description,
+    setDescription,
+    body,
+    setBody,
+    source,
+    setSource,
+    inspectSession,
+    selectedNames,
+    setSelectedNames,
+    pickerNote,
+    error,
+    step,
+    effectiveProviderScoped,
+    setProviderScoped,
+    destination,
+    showScope,
+    blocker,
+    onSubmit,
+    goToWrite: () => {
+      setMode("write");
+      resetTransient();
+    },
+    goToImport: () => {
+      setMode("import");
+      resetTransient();
+    },
+  };
+}
 
+function ComposerStepFields(props: {
+  readonly step: SkillComposerStep;
+  readonly name: string;
+  readonly setName: (value: string) => void;
+  readonly nameError: string | null;
+  readonly description: string;
+  readonly setDescription: (value: string) => void;
+  readonly body: string;
+  readonly setBody: (value: string) => void;
+  readonly source: string;
+  readonly setSource: (value: string) => void;
+  readonly inspectSession: {
+    readonly token: string;
+    readonly candidates: readonly ProviderSkillInspectCandidate[];
+  } | null;
+  readonly selectedNames: readonly string[];
+  readonly setSelectedNames: (value: readonly string[]) => void;
+  readonly pickerNote: string | null;
+  readonly pending: boolean;
+  readonly canImport: boolean;
+  readonly canWrite: boolean;
+  readonly onImport: () => void;
+  readonly onWrite: () => void;
+}): ReactNode {
+  if (props.step === "write") {
+    return (
+      <WriteFields
+        name={props.name}
+        setName={props.setName}
+        nameError={props.nameError}
+        description={props.description}
+        setDescription={props.setDescription}
+        body={props.body}
+        setBody={props.setBody}
+        disabled={props.pending}
+        canImport={props.canImport}
+        onImport={props.onImport}
+      />
+    );
+  }
+  if (props.step === "import") {
+    return (
+      <ImportFields
+        source={props.source}
+        setSource={props.setSource}
+        disabled={props.pending}
+        canWrite={props.canWrite}
+        onWrite={props.onWrite}
+      />
+    );
+  }
+  if (props.inspectSession === null) return null;
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !props.pending) props.onClose();
+    <PickerFields
+      candidates={props.inspectSession.candidates}
+      selectedNames={props.selectedNames}
+      note={props.pickerNote}
+      disabled={props.pending}
+      onToggle={(candidateName) => {
+        props.setSelectedNames(
+          props.selectedNames.includes(candidateName)
+            ? props.selectedNames.filter((entry) => entry !== candidateName)
+            : [...props.selectedNames, candidateName],
+        );
       }}
-    >
-      <DialogContent className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,44rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,44rem)]">
-        <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
-          <DialogTitle className="text-ui-lg">
-            {titleForStep(step, inspectSession?.candidates.length ?? 0)}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm">
-            <ComposerDescription step={step} />
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
-          {error === null ? null : (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
-              {error}
-            </div>
-          )}
-
-          {step === "write" ? (
-            <WriteFields
-              name={name}
-              setName={setName}
-              nameError={nameError}
-              description={description}
-              setDescription={setDescription}
-              body={body}
-              setBody={setBody}
-              disabled={props.pending}
-              canImport={props.authoring.canImport}
-              onImport={goToImport}
-            />
-          ) : null}
-
-          {step === "import" ? (
-            <ImportFields
-              source={source}
-              setSource={setSource}
-              disabled={props.pending}
-              canWrite={props.authoring.canWrite}
-              onWrite={goToWrite}
-            />
-          ) : null}
-
-          {step === "picker" && inspectSession !== null ? (
-            <PickerFields
-              candidates={inspectSession.candidates}
-              selectedNames={selectedNames}
-              note={pickerNote}
-              disabled={props.pending}
-              onToggle={(candidateName) => {
-                setSelectedNames((current) =>
-                  current.includes(candidateName)
-                    ? current.filter((entry) => entry !== candidateName)
-                    : [...current, candidateName],
-                );
-              }}
-              onBack={goToImport}
-            />
-          ) : null}
-
-          {step === "picker" || !props.canProviderScope ? null : (
-            <SkillScopeFieldset
-              providerLabel={props.providerLabel}
-              providerScoped={effectiveProviderScoped}
-              disabled={props.pending}
-              onChange={setProviderScoped}
-            />
-          )}
-        </div>
-
-        <DialogFooter className="mx-0 mb-0 flex-col items-stretch gap-2 rounded-none border-t border-border/40 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <DestinationLine
-            step={step}
-            destination={destination.display}
-            exact={destination.exact}
-            filePath={skillFilePath({ destination, name })}
-          />
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {blocker === null ? null : (
-              <span className="text-ui-xs text-muted-foreground">
-                {blocker}
-              </span>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={props.pending}
-              onClick={props.onClose}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={props.pending || blocker !== null}
-              onClick={() => {
-                void onSubmit();
-              }}
-            >
-              {props.pending ? <MutedAgentSpinner /> : null}
-              {submitLabel(step, selectedNames.length, props.authoring.canInspect)}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      onBack={props.onImport}
+    />
   );
 }
 
 function ComposerDescription({
   step,
+  editing,
 }: {
   readonly step: SkillComposerStep;
+  readonly editing: boolean;
 }): ReactNode {
   if (step === "picker") {
     return "Selecting an installed skill overwrites it from this source.";
   }
   if (step === "import") {
     return "Paste a source. The host clones or copies it and finds every SKILL.md.";
+  }
+  if (editing) {
+    return "Rename is allowed. The folder moves with the name.";
   }
   return (
     <>
@@ -270,10 +394,26 @@ function ComposerDescription({
   );
 }
 
+function editDestination(skillPath: string): {
+  readonly display: string;
+  readonly exact: boolean;
+} {
+  const separator =
+    skillPath.includes("\\") && !skillPath.includes("/") ? "\\" : "/";
+  const trimmed = skillPath.endsWith(separator)
+    ? skillPath.slice(0, -1)
+    : skillPath;
+  const index = trimmed.lastIndexOf(separator);
+  if (index <= 0) return { display: trimmed, exact: true };
+  return { display: trimmed.slice(0, index), exact: true };
+}
+
 function titleForStep(
   step: SkillComposerStep,
   candidateCount: number,
+  editing: boolean,
 ): string {
+  if (editing) return "Edit skill";
   if (step === "picker") {
     return candidateCount === 1
       ? "1 skill found"
@@ -286,8 +426,9 @@ function submitLabel(
   step: SkillComposerStep,
   selectedCount: number,
   canInspect: boolean,
+  editing: boolean,
 ): string {
-  if (step === "write") return "Create skill";
+  if (step === "write") return editing ? "Save skill" : "Create skill";
   if (step === "picker") {
     return selectedCount === 1
       ? "Install 1 skill"
@@ -382,6 +523,7 @@ function WriteFields({
             placeholder={undefined}
             ariaLabel="Instructions"
             testId="skill-composer-instructions"
+            mode="full"
           />
         </div>
       </div>

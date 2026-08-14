@@ -10,6 +10,7 @@ import {
   preselectSkillNames,
   skillNamesFromSourceFlags,
   type SkillComposerStep,
+  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 
 export type ComposerInspectSession = {
@@ -27,6 +28,7 @@ export type ComposerFlowState = {
   readonly inspectSession: ComposerInspectSession | null;
   readonly canInspect: boolean;
   readonly listScope: ProviderNativeScope;
+  readonly editTarget: SkillEditTarget | undefined;
 };
 
 export type ComposerFlowSink = {
@@ -83,13 +85,23 @@ async function submitWrite(
   sink: ComposerFlowSink,
 ): Promise<void> {
   try {
-    await sink.onMutate({
-      action: "create",
-      name: state.name.trim(),
-      description: state.description.trim(),
-      body: state.body,
-      providerScoped: state.providerScoped,
-    });
+    if (state.editTarget !== undefined) {
+      await sink.onMutate({
+        action: "edit",
+        path: state.editTarget.path,
+        name: state.name.trim(),
+        description: state.description.trim(),
+        body: state.body,
+      });
+    } else {
+      await sink.onMutate({
+        action: "create",
+        name: state.name.trim(),
+        description: state.description.trim(),
+        body: state.body,
+        providerScoped: state.providerScoped,
+      });
+    }
     sink.onClose();
   } catch (err) {
     sink.setError(composerErrorMessage(err));

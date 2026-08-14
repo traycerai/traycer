@@ -9,14 +9,27 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "@uiw/react-codemirror";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+
+type SkillsListMutateResult = {
+  readonly kind: "skills";
+  readonly skills: readonly ProviderSkill[];
+};
 
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
   removeScopes: [] as string[],
+  editScopes: [] as string[],
+  updateScopes: [] as string[],
   mutate: vi.fn(),
   // Captured through the wrapper below rather than read off
   // `mutate.mock.calls`, which types as `any[]` and trips the repo's
@@ -28,6 +41,12 @@ const skillMocks = vi.hoisted(() => ({
   // already renders inline.
   mutateVariables: [] as Array<{ readonly suppressToast: boolean }>,
   mutateIsPending: false,
+  onMutateAsync: async (
+    _mutation: ProvidersSkillsMutateAction,
+  ): Promise<SkillsListMutateResult> => ({
+    kind: "skills",
+    skills: [],
+  }),
   readFileCalls: [] as Array<{
     workspacePath: string | null;
     filePath: string | null;
@@ -67,6 +86,13 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
   }),
 }));
 
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: (
@@ -85,7 +111,16 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
       });
       skillMocks.mutate(variables, opts);
     },
-    mutateAsync: vi.fn(),
+    mutateAsync: async (variables: {
+      mutation: ProvidersSkillsMutateAction;
+      suppressToast: boolean;
+    }) => {
+      skillMocks.mutations.push(variables.mutation);
+      skillMocks.mutateVariables.push({
+        suppressToast: variables.suppressToast,
+      });
+      return skillMocks.onMutateAsync(variables.mutation);
+    },
     isPending: skillMocks.mutateIsPending,
   }),
 }));
@@ -110,10 +145,11 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   },
 }));
 
-function removeScopes(): ProviderNativeScope[] {
+function advertisedScopes(names: readonly string[]): ProviderNativeScope[] {
   // Narrowed off the mock's loose `string[]` so a typo in a test reads as an
-  // empty scope list (no Remove button) instead of type-checking as one.
-  return skillMocks.removeScopes.flatMap((scope) =>
+  // empty scope list (no Remove/Edit/Update button) instead of type-checking
+  // as one.
+  return names.flatMap((scope) =>
     scope === "global" || scope === "project" ? [scope] : [],
   );
 }
@@ -121,6 +157,10 @@ function removeScopes(): ProviderNativeScope[] {
 function skillsState(): ProviderCliState {
   // `list` only by default: create/import are deliberately empty so the "New"
   // dropdown never mounts here - this suite is about opening an existing skill.
+  // `edit` / `update` keys stay omitted unless a test advertises them: absent
+  // is the old-host skew gate and is not the same as an empty array.
+  const edit = advertisedScopes(skillMocks.editScopes);
+  const update = advertisedScopes(skillMocks.updateScopes);
   return {
     providerId: "codex",
     enabled: true,
@@ -135,7 +175,9 @@ function skillsState(): ProviderCliState {
           add: [],
           create: [],
           import: [],
-          remove: removeScopes(),
+          remove: advertisedScopes(skillMocks.removeScopes),
+          ...(skillMocks.editScopes.length > 0 ? { edit } : {}),
+          ...(skillMocks.updateScopes.length > 0 ? { update } : {}),
         },
       },
       modelProviders: null,
@@ -176,6 +218,35 @@ function confirmAction(): HTMLElement {
   );
 }
 
+function confirmUpdateAction(): HTMLElement {
+  return within(screen.getByTestId("confirm-destructive-dialog")).getByRole(
+    "button",
+    { name: "Update" },
+  );
+}
+
+function replaceInstructions(markdown: string): void {
+  const editor = screen.getByTestId("skill-composer-instructions");
+  const view = EditorView.findFromDOM(editor);
+  if (view === null) throw new Error("Expected a CodeMirror editor element");
+  act(() => {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: markdown },
+    });
+  });
+}
+
+function nativeError(
+  code: "external_drift" | "no_change_detected",
+  detail: string,
+): ProviderNativeRpcError {
+  return new ProviderNativeRpcError({
+    code,
+    detail,
+    method: "providers.nativeMutate",
+  });
+}
+
 const FIND_SKILLS: ProviderSkill = {
   name: "find-skills",
   description: "Helps users discover and install agent skills.",
@@ -187,10 +258,15 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   beforeEach(() => {
     skillMocks.skills = [FIND_SKILLS];
     skillMocks.removeScopes = [];
+    skillMocks.editScopes = [];
+    skillMocks.updateScopes = [];
     skillMocks.mutate.mockReset();
     skillMocks.mutations = [];
     skillMocks.mutateVariables = [];
     skillMocks.mutateIsPending = false;
+    skillMocks.onMutateAsync = async () => ({ kind: "skills", skills: [] });
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
     skillMocks.readFileCalls = [];
     skillMocks.readFile = {
       data: {
@@ -276,12 +352,16 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     ];
     renderTab();
 
-    expect(
-      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
-    ).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Open find-skills (Provider-only)" }),
-    ).toBeDefined();
+    const sharedRow = screen.getByRole("button", {
+      name: "Open find-skills (Shared)",
+    });
+    const providerRow = screen.getByRole("button", {
+      name: "Open find-skills (Provider-only)",
+    });
+    expect(sharedRow).toBeDefined();
+    expect(providerRow).toBeDefined();
+    expect(within(sharedRow).getByText("Shared")).toBeDefined();
+    expect(within(providerRow).getByText("Provider-only")).toBeDefined();
   });
 
   it("does not mount the file read until a row is opened", () => {
@@ -330,6 +410,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     // The header already shows name + description; re-printing the raw
     // frontmatter would show them twice, as a `---`-delimited paragraph.
     expect(dialog.textContent).not.toContain("description:");
+    expect(screen.getByTestId("skill-detail-body-preview")).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
 
     expect(
       skillMocks.readFileCalls.some(
@@ -522,5 +605,233 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.getByRole("dialog").textContent).toContain("no instructions");
+  });
+
+  it("shows a Conflict badge and tooltip on a conflict row", async () => {
+    const user = userEvent.setup();
+    skillMocks.skills = [{ ...FIND_SKILLS, conflict: true }];
+    renderTab();
+
+    const row = screen.getByRole("button", {
+      name: "Open find-skills (Shared, Conflict)",
+    });
+    expect(within(row).getByText("Shared")).toBeDefined();
+    const badge = within(row).getByText("Conflict");
+    expect(badge).toBeDefined();
+
+    await user.hover(badge);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toMatch(/occupies this provider's link/i);
+    expect(tooltip.textContent).toMatch(/did not adopt or overwrite/i);
+  });
+
+  it("shows Imported from origin in the detail dialog, and omits it when there is none", () => {
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Imported from owner/repo",
+    );
+
+    cleanup();
+    skillMocks.skills = [FIND_SKILLS];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    expect(screen.getByRole("dialog").textContent).not.toContain(
+      "Imported from",
+    );
+  });
+
+  it("opens the composer on Edit skill, prefills from the file, and submits edit not create", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByText("Edit skill")).toBeDefined();
+    expect(screen.queryByText("Add a skill")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save skill" })).toBeDefined();
+    expect(screen.queryByText("Available to")).toBeNull();
+    expect(screen.queryByLabelText(/Every provider/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "or import an existing one" }),
+    ).toBeNull();
+
+    const nameInput = screen.getByLabelText("Name");
+    expect(nameInput instanceof HTMLInputElement && nameInput.value).toBe(
+      "find-skills",
+    );
+    const descriptionInput = screen.getByRole("textbox", {
+      name: "Description",
+    });
+    expect(
+      descriptionInput instanceof HTMLTextAreaElement &&
+        descriptionInput.value,
+    ).toBe("Helps");
+    const editor = screen.getByTestId("skill-composer-instructions");
+    const view = EditorView.findFromDOM(editor);
+    if (view === null) throw new Error("Expected a CodeMirror editor element");
+    expect(view.state.doc.toString()).toBe("# When to use\n\nAsk for a skill.\n");
+
+    fireEvent.change(nameInput, { target: { value: "find-skills-v2" } });
+    fireEvent.change(descriptionInput, {
+      target: { value: "Updated description" },
+    });
+    replaceInstructions("# New body\n");
+
+    await user.click(screen.getByRole("button", { name: "Save skill" }));
+
+    await waitFor(() => {
+      expect(skillMocks.mutations).toEqual([
+        {
+          action: "edit",
+          path: FIND_SKILLS.path,
+          name: "find-skills-v2",
+          description: "Updated description",
+          body: "# New body\n",
+        },
+      ]);
+    });
+  });
+
+  it("asks to overwrite local edits after a dirty-canon update, then resends with confirm", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.onMutateAsync = async (mutation) => {
+      if (mutation.action === "update" && mutation.confirm !== true) {
+        throw nativeError(
+          "external_drift",
+          "Inspected source changed (abc123 → def456); inspect again",
+        );
+      }
+      return { kind: "skills", skills: [] };
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Update from source" }));
+
+    const confirm = await screen.findByTestId("confirm-destructive-dialog");
+    expect(confirm.textContent).toMatch(/local edits that will be overwritten/i);
+    expect(confirm.textContent).toMatch(/Overwrite local edits/i);
+    expect(skillMocks.mutations).toEqual([
+      {
+        action: "update",
+        name: FIND_SKILLS.name,
+        path: FIND_SKILLS.path,
+      },
+    ]);
+    expect(toast.success).not.toHaveBeenCalled();
+
+    await user.click(confirmUpdateAction());
+
+    await waitFor(() => {
+      expect(skillMocks.mutations).toEqual([
+        {
+          action: "update",
+          name: FIND_SKILLS.name,
+          path: FIND_SKILLS.path,
+        },
+        {
+          action: "update",
+          name: FIND_SKILLS.name,
+          path: FIND_SKILLS.path,
+          confirm: true,
+        },
+      ]);
+    });
+  });
+
+  it("toasts Already up to date when update is a no-op, without a confirm dialog", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.onMutateAsync = async () => {
+      throw nativeError(
+        "no_change_detected",
+        "Source matches the installed skill",
+      );
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Update from source" }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Already up to date");
+    });
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(skillMocks.mutations).toEqual([
+      {
+        action: "update",
+        name: FIND_SKILLS.name,
+        path: FIND_SKILLS.path,
+      },
+    ]);
+  });
+
+  it("hides Edit and Update from source when actionScopes omit those keys", () => {
+    // Old-host skew: absent keys, not empty arrays. The fixture must not
+    // default edit/update.
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    const caps = skillsState().nativeCapabilities.skills;
+    if (caps === null) throw new Error("expected skills capabilities");
+    expect("edit" in caps.actionScopes).toBe(false);
+    expect("update" in caps.actionScopes).toBe(false);
+
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Imported from owner/repo",
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Update from source" }),
+    ).toBeNull();
+  });
+
+  it("says removing a shared skill removes it for every provider", () => {
+    skillMocks.removeScopes = ["global"];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(screen.getByTestId("confirm-destructive-dialog").textContent).toMatch(
+      /removing a shared skill removes it for every provider/i,
+    );
+  });
+
+  it("does not offer Remove on a conflict row, and says why", () => {
+    skillMocks.removeScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, conflict: true }];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open find-skills (Shared, Conflict)",
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toMatch(
+      /occupies the provider link/i,
+    );
   });
 });

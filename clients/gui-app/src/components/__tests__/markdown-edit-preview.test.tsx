@@ -34,6 +34,7 @@ function ControlledMarkdownEditPreview(props: ControlledHarnessProps) {
       placeholder={undefined}
       ariaLabel="Markdown source"
       testId={TEST_ID}
+      mode="full"
     />
   );
 }
@@ -119,6 +120,7 @@ describe("MarkdownEditPreview", () => {
             placeholder={undefined}
             ariaLabel="Markdown source"
             testId={TEST_ID}
+            mode="full"
           />
         </QueryClientProvider>
       </StrictMode>,
@@ -154,6 +156,7 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
+          mode="full"
         />
       </StrictMode>,
     );
@@ -170,6 +173,29 @@ describe("MarkdownEditPreview", () => {
     expect(readMarkdown(editor)).toBe("locked draft");
   });
 
+  it("renders preview only when mode is preview-only", () => {
+    render(
+      <StrictMode>
+        <MarkdownEditPreview
+          value="# Hello from preview"
+          onChange={() => undefined}
+          readOnly
+          placeholder={undefined}
+          ariaLabel="Markdown source"
+          testId={TEST_ID}
+          mode="preview-only"
+        />
+      </StrictMode>,
+    );
+
+    expect(screen.getByTestId(`${TEST_ID}-preview`).textContent).toContain(
+      "Hello from preview",
+    );
+    expect(screen.queryByRole("tab", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
+    expect(EditorView.findFromDOM(document.body)).toBeNull();
+  });
+
   it("applies the CodeMirror theme class when the document theme changes", async () => {
     render(
       <StrictMode>
@@ -180,6 +206,7 @@ describe("MarkdownEditPreview", () => {
           placeholder={undefined}
           ariaLabel="Markdown source"
           testId={TEST_ID}
+          mode="full"
         />
       </StrictMode>,
     );

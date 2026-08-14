@@ -19,3 +19,12 @@ export const SKILL_SOURCE_TONE: Record<ProviderSkillSourceBadge, string> = {
   plugin: "border-violet-500/40 text-violet-700 dark:text-violet-300",
   managed: "border-border text-muted-foreground",
 };
+
+/** Occupied link-target row. Distinct from the source badge. */
+export const SKILL_CONFLICT_LABEL = "Conflict";
+
+export const SKILL_CONFLICT_TONE =
+  "border-amber-500/40 text-amber-800 dark:text-amber-200";
+
+export const SKILL_CONFLICT_TOOLTIP =
+  "A folder already occupies this provider's link for this skill. Traycer did not adopt or overwrite it.";

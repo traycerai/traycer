@@ -8,17 +8,24 @@ import { describe, expect, it } from "vitest";
 import {
   composerErrorMessage,
   isSkillSourceShaMismatch,
+  isSkillUpdateDirtyCanon,
+  isSkillUpdateNoOp,
   previewSkillMd,
   preselectSkillNames,
   providerRootFromSkills,
+  skillActionAdvertised,
   skillAuthoring,
   skillDestination,
+  skillEditPrefill,
   skillFilePath,
+  skillIsEditable,
   skillNameError,
   skillNamesFromSourceFlags,
+  skillOriginDisplay,
   skillProviderScopeVisible,
   skillSubmitBlocker,
 } from "@/components/settings/panels/provider-skill-composer-model";
+import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 
 function capsWith(
   create: readonly ProviderNativeScope[],
@@ -403,26 +410,204 @@ describe("preselectSkillNames", () => {
   });
 });
 
+function nativeError(
+  code: "external_drift" | "no_change_detected" | "unsupported_action",
+  detail: string,
+): ProviderNativeRpcError {
+  return new ProviderNativeRpcError({
+    code,
+    detail,
+    method: "providers.nativeMutate",
+  });
+}
+
 describe("isSkillSourceShaMismatch", () => {
-  it("rejects non-Error values", () => {
+  it("matches ProviderNativeRpcError external_drift, including host copy the fuzzy matcher missed", () => {
+    expect(
+      isSkillSourceShaMismatch(
+        nativeError(
+          "external_drift",
+          "Inspected commit abc123 no longer matches source (def456); inspect again",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isSkillSourceShaMismatch(
+        nativeError(
+          "external_drift",
+          "Inspected source changed (abc123 → def456); inspect again",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects other native codes, a plain Error with sha/mismatch text, and non-Errors", () => {
+    expect(
+      isSkillSourceShaMismatch(
+        nativeError("no_change_detected", "Already installed at this SHA"),
+      ),
+    ).toBe(false);
+    expect(
+      isSkillSourceShaMismatch(
+        nativeError("unsupported_action", "SHA mismatch is not a verb"),
+      ),
+    ).toBe(false);
+    expect(
+      isSkillSourceShaMismatch(new Error("source SHA mismatch after re-clone")),
+    ).toBe(false);
     expect(isSkillSourceShaMismatch("sha mismatch")).toBe(false);
     expect(isSkillSourceShaMismatch({ message: "sha mismatch" })).toBe(false);
   });
+});
 
-  it.each([
-    ["SHA mismatch on token"],
-    ["source sha moved since inspect"],
-    ["commit hash changed"],
-    ["the SHAs differ"],
-  ])("recognizes %s", (message) => {
-    expect(isSkillSourceShaMismatch(new Error(message))).toBe(true);
+describe("isSkillUpdateDirtyCanon", () => {
+  it("is true only for ProviderNativeRpcError external_drift", () => {
+    expect(
+      isSkillUpdateDirtyCanon(
+        nativeError(
+          "external_drift",
+          "Inspected source changed (abc123 → def456); inspect again",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isSkillUpdateDirtyCanon(
+        nativeError("no_change_detected", "Already up to date"),
+      ),
+    ).toBe(false);
+    expect(
+      isSkillUpdateDirtyCanon(new Error("local edits will be overwritten")),
+    ).toBe(false);
+    expect(isSkillUpdateDirtyCanon("external_drift")).toBe(false);
+  });
+});
+
+describe("isSkillUpdateNoOp", () => {
+  it("is true only for ProviderNativeRpcError no_change_detected", () => {
+    expect(
+      isSkillUpdateNoOp(
+        nativeError("no_change_detected", "Source matches the installed skill"),
+      ),
+    ).toBe(true);
+    expect(
+      isSkillUpdateNoOp(
+        nativeError("external_drift", "Inspected commit moved"),
+      ),
+    ).toBe(false);
+    expect(isSkillUpdateNoOp(new Error("no_change_detected"))).toBe(false);
+    expect(isSkillUpdateNoOp({ code: "no_change_detected" })).toBe(false);
+  });
+});
+
+describe("skillActionAdvertised", () => {
+  it("is false when the key is missing (old-host skew gate)", () => {
+    expect(skillActionAdvertised(undefined, "global")).toBe(false);
   });
 
-  it("does not treat an unrelated sha mention as a mismatch", () => {
-    expect(isSkillSourceShaMismatch(new Error("could not resolve sha"))).toBe(
+  it("is true only when the selected scope is listed", () => {
+    expect(skillActionAdvertised(["global"], "global")).toBe(true);
+    expect(skillActionAdvertised(["project"], "global")).toBe(false);
+    expect(skillActionAdvertised([], "global")).toBe(false);
+  });
+});
+
+describe("skillIsEditable", () => {
+  const row: ProviderSkill = {
+    name: "find-skills",
+    description: null,
+    path: "/Users/dev/.agents/skills/find-skills",
+    source: "shared",
+  };
+
+  it.each(["shared", "provider"] as const)(
+    "allows editing a %s skill",
+    (source) => {
+      expect(skillIsEditable({ ...row, source })).toBe(true);
+    },
+  );
+
+  it.each(["plugin", "managed"] as const)(
+    "refuses a %s skill",
+    (source) => {
+      expect(skillIsEditable({ ...row, source })).toBe(false);
+    },
+  );
+
+  it("refuses a conflict row even when the source is writable", () => {
+    expect(skillIsEditable({ ...row, source: "shared", conflict: true })).toBe(
       false,
     );
-    expect(isSkillSourceShaMismatch(new Error("import failed"))).toBe(false);
+    expect(
+      skillIsEditable({ ...row, source: "provider", conflict: true }),
+    ).toBe(false);
+  });
+});
+
+describe("skillOriginDisplay", () => {
+  const row: ProviderSkill = {
+    name: "find-skills",
+    description: null,
+    path: "/Users/dev/.agents/skills/find-skills",
+    source: "shared",
+  };
+
+  it("returns null when origin is missing or blank", () => {
+    expect(skillOriginDisplay(row)).toBeNull();
+    expect(skillOriginDisplay({ ...row, origin: null })).toBeNull();
+    expect(skillOriginDisplay({ ...row, origin: "" })).toBeNull();
+    expect(skillOriginDisplay({ ...row, origin: "   " })).toBeNull();
+  });
+
+  it("returns the trimmed origin otherwise", () => {
+    expect(skillOriginDisplay({ ...row, origin: "owner/repo" })).toBe(
+      "owner/repo",
+    );
+    expect(skillOriginDisplay({ ...row, origin: "  owner/repo  " })).toBe(
+      "owner/repo",
+    );
+  });
+});
+
+describe("skillEditPrefill", () => {
+  const row: ProviderSkill = {
+    name: "find-skills",
+    description: "Row snapshot description",
+    path: "/Users/dev/.agents/skills/find-skills",
+    source: "shared",
+  };
+
+  it("parses name, description, and body from the file via parseSkillMarkdown", () => {
+    expect(
+      skillEditPrefill(
+        row,
+        '---\nname: parsed-name\ndescription: "Parsed \\"desc\\""\n---\n\n# Body from disk\n',
+      ),
+    ).toEqual({
+      path: row.path,
+      name: "parsed-name",
+      description: 'Parsed "desc"',
+      body: "# Body from disk\n",
+    });
+  });
+
+  it("falls back to the row when frontmatter is missing", () => {
+    expect(skillEditPrefill(row, "# Just a heading\n\nBody text.\n")).toEqual({
+      path: row.path,
+      name: "find-skills",
+      description: "Row snapshot description",
+      body: "# Just a heading\n\nBody text.\n",
+    });
+  });
+
+  it("falls back to an empty description when the row has none either", () => {
+    expect(
+      skillEditPrefill({ ...row, description: null }, "# Body only\n"),
+    ).toEqual({
+      path: row.path,
+      name: "find-skills",
+      description: "",
+      body: "# Body only\n",
+    });
   });
 });
 

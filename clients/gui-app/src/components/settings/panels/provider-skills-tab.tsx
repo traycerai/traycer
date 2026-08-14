@@ -5,14 +5,17 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
+  ProviderNativeScope,
   ProviderSkill,
   ProviderSkillsCapabilities,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
 import { ChevronRight, Plus, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
@@ -20,13 +23,26 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
+  isSkillUpdateDirtyCanon,
+  isSkillUpdateNoOp,
   providerRootFromSkills,
+  skillActionAdvertised,
   skillAuthoring,
+  skillIsEditable,
+  skillOriginDisplay,
   skillProviderScopeVisible,
+  type SkillAuthoring,
+  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 import { ProviderSkillDetailDialog } from "./provider-skill-detail-dialog";
-import { skillRemovability } from "./provider-skill-removable";
 import {
+  skillRemovability,
+  type SkillRemovability,
+} from "./provider-skill-removable";
+import {
+  SKILL_CONFLICT_LABEL,
+  SKILL_CONFLICT_TONE,
+  SKILL_CONFLICT_TOOLTIP,
   SKILL_SOURCE_LABEL,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
@@ -111,15 +127,19 @@ function ProviderSkillsTabBody({
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<SkillEditTarget | undefined>(
+    undefined,
+  );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
-  // Removal errors render inside the skill dialog, which is closed while the
-  // composer is mounted and vice versa.
-  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(null);
+  // Removal/update errors render inside the skill dialog, which is closed
+  // while the composer is mounted and vice versa.
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const skills = listQuery.data?.skills ?? EMPTY_SKILLS;
@@ -140,6 +160,22 @@ function ProviderSkillsTabBody({
   const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
   const removePending = isRemovePending(isMutating, pendingKey);
   const composerPending = isComposerPending(isMutating, pendingKey);
+  const updatePending = isUpdatePending(isMutating, pendingKey);
+  const canEditHere = skillActionAdvertised(
+    caps.actionScopes.edit,
+    effectiveScope,
+  );
+  const canUpdateHere = skillActionAdvertised(
+    caps.actionScopes.update,
+    effectiveScope,
+  );
+  // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`.
+  const openSkillEditable =
+    openSkill !== null && canEditHere && skillIsEditable(openSkill);
+  const openSkillUpdatable =
+    openSkill !== null &&
+    canUpdateHere &&
+    skillOriginDisplay(openSkill) !== null;
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
@@ -174,6 +210,14 @@ function ProviderSkillsTabBody({
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
   function openComposer(): void {
+    setEditTarget(undefined);
+    setComposerOpen(true);
+  }
+
+  function openEdit(target: SkillEditTarget): void {
+    setDetailError(null);
+    setOpenSkill(null);
+    setEditTarget(target);
     setComposerOpen(true);
   }
 
@@ -202,8 +246,48 @@ function ProviderSkillsTabBody({
    * dialogs (the open skill no longer exists); failure has to surface inside
    * the skill dialog, not in a composer that is not even mounted.
    */
+  async function onUpdate(
+    skill: ProviderSkill,
+    confirm: boolean,
+  ): Promise<void> {
+    setDetailError(null);
+    setPendingKey(`update:${skill.path}`);
+    try {
+      await mutate.mutateAsync({
+        providerId,
+        scope: effectiveScope,
+        workspaceRoot: listWorkspaceRoot,
+        mutation: confirm
+          ? {
+              action: "update",
+              name: skill.name,
+              path: skill.path,
+              confirm: true,
+            }
+          : { action: "update", name: skill.name, path: skill.path },
+        suppressToast: true,
+      });
+      setUpdateConfirm(null);
+      toast.success("Updated from source");
+    } catch (err) {
+      if (!confirm && isSkillUpdateDirtyCanon(err)) {
+        setUpdateConfirm(skill);
+        return;
+      }
+      if (isSkillUpdateNoOp(err)) {
+        setUpdateConfirm(null);
+        toast.success("Already up to date");
+        return;
+      }
+      setUpdateConfirm(null);
+      setDetailError(err instanceof Error ? err.message : "Couldn't update this skill.");
+    } finally {
+      setPendingKey(null);
+    }
+  }
+
   function onRemove(skill: ProviderSkill): void {
-    setRemoveError(null);
+    setDetailError(null);
     setPendingKey(`remove:${skill.path}`);
     mutate.mutate(
       {
@@ -228,7 +312,7 @@ function ProviderSkillsTabBody({
           // where the error renders, and re-confirming an operation that just
           // failed is not the next step.
           setRemoveTarget(null);
-          setRemoveError(err.message);
+          setDetailError(err.message);
         },
       },
     );
@@ -307,51 +391,147 @@ function ProviderSkillsTabBody({
         onOpenSkill={setOpenSkill}
       />
 
-      {composerOpen ? (
+      <SkillsTabDialogs
+        composerOpen={composerOpen}
+        providerLabel={providerLabel}
+        authoring={authoring}
+        listScope={effectiveScope}
+        providerRoot={providerRoot}
+        canProviderScope={canProviderScope}
+        composerPending={composerPending}
+        onComposerMutate={onComposerMutate}
+        onComposerClose={() => {
+          setComposerOpen(false);
+          setEditTarget(undefined);
+        }}
+        editTarget={editTarget}
+        openSkill={openSkill}
+        removal={
+          openSkill === null
+            ? null
+            : skillRemovability({
+                removeScopes: caps.actionScopes.remove,
+                source: openSkill.source,
+                effectiveScope,
+                conflict: openSkill.conflict === true,
+              })
+        }
+        removePending={removePending}
+        isMutating={isMutating}
+        detailError={detailError}
+        openSkillEditable={openSkillEditable}
+        openSkillUpdatable={openSkillUpdatable}
+        updatePending={updatePending}
+        onRequestEdit={openEdit}
+        onRequestUpdate={() => {
+          if (openSkill === null) return;
+          void onUpdate(openSkill, false);
+        }}
+        onRequestRemove={() => {
+          if (openSkill === null) return;
+          setRemoveTarget(openSkill);
+        }}
+        onDetailClose={() => {
+          setOpenSkill(null);
+          setDetailError(null);
+        }}
+        removeTarget={removeTarget}
+        onRemoveCancel={() => {
+          setRemoveTarget(null);
+        }}
+        onRemove={onRemove}
+        updateConfirm={updateConfirm}
+        onUpdateCancel={() => {
+          setUpdateConfirm(null);
+        }}
+        onUpdateConfirm={(skill) => {
+          void onUpdate(skill, true);
+        }}
+      />
+    </div>
+  );
+}
+
+function SkillsTabDialogs(props: {
+  readonly composerOpen: boolean;
+  readonly providerLabel: string;
+  readonly authoring: SkillAuthoring;
+  readonly listScope: ProviderNativeScope;
+  readonly providerRoot: string | null;
+  readonly canProviderScope: boolean;
+  readonly composerPending: boolean;
+  readonly onComposerMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
+  readonly onComposerClose: () => void;
+  readonly editTarget: SkillEditTarget | undefined;
+  readonly openSkill: ProviderSkill | null;
+  readonly removal: SkillRemovability | null;
+  readonly removePending: boolean;
+  readonly isMutating: boolean;
+  readonly detailError: string | null;
+  readonly openSkillEditable: boolean;
+  readonly openSkillUpdatable: boolean;
+  readonly updatePending: boolean;
+  readonly onRequestEdit: (target: SkillEditTarget) => void;
+  readonly onRequestUpdate: () => void;
+  readonly onRequestRemove: () => void;
+  readonly onDetailClose: () => void;
+  readonly removeTarget: ProviderSkill | null;
+  readonly onRemoveCancel: () => void;
+  readonly onRemove: (skill: ProviderSkill) => void;
+  readonly updateConfirm: ProviderSkill | null;
+  readonly onUpdateCancel: () => void;
+  readonly onUpdateConfirm: (skill: ProviderSkill) => void;
+}): ReactNode {
+  return (
+    <>
+      {props.composerOpen ? (
         <ProviderSkillComposerDialog
-          providerLabel={providerLabel}
-          authoring={authoring}
-          listScope={effectiveScope}
-          providerRoot={providerRoot}
-          canProviderScope={canProviderScope}
-          pending={composerPending}
-          onMutate={onComposerMutate}
-          onClose={() => {
-            setComposerOpen(false);
-          }}
+          providerLabel={props.providerLabel}
+          authoring={props.authoring}
+          listScope={props.listScope}
+          providerRoot={props.providerRoot}
+          canProviderScope={props.canProviderScope}
+          pending={props.composerPending}
+          onMutate={props.onComposerMutate}
+          onClose={props.onComposerClose}
+          editTarget={props.editTarget}
         />
       ) : null}
 
-      {openSkill === null ? null : (
+      {props.openSkill === null || props.removal === null ? null : (
         <ProviderSkillDetailDialog
-          skill={openSkill}
-          removal={skillRemovability({
-            removeScopes: caps.actionScopes.remove,
-            source: openSkill.source,
-            effectiveScope,
-          })}
-          removePending={removePending}
-          removeDisabled={isMutating}
-          removeError={removeError}
-          onRequestRemove={() => {
-            setRemoveTarget(openSkill);
-          }}
-          onClose={() => {
-            setOpenSkill(null);
-            setRemoveError(null);
-          }}
+          skill={props.openSkill}
+          removal={props.removal}
+          removePending={props.removePending}
+          removeDisabled={props.isMutating}
+          actionError={props.detailError}
+          canEdit={props.openSkillEditable}
+          canUpdate={props.openSkillUpdatable}
+          origin={skillOriginDisplay(props.openSkill)}
+          updatePending={props.updatePending}
+          onRequestEdit={props.onRequestEdit}
+          onRequestUpdate={props.onRequestUpdate}
+          onRequestRemove={props.onRequestRemove}
+          onClose={props.onDetailClose}
         />
       )}
 
       <SkillRemoveConfirm
-        target={removeTarget}
-        pending={removePending}
-        onCancel={() => {
-          setRemoveTarget(null);
-        }}
-        onConfirm={onRemove}
+        target={props.removeTarget}
+        pending={props.removePending}
+        onCancel={props.onRemoveCancel}
+        onConfirm={props.onRemove}
       />
-    </div>
+
+      <SkillUpdateConfirm
+        target={props.updateConfirm}
+        pending={props.updatePending}
+        onCancel={props.onUpdateCancel}
+        onConfirm={props.onUpdateConfirm}
+      />
+    </>
   );
 }
 
@@ -370,6 +550,10 @@ function isComposerPending(isMutating: boolean, pendingKey: string | null) {
   return (
     isMutating && pendingKey !== null && pendingKey.startsWith("composer:")
   );
+}
+
+function isUpdatePending(isMutating: boolean, pendingKey: string | null) {
+  return isMutating && pendingKey !== null && pendingKey.startsWith("update:");
 }
 
 /**
@@ -422,13 +606,51 @@ function SkillRemoveConfirm({
       // Names the PATH, not just the skill: removal deletes a directory, and
       // which of the four skill roots it sits in is the part the name alone
       // cannot tell you.
+      description={removeDescription(target)}
+      cascadeSummary={null}
+      actionLabel="Remove"
+      isPending={pending}
+      onConfirm={() => {
+        if (target === null) return;
+        onConfirm(target);
+      }}
+    />
+  );
+}
+
+function removeDescription(target: ProviderSkill | null): string {
+  if (target === null) return "";
+  if (target.source === "shared") {
+    return `Delete “${target.name}” from disk? Removing a shared skill removes it for every provider. Its folder and SKILL.md are removed from ${target.path}.`;
+  }
+  return `Delete “${target.name}” from disk? Its folder and SKILL.md are removed from ${target.path}.`;
+}
+
+function SkillUpdateConfirm({
+  target,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  readonly target: ProviderSkill | null;
+  readonly pending: boolean;
+  readonly onCancel: () => void;
+  readonly onConfirm: (skill: ProviderSkill) => void;
+}): ReactNode {
+  return (
+    <ConfirmDestructiveDialog
+      open={target !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title="Overwrite local edits?"
       description={
         target === null
           ? ""
-          : `Delete “${target.name}” from disk? Its folder and SKILL.md are removed from ${target.path}.`
+          : `“${target.name}” has local edits that will be overwritten by the source.`
       }
       cascadeSummary={null}
-      actionLabel="Remove"
+      actionLabel="Update"
       isPending={pending}
       onConfirm={() => {
         if (target === null) return;
@@ -601,6 +823,14 @@ description: Reviews a   # what the agent matches on
 ## When to use this
 ...instructions the agent follows...`;
 
+function skillOpenLabel(skill: ProviderSkill): string {
+  const badge = SKILL_SOURCE_LABEL[skill.source];
+  if (skill.conflict === true) {
+    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL})`;
+  }
+  return `Open ${skill.name} (${badge})`;
+}
+
 function SkillRow({
   skill,
   onOpen,
@@ -608,7 +838,6 @@ function SkillRow({
   readonly skill: ProviderSkill;
   readonly onOpen: () => void;
 }): ReactNode {
-  const badge = SKILL_SOURCE_LABEL[skill.source];
   return (
     <li>
       <button
@@ -620,7 +849,7 @@ function SkillRow({
         // skill name under `shared`, `provider`, `plugin` and `managed` roots
         // (rows are keyed `source:path`), which would leave a screen reader
         // with several buttons all reading "Open deploy".
-        aria-label={`Open ${skill.name} (${badge})`}
+        aria-label={skillOpenLabel(skill)}
         className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
@@ -639,8 +868,25 @@ function SkillRow({
                 SKILL_SOURCE_TONE[skill.source],
               )}
             >
-              {badge}
+              {SKILL_SOURCE_LABEL[skill.source]}
             </span>
+            {skill.conflict === true ? (
+              <TooltipWrapper
+                label={SKILL_CONFLICT_TOOLTIP}
+                side="top"
+                sideOffset={4}
+                align="center"
+              >
+                <span
+                  className={cn(
+                    "rounded border px-1.5 py-0.5 text-ui-xs",
+                    SKILL_CONFLICT_TONE,
+                  )}
+                >
+                  {SKILL_CONFLICT_LABEL}
+                </span>
+              </TooltipWrapper>
+            ) : null}
           </span>
           {skill.description !== null && skill.description.length > 0 ? (
             <span className="mt-0.5 block truncate text-ui-xs text-muted-foreground">

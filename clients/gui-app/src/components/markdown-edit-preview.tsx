@@ -29,6 +29,8 @@ const MARKDOWN_EDITOR_BASIC_SETUP = {
 
 type MarkdownEditPreviewView = "edit" | "preview";
 
+export type MarkdownEditPreviewMode = "full" | "preview-only";
+
 export type MarkdownEditPreviewProps = {
   readonly value: string;
   readonly onChange: (value: string) => void;
@@ -36,7 +38,28 @@ export type MarkdownEditPreviewProps = {
   readonly placeholder: string | undefined;
   readonly ariaLabel: string;
   readonly testId: string;
+  /**
+   * `undefined` and `"full"` both show the Edit|Preview strip.
+   * `"preview-only"` locks the surface to the rendered body (no Edit tab).
+   */
+  readonly mode: MarkdownEditPreviewMode | undefined;
 };
+
+function MarkdownPreview({ value }: { readonly value: string }) {
+  return (
+    <TraycerMarkdown
+      className="px-3 py-2 text-foreground"
+      proseSize="compact"
+      components={null}
+      remarkPlugins={null}
+      rehypePlugins={null}
+      quotable={false}
+      isStreaming={false}
+    >
+      {value}
+    </TraycerMarkdown>
+  );
+}
 
 export function MarkdownEditPreview({
   value,
@@ -45,6 +68,7 @@ export function MarkdownEditPreview({
   placeholder,
   ariaLabel,
   testId,
+  mode,
 }: MarkdownEditPreviewProps) {
   const theme = useCodeMirrorTheme();
   const [view, setView] = useState<MarkdownEditPreviewView>("edit");
@@ -60,6 +84,17 @@ export function MarkdownEditPreview({
     ],
     [ariaLabel],
   );
+
+  if (mode === "preview-only") {
+    return (
+      <div
+        className="h-full min-h-0 overflow-auto"
+        data-testid={`${testId}-preview`}
+      >
+        <MarkdownPreview value={value} />
+      </div>
+    );
+  }
 
   return (
     <Tabs
@@ -93,17 +128,7 @@ export function MarkdownEditPreview({
         className="min-h-0 overflow-auto"
         data-testid={`${testId}-preview`}
       >
-        <TraycerMarkdown
-          className="px-3 py-2 text-foreground"
-          proseSize="compact"
-          components={null}
-          remarkPlugins={null}
-          rehypePlugins={null}
-          quotable={false}
-          isStreaming={false}
-        >
-          {value}
-        </TraycerMarkdown>
+        <MarkdownPreview value={value} />
       </TabsContent>
     </Tabs>
   );

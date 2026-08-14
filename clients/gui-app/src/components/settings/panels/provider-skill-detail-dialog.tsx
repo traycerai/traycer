@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
-import { FileWarning, Trash2 } from "lucide-react";
+import { FileWarning, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
+import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,16 +13,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { useHostClient } from "@/lib/host";
-import { TraycerMarkdown } from "@/markdown";
 import { cn } from "@/lib/utils";
+import { SKILL_ENTRY_FILE, parseSkillMarkdown } from "./provider-skill-markdown";
 import {
-  SKILL_ENTRY_FILE,
-  stripSkillFrontmatter,
-} from "./provider-skill-markdown";
+  skillEditPrefill,
+  type SkillEditTarget,
+} from "./provider-skill-composer-model";
 import type { SkillRemovability } from "./provider-skill-removable";
 import {
+  SKILL_CONFLICT_LABEL,
+  SKILL_CONFLICT_TONE,
+  SKILL_CONFLICT_TOOLTIP,
   SKILL_SOURCE_LABEL,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
@@ -69,16 +74,34 @@ export function ProviderSkillDetailDialog(props: {
    */
   readonly removeDisabled: boolean;
   /**
-   * A failed removal. Surfaced HERE rather than only on the tab behind this
-   * dialog, which the user cannot see while it is open.
+   * A failed removal or update. Surfaced HERE rather than only on the tab
+   * behind this dialog, which the user cannot see while it is open.
    */
-  readonly removeError: string | null;
+  readonly actionError: string | null;
+  readonly canEdit: boolean;
+  readonly canUpdate: boolean;
+  readonly origin: string | null;
+  readonly updatePending: boolean;
+  readonly onRequestEdit: (target: SkillEditTarget) => void;
+  readonly onRequestUpdate: () => void;
   readonly onRequestRemove: () => void;
   readonly onClose: () => void;
 }): ReactNode {
   const { skill, removal } = props;
   const client = useHostClient();
   const fileQuery = useWorkspaceReadFile(client, skill.path, SKILL_ENTRY_FILE);
+  const content = fileQuery.data?.content ?? null;
+  const truncated = fileQuery.data?.truncated ?? false;
+  const readError =
+    fileQuery.isError
+      ? fileQuery.error.message
+      : (fileQuery.data?.error ?? null);
+  const editReady =
+    props.canEdit &&
+    !fileQuery.isPending &&
+    readError === null &&
+    content !== null &&
+    !truncated;
 
   return (
     <Dialog
@@ -88,77 +111,176 @@ export function ProviderSkillDetailDialog(props: {
       }}
     >
       <DialogContent className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,52rem)]">
-        <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <DialogTitle className="min-w-0 truncate text-ui-lg">
-              {skill.name}
-            </DialogTitle>
-            <span
-              className={cn(
-                "rounded border px-1.5 py-0.5 text-ui-xs",
-                SKILL_SOURCE_TONE[skill.source],
-              )}
-            >
-              {SKILL_SOURCE_LABEL[skill.source]}
-            </span>
-          </div>
-          <DialogDescription className="text-ui-sm">
-            {skill.description !== null && skill.description.length > 0
-              ? skill.description
-              : "No description in this skill's frontmatter."}
-          </DialogDescription>
-        </DialogHeader>
+        <SkillDetailHeader
+          skill={skill}
+          origin={props.origin}
+          canUpdate={props.canUpdate}
+          updatePending={props.updatePending}
+          updateDisabled={props.removeDisabled}
+          onRequestUpdate={props.onRequestUpdate}
+        />
         <div className="min-h-0 overflow-y-auto px-5 py-4">
-          {props.removeError === null ? null : (
+          {props.actionError === null ? null : (
             <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
-              {props.removeError}
+              {props.actionError}
             </div>
           )}
           <SkillBody
             pending={fileQuery.isPending}
-            error={
-              fileQuery.isError
-                ? fileQuery.error.message
-                : (fileQuery.data?.error ?? null)
-            }
-            content={fileQuery.data?.content ?? null}
-            truncated={fileQuery.data?.truncated ?? false}
+            error={readError}
+            content={content}
+            truncated={truncated}
           />
         </div>
-        <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
-          {/* The path stays the footer's primary content - it answers "which of
-              the four roots is this one in?", which the name alone cannot. */}
-          <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
-            {skill.path}
-          </StartTruncatedText>
-          {removal.kind === "blocked" ? (
-            // Shrinkable and wrapping, not `shrink-0`: the reason is a full
-            // sentence and would otherwise squeeze the path to nothing (or
-            // overflow the footer outright) on a narrow dialog.
-            <span className="min-w-0 text-right text-ui-xs text-muted-foreground">
-              {removal.reason}
+        <SkillDetailFooter
+          path={skill.path}
+          removal={removal}
+          canEdit={props.canEdit}
+          editReady={editReady}
+          removePending={props.removePending}
+          actionsDisabled={props.removeDisabled}
+          onEdit={() => {
+            if (content === null) return;
+            props.onRequestEdit(skillEditPrefill(skill, content));
+          }}
+          onRequestRemove={props.onRequestRemove}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SkillDetailHeader(props: {
+  readonly skill: ProviderSkill;
+  readonly origin: string | null;
+  readonly canUpdate: boolean;
+  readonly updatePending: boolean;
+  readonly updateDisabled: boolean;
+  readonly onRequestUpdate: () => void;
+}): ReactNode {
+  const { skill } = props;
+  return (
+    <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <DialogTitle className="min-w-0 truncate text-ui-lg">
+          {skill.name}
+        </DialogTitle>
+        <span
+          className={cn(
+            "rounded border px-1.5 py-0.5 text-ui-xs",
+            SKILL_SOURCE_TONE[skill.source],
+          )}
+        >
+          {SKILL_SOURCE_LABEL[skill.source]}
+        </span>
+        {skill.conflict === true ? (
+          <TooltipWrapper
+            label={SKILL_CONFLICT_TOOLTIP}
+            side="top"
+            sideOffset={4}
+            align="center"
+          >
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-ui-xs",
+                SKILL_CONFLICT_TONE,
+              )}
+            >
+              {SKILL_CONFLICT_LABEL}
             </span>
-          ) : null}
-          {removal.kind === "removable" ? (
+          </TooltipWrapper>
+        ) : null}
+      </div>
+      <DialogDescription className="text-ui-sm">
+        {skill.description !== null && skill.description.length > 0
+          ? skill.description
+          : "No description in this skill's frontmatter."}
+      </DialogDescription>
+      {props.origin === null ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="min-w-0 text-ui-xs text-muted-foreground">
+            Imported from {props.origin}
+          </p>
+          {props.canUpdate ? (
             <Button
               type="button"
               size="sm"
-              variant="destructive"
+              variant="outline"
               className="shrink-0"
-              disabled={props.removeDisabled}
-              onClick={props.onRequestRemove}
+              disabled={props.updateDisabled}
+              onClick={props.onRequestUpdate}
             >
-              {props.removePending ? (
+              {props.updatePending ? (
                 <MutedAgentSpinner />
               ) : (
-                <Trash2 className="size-3.5" />
+                <RefreshCw className="size-3.5" />
               )}
-              Remove
+              Update from source
             </Button>
           ) : null}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      )}
+    </DialogHeader>
+  );
+}
+
+function SkillDetailFooter(props: {
+  readonly path: string;
+  readonly removal: SkillRemovability;
+  readonly canEdit: boolean;
+  readonly editReady: boolean;
+  readonly removePending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onEdit: () => void;
+  readonly onRequestRemove: () => void;
+}): ReactNode {
+  return (
+    <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
+      {/* The path stays the footer's primary content - it answers "which of
+          the four roots is this one in?", which the name alone cannot. */}
+      <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
+        {props.path}
+      </StartTruncatedText>
+      {props.removal.kind === "blocked" ? (
+        // Shrinkable and wrapping, not `shrink-0`: the reason is a full
+        // sentence and would otherwise squeeze the path to nothing (or
+        // overflow the footer outright) on a narrow dialog.
+        <span className="min-w-0 text-right text-ui-xs text-muted-foreground">
+          {props.removal.reason}
+        </span>
+      ) : null}
+      <div className="flex shrink-0 items-center gap-2">
+        {props.canEdit ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={props.actionsDisabled || !props.editReady}
+            onClick={props.onEdit}
+          >
+            <Pencil className="size-3.5" />
+            Edit
+          </Button>
+        ) : null}
+        {props.removal.kind === "removable" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            className="shrink-0"
+            disabled={props.actionsDisabled}
+            onClick={props.onRequestRemove}
+          >
+            {props.removePending ? (
+              <MutedAgentSpinner />
+            ) : (
+              <Trash2 className="size-3.5" />
+            )}
+            Remove
+          </Button>
+        ) : null}
+      </div>
+    </DialogFooter>
   );
 }
 
@@ -190,12 +312,12 @@ function SkillBody(props: {
       </div>
     );
   }
-  const body = stripSkillFrontmatter(props.content);
+  const body = parseSkillMarkdown(props.content).body;
   return (
     <>
       {props.truncated ? (
         <p className="mb-3 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground">
-          This skill is large — showing the beginning of the file.
+          This skill is large - showing the beginning of the file.
         </p>
       ) : null}
       {body.trim().length === 0 ? (
@@ -203,17 +325,15 @@ function SkillBody(props: {
           This skill has frontmatter but no instructions.
         </p>
       ) : (
-        <TraycerMarkdown
-          className={null}
-          proseSize="normal"
-          components={null}
-          remarkPlugins={null}
-          rehypePlugins={null}
-          quotable={false}
-          isStreaming={false}
-        >
-          {body}
-        </TraycerMarkdown>
+        <MarkdownEditPreview
+          value={body}
+          onChange={() => undefined}
+          readOnly
+          placeholder={undefined}
+          ariaLabel="Skill instructions"
+          testId="skill-detail-body"
+          mode="preview-only"
+        />
       )}
     </>
   );

@@ -4,6 +4,8 @@ import type {
   ProviderSkillInspectCandidate,
   ProviderSkillsCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
+import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { parseSkillMarkdown } from "./provider-skill-markdown";
 
 /**
  * Pure decision layer for the Skills authoring surface.
@@ -31,6 +33,34 @@ export const SKILL_DESCRIPTION_SOFT_LIMIT = 1024;
 const SHARED_SKILLS_RELATIVE = ".agents/skills";
 
 export type SkillComposerStep = "import" | "picker" | "write";
+
+/**
+ * Prefill payload for opening the composer on an existing skill.
+ * Submit sends `edit {path, name, description, body}` instead of `create`.
+ */
+export type SkillEditTarget = {
+  readonly path: string;
+  readonly name: string;
+  readonly description: string;
+  readonly body: string;
+};
+
+export function skillEditPrefill(
+  skill: ProviderSkill,
+  raw: string,
+): SkillEditTarget {
+  const parsed = parseSkillMarkdown(raw);
+  return {
+    path: skill.path,
+    name:
+      parsed.name !== null && parsed.name.length > 0 ? parsed.name : skill.name,
+    description:
+      parsed.description !== null
+        ? parsed.description
+        : (skill.description ?? ""),
+    body: parsed.body,
+  };
+}
 
 /**
  * Which authoring paths this provider actually offers for the selected scope.
@@ -281,28 +311,56 @@ export function preselectSkillNames(
 }
 
 /**
- * Host rejects an expired-token install whose re-clone SHA moved. There is
- * no dedicated native error code yet, so this matches the detail the host
- * puts on the wire.
+ * Host rejects an expired-token install whose re-clone SHA moved by
+ * mapping `NativeWriteError("external_drift")` onto the wire. The GUI
+ * preserves that as `ProviderNativeRpcError.nativeCode`.
  */
 export function isSkillSourceShaMismatch(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const text = error.message.toLowerCase();
-  if (
-    text.includes("sha") &&
-    (text.includes("mismatch") ||
-      text.includes("moved") ||
-      text.includes("changed") ||
-      text.includes("differ"))
-  ) {
-    return true;
-  }
   return (
-    text.includes("commit") &&
-    (text.includes("mismatch") ||
-      text.includes("moved") ||
-      text.includes("changed"))
+    isProviderNativeRpcError(error) && error.nativeCode === "external_drift"
   );
+}
+
+/**
+ * Update-from-source refused because canon hash ≠ recorded `installedHash`.
+ * Same native code as inspect SHA drift; the verb is what distinguishes them.
+ */
+export function isSkillUpdateDirtyCanon(error: unknown): boolean {
+  return (
+    isProviderNativeRpcError(error) && error.nativeCode === "external_drift"
+  );
+}
+
+/** Fetched source matches what is already installed. */
+export function isSkillUpdateNoOp(error: unknown): boolean {
+  return (
+    isProviderNativeRpcError(error) &&
+    error.nativeCode === "no_change_detected"
+  );
+}
+
+/**
+ * Absent `actionScopes.edit` / `update` is the old-host skew gate: hide
+ * the feature rather than offering a verb the host will refuse.
+ */
+export function skillActionAdvertised(
+  scopes: readonly ProviderNativeScope[] | undefined,
+  effectiveScope: ProviderNativeScope,
+): boolean {
+  if (scopes === undefined) return false;
+  return scopes.includes(effectiveScope);
+}
+
+export function skillIsEditable(skill: ProviderSkill): boolean {
+  if (skill.conflict === true) return false;
+  return skill.source === "shared" || skill.source === "provider";
+}
+
+export function skillOriginDisplay(skill: ProviderSkill): string | null {
+  const origin = skill.origin;
+  if (origin === undefined || origin === null) return null;
+  const trimmed = origin.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function composerErrorMessage(error: unknown): string {
