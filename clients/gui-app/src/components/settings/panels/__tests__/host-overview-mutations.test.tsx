@@ -534,8 +534,8 @@ describe("<HostSettingsPanel /> Overview OS service externally-managed outcome",
         "managed by an external supervisor",
       );
     });
-    expect(screen.queryByTestId("host-overview-service-register")).toBeNull();
-    expect(screen.queryByTestId("host-overview-service-deregister")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Re-register" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deregister" })).toBeNull();
     expect(screen.queryByTestId("host-overview-service-manifest")).toBeNull();
   });
 });
