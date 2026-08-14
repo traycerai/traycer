@@ -605,7 +605,7 @@ describe("mutation lane: wait-never-reject", () => {
     // pass is manifest-only. The one automatic download stays on the
     // independent lane before apply owns the mutation lane.
     expect(order).toEqual([
-      "host restart",
+      "host restart --force",
       "host download --automatic",
       "host apply --expected-stage-fingerprint stage-1.8.0",
     ]);
@@ -2553,8 +2553,12 @@ describe("yank/apply ordering", () => {
 
     const restart = controller.respawn();
     await vi.waitFor(() => {
+      // `--force` distinguishes respawn (the explicit force path - the
+      // Settings Force-restart offer, tray restart) from the cooperative
+      // `["host", "restart"]` that `activateInstalledCliOwned`/`recoverIfDown`
+      // send: respawn must skip the shutdown claim the busy host would deny.
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-        expect.objectContaining({ args: ["host", "restart"] }),
+        expect.objectContaining({ args: ["host", "restart", "--force"] }),
       );
     });
     const pendingReconcile = controller.stageLatest();

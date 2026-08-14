@@ -1,6 +1,9 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import {
+  readHostPidMetadata,
+  removeHostPidMetadata,
+} from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
@@ -260,6 +263,7 @@ async function stopService(
   // this - and escalate with `systemctl kill -s SIGKILL`, which signals the
   // unit's OWN cgroup.
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGTERM_GRACE_MS)) {
+    await purgePidMetadataAfterConfirmedStop(label);
     return;
   }
   await run(
@@ -273,6 +277,7 @@ async function stopService(
     },
   );
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
+    await purgePidMetadataAfterConfirmedStop(label);
     return;
   }
   throw cliError({
@@ -281,6 +286,23 @@ async function stopService(
     details: { unit: unitName(label) },
     exitCode: 1,
   });
+}
+
+// A SIGKILLed host cannot run its own shutdown cleanup, so the stale
+// pid.json record survives the process - and the Desktop health monitor
+// reads "metadata present + endpoint dead" as a crash and starts recovery,
+// undoing the stop the user just forced. Purge is gated on a CONFIRMED
+// inactive unit (never the unconfirmed non-force return: deleting a live
+// host's published endpoint would orphan it) and is best-effort - a failed
+// unlink must not turn a real, confirmed stop into a reported failure.
+async function purgePidMetadataAfterConfirmedStop(
+  label: ServiceLabel,
+): Promise<void> {
+  try {
+    await removeHostPidMetadata(label.environment);
+  } catch {
+    // Best-effort by design; the stop itself is already confirmed.
+  }
 }
 
 // Mirrors the macOS force-stop grace: the host's own force-exit watchdog
@@ -292,12 +314,14 @@ const FORCE_STOP_SIGKILL_GRACE_MS = 10_000;
 const FORCE_STOP_POLL_MS = 500;
 
 /**
- * Polls `systemctl is-active` until the unit settles out of `active`/
- * `deactivating` or the deadline passes. `inactive`/`failed`/`unknown` (and
- * any non-zero-exit answer, which is how is-active reports them) all mean
- * the unit is no longer running the host. A probe that cannot run at all
- * reads as NOT settled - the caller escalates or fails loudly rather than
- * reporting a stop it could not confirm.
+ * Polls `systemctl is-active` until the unit POSITIVELY reports a settled
+ * state (`inactive`/`failed`/`unknown` on stdout) or the deadline passes.
+ * Only a recognized state is evidence: `is-active` reports settled states
+ * through a nonzero exit WITH the state on stdout, but a probe that cannot
+ * reach the user manager at all ("Failed to connect to bus") also exits
+ * nonzero - printing nothing - and says nothing about the unit. Anything
+ * unrecognized reads as NOT settled, so the caller escalates or fails
+ * loudly rather than reporting a stop it could not confirm.
  */
 async function waitForUnitInactive(
   label: ServiceLabel,
@@ -331,16 +355,18 @@ async function probeUnitSettled(
     return false;
   }
   const state = result.stdout.trim();
-  // "activating" is NOT settled either: it means something (a concurrent
-  // start, a restart) is bringing the unit UP, and reporting the stop
-  // successful while a host is coming to life is the lie this whole wait
-  // exists to prevent. The caller keeps waiting and escalates.
-  return (
-    state !== "active" &&
-    state !== "activating" &&
-    state !== "deactivating" &&
-    state !== "reloading"
-  );
+  // POSITIVE confirmation only. An exclusion list ("not active, not
+  // activating, ...") would also match an EMPTY answer - which is what a
+  // probe that could not reach the systemd user manager produces
+  // (`tolerateNonZeroExit` resolves it: nonzero exit, error on stderr,
+  // nothing on stdout) - and would report a stop this command never
+  // confirmed. `inactive`/`failed` are systemd's settled states; `unknown`
+  // is older systemctl's answer for a unit that is not loaded at all.
+  // Everything else - including `activating` (something is bringing the
+  // unit UP), `deactivating`, and any unrecognized or empty answer - reads
+  // as not settled, and the caller keeps waiting, escalates, or fails
+  // loudly.
+  return state === "inactive" || state === "failed" || state === "unknown";
 }
 
 async function startService(

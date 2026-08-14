@@ -1045,7 +1045,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(MOCKS.isProcessAlive).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects when a stopped host remains alive through the shutdown timeout", async () => {
+  it("rejects when a stopped host remains alive through the shutdown timeout, naming --force as the escalation path", async () => {
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(true);
@@ -1061,39 +1061,150 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await vi.runAllTimersAsync();
 
     await result;
+    // Without --force this is a dead end unless the message names the way
+    // out - never escalates to SIGKILL on its own. Re-assert against the
+    // SAME already-settled promise (not a fresh call) - a second `stop()`
+    // would need its own ~32s fake-timer advance to time out too.
+    await expect(stopping).rejects.toMatchObject({
+      message: expect.stringContaining("Re-run with --force"),
+    });
   });
 
-  it("--force escalates to SIGKILL and stops successfully after a CLI-owned host outlives SIGTERM", async () => {
-    vi.useFakeTimers();
-    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
-    // Alive throughout the SIGTERM wait (proving it ran to its full
-    // timeout rather than escalating early); dead as soon as the SIGKILL
-    // launchctl call has actually been issued.
-    let sigkillIssued = false;
-    MOCKS.isProcessAlive.mockImplementation(() => !sigkillIssued);
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      if (command === "launchctl" && args[0] === "kill" && args[1] === "KILL") {
-        sigkillIssued = true;
-      }
-      return buildSuccessResult();
-    };
-    const controller = createMacosController(runner);
+  // CLI-owned `stop --force`, once the plain SIGTERM relayed through
+  // launchd has been outlived: the SAME engine as the Desktop-managed force
+  // path (`forceStopHostProcess`) - `launchctl kill KILL` is never used
+  // here. `launchctl kill KILL` targets the JOB's service process, which is
+  // the `host start` SUPERVISOR, not the host: SIGKILL is untrappable,
+  // `KeepAlive{Crashed:true}` respawns a replacement supervisor, and the
+  // replacement reads the on-disk stop intent as already-served and starts
+  // a FRESH host - the stop would report success and be undone seconds
+  // later. Escalating against the identity-verified HOST CHILD instead
+  // leaves the supervisor alive to consume the intent and exit cleanly, so
+  // the job stays down. Reuses the exact `MOCKS.forceStopHostProcess`
+  // stubbing pattern the Desktop-managed force tests below already
+  // establish - same seam, same outcome union, different caller.
+  describe("CLI-owned stop --force (never launchctl kill KILL)", () => {
+    function stageOutlivedSigterm(): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+      // Alive throughout - the plain SIGTERM wait must run to its FULL
+      // timeout before any escalation, exactly like the non-force case.
+      MOCKS.isProcessAlive.mockReturnValue(true);
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
 
-    const stopping = controller.stop(label, { force: true });
-    // The SIGTERM wait's full timeout, then slack for the SIGKILL follow-up
-    // wait - same STOP_EXIT_TIMEOUT_MS margin the non-force case above
-    // times out at.
-    await vi.advanceTimersByTimeAsync(40_000);
+    it("invokes forceStopHostProcess once SIGTERM is outlived, and the launchd job NEVER receives a kill KILL", async () => {
+      const { calls, controller } = stageOutlivedSigterm();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
 
-    await expect(stopping).resolves.toBeUndefined();
-    const killArgs = calls
-      .filter((c) => c.command === "launchctl" && c.args[0] === "kill")
-      .map((c) => c.args[1]);
-    // Escalation must follow a SIGTERM that was actually tried - never
-    // SIGKILL in place of it.
-    expect(killArgs).toEqual(["TERM", "KILL"]);
+      const stopping = controller.stop(label, { force: true });
+      // STOP_EXIT_TIMEOUT_MS, plus slack - same margin the non-force
+      // timeout test above uses for the identical wait.
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await expect(stopping).resolves.toBeUndefined();
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "stop",
+      );
+      // Only the plain SIGTERM relay to the job ever happened - no
+      // second launchctl kill of any kind, KILL or otherwise.
+      const launchctlKillCalls = calls.filter(
+        (call) => call.command === "launchctl" && call.args[0] === "kill",
+      );
+      expect(launchctlKillCalls).toEqual([
+        {
+          command: "launchctl",
+          args: ["kill", "TERM", `gui/${process.getuid?.() ?? 0}/${label.id}`],
+        },
+      ]);
+    });
+
+    it("resolves when forceStopHostProcess reports no-host (the pid was already gone)", async () => {
+      const { controller } = stageOutlivedSigterm();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      const stopping = controller.stop(label, { force: true });
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await expect(stopping).resolves.toBeUndefined();
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the missing endpoint when forceStopHostProcess reports no-metadata", async () => {
+      const { controller } = stageOutlivedSigterm();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      const stopping = controller.stop(label, { force: true });
+      const assertion = expect(stopping).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("no host endpoint is published"),
+      });
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await assertion;
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
+      const { controller } = stageOutlivedSigterm();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      const stopping = controller.stop(label, { force: true });
+      const assertion = expect(stopping).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not verify"),
+      });
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await assertion;
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
+      const { controller } = stageOutlivedSigterm();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      const stopping = controller.stop(label, { force: true });
+      const assertion = expect(stopping).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("survived SIGKILL"),
+      });
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await assertion;
+    });
+
+    it("invokes forceStopHostProcess even when NO pid.json was published at all - force never falls back to a silent success", async () => {
+      // `before === null` used to short-circuit force into an unverified
+      // "success" (nothing to wait on). It must now fall through to the
+      // same engine as every other force outcome - there is no waiting to
+      // do here (no pid to poll), so no fake timers are needed either.
+      MOCKS.readHostPidMetadata.mockResolvedValue(null);
+      const runner: ProcessRunner = async () => buildSuccessResult();
+      const controller = createMacosController(runner);
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "stop",
+      );
+    });
   });
 
   it("forces a recycle on the CLI-owned restart, because the supervisor outlives the host pid it waited on", async () => {

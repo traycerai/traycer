@@ -2918,13 +2918,17 @@ export class HostController {
 
   // ---- respawn / recoverIfDown --------------------------------------------
 
-  // `respawn` is always force=true (unconditional `host restart` / a
+  // `respawn` is always force=true (`host restart --force` / a
   // force-activation cycle, never `--if-idle`): it is the explicit "restart
-  // the host now" intent - Settings → Restart Host, a doctor-recommended
-  // restart, the health monitor's recovery hook. The caller deliberately
-  // asked for an immediate restart; silently downgrading to "only if idle"
-  // would make the action a no-op exactly when the user is trying to
-  // recover from a stuck host, which is the case it exists for.
+  // the host now" intent - Settings → Force restart on a busy denial, a
+  // doctor-recommended restart, the health monitor's recovery hook. The
+  // caller deliberately asked for an immediate restart; silently downgrading
+  // to "only if idle" would make the action a no-op exactly when the user is
+  // trying to recover from a stuck host, which is the case it exists for.
+  // `--force` on the CLI leg is load-bearing for the same reason: without it
+  // `host restart` runs the cooperative shutdown claim, and the busy host
+  // that made the user reach for Force restart denies it - the forced
+  // restart would report the very declined outcome it exists to override.
   async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
     return this.enqueueMutation<ActivateInstalledOk>(
       "respawn",
@@ -2959,7 +2963,11 @@ export class HostController {
           (await readRunningHostIdentity(this.layout))?.pid ?? null;
         let raw: unknown;
         try {
-          raw = await this.streamBundled<unknown>(["host", "restart"]);
+          raw = await this.streamBundled<unknown>([
+            "host",
+            "restart",
+            "--force",
+          ]);
         } catch (err) {
           // Fixup B14: same healing as the packaged-mac branch above - a
           // CLI-lock-busy/failed restart never touched the host either.

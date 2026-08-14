@@ -2,12 +2,34 @@ import { mkdtempSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { createLinuxController, type ProcessRunner } from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
+
+// `stop --force`'s confirmed-stop paths purge pid.json on the host's
+// behalf (a SIGKILLed/SIGTERMed-but-unconfirmed host cannot run its own
+// shutdown cleanup) - stub the removal the same way `macos.test.ts` /
+// `desktop-agent-shutdown.test.ts` stub the identical export, so this
+// suite never touches a real path.
+const MOCKS = vi.hoisted(() => ({
+  removeHostPidMetadata: vi.fn(),
+}));
+vi.mock("../../../host/pid-metadata", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../host/pid-metadata")>();
+  return { ...actual, removeHostPidMetadata: MOCKS.removeHostPidMetadata };
+});
 
 /**
  * The systemd install FLOW - as opposed to the emitted artifact, which
@@ -239,11 +261,15 @@ describe("linux service install flow", () => {
 // the way `macos.test.ts` / `desktop-agent-shutdown.test.ts` already do for
 // the identical wait shape.
 describe("linux service stop --force", () => {
+  beforeEach(() => {
+    MOCKS.removeHostPidMetadata.mockReset();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent", async () => {
+  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - and purges pid.json", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -258,6 +284,10 @@ describe("linux service stop --force", () => {
     // The first is-active probe settles immediately - no poll wait, no
     // kill, ever.
     expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    // A CONFIRMED inactive unit purges the stale pid.json on the host's
+    // behalf - the host's own shutdown handler may not have run (or
+    // finished) in time to unlink it itself.
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, then settles and succeeds", async () => {
@@ -297,6 +327,8 @@ describe("linux service stop --force", () => {
       "--signal=SIGKILL",
       "ai.traycer.host.dev.service",
     ]);
+    // Purged on the SIGKILL-confirmed path too - same as the SIGTERM one.
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("is still 'active' after the SIGKILL grace too - SERVICE_CONTROL_FAILED, never a false success", async () => {
@@ -323,6 +355,9 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
+    // Never confirmed, so nothing is purged - deleting a live host's
+    // published endpoint would orphan it.
+    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 
   it("'activating' does NOT count as settled - it drives the SIGKILL escalation exactly like 'active' does", async () => {
@@ -352,6 +387,7 @@ describe("linux service stop --force", () => {
 
     await expect(pending).resolves.toBeUndefined();
     expect(calls.map(verbOf)).toContain("kill");
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("a probe that throws (systemd unreachable) reads as NOT settled, not as a false success", async () => {
@@ -372,6 +408,73 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
+    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  // Codex's exact scenario: `tolerateNonZeroExit: true` means a probe that
+  // could not reach the systemd user manager RESOLVES (never throws) with
+  // an empty stdout and a nonzero exit - the OLD exclusion-list logic
+  // (`state !== "active" && state !== "activating" && ...`) treated that
+  // empty string as settled, reporting a stop it never confirmed. The
+  // positive-list rewrite closes it: nothing but a recognized settled
+  // state counts.
+  it("empty stdout with a nonzero, tolerated exit (bus unreachable) reads as NOT settled - escalates, still empty - SERVICE_CONTROL_FAILED", async () => {
+    vi.useFakeTimers();
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "systemctl" && args[1] === "is-active") {
+        return {
+          stdout: "",
+          stderr: "Failed to connect to bus: No medium found",
+          exitCode: 1,
+        };
+      }
+      return ok();
+    };
+
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("still active after SIGKILL"),
+    });
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "failed", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+  });
+
+  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL", async () => {
+    // Older systemctl's answer for a unit that is not loaded at all.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "unknown", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("without --force, a stop never probes is-active or escalates to kill - today's semantics, pinned", async () => {
@@ -380,5 +483,7 @@ describe("linux service stop --force", () => {
     await createLinuxController(runner).stop(label, { force: false });
 
     expect(calls.map(verbOf)).toEqual(["stop"]);
+    // Non-force never confirms the stop, so it never purges either.
+    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 });
