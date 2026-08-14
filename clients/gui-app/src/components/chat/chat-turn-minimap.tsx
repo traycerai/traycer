@@ -901,8 +901,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       if (chatTurnMinimapEventTargetsPreview(event.target)) return;
       // A positive-width hit strip is capped to the real side gutter, so a
       // hand-cursor click cannot be part of transcript text selection. Keep
-      // navigation available while preserving the selection and suppressing
-      // the preview until a later clean hover.
+      // navigation available without disturbing the selection.
       if (!chatTurnMinimapHasActiveTextSelection()) {
         setInteractionStarted(true);
       }
@@ -1109,10 +1108,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
             onMouseDown={handleHitStripMouseDown}
             onMouseMove={(event) => {
               if (expanded || isInert) return;
-              if (
-                event.buttons !== 0 ||
-                chatTurnMinimapHasActiveTextSelection()
-              ) {
+              // Reaching this positive-width button means the pointer is in
+              // the real side gutter, where hover cannot alter transcript
+              // selection. Passive zero-gutter hover remains selection-safe.
+              if (event.buttons !== 0) {
                 closeInteraction();
                 return;
               }
