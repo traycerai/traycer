@@ -41,12 +41,13 @@ const skillMocks = vi.hoisted(() => ({
   // already renders inline.
   mutateVariables: [] as Array<{ readonly suppressToast: boolean }>,
   mutateIsPending: false,
-  onMutateAsync: async (
+  onMutateAsync: (
     _mutation: ProvidersSkillsMutateAction,
-  ): Promise<SkillsListMutateResult> => ({
-    kind: "skills",
-    skills: [],
-  }),
+  ): Promise<SkillsListMutateResult> =>
+    Promise.resolve({
+      kind: "skills",
+      skills: [],
+    }),
   readFileCalls: [] as Array<{
     workspacePath: string | null;
     filePath: string | null;
@@ -270,7 +271,8 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.mutations = [];
     skillMocks.mutateVariables = [];
     skillMocks.mutateIsPending = false;
-    skillMocks.onMutateAsync = async () => ({ kind: "skills", skills: [] });
+    skillMocks.onMutateAsync = () =>
+      Promise.resolve({ kind: "skills", skills: [] });
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
     skillMocks.readFileCalls = [];
@@ -639,7 +641,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
-    const withOrigin = screen.getByRole("dialog").textContent ?? "";
+    const withOrigin = screen.getByRole("dialog").textContent;
     expect(withOrigin).toContain("Imported from owner/repo");
     expect(withOrigin).not.toContain("Imported from Imported from");
 
@@ -686,13 +688,14 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       name: "Description",
     });
     expect(
-      descriptionInput instanceof HTMLTextAreaElement &&
-        descriptionInput.value,
+      descriptionInput instanceof HTMLTextAreaElement && descriptionInput.value,
     ).toBe("Helps");
     const editor = screen.getByTestId("skill-composer-instructions");
     const view = EditorView.findFromDOM(editor);
     if (view === null) throw new Error("Expected a CodeMirror editor element");
-    expect(view.state.doc.toString()).toBe("# When to use\n\nAsk for a skill.\n");
+    expect(view.state.doc.toString()).toBe(
+      "# When to use\n\nAsk for a skill.\n",
+    );
 
     fireEvent.change(nameInput, { target: { value: "find-skills-v2" } });
     fireEvent.change(descriptionInput, {
@@ -719,24 +722,30 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     const user = userEvent.setup();
     skillMocks.updateScopes = ["global"];
     skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
-    skillMocks.onMutateAsync = async (mutation) => {
+    skillMocks.onMutateAsync = (mutation) => {
       if (mutation.action === "update" && mutation.confirm !== true) {
-        throw nativeError(
-          "external_drift",
-          "Inspected source changed (abc123 → def456); inspect again",
+        return Promise.reject(
+          nativeError(
+            "external_drift",
+            "Inspected source changed (abc123 → def456); inspect again",
+          ),
         );
       }
-      return { kind: "skills", skills: [] };
+      return Promise.resolve({ kind: "skills", skills: [] });
     };
     renderTab();
     fireEvent.click(
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Update from source" }));
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
 
     const confirm = await screen.findByTestId("confirm-destructive-dialog");
-    expect(confirm.textContent).toMatch(/local edits that will be overwritten/i);
+    expect(confirm.textContent).toMatch(
+      /local edits that will be overwritten/i,
+    );
     expect(confirm.textContent).toMatch(/Overwrite local edits/i);
     expect(skillMocks.mutations).toEqual([
       {
@@ -770,10 +779,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     const user = userEvent.setup();
     skillMocks.updateScopes = ["global"];
     skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
-    skillMocks.onMutateAsync = async () => {
-      throw nativeError(
-        "no_change_detected",
-        "Source matches the installed skill",
+    skillMocks.onMutateAsync = () => {
+      return Promise.reject(
+        nativeError("no_change_detected", "Source matches the installed skill"),
       );
     };
     renderTab();
@@ -781,7 +789,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Update from source" }));
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith("Already up to date");
@@ -812,7 +822,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
 
-    const dialogText = screen.getByRole("dialog").textContent ?? "";
+    const dialogText = screen.getByRole("dialog").textContent;
     expect(dialogText).toContain("Imported from owner/repo");
     expect(dialogText).not.toContain("Imported from Imported from");
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
@@ -829,9 +839,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
-    expect(screen.getByTestId("confirm-destructive-dialog").textContent).toMatch(
-      /removing a shared skill removes it for every provider/i,
-    );
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toMatch(/removing a shared skill removes it for every provider/i);
   });
 
   it("refreshes the open dialog in place after a successful Update from source", async () => {
@@ -846,7 +856,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       description: "Updated from source",
       origin: "Imported from owner/repo#next",
     };
-    skillMocks.onMutateAsync = async () => {
+    skillMocks.onMutateAsync = () => {
       skillMocks.readFile = {
         data: {
           content:
@@ -858,14 +868,14 @@ describe("<ProviderSkillsTab /> skill detail", () => {
         isError: false,
         error: null,
       };
-      return { kind: "skills", skills: [updatedRow] };
+      return Promise.resolve({ kind: "skills", skills: [updatedRow] });
     };
     renderTab();
     fireEvent.click(
       screen.getByRole("button", { name: "Open find-skills (Shared)" }),
     );
 
-    const before = screen.getByRole("dialog").textContent ?? "";
+    const before = screen.getByRole("dialog").textContent;
     expect(before).toContain("find-skills");
     expect(before).toContain("Helps users discover and install agent skills.");
     expect(before).toContain("Imported from owner/repo");
@@ -879,16 +889,18 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       ),
     ).toBe(true);
 
-    await user.click(screen.getByRole("button", { name: "Update from source" }));
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
 
     await waitFor(() => {
-      const after = screen.getByRole("dialog").textContent ?? "";
+      const after = screen.getByRole("dialog").textContent;
       expect(after).toContain("find-skills-v2");
       expect(after).toContain("Updated from source");
       expect(after).toContain("Imported from owner/repo#next");
       expect(after).toContain("Updated instructions from source.");
     });
-    const after = screen.getByRole("dialog").textContent ?? "";
+    const after = screen.getByRole("dialog").textContent;
     expect(after).not.toContain(
       "Helps users discover and install agent skills.",
     );

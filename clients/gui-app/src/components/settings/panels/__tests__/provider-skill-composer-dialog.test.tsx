@@ -3,7 +3,13 @@ import type {
   ProviderSkillInspectCandidate,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillComposerDialog } from "@/components/settings/panels/provider-skill-composer-dialog";
@@ -77,9 +83,10 @@ function renderDialog(
     pending: boolean;
   }>,
 ) {
-  const onMutate = vi.fn<
-    (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
-  >();
+  const onMutate =
+    vi.fn<
+      (mutation: ProvidersSkillsMutateAction) => Promise<SkillsMutateData>
+    >();
   onMutate.mockResolvedValue({ kind: "skills", skills: [] });
   const onClose = vi.fn<() => void>();
   render(
@@ -100,7 +107,7 @@ function renderDialog(
   return { onMutate, onClose };
 }
 
-async function fillSource(value: string): Promise<void> {
+function fillSource(value: string): void {
   fireEvent.change(screen.getByLabelText("Skill source"), {
     target: { value },
   });
@@ -236,14 +243,14 @@ describe("<ProviderSkillComposerDialog />", () => {
       action: "create",
       name: "review-pr",
       description: "Reviews a pull request for bugs.",
-      body: expect.stringContaining("## When to use this"),
+      body: expect.stringContaining("## When to use this") as string,
       providerScoped: false,
     });
   });
 
   it("uses the legacy single-shot import when inspect is not advertised", async () => {
     const { onMutate } = renderDialog({ authoring: LEGACY_IMPORT });
-    await fillSource("https://github.com/org/skill.git");
+    fillSource("https://github.com/org/skill.git");
 
     expect(screen.getByRole("button", { name: "Import skill" })).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Import skill" }));
@@ -261,12 +268,14 @@ describe("<ProviderSkillComposerDialog />", () => {
   it("inspects a source and shows an inline empty message when no SKILL.md is found", async () => {
     const { onMutate, onClose } = renderDialog({ authoring: BOTH });
     onMutate.mockResolvedValueOnce(inspectData([], "tok-empty"));
-    await fillSource("owner/empty-repo");
+    fillSource("owner/empty-repo");
 
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
 
     await waitFor(() => {
-      expect(screen.getByText("No SKILL.md found in that source.")).toBeDefined();
+      expect(
+        screen.getByText("No SKILL.md found in that source."),
+      ).toBeDefined();
     });
     expect(onMutate).toHaveBeenCalledWith({
       action: "inspect",
@@ -282,13 +291,13 @@ describe("<ProviderSkillComposerDialog />", () => {
       authoring: BOTH,
       listScope: "project",
     });
-    onMutate.mockImplementation(async (mutation) => {
+    onMutate.mockImplementation((mutation) => {
       if (mutation.action === "inspect") {
-        return inspectData([SHOW_ME], "tok-one");
+        return Promise.resolve(inspectData([SHOW_ME], "tok-one"));
       }
-      return { kind: "skills", skills: [] };
+      return Promise.resolve({ kind: "skills", skills: [] });
     });
-    await fillSource("owner/repo");
+    fillSource("owner/repo");
 
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
 
@@ -341,13 +350,13 @@ describe("<ProviderSkillComposerDialog />", () => {
       authoring: BOTH,
       listScope: "project",
     });
-    onMutate.mockImplementation(async (mutation) => {
+    onMutate.mockImplementation((mutation) => {
       if (mutation.action === "inspect") {
-        return inspectData([DESIGN_LOOP], "tok-fresh");
+        return Promise.resolve(inspectData([DESIGN_LOOP], "tok-fresh"));
       }
-      return { kind: "skills", skills: [] };
+      return Promise.resolve({ kind: "skills", skills: [] });
     });
-    await fillSource("owner/repo");
+    fillSource("owner/repo");
 
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
 
@@ -379,13 +388,15 @@ describe("<ProviderSkillComposerDialog />", () => {
       canProviderScope: true,
       providerRoot: "/Users/dev/.codex/skills",
     });
-    onMutate.mockImplementation(async (mutation) => {
+    onMutate.mockImplementation((mutation) => {
       if (mutation.action === "inspect") {
-        return inspectData([SHOW_ME, DESIGN_LOOP, IMPROVE_MD], "tok-many");
+        return Promise.resolve(
+          inspectData([SHOW_ME, DESIGN_LOOP, IMPROVE_MD], "tok-many"),
+        );
       }
-      return { kind: "skills", skills: [] };
+      return Promise.resolve({ kind: "skills", skills: [] });
     });
-    await fillSource(
+    fillSource(
       "npx skills add owner/repo -s show-me --skill design-control-loop",
     );
 
@@ -433,7 +444,8 @@ describe("<ProviderSkillComposerDialog />", () => {
       .find((mutation) => mutation.action === "import");
     expect(importCall).toEqual({
       action: "import",
-      source: "npx skills add owner/repo -s show-me --skill design-control-loop",
+      source:
+        "npx skills add owner/repo -s show-me --skill design-control-loop",
       providerScoped: false,
       token: "tok-many",
       names: ["show-me", "design-control-loop"],
@@ -447,13 +459,15 @@ describe("<ProviderSkillComposerDialog />", () => {
       canProviderScope: true,
       providerRoot: "/Users/dev/.codex/skills",
     });
-    onMutate.mockImplementation(async (mutation) => {
+    onMutate.mockImplementation((mutation) => {
       if (mutation.action === "inspect") {
-        return inspectData([SHOW_ME, DESIGN_LOOP], "tok-scope");
+        return Promise.resolve(
+          inspectData([SHOW_ME, DESIGN_LOOP], "tok-scope"),
+        );
       }
-      return { kind: "skills", skills: [] };
+      return Promise.resolve({ kind: "skills", skills: [] });
     });
-    await fillSource("owner/repo");
+    fillSource("owner/repo");
     await user.click(screen.getByLabelText(/Codex only/));
 
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
@@ -484,13 +498,17 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     const { onMutate } = renderDialog({ authoring: BOTH });
     let inspectCount = 0;
-    onMutate.mockImplementation(async (mutation) => {
+    onMutate.mockImplementation((mutation) => {
       if (mutation.action === "inspect") {
         inspectCount += 1;
         if (inspectCount === 1) {
-          return inspectData([SHOW_ME, DESIGN_LOOP], "tok-stale");
+          return Promise.resolve(
+            inspectData([SHOW_ME, DESIGN_LOOP], "tok-stale"),
+          );
         }
-        return inspectData([SHOW_ME, DESIGN_LOOP, IMPROVE_MD], "tok-fresh");
+        return Promise.resolve(
+          inspectData([SHOW_ME, DESIGN_LOOP, IMPROVE_MD], "tok-fresh"),
+        );
       }
       throw new ProviderNativeRpcError({
         code: "external_drift",
@@ -499,7 +517,7 @@ describe("<ProviderSkillComposerDialog />", () => {
         method: "providers.nativeMutate",
       });
     });
-    await fillSource("owner/repo");
+    fillSource("owner/repo");
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
 
     await waitFor(() => {
@@ -516,7 +534,9 @@ describe("<ProviderSkillComposerDialog />", () => {
         "The source changed since the last look. Pick again from the updated list.",
       ),
     ).toBeDefined();
-    expect(screen.getByRole("checkbox", { name: "improve-claude-md" })).toBeDefined();
+    expect(
+      screen.getByRole("checkbox", { name: "improve-claude-md" }),
+    ).toBeDefined();
     const inspectCalls = onMutate.mock.calls.filter(
       (call) => call[0].action === "inspect",
     );

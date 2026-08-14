@@ -148,7 +148,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
       skillMocks.mutateCalls.push(variables);
       skillMocks.mutate(variables, opts);
     },
-    mutateAsync: async (variables: {
+    mutateAsync: (variables: {
       providerId: string;
       scope: ProviderNativeScope;
       workspaceRoot: string | null;
@@ -157,7 +157,10 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
     }) => {
       skillMocks.mutateCalls.push(variables);
       skillMocks.mutate(variables);
-      return { kind: "skills" as const, skills: skillMocks.skills };
+      return Promise.resolve({
+        kind: "skills" as const,
+        skills: skillMocks.skills,
+      });
     },
     isPending: skillMocks.mutateIsPending,
   }),
