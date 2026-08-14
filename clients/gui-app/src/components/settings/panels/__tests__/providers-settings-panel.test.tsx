@@ -206,6 +206,7 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: vi.fn(),
+    mutateAsync: vi.fn(),
     isPending: false,
   }),
 }));

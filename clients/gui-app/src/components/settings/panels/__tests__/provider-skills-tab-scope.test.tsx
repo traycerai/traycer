@@ -148,6 +148,17 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
       skillMocks.mutateCalls.push(variables);
       skillMocks.mutate(variables, opts);
     },
+    mutateAsync: async (variables: {
+      providerId: string;
+      scope: ProviderNativeScope;
+      workspaceRoot: string | null;
+      mutation: ProvidersSkillsMutateAction;
+      suppressToast: boolean;
+    }) => {
+      skillMocks.mutateCalls.push(variables);
+      skillMocks.mutate(variables);
+      return { kind: "skills" as const, skills: skillMocks.skills };
+    },
     isPending: skillMocks.mutateIsPending,
   }),
 }));
@@ -355,7 +366,7 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     expect(skillMocks.listCalls.every((c) => !c.enabled)).toBe(true);
   });
 
-  it("hides New skill when only project create is advertised while viewing Global", () => {
+  it("hides Add skill when only project create is advertised while viewing Global", () => {
     // Per-scope authoring gate: project-only create must not appear on Global.
     // Distinct from composer's providerScoped "Available to" control.
     skillMocks.createScopes = ["project"];
@@ -363,10 +374,10 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     skillMocks.skills = [FIND_SKILLS];
     render(<ProviderSkillsTab state={skillsState()} />);
 
-    expect(screen.queryByRole("button", { name: /New skill/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Add skill/ })).toBeNull();
 
     chooseScopeOption(/app/);
-    expect(screen.getByRole("button", { name: /New skill/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: /Add skill/ })).toBeDefined();
   });
 
   it("does not present the scope picker as an Available-to / providerScoped control", () => {
@@ -383,7 +394,7 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     expect(location.textContent).not.toMatch(/Available to/i);
     expect(location.textContent).not.toMatch(/providerScoped/i);
 
-    fireEvent.click(screen.getByRole("button", { name: /New skill/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Add skill/ }));
     // Composer is a separate surface; its "Available to" copy must not appear
     // as a second location picker label on the dialog title/description.
     const dialog = screen.getByRole("dialog");

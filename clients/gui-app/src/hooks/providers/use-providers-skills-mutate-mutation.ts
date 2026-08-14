@@ -78,9 +78,10 @@ export function useProvidersSkillsMutate(): UseMutationResult<
     }),
     onSuccess: (data, _variables, ctx) => {
       if (ctx.hostId === null) return;
+      if (data.kind !== "skills") return;
       queryClient.setQueryData<SkillsListData>(
         providersNativeQueryKeys.skillsList(ctx.hostId, ctx.listParams),
-        data,
+        { skills: data.skills },
       );
     },
     onError: (error, variables) => {

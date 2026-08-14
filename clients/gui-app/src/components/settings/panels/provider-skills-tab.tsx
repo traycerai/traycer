@@ -9,10 +9,11 @@ import type {
   ProviderSkillsCapabilities,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { ChevronRight, Download, Plus, Sparkles } from "lucide-react";
+import { ChevronRight, Plus, Sparkles } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -21,7 +22,7 @@ import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
   providerRootFromSkills,
   skillAuthoring,
-  type SkillComposerTab,
+  skillProviderScopeVisible,
 } from "./provider-skill-composer-model";
 import { ProviderSkillDetailDialog } from "./provider-skill-detail-dialog";
 import { skillRemovability } from "./provider-skill-removable";
@@ -108,20 +109,16 @@ function ProviderSkillsTabBody({
   });
   const mutate = useProvidersSkillsMutate();
 
-  // The composer's open state IS which tab it opened on. Null closes it and
-  // discards the draft with it - there is no half-filled form waiting behind
-  // the button.
-  const [composerTab, setComposerTab] = useState<SkillComposerTab | null>(null);
-  const [composerError, setComposerError] = useState<string | null>(null);
+  // Conditional mount: false unmounts the composer and discards the draft.
+  const [composerOpen, setComposerOpen] = useState(false);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
-  // Separate from `composerError`, which renders inside the composer - which
-  // is closed while a skill dialog is open, where a failed removal would
-  // otherwise be invisible.
+  // Removal errors render inside the skill dialog, which is closed while the
+  // composer is mounted and vice versa.
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -146,8 +143,7 @@ function ProviderSkillsTabBody({
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
-  const canWriteHere = authoring.canWrite && !projectNeedsWorkspace;
-  const canImportHere = authoring.canImport && !projectNeedsWorkspace;
+  const canAuthorHere = authoring.canAuthor && !projectNeedsWorkspace;
 
   // Read off the listing rather than mirrored from host code, so the composer
   // can name the provider's own skills folder without a second copy of that
@@ -155,6 +151,10 @@ function ProviderSkillsTabBody({
   // render (`?? []` on an optional query result), so a `useMemo` keyed on it
   // would recompute every time anyway while implying it does not.
   const providerRoot = providerRootFromSkills(skills);
+  const canProviderScope = skillProviderScopeVisible({
+    effectiveScope,
+    providerRoot,
+  });
 
   const handleBrowse = useCallback(() => {
     void browseForWorkspace()
@@ -173,43 +173,31 @@ function ProviderSkillsTabBody({
       });
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
-  function openComposer(tab: SkillComposerTab): void {
-    setComposerError(null);
-    setComposerTab(tab);
+  function openComposer(): void {
+    setComposerOpen(true);
   }
 
-  function onComposerSubmit(mutation: ProvidersSkillsMutateAction): void {
-    setComposerError(null);
+  async function onComposerMutate(
+    mutation: ProvidersSkillsMutateAction,
+  ): Promise<SkillsMutateData> {
     setPendingKey(`composer:${mutation.action}`);
-    mutate.mutate(
-      {
+    try {
+      return await mutate.mutateAsync({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation,
-        // This surface renders the failure inside the composer via
-        // `setComposerError`, so the hook's global toast would double-report
-        // the same error.
+        // The composer renders failures inline, so the hook's global toast
+        // would double-report the same error.
         suppressToast: true,
-      },
-      {
-        onSuccess: () => {
-          setPendingKey(null);
-          setComposerTab(null);
-        },
-        onError: (err) => {
-          setPendingKey(null);
-          // The composer stays OPEN on failure: the draft is the only copy of
-          // what the user just wrote, and closing it to show an error would
-          // throw the work away along with it.
-          setComposerError(err.message);
-        },
-      },
-    );
+      });
+    } finally {
+      setPendingKey(null);
+    }
   }
 
   /**
-   * Removal gets its own path rather than reusing `onComposerSubmit`: its
+   * Removal gets its own path rather than reusing `onComposerMutate`: its
    * success and failure land in different places. Success must close BOTH
    * dialogs (the open skill no longer exists); failure has to surface inside
    * the skill dialog, not in a composer that is not even mounted.
@@ -255,9 +243,8 @@ function ProviderSkillsTabBody({
             Invoked by the agent when relevant, or manually with / in chat.
           </p>
         </div>
-        <SkillEntryButtons
-          canWrite={canWriteHere}
-          canImport={canImportHere}
+        <SkillEntryButton
+          canAuthor={canAuthorHere}
           disabled={isMutating}
           onOpen={openComposer}
         />
@@ -314,28 +301,26 @@ function ProviderSkillsTabBody({
         unfilteredSkillCount={skills.length}
         searchQuery={searchQuery}
         searchActive={skillSearchActive}
-        canWrite={canWriteHere}
-        canImport={canImportHere}
+        canAuthor={canAuthorHere}
         disabled={isMutating}
         onOpenComposer={openComposer}
         onOpenSkill={setOpenSkill}
       />
 
-      {composerTab === null ? null : (
+      {composerOpen ? (
         <ProviderSkillComposerDialog
           providerLabel={providerLabel}
           authoring={authoring}
-          initialTab={composerTab}
+          listScope={effectiveScope}
           providerRoot={providerRoot}
+          canProviderScope={canProviderScope}
           pending={composerPending}
-          error={composerError}
-          onSubmit={onComposerSubmit}
+          onMutate={onComposerMutate}
           onClose={() => {
-            setComposerTab(null);
-            setComposerError(null);
+            setComposerOpen(false);
           }}
         />
-      )}
+      ) : null}
 
       {openSkill === null ? null : (
         <ProviderSkillDetailDialog
@@ -388,55 +373,31 @@ function isComposerPending(isMutating: boolean, pendingKey: string | null) {
 }
 
 /**
- * The header affordance.
- *
- * Two real buttons rather than a `New ▾` menu. The menu it replaces derived its
- * items from the capability table, and every shipped provider contract had
- * `create: []` — so it was always a chevron hiding exactly one item. When only
- * one path is open this still renders one button, but a button that names what
- * it does instead of a menu that has to be opened to find out.
+ * The header affordance. One Add skill button opens the composer import-first
+ * (or write-only when import is not advertised). No menu, no Import/New pair.
  */
-function SkillEntryButtons({
-  canWrite,
-  canImport,
+function SkillEntryButton({
+  canAuthor,
   disabled,
   onOpen,
 }: {
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpen: (tab: SkillComposerTab) => void;
+  readonly onOpen: () => void;
 }): ReactNode {
-  if (!canWrite && !canImport) return null;
+  if (!canAuthor) return null;
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
-      {canImport ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-ui-xs"
-          disabled={disabled}
-          onClick={() => onOpen("import")}
-        >
-          <Download className="size-3.5" />
-          Import skill
-        </Button>
-      ) : null}
-      {canWrite ? (
-        <Button
-          type="button"
-          variant={canImport ? "default" : "outline"}
-          size="sm"
-          className="text-ui-xs"
-          disabled={disabled}
-          onClick={() => onOpen("write")}
-        >
-          <Plus className="size-3.5" />
-          New skill
-        </Button>
-      ) : null}
-    </div>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="text-ui-xs"
+      disabled={disabled}
+      onClick={onOpen}
+    >
+      <Plus className="size-3.5" />
+      Add skill
+    </Button>
   );
 }
 
@@ -487,8 +448,7 @@ function SkillsListBody({
   unfilteredSkillCount,
   searchQuery,
   searchActive,
-  canWrite,
-  canImport,
+  canAuthor,
   disabled,
   onOpenComposer,
   onOpenSkill,
@@ -502,10 +462,9 @@ function SkillsListBody({
   readonly unfilteredSkillCount: number;
   readonly searchQuery: string;
   readonly searchActive: boolean;
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpenComposer: (tab: SkillComposerTab) => void;
+  readonly onOpenComposer: () => void;
   readonly onOpenSkill: (skill: ProviderSkill) => void;
 }): ReactNode {
   if (projectNeedsWorkspace) {
@@ -544,8 +503,7 @@ function SkillsListBody({
   if (unfilteredSkillCount === 0) {
     return (
       <SkillsEmptyState
-        canWrite={canWrite}
-        canImport={canImport}
+        canAuthor={canAuthor}
         disabled={disabled}
         onOpenComposer={onOpenComposer}
       />
@@ -584,15 +542,13 @@ function SkillsListBody({
  * broken tab.
  */
 function SkillsEmptyState({
-  canWrite,
-  canImport,
+  canAuthor,
   disabled,
   onOpenComposer,
 }: {
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpenComposer: (tab: SkillComposerTab) => void;
+  readonly onOpenComposer: () => void;
 }): ReactNode {
   return (
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
@@ -608,34 +564,17 @@ function SkillsEmptyState({
       <pre className="w-full max-w-prose overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-ui-xs text-muted-foreground">
         {EXAMPLE_SKILL_MD}
       </pre>
-      {canWrite || canImport ? (
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {canWrite ? (
-            <Button
-              type="button"
-              size="sm"
-              className="text-ui-xs"
-              disabled={disabled}
-              onClick={() => onOpenComposer("write")}
-            >
-              <Plus className="size-3.5" />
-              New skill
-            </Button>
-          ) : null}
-          {canImport ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="text-ui-xs"
-              disabled={disabled}
-              onClick={() => onOpenComposer("import")}
-            >
-              <Download className="size-3.5" />
-              Import from a repo or folder
-            </Button>
-          ) : null}
-        </div>
+      {canAuthor ? (
+        <Button
+          type="button"
+          size="sm"
+          className="text-ui-xs"
+          disabled={disabled}
+          onClick={onOpenComposer}
+        >
+          <Plus className="size-3.5" />
+          Add skill
+        </Button>
       ) : (
         <p className="max-w-prose text-ui-xs text-muted-foreground">
           This provider reads skills but can&apos;t add them from Traycer. Put a

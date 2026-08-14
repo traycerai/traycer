@@ -85,6 +85,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
       });
       skillMocks.mutate(variables, opts);
     },
+    mutateAsync: vi.fn(),
     isPending: skillMocks.mutateIsPending,
   }),
 }));
