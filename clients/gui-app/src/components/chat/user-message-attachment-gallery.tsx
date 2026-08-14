@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   type AttachmentBlobSrcState,
-  useAttachmentBlobSrc,
+  useChatAttachmentBlobSrc,
 } from "@/lib/attachments/use-attachment-blob-src";
 import {
   buildImageAttachmentDisplayLabels,
@@ -79,16 +79,17 @@ function imageAttachmentRenderKey(attachment: ImageAttachment): string {
 }
 
 /**
- * Resolves the image source: persisted images (`hash`) stream their bytes from
- * the epic doc's attachments map into a shared blob URL via the content-addressed
- * cache; draft/optimistic images render their inline `dataUrl` directly. A
- * persisted hash transitions from loading to unavailable after its sync grace
- * period while remaining able to recover when bytes arrive later.
+ * Resolves the image source: persisted images (`hash`) fetch their bytes off the
+ * chat plane (this chat's tab host, epic doc as the legacy fallback) into a
+ * shared blob URL via the content-addressed cache; draft/optimistic images
+ * render their inline `dataUrl` directly. A persisted hash transitions from
+ * loading to unavailable after its grace period while remaining able to recover
+ * when bytes arrive later.
  */
 function useImageAttachmentSrc(
   attachment: ImageAttachment,
 ): AttachmentBlobSrcState {
-  return useAttachmentBlobSrc(
+  return useChatAttachmentBlobSrc(
     attachment.hash,
     attachment.mediaType,
     attachment.dataUrl,

@@ -183,7 +183,7 @@ describe("PrDetailConversation review threads", () => {
     expect(screen.getByText("src/domain/git/git-service.ts:1141")).toBeTruthy();
   });
 
-  it("collapses resolved findings behind a count, keeping open ones in view", () => {
+  it("renders resolved findings as collapsed rows, keeping open ones in view", () => {
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 3")]),
       reviewThreads: threads([
@@ -215,15 +215,17 @@ describe("PrDetailConversation review threads", () => {
       onQuoteThread: null,
     });
 
-    const resolvedGroup = screen.getByTestId("pr-detail-resolved-threads");
-    expect(resolvedGroup.textContent).toContain("2 resolved");
-    // The open one is NOT inside the collapsed group - the tab is about what
-    // is still blocking.
-    const open = screen
-      .getAllByTestId("pr-detail-review-thread")
-      .filter((node) => node.getAttribute("data-resolved") === "false");
+    // The open one renders in full - the tab is about what is still blocking.
+    const open = screen.getAllByTestId("pr-detail-review-thread");
     expect(open).toHaveLength(1);
-    expect(resolvedGroup.contains(open[0] ?? null)).toBe(false);
+    expect(open[0]?.getAttribute("data-resolved")).toBe("false");
+    expect(screen.getByText("Still open.")).toBeTruthy();
+    // Each resolved one is a collapsed row naming its file, body unmounted.
+    const rows = screen.getAllByTestId("pr-detail-resolved-thread");
+    expect(rows).toHaveLength(2);
+    expect(screen.getByText("src/domain/git/git-service.ts:20")).toBeTruthy();
+    expect(screen.getByText("src/domain/git/git-service.ts:30")).toBeTruthy();
+    expect(screen.queryByText("Already handled.")).toBeNull();
   });
 
   it("gives a body-less review its findings instead of 'No content.'", () => {
@@ -414,9 +416,9 @@ describe("PrDetailConversation review threads", () => {
   });
 
   it("does not mount a diff for a resolved finding nobody has opened", () => {
-    // `<details>` hides its children with CSS, so an uncontrolled one still
-    // mounts every collapsed thread - and each one now mounts a real diff
-    // renderer that parses and highlights its hunk.
+    // A collapsed row is a real unmount, not `<details>` CSS hiding - each
+    // expanded thread mounts a real diff renderer that parses and highlights
+    // its hunk, so only the row the reader opens may pay for one.
     renderTab({
       activity: activity([botReview("PRR_1", "Actionable comments posted: 2")]),
       reviewThreads: threads([
@@ -441,10 +443,76 @@ describe("PrDetailConversation review threads", () => {
     });
 
     expect(screen.queryAllByTestId("diff-patch")).toHaveLength(0);
-    const group = screen.getByTestId("pr-detail-resolved-threads");
-    group.setAttribute("open", "");
-    fireEvent(group, new Event("toggle", { bubbles: false }));
-    expect(screen.queryAllByTestId("diff-patch")).toHaveLength(2);
+    expect(screen.getAllByTestId("pr-detail-resolved-thread")).toHaveLength(2);
+    // Opening one row mounts one renderer, not both.
+    fireEvent.click(screen.getByText("src/domain/git/git-service.ts:10"));
+    expect(screen.queryAllByTestId("diff-patch")).toHaveLength(1);
+    // Folding it back unmounts it again.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Collapse the resolved thread/u }),
+    );
+    expect(screen.queryAllByTestId("diff-patch")).toHaveLength(0);
+    expect(screen.getAllByTestId("pr-detail-resolved-thread")).toHaveLength(2);
+  });
+
+  it("hands keyboard focus to the control that replaces the one it unmounts", () => {
+    // Expanding swaps the row out for the card, so the focused control stops
+    // existing. Without a handover focus falls back to <body> and the next Tab
+    // restarts at the top of the page instead of entering the thread.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 10,
+          body: "Already handled.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    fireEvent.click(screen.getByText("src/domain/git/git-service.ts:10"));
+    const collapse = screen.getByRole("button", {
+      name: /Collapse the resolved thread/u,
+    });
+    expect(document.activeElement).toBe(collapse);
+    fireEvent.click(collapse);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("pr-detail-resolved-thread"),
+    );
+  });
+
+  it("does not steal focus while resolved rows sit collapsed", () => {
+    // The handover effect also runs on mount; firing it there would drag focus
+    // onto the last resolved row of every review the tab renders.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 2")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 10,
+          body: "Already handled.",
+          totalCommentCount: 1,
+        }),
+        thread({
+          id: "t2",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 20,
+          body: "Also handled.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    expect(screen.getAllByTestId("pr-detail-resolved-thread")).toHaveLength(2);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("sizes every date in a card the same, however deep it sits", () => {

@@ -8,7 +8,17 @@ import {
 export type ImageBlobUrlState =
   | { readonly status: "loading"; readonly url: null }
   | { readonly status: "unavailable"; readonly url: null }
-  | { readonly status: "ready"; readonly url: string };
+  | {
+      readonly status: "ready";
+      readonly url: string;
+      /**
+       * The type the Blob behind `url` was actually created with - the byte
+       * source's sniffed verdict when it had one, else the `mediaType` passed
+       * in. Anything that branches on format (SVG sanitization) must read this
+       * rather than the caller's own argument; see `ImageBlobResolution`.
+       */
+      readonly mediaType: string;
+    };
 
 export const IMAGE_UNAVAILABLE_GRACE_MS = 12_000;
 export const IMAGE_FETCH_RETRY_BASE_MS = 250;
@@ -91,11 +101,18 @@ export function useImageBlobUrlState(
       );
       releaseLease = lease.release;
       lease.promise
-        .then((url) => {
+        .then((resolution) => {
           if (!active) return;
           cancelUnavailable?.();
           cancelUnavailable = null;
-          setResolved({ hash, state: { status: "ready", url } });
+          setResolved({
+            hash,
+            state: {
+              status: "ready",
+              url: resolution.url,
+              mediaType: resolution.mediaType,
+            },
+          });
         })
         .catch(() => {
           if (!active) return;
