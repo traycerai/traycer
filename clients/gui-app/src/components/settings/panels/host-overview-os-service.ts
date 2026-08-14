@@ -43,6 +43,13 @@ export function useOverviewOsService(input: {
   // or, worse, installs a second unit beside the owner's, so there is no state
   // in which offering them here is honest.
   const externallyManaged = ok?.state === "externally-managed";
+  // The status read has affirmatively said there is NO CLI on that machine.
+  // Both verbs run that same CLI, so offering them is advertising a
+  // deterministic `cli-unavailable` toast. Only the affirmative answer hides
+  // them: a failed or unreadable status says nothing about whether the CLI
+  // exists, and withdrawing repair verbs on ambiguity would take Re-register
+  // away exactly when someone is debugging a flaky host.
+  const cliUnavailable = input.status?.outcome === "cli-unavailable";
 
   return {
     hostName,
@@ -53,8 +60,10 @@ export function useOverviewOsService(input: {
     }),
     manifestLine: ok === null ? null : `${ok.label} · ${ok.manifestPath}`,
     degrade: input.statusDegrade,
-    canRegister: input.registerDegrade === null && !externallyManaged,
-    canDeregister: input.deregisterDegrade === null && !externallyManaged,
+    canRegister:
+      input.registerDegrade === null && !externallyManaged && !cliUnavailable,
+    canDeregister:
+      input.deregisterDegrade === null && !externallyManaged && !cliUnavailable,
     nothingToDeregister: ok?.state === "not-installed",
     registerPending: register.isPending,
     deregisterPending: deregister.isPending,

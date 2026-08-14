@@ -35,6 +35,9 @@ import {
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
+import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import {
   managedInstallation,
   useHostIdentityQuery,
@@ -114,6 +117,19 @@ export function HostOverviewPanel(props: {
   // fires against the ambient host and caches the answer under this page's key,
   // however well a gate hides the result.
   const usable = isHostScopeUsable(scope.status) && client !== null;
+  // THIS machine's host, affirmatively down, with the bridge right here to
+  // revive it. The one state where the RPC-only rule would strand a user: the
+  // page can describe the host from the registry but nothing on it could
+  // start the process back up. `unreachable` only — while `connecting` the
+  // route may still resolve, and offering Start against a host that is about
+  // to answer would race the very process it spawns. This is what remains of
+  // the recovery console's Start/doctor half (its uninstall half lives on the
+  // empty-account path); `LocalHostGate` no longer renders in production, so
+  // Settings cannot delegate this state upstream.
+  const localRecovery =
+    scope.status === "unreachable" &&
+    (host?.isLocalMachine ?? false) &&
+    props.hasLocalBridge;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
@@ -287,6 +303,56 @@ export function HostOverviewPanel(props: {
 
   const registryItem = host.item;
 
+  // The header cluster, withheld entirely when there is no route rather than
+  // rendered and disabled. Every one of its verbs needs a live host to answer,
+  // so on an unreachable host they would be dead controls under a card that
+  // already says the host cannot be reached — and "disabled" would wrongly
+  // imply a capability verdict rather than a connectivity one. What survives
+  // an outage is the account-backed half below: the update policy, which
+  // needs no route at all. The ONE exception is this computer's own stopped
+  // host, whose revival verbs run over the CLI bridge and need no route by
+  // construction.
+  let headerActions: ReactNode = null;
+  if (localRecovery) {
+    headerActions = (
+      <LocalHostRecoveryActions
+        hostName={displayName}
+        onOpenDoctor={() => setDoctorOpen(true)}
+      />
+    );
+  } else if (usable) {
+    headerActions = (
+      <HostOverviewHeaderActions
+        hostName={displayName}
+        // Nothing extra: this page only renders for a host that has
+        // already answered, so there is never an Install to offer.
+        primaryAction={null}
+        restartDegrade={restartDegrade}
+        doctorDegrade={doctorDegrade}
+        restartPending={restart.isPending}
+        anyPending={anyPending}
+        isActive={host.isActive}
+        connectable={host.connectable}
+        // Only offered when there is an override to clear. A host running
+        // under its own default name has nothing to reset, and the write
+        // would be the no-op `submitRename` already guards.
+        onResetName={
+          (identity?.customName ?? null) === null
+            ? null
+            : () => submitRename(null)
+        }
+        resetNameDegrade={renameDegrade}
+        onRestart={() => {
+          setRestartBusyCount(null);
+          setRestartConfirmOpen(true);
+        }}
+        onOpenDoctor={() => setDoctorOpen(true)}
+        onMakeActive={() => scope.makeActive(host.hostId)}
+        onCopyHostId={() => hostIdCopy.copy(host.hostId)}
+      />
+    );
+  }
+
   return (
     <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
       <HostIdentityCard
@@ -328,45 +394,7 @@ export function HostOverviewPanel(props: {
             />
           )
         }
-        actions={
-          // Withheld entirely when there is no route, rather than rendered and
-          // disabled. Every one of these needs a live host to answer, so on an
-          // unreachable host they would be dead controls under a card that
-          // already says the host cannot be reached — and "disabled" would
-          // wrongly imply a capability verdict rather than a connectivity one.
-          // What survives an outage is the account-backed half below: the
-          // update policy, which needs no route at all.
-          !usable ? null : (
-            <HostOverviewHeaderActions
-              hostName={displayName}
-              // Nothing extra: this page only renders for a host that has
-              // already answered, so there is never an Install to offer.
-              primaryAction={null}
-              restartDegrade={restartDegrade}
-              doctorDegrade={doctorDegrade}
-              restartPending={restart.isPending}
-              anyPending={anyPending}
-              isActive={host.isActive}
-              connectable={host.connectable}
-              // Only offered when there is an override to clear. A host running
-              // under its own default name has nothing to reset, and the write
-              // would be the no-op `submitRename` already guards.
-              onResetName={
-                (identity?.customName ?? null) === null
-                  ? null
-                  : () => submitRename(null)
-              }
-              resetNameDegrade={renameDegrade}
-              onRestart={() => {
-                setRestartBusyCount(null);
-                setRestartConfirmOpen(true);
-              }}
-              onOpenDoctor={() => setDoctorOpen(true)}
-              onMakeActive={() => scope.makeActive(host.hostId)}
-              onCopyHostId={() => hostIdCopy.copy(host.hostId)}
-            />
-          )
-        }
+        actions={headerActions}
       >
         {view.updateProgress === null ? null : (
           <HostOverviewUpdateProgress
@@ -505,17 +533,88 @@ export function HostOverviewPanel(props: {
       <DoctorSheet
         open={doctorOpen}
         onOpenChange={setDoctorOpen}
-        source={{
-          kind: "rpc",
-          client,
-          hostName: displayName,
-          isLocalMachine: host.isLocalMachine,
-          hasLocalBridge: props.hasLocalBridge,
-          degrade: doctorDegrade,
-          onLocalFix: props.onLocalDoctorFix,
-          localFixPendingCode: props.localDoctorFixPendingCode,
-        }}
+        source={
+          // The bridge branch's one production caller: a stopped local host
+          // cannot shell its own CLI over an RPC it cannot answer, and the
+          // report this machine's bridge produces IS about the machine the
+          // page names — the misattribution the rpc-only rule guards against
+          // cannot happen when the subject is this computer.
+          localRecovery
+            ? { kind: "bridge" }
+            : {
+                kind: "rpc",
+                client,
+                hostName: displayName,
+                isLocalMachine: host.isLocalMachine,
+                hasLocalBridge: props.hasLocalBridge,
+                degrade: doctorDegrade,
+                onLocalFix: props.onLocalDoctorFix,
+                localFixPendingCode: props.localDoctorFixPendingCode,
+              }
+        }
       />
+    </div>
+  );
+}
+
+/**
+ * The header cluster for this computer's host when it is affirmatively DOWN.
+ *
+ * Two verbs, both bridge-backed and so both honest without a route: Start
+ * (`convergeReady` — install + register + start, the same intent the post-auth
+ * gate uses) and the bridge doctor. Success needs no explicit refresh here:
+ * the host coming up flips the scope status through its ordinary reactivity
+ * and the live cluster replaces this one.
+ */
+function LocalHostRecoveryActions(props: {
+  readonly hostName: string;
+  readonly onOpenDoctor: () => void;
+}): ReactNode {
+  const convergeReady = useRunnerConvergeReady();
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <Button
+        type="button"
+        variant="default"
+        size="sm"
+        disabled={convergeReady.isPending}
+        data-testid="host-overview-start-local"
+        onClick={() => {
+          convergeReady.mutate(
+            { force: false },
+            {
+              onSuccess: () => {
+                toast.success(`Starting ${props.hostName}…`);
+              },
+              onError: (error) => {
+                toast.error(
+                  error.message.length > 0
+                    ? error.message
+                    : `Couldn't start ${props.hostName}.`,
+                );
+              },
+            },
+          );
+        }}
+      >
+        {convergeReady.isPending ? (
+          <AgentSpinningDots
+            className="mr-2 size-3"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        Start host
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="host-overview-recovery-doctor"
+        onClick={props.onOpenDoctor}
+      >
+        Run doctor
+      </Button>
     </div>
   );
 }

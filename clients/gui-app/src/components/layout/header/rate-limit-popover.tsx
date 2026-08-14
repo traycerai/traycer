@@ -109,6 +109,7 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -1003,6 +1004,7 @@ function RateLimitRail({
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryUsageHostIntoSettingsScope();
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -2310,6 +2312,7 @@ function RateLimitZeroState({
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryUsageHostIntoSettingsScope();
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -2326,4 +2329,19 @@ function RateLimitZeroState({
       </button>
     </div>
   );
+}
+
+/**
+ * The usage view's explicit host pin travels with the jump into Settings.
+ *
+ * Without this, scoping Usage to host B and pressing Provider settings opens
+ * controls for whatever host Settings last showed - the action was invoked
+ * FROM B's numbers, so provider changes made next would target the wrong
+ * machine. Only an explicit pin transfers: `null` means "follow the active
+ * host", and both surfaces already agree on that default.
+ */
+function carryUsageHostIntoSettingsScope(): void {
+  const pinned = useRateLimitPopoverStore.getState().scopedHostId;
+  if (pinned === null) return;
+  useSettingsHostScopeStore.getState().setScopedHostId(pinned);
 }
