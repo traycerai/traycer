@@ -292,8 +292,12 @@ function ProviderSkillsTabBody({
       setUpdateConfirm(null);
       toast.success("Updated from source");
       const next = skillAfterUpdate(data, skill);
-      if (next !== null) setOpenSkill(next);
-      setDetailFileEpoch((epoch) => epoch + 1);
+      if (next === null) {
+        setOpenSkill(null);
+      } else {
+        setOpenSkill(next);
+        setDetailFileEpoch((epoch) => epoch + 1);
+      }
     } catch (err) {
       if (!confirm && isExternalDriftError(err)) {
         setUpdateConfirm(skill);
@@ -885,7 +889,7 @@ description: Reviews a   # what the agent matches on
 function skillOpenLabel(skill: ProviderSkill): string {
   const badge = SKILL_SOURCE_LABEL[skill.source];
   if (skill.conflict === true) {
-    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL})`;
+    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
   }
   return `Open ${skill.name} (${badge})`;
 }

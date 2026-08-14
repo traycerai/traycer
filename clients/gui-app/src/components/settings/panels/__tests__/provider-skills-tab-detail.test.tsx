@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 
 type SkillsListMutateResult = {
   readonly kind: "skills";
@@ -621,7 +622,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     renderTab();
 
     const row = screen.getByRole("button", {
-      name: "Open find-skills (Shared, Conflict)",
+      name: /Open find-skills \(Shared, Conflict/,
     });
     expect(within(row).getByText("Shared")).toBeDefined();
     const badge = within(row).getByText("Conflict");
@@ -705,11 +706,18 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
     await user.click(screen.getByRole("button", { name: "Save skill" }));
 
+    const baseline = skillMocks.readFile.data?.content;
+    if (baseline === undefined || baseline === null) {
+      throw new Error("expected the open skill file content");
+    }
+    const expectedHash = await fileContentRevision(baseline);
+
     await waitFor(() => {
       expect(skillMocks.mutations).toEqual([
         {
           action: "edit",
           path: FIND_SKILLS.path,
+          expectedHash,
           name: "find-skills-v2",
           description: "Updated description",
           body: "# New body\n",
@@ -915,13 +923,52 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     ).toBe(true);
   });
 
+  it("closes the detail dialog when update succeeds without the open skill path", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    skillMocks.onMutateAsync = () =>
+      Promise.resolve({
+        kind: "skills",
+        skills: [
+          {
+            ...FIND_SKILLS,
+            name: "other-skill",
+            path: "/Users/dev/.agents/skills/other-skill",
+          },
+        ],
+      });
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    expect(screen.getByRole("dialog")).toBeDefined();
+
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 1,
+      ),
+    ).toBe(false);
+  });
+
   it("does not offer Remove on a conflict row, and says why", () => {
     skillMocks.removeScopes = ["global"];
     skillMocks.skills = [{ ...FIND_SKILLS, conflict: true }];
     renderTab();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Open find-skills (Shared, Conflict)",
+        name: /Open find-skills \(Shared, Conflict/,
       }),
     );
 

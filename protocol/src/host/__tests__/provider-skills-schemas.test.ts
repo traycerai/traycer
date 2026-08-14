@@ -132,15 +132,37 @@ describe("providersSkillsMutateActionSchema via nativeMutationSchema", () => {
         ).success,
       ).toBe(false);
     });
+
+    it("rejects an inspect scope that differs from the envelope scope", () => {
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation(
+            { action: "inspect", source: "owner/repo", scope: "project" },
+            "global",
+          ),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation(
+            { action: "inspect", source: "owner/repo", scope: "global" },
+            "project",
+          ),
+        ).success,
+      ).toBe(false);
+    });
   });
 
   describe("edit", () => {
+    const VALID_EXPECTED_HASH = "a".repeat(64);
+
     it("parses a complete edit envelope", () => {
       const parsed = nativeMutationSchema.parse(
         skillsMutation(
           {
             action: "edit",
             path: "/Users/me/.agents/skills/frontend-design/SKILL.md",
+            expectedHash: VALID_EXPECTED_HASH,
             name: "frontend-design",
             description: "UI skill",
             body: "# frontend-design\n",
@@ -155,21 +177,29 @@ describe("providersSkillsMutateActionSchema via nativeMutationSchema", () => {
       expect(parsed.mutation).toEqual({
         action: "edit",
         path: "/Users/me/.agents/skills/frontend-design/SKILL.md",
+        expectedHash: VALID_EXPECTED_HASH,
         name: "frontend-design",
         description: "UI skill",
         body: "# frontend-design\n",
       });
     });
 
-    it("rejects missing path, name, description, or body", () => {
+    it("rejects missing path, name, description, body, or expectedHash", () => {
       const valid = {
         action: "edit",
         path: "/skills/frontend-design/SKILL.md",
+        expectedHash: VALID_EXPECTED_HASH,
         name: "frontend-design",
         description: "UI skill",
         body: "# body\n",
       };
-      for (const key of ["path", "name", "description", "body"] as const) {
+      for (const key of [
+        "path",
+        "name",
+        "description",
+        "body",
+        "expectedHash",
+      ] as const) {
         expect(
           nativeMutationSchema.safeParse(
             skillsMutation(omitKey(valid, key), "global"),
@@ -182,6 +212,7 @@ describe("providersSkillsMutateActionSchema via nativeMutationSchema", () => {
       const valid = {
         action: "edit",
         path: "/skills/frontend-design/SKILL.md",
+        expectedHash: VALID_EXPECTED_HASH,
         name: "frontend-design",
         description: "UI skill",
         body: "# body\n",
@@ -194,6 +225,45 @@ describe("providersSkillsMutateActionSchema via nativeMutationSchema", () => {
       expect(
         nativeMutationSchema.safeParse(
           skillsMutation({ ...valid, name: "" }, "global"),
+        ).success,
+      ).toBe(false);
+    });
+
+    it("rejects a malformed expectedHash", () => {
+      const valid = {
+        action: "edit",
+        path: "/skills/frontend-design/SKILL.md",
+        expectedHash: VALID_EXPECTED_HASH,
+        name: "frontend-design",
+        description: "UI skill",
+        body: "# body\n",
+      };
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...valid, expectedHash: "" }, "global"),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...valid, expectedHash: "A".repeat(64) }, "global"),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...valid, expectedHash: "a".repeat(63) }, "global"),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...valid, expectedHash: "a".repeat(65) }, "global"),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation(
+            { ...valid, expectedHash: `${"a".repeat(63)}g` },
+            "global",
+          ),
         ).success,
       ).toBe(false);
     });
@@ -328,6 +398,24 @@ describe("providersSkillsMutateActionSchema via nativeMutationSchema", () => {
       expect(
         nativeMutationSchema.safeParse(
           skillsMutation({ ...valid, names: [""] }, "global"),
+        ).success,
+      ).toBe(false);
+    });
+
+    it("rejects token-only and names-only import payloads", () => {
+      const base = {
+        action: "import",
+        source: "https://github.com/org/skills",
+        providerScoped: false,
+      };
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...base, token: "inspect-token-1" }, "global"),
+        ).success,
+      ).toBe(false);
+      expect(
+        nativeMutationSchema.safeParse(
+          skillsMutation({ ...base, names: ["frontend-design"] }, "global"),
         ).success,
       ).toBe(false);
     });

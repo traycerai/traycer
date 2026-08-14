@@ -14,7 +14,10 @@ import {
   type SkillsMutateData,
 } from "@/hooks/providers/native-response-map";
 import { providersMutationKeys } from "@/lib/query-keys";
-import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
+import {
+  isNativeSkillsListQueryKey,
+  providersNativeQueryKeys,
+} from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 export type SkillsMutateVariables = {
@@ -76,21 +79,33 @@ export function useProvidersSkillsMutate(): UseMutationResult<
         workspaceRoot: variables.workspaceRoot,
       },
     }),
-    onSuccess: (data, _variables, ctx) => {
+    onSuccess: (data, variables, ctx) => {
       if (ctx.hostId === null) return;
       if (data.kind !== "skills") return;
       queryClient.setQueryData<SkillsListData>(
         providersNativeQueryKeys.skillsList(ctx.hostId, ctx.listParams),
         { skills: data.skills },
       );
+      const mutation = variables.mutation;
+      const affectsSharedStore =
+        mutation.action === "edit" ||
+        mutation.action === "update" ||
+        mutation.action === "remove" ||
+        ("providerScoped" in mutation && !mutation.providerScoped);
+      if (affectsSharedStore) {
+        const hostPrefix = providersNativeQueryKeys.base(ctx.hostId);
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            hostPrefix.every((part, index) => query.queryKey[index] === part) &&
+            isNativeSkillsListQueryKey(query.queryKey),
+        });
+      }
     },
     onError: (error, variables, ctx) => {
-      // A multi-name import can land some trees before the host errors. The
-      // success path rewrites the list cache; the error path must refetch so
-      // those committed rows appear instead of staying hidden behind the
-      // pre-import snapshot.
+      // Any write may land partially before the host reports an error. Inspect
+      // is excluded because it never writes.
       if (
-        variables.mutation.action === "import" &&
+        variables.mutation.action !== "inspect" &&
         ctx !== undefined &&
         ctx.hostId !== null
       ) {

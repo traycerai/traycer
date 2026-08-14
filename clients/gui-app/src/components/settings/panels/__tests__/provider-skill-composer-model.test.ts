@@ -577,36 +577,48 @@ describe("skillEditPrefill", () => {
   };
 
   it("parses name, description, and body from the file via parseSkillMarkdown", () => {
-    expect(
-      skillEditPrefill(
-        row,
-        '---\nname: parsed-name\ndescription: "Parsed \\"desc\\""\n---\n\n# Body from disk\n',
-      ),
-    ).toEqual({
+    const raw =
+      '---\nname: parsed-name\ndescription: "Parsed \\"desc\\""\n---\n\n# Body from disk\n';
+    expect(skillEditPrefill(row, raw)).toEqual({
       path: row.path,
       name: "parsed-name",
       description: 'Parsed "desc"',
       body: "# Body from disk\n",
+      baseline: raw,
     });
   });
 
   it("falls back to the row when frontmatter is missing", () => {
-    expect(skillEditPrefill(row, "# Just a heading\n\nBody text.\n")).toEqual({
+    const raw = "# Just a heading\n\nBody text.\n";
+    expect(skillEditPrefill(row, raw)).toEqual({
       path: row.path,
       name: "find-skills",
       description: "Row snapshot description",
-      body: "# Just a heading\n\nBody text.\n",
+      body: raw,
+      baseline: raw,
     });
   });
 
   it("falls back to an empty description when the row has none either", () => {
-    expect(
-      skillEditPrefill({ ...row, description: null }, "# Body only\n"),
-    ).toEqual({
+    const raw = "# Body only\n";
+    expect(skillEditPrefill({ ...row, description: null }, raw)).toEqual({
       path: row.path,
       name: "find-skills",
       description: "",
-      body: "# Body only\n",
+      body: raw,
+      baseline: raw,
+    });
+  });
+
+  it("falls back to the row description when the file uses a YAML block scalar", () => {
+    const raw =
+      "---\nname: parsed-name\ndescription: |\n  Multi\n  line\n---\n\n# Body from disk\n";
+    expect(skillEditPrefill(row, raw)).toEqual({
+      path: row.path,
+      name: "parsed-name",
+      description: "Row snapshot description",
+      body: "# Body from disk\n",
+      baseline: raw,
     });
   });
 });

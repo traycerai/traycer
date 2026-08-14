@@ -89,7 +89,11 @@ export function MarkdownEditPreview({
         <TabsTrigger value="edit">Edit</TabsTrigger>
         <TabsTrigger value="preview">Preview</TabsTrigger>
       </TabsList>
-      <TabsContent value="edit" className="min-h-0 overflow-hidden">
+      <TabsContent
+        value="edit"
+        forceMount
+        className="min-h-0 overflow-hidden data-[state=inactive]:hidden"
+      >
         <CodeMirror
           value={value}
           onChange={onChange}

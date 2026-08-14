@@ -70,4 +70,25 @@ describe("parseSkillMarkdown", () => {
     expect(parsed.body).toBe("# When to use\n");
     expect(parsed.body).not.toContain("description:");
   });
+
+  it("returns a null description for YAML block-scalar markers", () => {
+    expect(
+      parseSkillMarkdown(
+        "---\nname: find-skills\ndescription: |\n  Multi\n  line\n---\n\n# Body\n",
+      ),
+    ).toEqual({
+      name: "find-skills",
+      description: null,
+      body: "# Body\n",
+    });
+    expect(
+      parseSkillMarkdown(
+        "---\nname: find-skills\ndescription: >\n  Folded\n  text\n---\n\n# Body\n",
+      ),
+    ).toEqual({
+      name: "find-skills",
+      description: null,
+      body: "# Body\n",
+    });
+  });
 });

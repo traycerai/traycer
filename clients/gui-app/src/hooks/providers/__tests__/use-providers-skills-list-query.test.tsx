@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 
@@ -10,6 +10,7 @@ import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-l
 const queryMocks = vi.hoisted(() => ({
   options: [] as Array<{ poll?: boolean; staleTime?: number }>,
   refetch: vi.fn(),
+  isReady: true,
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -27,20 +28,38 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: "host-1",
+    requestContextUserId: "user-1",
+    isReady: queryMocks.isReady,
+  }),
+}));
+
 vi.mock("@/lib/host", async () => {
   const actual =
     await vi.importActual<typeof import("@/lib/host")>("@/lib/host");
   return { ...actual, useHostClient: () => null };
 });
 
+const visibilityState = { current: "visible" as DocumentVisibilityState };
+
 describe("useProvidersSkillsList", () => {
   beforeEach(() => {
     queryMocks.options = [];
     queryMocks.refetch.mockClear();
+    queryMocks.isReady = true;
+    visibilityState.current = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibilityState.current,
+    });
   });
 
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
+    Reflect.deleteProperty(document, "visibilityState");
   });
 
   /**
@@ -113,5 +132,55 @@ describe("useProvidersSkillsList", () => {
 
     vi.advanceTimersByTime(120_000);
     expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh while the host is not ready", () => {
+    queryMocks.isReady = false;
+    vi.useFakeTimers();
+    renderHook(() =>
+      useProvidersSkillsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(120_000);
+    expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("skips ticks while the document is hidden", () => {
+    visibilityState.current = "hidden";
+    vi.useFakeTimers();
+    renderHook(() =>
+      useProvidersSkillsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(60_000);
+    expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("clears the cadence on unmount", () => {
+    vi.useFakeTimers();
+    const rendered = renderHook(() =>
+      useProvidersSkillsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(30_000);
+    expect(queryMocks.refetch).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+    vi.advanceTimersByTime(60_000);
+    expect(queryMocks.refetch).toHaveBeenCalledTimes(1);
   });
 });

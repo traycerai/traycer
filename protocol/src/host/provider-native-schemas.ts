@@ -941,9 +941,8 @@ export type ProvidersPluginsMutateAction = z.infer<
   typeof providersPluginsMutateActionSchema
 >;
 
-export const providersSkillsMutateActionSchema = z.discriminatedUnion(
-  "action",
-  [
+export const providersSkillsMutateActionSchema = z
+  .discriminatedUnion("action", [
     z.object({
       action: z.literal("add"),
       /**
@@ -1008,6 +1007,8 @@ export const providersSkillsMutateActionSchema = z.discriminatedUnion(
     z.object({
       action: z.literal("edit"),
       path: z.string().min(1),
+      /** SHA-256 of the exact SKILL.md text the editor loaded. */
+      expectedHash: z.string().regex(/^[0-9a-f]{64}$/),
       name: z.string().min(1),
       description: z.string(),
       body: z.string(),
@@ -1027,8 +1028,16 @@ export const providersSkillsMutateActionSchema = z.discriminatedUnion(
       name: z.string().min(1),
       path: z.string().min(1),
     }),
-  ],
-);
+  ])
+  .superRefine((value, ctx) => {
+    if (value.action !== "import") return;
+    if ((value.token === undefined) === (value.names === undefined)) return;
+    ctx.addIssue({
+      code: "custom",
+      path: value.token === undefined ? ["token"] : ["names"],
+      message: "token and names must be provided together",
+    });
+  });
 export type ProvidersSkillsMutateAction = z.infer<
   typeof providersSkillsMutateActionSchema
 >;
@@ -1194,7 +1203,20 @@ export const nativeMutationSchema = z
       mutation: providersSkillsMutateActionSchema,
     }),
   ])
-  .superRefine(refineProviderNativeScope);
+  .superRefine((value, ctx) => {
+    refineProviderNativeScope(value, ctx);
+    if (
+      value.kind === "skills" &&
+      value.mutation.action === "inspect" &&
+      value.mutation.scope !== value.scope
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["mutation", "scope"],
+        message: "inspect scope must match the mutation scope",
+      });
+    }
+  });
 export type NativeMutation = z.infer<typeof nativeMutationSchema>;
 
 const nativeMutationSuccessResultSchema = z.discriminatedUnion("kind", [
@@ -1216,9 +1238,7 @@ const nativeMutationSuccessResultSchema = z.discriminatedUnion("kind", [
   z.object({
     ok: z.literal(true),
     kind: z.literal("skillsInspect"),
-    token: z.string().min(1),
-    commitSha: z.string().min(1),
-    candidates: z.array(providerSkillInspectCandidateSchema),
+    ...providersSkillsInspectResultSchema.shape,
   }),
 ]);
 

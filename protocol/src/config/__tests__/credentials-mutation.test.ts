@@ -1157,7 +1157,7 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
-        // Park the 15ms retry. `driveContinuation()` takes the same lock B's
+        // Park the automatic retry. `driveContinuation()` takes the same lock B's
         // observe needs; under parallel load that hold outlives B's 500ms
         // wait and the pin reads `lock-busy` instead of the marker gate.
         // `continuationRetryMs` is the injected test hook; we drive the

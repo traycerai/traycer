@@ -66,6 +66,9 @@ function yamlScalar(block: string, key: string): string | null {
   if (match === null) return null;
   const raw = match[1].trim();
   if (raw.length === 0) return null;
+  // The row already carries the host's parsed description. Falling back to it
+  // is safer than treating a YAML block-scalar marker as the description.
+  if (raw.startsWith("|") || raw.startsWith(">")) return null;
   if (raw.startsWith('"') && raw.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(raw);

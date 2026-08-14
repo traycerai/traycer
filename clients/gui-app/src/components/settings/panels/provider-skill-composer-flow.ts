@@ -4,6 +4,7 @@ import type {
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
+import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import {
   composerErrorMessage,
   isExternalDriftError,
@@ -89,6 +90,7 @@ async function submitWrite(
       await sink.onMutate({
         action: "edit",
         path: state.editTarget.path,
+        expectedHash: await fileContentRevision(state.editTarget.baseline),
         name: state.name.trim(),
         description: state.description.trim(),
         body: state.body,

@@ -5,6 +5,7 @@ import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   mapProvidersListToSkills,
   type SkillsListData,
@@ -21,6 +22,7 @@ export function useProvidersSkillsList(args: {
   readonly enabled: boolean;
 }): UseQueryResult<SkillsListData, HostRpcError> {
   const client = useHostClient();
+  const readiness = useReactiveHostReadiness(client);
   const listParams = {
     providerId: args.providerId,
     scope: args.scope,
@@ -56,12 +58,13 @@ export function useProvidersSkillsList(args: {
   const { refetch } = query;
   const enabled = args.enabled;
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !readiness.isReady) return;
     const timer = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       void refetch();
     }, SKILLS_LIST_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [enabled, refetch]);
+  }, [enabled, readiness.isReady, refetch]);
 
   return query;
 }

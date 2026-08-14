@@ -36,13 +36,14 @@ export type SkillComposerStep = "import" | "picker" | "write";
 
 /**
  * Prefill payload for opening the composer on an existing skill.
- * Submit sends `edit {path, name, description, body}` instead of `create`.
+ * Submit hashes `baseline` into the edit mutation's compare-and-swap guard.
  */
 export type SkillEditTarget = {
   readonly path: string;
   readonly name: string;
   readonly description: string;
   readonly body: string;
+  readonly baseline: string;
 };
 
 export function skillEditPrefill(
@@ -59,6 +60,7 @@ export function skillEditPrefill(
         ? parsed.description
         : (skill.description ?? ""),
     body: parsed.body,
+    baseline: raw,
   };
 }
 
