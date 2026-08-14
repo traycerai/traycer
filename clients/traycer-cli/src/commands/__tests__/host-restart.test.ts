@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   busyOverride: null as "busy" | null,
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
+  stopForRestartForceValues: [] as boolean[],
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -42,8 +43,12 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
-      stopForRestart: async () => {
+      stopForRestart: async (
+        _label: import("../../service").ServiceLabel,
+        options: import("../../service").StopServiceOptions,
+      ) => {
         mocks.controllerCalls.push("stopForRestart");
+        mocks.stopForRestartForceValues.push(options.force);
         return { forcedRecycle: false };
       },
       relaunchAfterRestart: async () => {
@@ -150,6 +155,7 @@ describe("buildHostRestartCommand", () => {
     mocks.busyOverride = null;
     mocks.busyCalls = [];
     mocks.lockCalls = [];
+    mocks.stopForRestartForceValues = [];
   });
 
   afterEach(() => {
@@ -168,7 +174,7 @@ describe("buildHostRestartCommand", () => {
 
   it("wraps the whole restart in one cli-lock acquisition, without a busy probe by default", async () => {
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: false });
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
     await command(fakeCtx());
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-restart" }]);
@@ -182,7 +188,7 @@ describe("buildHostRestartCommand", () => {
   it("plain restart proceeds unconditionally even when the host is busy", async () => {
     mocks.busyOverride = "busy";
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: false });
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
     const result = await command(fakeCtx());
 
     expect(mocks.busyCalls).toHaveLength(0);
@@ -196,7 +202,7 @@ describe("buildHostRestartCommand", () => {
   it("returns the install record it observed under cli-lock for Desktop's post-restart CAS", async () => {
     await writeInstallRecordForAttestation();
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: false });
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
 
     const result = await command(fakeCtx());
 
@@ -209,7 +215,7 @@ describe("buildHostRestartCommand", () => {
 
   it("--if-idle probes busy (inside the lock) before stop, and proceeds when idle", async () => {
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: true });
+    const command = buildHostRestartCommand({ ifIdle: true, force: false });
     await command(fakeCtx());
 
     expect(mocks.busyCalls).toEqual(["production"]);
@@ -222,11 +228,47 @@ describe("buildHostRestartCommand", () => {
   it("--if-idle refuses with E_HOST_BUSY before stop is ever called, and never proceeds", async () => {
     mocks.busyOverride = "busy";
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: true });
+    const command = buildHostRestartCommand({ ifIdle: true, force: false });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_BUSY",
     });
     expect(mocks.controllerCalls).toEqual([]);
+  });
+
+  it("--if-idle and --force together throw E_INVALID_ARGUMENT before the lock is ever taken", async () => {
+    // One flag widens the busy gate, the other removes it - a command
+    // carrying both has no coherent intent, so this must be refused before
+    // any lock/probe/stop side effect runs, not merely resolved in favour
+    // of one flag over the other.
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: true, force: true });
+
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+    });
+    expect(mocks.lockCalls).toEqual([]);
+    expect(mocks.busyCalls).toEqual([]);
+    expect(mocks.controllerCalls).toEqual([]);
+  });
+
+  it("threads --force through to stopForRestart", async () => {
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: false, force: true });
+    await command(fakeCtx());
+
+    expect(mocks.stopForRestartForceValues).toEqual([true]);
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
+  });
+
+  it("without --force, stopForRestart still sees force: false", async () => {
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: false, force: false });
+    await command(fakeCtx());
+
+    expect(mocks.stopForRestartForceValues).toEqual([false]);
   });
 });

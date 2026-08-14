@@ -172,3 +172,95 @@ async function waitForCooperativeExit(pid: number): Promise<boolean> {
   // deadline elapsed.
   return !isProcessAlive(pid);
 }
+
+export type ForcedShutdownOutcome =
+  // The host process was observed to exit (or was already gone by the time
+  // the signal landed).
+  | { readonly kind: "stopped" }
+  // PROVEN absent: pid metadata was read and the process it names is gone.
+  | { readonly kind: "no-host" }
+  // Pid metadata could not be read at all, so there is no process to signal.
+  // Same non-proof caveat as `CooperativeShutdownOutcome`: a booting host may
+  // not have published its endpoint yet.
+  | { readonly kind: "no-metadata" }
+  // The process survived SIGTERM through the exit grace AND a follow-up
+  // SIGKILL - it is unkillable from here (uninterruptible sleep, or not ours).
+  | { readonly kind: "hung"; readonly pid: number };
+
+/**
+ * Forced shutdown of a Desktop-managed host: kill the HOST CHILD process
+ * directly instead of asking it to stand down.
+ *
+ * This deliberately signals the child named by pid.json and never touches
+ * launchd: the SMAppService registration stays exactly as Desktop left it,
+ * and the supervisor - which reads the stop-intent record the calling
+ * command's `withStopIntent` decorator wrote before this ran - treats the
+ * death as asked-for rather than a crash, so nothing relaunches the host.
+ *
+ * No RPC is involved at any point, which is the other half of the contract:
+ * force works identically against a busy host, a wedged host, and a host
+ * whose endpoint is unreachable, on every host version.
+ *
+ * SIGTERM first: the host's own handler runs its graceful shutdown (with its
+ * force-exit watchdog), so in-flight persistence gets the same drain a
+ * cooperative commit gives it. SIGKILL only after the full exit grace.
+ */
+export async function forceStopHostProcess(
+  environment: Environment,
+  operation: string,
+): Promise<ForcedShutdownOutcome> {
+  const logger = createCliLogger(environment);
+  const metadata = await readHostPidMetadata(environment);
+  if (metadata === null) {
+    return { kind: "no-metadata" };
+  }
+  if (!isProcessAlive(metadata.pid)) {
+    return { kind: "no-host" };
+  }
+  logger.warn("Force-stopping the running host", {
+    environment,
+    operation,
+    hostId: metadata.hostId,
+    pid: metadata.pid,
+  });
+  if (!signalPid(metadata.pid, "SIGTERM")) {
+    return { kind: "stopped" };
+  }
+  if (await waitForCooperativeExit(metadata.pid)) {
+    return { kind: "stopped" };
+  }
+  logger.warn(
+    "Host survived SIGTERM through the exit grace; escalating to SIGKILL",
+    { environment, operation, pid: metadata.pid },
+  );
+  if (!signalPid(metadata.pid, "SIGKILL")) {
+    return { kind: "stopped" };
+  }
+  if (await waitForCooperativeExit(metadata.pid)) {
+    return { kind: "stopped" };
+  }
+  return { kind: "hung", pid: metadata.pid };
+}
+
+/**
+ * `true` when the signal was delivered; `false` when the process is already
+ * gone (ESRCH). Any OTHER failure - EPERM most plausibly - throws: the
+ * process is still alive and unsignalable, and reporting it "stopped" would
+ * be the one lie this path must never tell.
+ */
+function signalPid(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ESRCH"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}

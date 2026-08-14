@@ -124,11 +124,21 @@ export interface RestartStop {
   readonly forcedRecycle: boolean;
 }
 
+// How a stop route treats a host with work in progress. `force: false` is
+// cooperative-or-nothing (a busy host denies and the denial surfaces as
+// E_HOST_BUSY); `force: true` kills the host process outright - the user
+// explicitly accepted losing running sessions and in-flight agent work, so
+// no busy gate runs. Explicit at every call site on purpose: which stops in
+// this codebase can destroy live work should be answerable by grep.
+export interface StopServiceOptions {
+  readonly force: boolean;
+}
+
 export interface ServiceController {
   install(options: InstallServiceOptions): Promise<void>;
   uninstall(options: UninstallServiceOptions): Promise<void>;
   status(label: ServiceLabel): Promise<ServiceStatus>;
-  stop(label: ServiceLabel): Promise<void>;
+  stop(label: ServiceLabel, options: StopServiceOptions): Promise<void>;
   start(label: ServiceLabel): Promise<void>;
   restart(label: ServiceLabel): Promise<void>;
   // The two halves of a restart, for the one caller that needs to do work
@@ -144,9 +154,13 @@ export interface ServiceController {
   // (by recycling the job) but leaves no window in the middle. So the halves
   // are named, and the recycle decision stays inside the platform.
   //
-  // `stopForRestart` still throws on a busy host: an explicit restart never
-  // escalates over live work.
-  stopForRestart(label: ServiceLabel): Promise<RestartStop>;
+  // `stopForRestart` still throws on a busy host unless `force` is set: an
+  // explicit restart never escalates over live work on its own - only the
+  // user's own `--force` does.
+  stopForRestart(
+    label: ServiceLabel,
+    options: StopServiceOptions,
+  ): Promise<RestartStop>;
   relaunchAfterRestart(label: ServiceLabel, stop: RestartStop): Promise<void>;
   // Explicit-consent counterpart to `install`'s SMAppService refusal
   // (macOS): move host management from the Desktop app to the CLI. Stops
@@ -313,19 +327,19 @@ export function withStopIntent(
     // written - before it has spawned a child or published `pid.json`. Clearing
     // there hands the old supervisor a window in which it sees neither intent
     // nor an incumbent, and it relaunches. One restart, two hosts.
-    stop: async (label) => {
+    stop: async (label, options) => {
       await announceStop(label.environment, "stop");
       try {
-        return await controller.stop(label);
+        return await controller.stop(label, options);
       } catch (error) {
         await retireIntentIfHostSurvived(label.environment);
         throw error;
       }
     },
-    stopForRestart: async (label) => {
+    stopForRestart: async (label, options) => {
       await announceStop(label.environment, "restart");
       try {
-        return await controller.stopForRestart(label);
+        return await controller.stopForRestart(label, options);
       } catch (error) {
         await retireIntentIfHostSurvived(label.environment);
         throw error;

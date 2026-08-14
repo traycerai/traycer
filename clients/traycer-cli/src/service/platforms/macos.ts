@@ -28,7 +28,10 @@ import {
 // fields only, `^\t?` anchor) replaces the any-depth variant that used to
 // live here, so a nested `path` inside `endpoints = { ... }` can never
 // masquerade as the job's plist path.
-import { requestCooperativeShutdown } from "./desktop-agent-shutdown";
+import {
+  forceStopHostProcess,
+  requestCooperativeShutdown,
+} from "./desktop-agent-shutdown";
 import {
   classifyLaunchctlPrintResult,
   deriveWedgeVerdict,
@@ -84,10 +87,11 @@ export function createMacosController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label, run),
-    stop: (label) => stopService(label, run),
+    stop: (label, options) => stopService(label, run, options.force),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
-    stopForRestart: (label) => stopServiceForRestart(label, run),
+    stopForRestart: (label, options) =>
+      stopServiceForRestart(label, run, options.force),
     relaunchAfterRestart: (label, stop) =>
       relaunchServiceAfterRestart(label, stop, run),
     retireCompetingRegistration: (label) =>
@@ -862,7 +866,12 @@ async function probeDesktopAgentOwnership(
 async function stopDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
+  force: boolean,
 ): Promise<void> {
+  if (force) {
+    await forceStopDesktopManagedHost(label, agent);
+    return;
+  }
   const outcome = await requestCooperativeShutdown(label.environment, "stop");
   switch (outcome.kind) {
     case "stopped":
@@ -883,7 +892,7 @@ async function stopDesktopManagedHost(
       throw cliError({
         code: CLI_ERROR_CODES.HOST_BUSY,
         message:
-          "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+          "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).",
         details: { label: label.id, agentLabel: agent.agentLabelId },
         exitCode: 1,
       });
@@ -913,6 +922,44 @@ async function stopDesktopManagedHost(
   }
 }
 
+// `host stop --force` on a Desktop-managed machine: kill the host child
+// directly. This mutates NO launchd registration - the SMAppService agent
+// stays exactly as Desktop left it - and the stop-intent record (written by
+// `withStopIntent` before any controller stop runs) tells the supervisor the
+// death was asked for, so nothing relaunches the host. Cooperative stays the
+// default; this exists because a host with any open terminal tab denies the
+// claim indefinitely, and the only escape previously offered was a full
+// `service uninstall`.
+async function forceStopDesktopManagedHost(
+  label: ServiceLabel,
+  agent: DesktopAgentOwnership,
+): Promise<void> {
+  const outcome = await forceStopHostProcess(label.environment, "stop");
+  switch (outcome.kind) {
+    case "stopped":
+    case "no-host":
+      return;
+    case "no-metadata":
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host stop --force: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so there is no process to kill. If the host is starting, retry in a moment; if it is wedged, run 'traycer host service uninstall' and relaunch the Traycer app.`,
+        details: { label: label.id, agentLabel: agent.agentLabelId },
+        exitCode: 1,
+      });
+    case "hung":
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host stop --force: pid=${outcome.pid} survived SIGKILL through the exit grace; stop did not take effect.`,
+        details: {
+          label: label.id,
+          agentLabel: agent.agentLabelId,
+          pid: outcome.pid,
+        },
+        exitCode: 1,
+      });
+  }
+}
+
 // `host restart` on a Desktop-managed machine. Cooperative stop first (a
 // busy host denies and the denial is surfaced - never escalate over live
 // work); then relaunch via kickstart of the agent label. When the host's
@@ -925,7 +972,7 @@ async function restartDesktopManagedHost(
   agent: DesktopAgentOwnership,
   run: ProcessRunner,
 ): Promise<void> {
-  const stop = await standDownDesktopManagedHost(label, agent);
+  const stop = await standDownDesktopManagedHost(label, agent, false);
   await kickstartDesktopAgent(agent, stop.forcedRecycle, run);
 }
 
@@ -937,7 +984,19 @@ async function restartDesktopManagedHost(
 async function standDownDesktopManagedHost(
   label: ServiceLabel,
   agent: DesktopAgentOwnership,
+  force: boolean,
 ): Promise<RestartStop> {
+  if (force) {
+    // Every force outcome relaunches by RECYCLING the job: the child was
+    // killed (or could not be found), the supervisor may still be winding
+    // down, and `kickstart -k` is correct in every one of those states
+    // where a plain kickstart can silently no-op. A `hung`/`no-metadata`
+    // outcome is not terminal here for the same reason the cooperative
+    // path's unreachable outcome is not: the caller is about to recycle
+    // the job either way.
+    await forceStopHostProcess(label.environment, "restart");
+    return { forcedRecycle: true };
+  }
   const outcome = await requestCooperativeShutdown(
     label.environment,
     "restart",
@@ -946,7 +1005,7 @@ async function standDownDesktopManagedHost(
     throw cliError({
       code: CLI_ERROR_CODES.HOST_BUSY,
       message:
-        "host restart: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+        "host restart: the running host has work in progress and denied the shutdown claim; retry once the work completes, or re-run with --force to restart anyway (running terminal sessions and in-flight agent work will be killed).",
       details: { label: label.id, agentLabel: agent.agentLabelId },
       exitCode: 1,
     });
@@ -1402,10 +1461,11 @@ async function retireCompetingRegistration(
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
+  force: boolean,
 ): Promise<void> {
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
-    await stopDesktopManagedHost(label, desktopAgent);
+    await stopDesktopManagedHost(label, desktopAgent, force);
     return;
   }
   // Snapshot the live host pid BEFORE signalling so we can confirm the
@@ -1433,9 +1493,29 @@ async function stopService(
   // still sees the job running). A timeout means the host is still serving,
   // so surface it as a failure instead of reporting success on a no-op stop.
   if (!exited) {
+    // `--force` escalates a SIGTERM the host outlived to SIGKILL rather than
+    // failing - the CLI-owned stop has no busy gate, so on this path the
+    // flag's whole meaning is "do not let a wedged shutdown handler win".
+    if (force) {
+      await run("launchctl", ["kill", "KILL", `${guiDomain()}/${label.id}`], {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 10_000,
+        tolerateNonZeroExit: true,
+      });
+      if (
+        await waitForPidExit(
+          before.pid,
+          STOP_EXIT_TIMEOUT_MS,
+          STOP_EXIT_POLL_MS,
+        )
+      ) {
+        return;
+      }
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect.`,
+      message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of ${force ? "SIGKILL" : "SIGTERM"}; stop did not take effect.${force ? "" : " Re-run with --force to escalate to SIGKILL."}`,
       details: {
         label: label.id,
         pid: before.pid,
@@ -1501,10 +1581,11 @@ async function startService(
 async function stopServiceForRestart(
   label: ServiceLabel,
   run: ProcessRunner,
+  force: boolean,
 ): Promise<RestartStop> {
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
-    return await standDownDesktopManagedHost(label, desktopAgent);
+    return await standDownDesktopManagedHost(label, desktopAgent, force);
   }
   // CLI-owned. This used to report no recycle, on the reasoning that
   // "`stopService` signals and then waits for the process to really exit, so a
@@ -1531,7 +1612,7 @@ async function stopServiceForRestart(
   // kickstart, and `kickstart -k` is correct either way - it recycles a running
   // job and starts a stopped one. All it costs is the tail of a deliberate
   // stop's diagnostics, which describe a shutdown nobody is debugging.
-  await stopService(label, run);
+  await stopService(label, run, force);
   return { forcedRecycle: true };
 }
 

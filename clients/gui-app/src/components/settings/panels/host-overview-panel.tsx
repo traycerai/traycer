@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -57,7 +58,11 @@ import {
 } from "@/components/settings/panels/host-service-write-latch-store";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
@@ -201,6 +206,42 @@ export function HostOverviewPanel(props: {
     },
   });
   const { identity, displayName } = view;
+
+  // The pre-rework recovery console offered Force restart when the host
+  // denied the shutdown claim (OSS #1156 dropped the offer); this is that
+  // offer's home on the one-page Overview. LOCAL machine with a bridge only,
+  // by the nature of the transport rather than a scope rule: the bridge
+  // respawn recycles THIS machine's host process, so surfacing it for a
+  // remote host would kill the wrong process. The claim-gated `host.restart`
+  // stays the default path for every host; force is the explicit consent to
+  // end the sessions the claim protects.
+  const management = useRunnerHostOrNull()?.hostManagement ?? null;
+  const forceRestart = useMutation<HostRestartRequestResult>({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: () => {
+      if (management === null) {
+        return Promise.reject(new Error("No local host bridge is available."));
+      }
+      return management.restartHost();
+    },
+    onSuccess: (result) => {
+      setRestartBusyCount(null);
+      // `declined` survives even a forced respawn (removed-by-user, another
+      // process holds the management lock) - informational, not an error.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
+      toast.success(`Restarting ${displayName}`);
+    },
+    onError: (error) => {
+      toastFromRunnerError(error, "Couldn't restart host");
+    },
+  });
+  const canForceRestart =
+    (host?.isLocalMachine ?? false) &&
+    props.hasLocalBridge &&
+    management !== null;
 
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
@@ -536,6 +577,10 @@ export function HostOverviewPanel(props: {
               setRestartConfirmOpen(true);
             }}
             onDismiss={() => setRestartBusyCount(null)}
+            onForceRestart={
+              canForceRestart ? () => forceRestart.mutate() : null
+            }
+            forcePending={forceRestart.isPending}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a

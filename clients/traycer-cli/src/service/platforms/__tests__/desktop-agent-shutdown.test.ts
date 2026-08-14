@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { requestCooperativeShutdown } from "../desktop-agent-shutdown";
+import {
+  forceStopHostProcess,
+  requestCooperativeShutdown,
+} from "../desktop-agent-shutdown";
 
 // The cooperative flow's own contract: claim -> commit -> wait for REAL
 // exit, with every failure mode mapped to a distinct outcome the caller
@@ -184,5 +187,118 @@ describe("requestCooperativeShutdown", () => {
     await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toEqual({ kind: "hung", pid: 4242 });
+  });
+});
+
+// `forceStopHostProcess`'s own contract: kill the pid directly (SIGTERM,
+// then SIGKILL after the exit grace) with no RPC involved at any point, and
+// map every outcome the way `requestCooperativeShutdown` does for the
+// outcomes they share (`no-metadata`/`no-host`/`stopped`/`hung`), plus the
+// two kill-failure shapes unique to signalling: ESRCH (already gone) versus
+// anything else (must propagate, never read as a false "stopped").
+describe("forceStopHostProcess", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports no-metadata without signalling anything when pid.json cannot be read", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(null);
+    const killSpy = vi.spyOn(process, "kill");
+
+    const outcome = await forceStopHostProcess("production", "stop");
+
+    expect(outcome).toEqual({ kind: "no-metadata" });
+    expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports no-host without signalling when the recorded pid is PROVEN dead", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
+    const killSpy = vi.spyOn(process, "kill");
+
+    const outcome = await forceStopHostProcess("production", "stop");
+
+    expect(outcome).toEqual({ kind: "no-host" });
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports stopped when SIGTERM alone is honored, without ever escalating to SIGKILL", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    // Alive for the pre-flight check, gone on the first post-SIGTERM poll -
+    // same shape as requestCooperativeShutdown's "stopped" case above.
+    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const outcome = await forceStopHostProcess("production", "stop");
+
+    expect(outcome).toEqual({ kind: "stopped" });
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+  });
+
+  it("escalates to SIGKILL once SIGTERM is survived through the full exit grace, and reports stopped when SIGKILL lands", async () => {
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    let sigkillSent = false;
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid, signal) => {
+        if (signal === "SIGKILL") sigkillSent = true;
+        return true;
+      });
+    // Alive right up until SIGKILL actually lands - proves SIGTERM's own
+    // wait ran to its full timeout rather than exiting early.
+    MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+
+    const pending = forceStopHostProcess("production", "stop");
+    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
+    // slack for the final poll - same margin the cooperative "hung" case
+    // above uses for the identical wait helper.
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toEqual({ kind: "stopped" });
+    expect(killSpy).toHaveBeenCalledTimes(2);
+    expect(killSpy).toHaveBeenNthCalledWith(1, 4242, "SIGTERM");
+    expect(killSpy).toHaveBeenNthCalledWith(2, 4242, "SIGKILL");
+  });
+
+  it("reports hung when the process survives BOTH SIGTERM and SIGKILL through their exit graces", async () => {
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const pending = forceStopHostProcess("production", "stop");
+    // Two full exit-grace waits back to back (SIGTERM's, then SIGKILL's).
+    await vi.advanceTimersByTimeAsync(80_000);
+
+    await expect(pending).resolves.toEqual({ kind: "hung", pid: 4242 });
+    expect(killSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads an ESRCH from process.kill as already-exited, without waiting", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValueOnce(true); // pre-flight only
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+
+    const outcome = await forceStopHostProcess("production", "stop");
+
+    expect(outcome).toEqual({ kind: "stopped" });
+    expect(MOCKS.isProcessAlive).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates any kill failure OTHER than ESRCH instead of reporting a false stop", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+
+    await expect(forceStopHostProcess("production", "stop")).rejects.toThrow(
+      "not permitted",
+    );
   });
 });

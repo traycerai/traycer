@@ -104,12 +104,33 @@ describe("withStopIntent", () => {
       baseController({ stop: async () => undefined }),
     );
 
-    await controller.stop(label);
+    await controller.stop(label, { force: false });
 
     expect(mocks.writes).toEqual(["stop"]);
     // NOT cleared: the supervisor still has to read it to know the child's
     // death was requested.
     expect(mocks.clears).toEqual([]);
+  });
+
+  it("writes the intent BEFORE a force stop runs too - force pass-through does not change decorator ordering", async () => {
+    // Snapshot `mocks.writes` from INSIDE the wrapped `stop`: if the
+    // decorator wrote the intent first, the write is already visible by the
+    // time this callback runs, regardless of `force`.
+    let writesWhenStopRan: string[] = [];
+    let forceSeenByStop = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async (_label, options) => {
+          writesWhenStopRan = [...mocks.writes];
+          forceSeenByStop = options.force;
+        },
+      }),
+    );
+
+    await controller.stop(label, { force: true });
+
+    expect(writesWhenStopRan).toEqual(["stop"]);
+    expect(forceSeenByStop).toBe(true);
   });
 
   it("clears the intent when stopForRestart is refused and the host is STILL SERVING", async () => {
@@ -127,7 +148,9 @@ describe("withStopIntent", () => {
       }),
     );
 
-    await expect(controller.stopForRestart(label)).rejects.toThrow(busy);
+    await expect(
+      controller.stopForRestart(label, { force: false }),
+    ).rejects.toThrow(busy);
 
     expect(mocks.writes).toEqual(["restart"]);
     expect(mocks.clears).toEqual(["production"]);
@@ -148,7 +171,9 @@ describe("withStopIntent", () => {
       }),
     );
 
-    await expect(controller.stop(label)).rejects.toThrow("outlived");
+    await expect(controller.stop(label, { force: false })).rejects.toThrow(
+      "outlived",
+    );
 
     expect(mocks.incumbentProbes).toBe(1);
     expect(mocks.clears).toEqual([]);
@@ -205,7 +230,7 @@ describe("withStopIntent", () => {
       }),
     );
 
-    await expect(controller.stop(label)).rejects.toThrow(
+    await expect(controller.stop(label, { force: false })).rejects.toThrow(
       /could not record the stop request/,
     );
     // The kill must NOT have happened: a host that comes back is worse than a
@@ -228,7 +253,7 @@ describe("withStopIntent", () => {
       }),
     );
 
-    await controller.stop(label);
+    await controller.stop(label, { force: false });
 
     expect(stopped).toBe(true);
   });
