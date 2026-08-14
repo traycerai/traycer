@@ -269,6 +269,9 @@ export function HostOverviewPanel(props: {
     busy: corePending,
     scopeUsable: usable,
     settledBusySessionCount: view.settledBusySessionCount,
+    refetchStatus: () => {
+      void serviceStatusQuery.refetch();
+    },
   });
   // The service writes are IN the page-wide gate, not only gated BY it.
   // Re-registering cycles the OS service and replaces this very host process,

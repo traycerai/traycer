@@ -1,7 +1,4 @@
-import { useEffect, useState } from "react";
-
-/** How long a probable register-restart holds the page without other release. */
-const REGISTER_RESTART_LATCH_MS = 45_000;
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -18,6 +15,9 @@ import {
 } from "@/components/settings/panels/host-overview-rpc";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+
+/** How long a probable register-restart holds the page without other release. */
+const REGISTER_RESTART_LATCH_MS = 45_000;
 
 /**
  * The `host.service.*` ADAPTER: RPC in, `OsServiceSectionProps` out.
@@ -39,6 +39,8 @@ export function useOverviewOsService(input: {
   readonly busy: boolean;
   /** Whether the scope still has a live route; releases the accepted latch. */
   readonly scopeUsable: boolean;
+  /** Refetches `host.service.status`; called when a restart window expires. */
+  readonly refetchStatus: () => void;
   /**
    * What the host said about open sessions, `null` while it has not settled -
    * the register CONFIRM names it, because re-registering bootouts the very
@@ -56,7 +58,7 @@ export function useOverviewOsService(input: {
     setRegisterRestartLikely,
     externallyManagedRefusal,
     setExternallyManagedRefusal,
-  } = useServiceWriteLatches(input.scopeUsable);
+  } = useServiceWriteLatches(input.scopeUsable, input.refetchStatus);
   const ok = input.status?.outcome === "ok" ? input.status : null;
   // A registration someone ELSE owns — Desktop's SMAppService, or the external
   // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
@@ -184,7 +186,10 @@ export function useOverviewOsService(input: {
  *   itself: the CLI's externally-managed STATE describes Desktop's
  *   SMAppService, a different owner than the host's env-var supervisor.
  */
-function useServiceWriteLatches(scopeUsable: boolean): {
+function useServiceWriteLatches(
+  scopeUsable: boolean,
+  onRegisterRestartWindowExpired: () => void,
+): {
   readonly deregisterAccepted: boolean;
   readonly setDeregisterAccepted: (value: boolean) => void;
   readonly registerRestartLikely: boolean;
@@ -205,10 +210,22 @@ function useServiceWriteLatches(scopeUsable: boolean): {
     if (registerRestartLikely) setRegisterRestartLikely(false);
     if (externallyManagedRefusal) setExternallyManagedRefusal(false);
   }
+  // Ref-carried so the timer effect does not restart on every render while
+  // latched (an inline callback changes identity each render).
+  const expiredRef = useRef(onRegisterRestartWindowExpired);
+  useEffect(() => {
+    expiredRef.current = onRegisterRestartWindowExpired;
+  });
   useEffect(() => {
     if (!registerRestartLikely) return;
     const timer = setTimeout(() => {
       setRegisterRestartLikely(false);
+      // The timer release is the one path with NO refetch of its own: a
+      // scope flip re-fetches through the queries' enabled transition, but a
+      // reconnect the scope machinery absorbed leaves `host.service.status`
+      // stale, unmounted-never, and unpolled (`poll: null`) - the section
+      // would describe the pre-registration service indefinitely.
+      expiredRef.current();
     }, REGISTER_RESTART_LATCH_MS);
     return () => clearTimeout(timer);
   }, [registerRestartLikely]);
