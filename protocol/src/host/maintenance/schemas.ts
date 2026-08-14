@@ -233,10 +233,19 @@ export type HostGetInstallationInfoResponse = z.infer<
  * Read and write are separate methods on purpose: the status read is cheap and
  * safe to run whenever the section is open, and the two writes are neither.
  */
+/**
+ * `externally-managed` is the CLI's word for a registration that EXISTS but is
+ * not the CLI's to touch — on macOS, the label loaded from Traycer Desktop's
+ * SMAppService in-bundle plist. That is the NORMAL state of a Desktop-managed
+ * machine, so a wire enum without it would make `host.service.status` fail on
+ * exactly the fleet's most common configuration. A caller must render it as
+ * "registered, owned elsewhere" and withhold the CLI-backed mutations.
+ */
 export const hostServiceStateSchema = z.enum([
   "running",
   "stopped",
   "not-installed",
+  "externally-managed",
 ]);
 export type HostServiceState = z.infer<typeof hostServiceStateSchema>;
 
@@ -291,6 +300,16 @@ export const hostServiceRegisterResponseSchema = z.discriminatedUnion(
   "outcome",
   [
     z.object({ outcome: z.literal("ok") }),
+    /**
+     * The HOST refused before the CLI ran: its updates — and with them its
+     * service lifecycle — are owned by an external supervisor
+     * (`TRAYCER_HOST_UPDATES=external`, the remote-staging unit being the
+     * canonical case). Distinct from a `cli-failed` refusal because the CLI
+     * would not refuse: it would install its OWN canonical unit beside the
+     * external one, two supervisors over one host home. Mirrors
+     * `host.update.install`'s outcome of the same name.
+     */
+    z.object({ outcome: z.literal("externally-managed") }),
     z.object({ outcome: z.literal("cli-unavailable") }),
     z.object({
       outcome: z.literal("cli-failed"),
@@ -326,6 +345,8 @@ export const hostServiceDeregisterResponseSchema = z.discriminatedUnion(
   "outcome",
   [
     z.object({ outcome: z.literal("accepted") }),
+    /** Same host-side refusal as register's: an external supervisor owns it. */
+    z.object({ outcome: z.literal("externally-managed") }),
     z.object({ outcome: z.literal("cli-unavailable") }),
     z.object({ outcome: z.literal("cli-failed") }),
   ],

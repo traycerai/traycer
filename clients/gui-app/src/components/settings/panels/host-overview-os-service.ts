@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
   HostServiceStatusResponse,
 } from "@traycer/protocol/host/maintenance/index";
@@ -36,6 +37,12 @@ export function useOverviewOsService(input: {
   const register = useHostServiceRegister(input.client);
   const deregister = useHostServiceDeregister(input.client);
   const ok = input.status?.outcome === "ok" ? input.status : null;
+  // A registration someone ELSE owns — Desktop's SMAppService, or the external
+  // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
+  // verbs are withheld rather than disabled: the CLI either refuses the write
+  // or, worse, installs a second unit beside the owner's, so there is no state
+  // in which offering them here is honest.
+  const externallyManaged = ok?.state === "externally-managed";
 
   return {
     hostName,
@@ -46,8 +53,8 @@ export function useOverviewOsService(input: {
     }),
     manifestLine: ok === null ? null : `${ok.label} · ${ok.manifestPath}`,
     degrade: input.statusDegrade,
-    canRegister: input.registerDegrade === null,
-    canDeregister: input.deregisterDegrade === null,
+    canRegister: input.registerDegrade === null && !externallyManaged,
+    canDeregister: input.deregisterDegrade === null && !externallyManaged,
     nothingToDeregister: ok?.state === "not-installed",
     registerPending: register.isPending,
     deregisterPending: deregister.isPending,
@@ -83,11 +90,7 @@ export function useOverviewOsService(input: {
             toast.success(`Stopping ${hostName} and deregistering it`);
             return;
           }
-          toast.error(
-            response.outcome === "cli-unavailable"
-              ? `${hostName} has no Traycer CLI to deregister its service with.`
-              : `${hostName} couldn't run the deregister command.`,
-          );
+          toast.error(describeServiceDeregisterFailure(response, hostName));
         },
         onError: (error) =>
           toastFromHostError(error, "Couldn't deregister the service."),
@@ -120,6 +123,12 @@ function describeServiceState(input: {
       if (input.status.state === "not-installed") {
         return "Not registered. The OS service manifest is required for the host to survive logout.";
       }
+      if (input.status.state === "externally-managed") {
+        // The registration EXISTS — this is the normal state of a
+        // Desktop-managed machine — it just is not the CLI's to change, so the
+        // verbs below are withheld rather than offered-and-refused.
+        return "Registered and managed by Traycer Desktop, which owns this host's service registration.";
+      }
       return input.status.state === "running"
         ? "Registered and running. The OS service manifest starts the host at user login."
         : "Registered but not running. The OS service manifest starts the host at user login.";
@@ -134,6 +143,12 @@ function describeServiceRegisterFailure(
   response: Exclude<HostServiceRegisterResponse, { readonly outcome: "ok" }>,
   hostName: string,
 ): string {
+  if (response.outcome === "externally-managed") {
+    // The host refused before running the CLI: an external supervisor owns its
+    // service lifecycle. Reachable only when the status read that hides the
+    // buttons is stale, so this is a correction rather than an error report.
+    return `${hostName}'s service is managed by an external supervisor, so it can't be re-registered from here.`;
+  }
   if (response.outcome === "cli-unavailable") {
     return `${hostName} has no Traycer CLI to register its service with.`;
   }
@@ -145,4 +160,21 @@ function describeServiceRegisterFailure(
   // owned by Traycer Desktop's SMAppService registration — names its own
   // remedy, and "couldn't register" would throw that away.
   return response.message ?? `${hostName} couldn't register its OS service.`;
+}
+
+function describeServiceDeregisterFailure(
+  response: Exclude<
+    HostServiceDeregisterResponse,
+    { readonly outcome: "accepted" }
+  >,
+  hostName: string,
+): string {
+  switch (response.outcome) {
+    case "externally-managed":
+      return `${hostName}'s service is managed by an external supervisor, so it can't be deregistered from here.`;
+    case "cli-unavailable":
+      return `${hostName} has no Traycer CLI to deregister its service with.`;
+    case "cli-failed":
+      return `${hostName} couldn't run the deregister command.`;
+  }
 }

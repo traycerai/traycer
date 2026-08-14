@@ -1,10 +1,16 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue as RpcDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import {
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
+import { LocalRecoveryDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
@@ -23,6 +29,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import type {
   HostDoctorIssue as BridgeDoctorIssue,
+  HostInstalledRecord,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ReactNode } from "react";
@@ -91,6 +98,11 @@ function HostSettingsPanelInner() {
   // Keeps a `false` capability answer refutable. See the hook below.
   useOverviewCapabilityProbe(scope);
 
+  const localRecoveryZone = useEmptyAccountLocalRecoveryZone(
+    scope,
+    management,
+  );
+
   const description =
     scope.host === null
       ? "Status, updates and maintenance for the selected host."
@@ -100,14 +112,15 @@ function HostSettingsPanelInner() {
   // gate, and it is safe to use one: everything below describes the scoped
   // host, so there is no region that would be wrongly withheld by it.
   //
-  // There is no longer a carve-out for a first run. The recovery console this
-  // page used to fall back to is GONE, along with the whole idea that a host
-  // which cannot answer gets a different page: one component now describes
+  // There is no longer a carve-out PAGE for a first run. The recovery console
+  // this page used to fall back to is GONE, along with the whole idea that a
+  // host which cannot answer gets a different page: one component now describes
   // every host from whatever source can answer for it, and says plainly when
   // that is only the account registry. Creating the first host was never
   // unique to that console anyway — the desktop auto-converges at startup
   // (`host-launch-converge.ts`) and `LocalHostGate` owns the app-level
-  // "your host is not up" surface with its own Install.
+  // "your host is not up" surface with its own Install. What survives of it is
+  // the single VERB above (`localRecoveryZone`), rendered under this gate.
   const unresolved = scope.host === null || scope.status === "vanished";
 
   const body = renderOverviewBody({
@@ -115,6 +128,7 @@ function HostSettingsPanelInner() {
     unresolved,
     compact,
     hasLocalBridge: management !== null && scopedIsLocalMachine,
+    localRecoveryZone,
     onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
     localDoctorFixPendingCode: localDoctorFix.isPending
       ? localDoctorFix.variables.code
@@ -196,18 +210,23 @@ function renderOverviewBody(input: {
   readonly unresolved: boolean;
   readonly compact: boolean;
   readonly hasLocalBridge: boolean;
+  /** The empty-account uninstall carve-out; `null` in every other state. */
+  readonly localRecoveryZone: ReactNode | null;
   readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
   readonly localDoctorFixPendingCode: string | null;
 }): ReactNode {
   const { scope } = input;
   if (input.unresolved) {
     return (
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
-        {null}
-      </HostScopeGate>
+      <div className="flex w-full flex-col gap-5">
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {null}
+        </HostScopeGate>
+        {input.localRecoveryZone}
+      </div>
     );
   }
   return (
@@ -248,6 +267,51 @@ function renderOverviewBody(input: {
 type LocalDoctorFixOutcome =
   | { readonly applied: true; readonly declinedMessage: null }
   | { readonly applied: false; readonly declinedMessage: string };
+
+// Tripwire, never called: the query above is `enabled` only with a bridge.
+function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+/**
+ * The one carve-out the whole-panel gate still owes: an install that completed
+ * while sign-in did not. An EMPTY account (both lists answered, nothing
+ * failed, no vanished pick) with installed local components has exactly one
+ * thing left to offer — removal over the CLI bridge, which needs no host row —
+ * and `LocalRecoveryDangerZone`'s contract names this page as the only
+ * uninstall surface. Everything else about recovery stays `LocalHostGate`'s
+ * job; this is the verb that must not vanish with the row. The caller decides
+ * whether anything is actually installed — the zone cannot know — so the
+ * bridge's install record is the gate, and only the empty-account state asks.
+ */
+function useEmptyAccountLocalRecoveryZone(
+  scope: HostScope,
+  management: IHostManagement | null,
+): ReactNode | null {
+  const emptyAccountLocalRecovery =
+    scope.host === null &&
+    scope.vanishedHostId === null &&
+    scope.hosts.length === 0 &&
+    !scope.isLoading &&
+    !scope.listsFailed;
+  const installedRecord = useQuery(
+    queryOptions<HostInstalledRecord | null>({
+      queryKey:
+        management === null
+          ? runnerQueryKeys.hostInstalledRecordUnavailable()
+          : runnerQueryKeys.hostInstalledRecord(management),
+      queryFn:
+        management === null
+          ? skipInstalledRecord
+          : () => management.installedRecord(),
+      enabled: management !== null && emptyAccountLocalRecovery,
+      staleTime: 30_000,
+    }),
+  );
+  if (!emptyAccountLocalRecovery || management === null) return null;
+  if ((installedRecord.data ?? null) === null) return null;
+  return <LocalRecoveryDangerZone />;
+}
 
 function useLocalDoctorFixMutation(management: IHostManagement | null) {
   const queryClient = useQueryClient();

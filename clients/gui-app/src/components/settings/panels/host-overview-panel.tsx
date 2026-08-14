@@ -34,6 +34,7 @@ import {
   settledBusySessionCount,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
+import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import {
   managedInstallation,
   useHostIdentityQuery,
@@ -233,8 +234,29 @@ export function HostOverviewPanel(props: {
   // and deliberately leaves the controls live, because that is exactly when
   // someone needs to retry.
   const updateInFlight = view.updateProgress?.state === "updating";
-  const anyPending =
+  const corePending =
     restart.isPending || identitySet.isPending || updateInFlight;
+
+  const serviceStatusQuery = useHostServiceStatusQuery({
+    client,
+    enabled: usable && serviceStatusDegrade === null,
+  });
+  const service = useOverviewOsService({
+    client,
+    hostName: displayName,
+    status: serviceStatusQuery.data,
+    loading: serviceStatusQuery.isPending,
+    statusDegrade: serviceStatusDegrade,
+    registerDegrade: serviceRegisterDegrade,
+    deregisterDegrade: serviceDeregisterDegrade,
+    busy: corePending,
+  });
+  // The service writes are IN the page-wide gate, not only gated BY it.
+  // Re-registering cycles the OS service and replaces this very host process,
+  // so a Restart or a detached update launched beside it races that lifecycle;
+  // the section locks the page for the same reason the page locks the section.
+  const anyPending =
+    corePending || service.registerPending || service.deregisterPending;
 
   // The update story lives at PAGE level because its two halves now render in
   // two different containers: the answer — is there an update, install it — as a
@@ -257,20 +279,6 @@ export function HostOverviewPanel(props: {
     enabled: usable,
     checkDegrade: updateCheckDegrade,
     installDegrade: updateInstallDegrade,
-    busy: anyPending,
-  });
-  const serviceStatusQuery = useHostServiceStatusQuery({
-    client,
-    enabled: usable && serviceStatusDegrade === null,
-  });
-  const service = useOverviewOsService({
-    client,
-    hostName: displayName,
-    status: serviceStatusQuery.data,
-    loading: serviceStatusQuery.isPending,
-    statusDegrade: serviceStatusDegrade,
-    registerDegrade: serviceRegisterDegrade,
-    deregisterDegrade: serviceDeregisterDegrade,
     busy: anyPending,
   });
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
@@ -429,6 +437,13 @@ export function HostOverviewPanel(props: {
           />
         }
       />
+
+      {/* Local machine only, by the nature of the fact rather than a scope
+          rule: the hint is Desktop's launch-time comparison of ITS bundled CLI
+          against THIS machine's package-manager CLI, recorded in Desktop-local
+          reconcile state the bridge alone can read. There is no remote
+          equivalent to render. */}
+      {props.hasLocalBridge ? <LocalPackageManagerUpgradeHint /> : null}
 
       {/* No list of the OTHER hosts, and no "Add host": a page about one host
           is the wrong place to manage the collection it belongs to. The
