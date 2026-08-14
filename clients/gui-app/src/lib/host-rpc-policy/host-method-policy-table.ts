@@ -885,6 +885,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // One chat image attachment's bytes. Not polled, and it must not be: the
+  // answer is content-addressed, so a hash that resolved once resolves to the
+  // same bytes forever and a hash that missed is re-driven by the image blob
+  // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
+  // interval here would re-fetch megabytes to re-learn a constant.
+  "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork

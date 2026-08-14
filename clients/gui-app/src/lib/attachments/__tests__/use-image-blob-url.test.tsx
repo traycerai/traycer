@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   imageBlobCache,
   type ImageBlobLease,
+  type ImageBlobResolution,
 } from "@/lib/attachments/image-blob-cache";
 import {
   IMAGE_FETCH_MAX_ATTEMPTS,
@@ -13,9 +14,17 @@ import {
   useImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
 
-function makeLease(promise: Promise<string>): ImageBlobLease {
+function makeLease(promise: Promise<ImageBlobResolution>): ImageBlobLease {
   return { promise, release: vi.fn() };
 }
+
+/** A resolution whose media type is whatever the caller declared. */
+function resolvedAs(url: string): ImageBlobResolution {
+  return { url, mediaType: "image/png" };
+}
+
+const bytesFetcher = () =>
+  Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null });
 
 describe("useImageBlobUrlState", () => {
   beforeEach(() => {
@@ -29,13 +38,13 @@ describe("useImageBlobUrlState", () => {
   });
 
   it("becomes unavailable after the grace period and recovers from late bytes", async () => {
-    let resolveFetch: ((url: string) => void) | null = null;
-    const pendingUrl = new Promise<string>((resolve) => {
+    let resolveFetch: ((resolution: ImageBlobResolution) => void) | null = null;
+    const pendingUrl = new Promise<ImageBlobResolution>((resolve) => {
       resolveFetch = resolve;
     });
     const lease = makeLease(pendingUrl);
     vi.spyOn(imageBlobCache, "acquire").mockReturnValue(lease);
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(bytesFetcher);
 
     const { result, unmount } = renderHook(() =>
       useImageBlobUrlState(
@@ -54,12 +63,13 @@ describe("useImageBlobUrlState", () => {
     expect(result.current).toEqual({ status: "unavailable", url: null });
 
     await act(async () => {
-      resolveFetch?.("blob:late-image");
+      resolveFetch?.(resolvedAs("blob:late-image"));
       await Promise.resolve();
     });
     expect(result.current).toEqual({
       status: "ready",
       url: "blob:late-image",
+      mediaType: "image/png",
     });
 
     unmount();
@@ -72,8 +82,10 @@ describe("useImageBlobUrlState", () => {
       .mockReturnValueOnce(
         makeLease(Promise.reject(new Error("store disposed"))),
       )
-      .mockReturnValueOnce(makeLease(Promise.resolve("blob:retried-image")));
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+      .mockReturnValueOnce(
+        makeLease(Promise.resolve(resolvedAs("blob:retried-image"))),
+      );
+    const fetcher = vi.fn(bytesFetcher);
 
     const { result } = renderHook(() =>
       useImageBlobUrlState(
@@ -97,6 +109,7 @@ describe("useImageBlobUrlState", () => {
     expect(result.current).toEqual({
       status: "ready",
       url: "blob:retried-image",
+      mediaType: "image/png",
     });
   });
 
@@ -106,7 +119,7 @@ describe("useImageBlobUrlState", () => {
       .mockImplementation(() =>
         makeLease(Promise.reject(new Error("store disposed"))),
       );
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(bytesFetcher);
 
     const { result } = renderHook(() =>
       useImageBlobUrlState(
@@ -139,7 +152,7 @@ describe("useImageBlobUrlState", () => {
       .mockImplementation(() =>
         makeLease(Promise.reject(new Error("store disposed"))),
       );
-    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const fetcher = vi.fn(bytesFetcher);
 
     const { unmount } = renderHook(() =>
       useImageBlobUrlState(
@@ -166,14 +179,14 @@ describe("useImageBlobUrlState", () => {
   });
 
   it("re-arms the retry budget when the fetcher dependency changes", async () => {
-    const rejectedFetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
-    const recoveredFetcher = vi.fn(() => Promise.resolve(new Uint8Array([2])));
+    const rejectedFetcher = vi.fn(bytesFetcher);
+    const recoveredFetcher = vi.fn(bytesFetcher);
     const acquire = vi
       .spyOn(imageBlobCache, "acquire")
       .mockImplementation((_hash, _mediaType, fetcher) =>
         makeLease(
           fetcher === recoveredFetcher
-            ? Promise.resolve("blob:rearmed-image")
+            ? Promise.resolve(resolvedAs("blob:rearmed-image"))
             : Promise.reject(new Error("store disposed")),
         ),
       );
@@ -204,6 +217,7 @@ describe("useImageBlobUrlState", () => {
     expect(result.current).toEqual({
       status: "ready",
       url: "blob:rearmed-image",
+      mediaType: "image/png",
     });
   });
 });

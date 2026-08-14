@@ -299,6 +299,7 @@ import {
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadChatAttachmentV10,
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
@@ -6056,6 +6057,27 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicListChatRecordsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // One chat image attachment's bytes off the CHAT plane, resolved by the
+  // viewer's tab host (its own disk store, else a bearer pass-through to the
+  // published cloud blob). Optional for the usual reason - a new method name is
+  // handshake-fatal against a released peer - and the degrade needs no surface
+  // at all: a host without it is a host whose images only ever lived in the
+  // epic doc, and the client's doc-replica fallback is exactly what it already
+  // did. `chatId` rides the request so a LOCAL hit can be gated by the same
+  // per-chat visibility rule as live viewing; see `epic/chat-attachment.ts`.
+  "epic.readChatAttachment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadChatAttachmentV10,
           upgradeFromPreviousVersion: null,
         },
       },
