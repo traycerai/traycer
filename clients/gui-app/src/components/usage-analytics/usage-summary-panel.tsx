@@ -10,7 +10,10 @@ import {
   type UsageSummaryResponse,
   type UsageSummaryWindowDays,
 } from "@/hooks/usage-analytics/use-usage-summary-query";
-import type { UsageMetric } from "@/lib/usage-analytics/usage-chart-data";
+import type {
+  UsageChartGroupBy,
+  UsageMetric,
+} from "@/lib/usage-analytics/usage-chart-data";
 import {
   buildUsageChartColumns,
   buildUsageSeriesScaleForBuckets,
@@ -35,6 +38,7 @@ import {
   UsageBreakdownToggle,
   type UsageBreakdownGroupBy,
 } from "@/components/usage-analytics/usage-breakdown-toggle";
+import { UsageChartGroupByToggle } from "@/components/usage-analytics/usage-chart-groupby-toggle";
 import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-split";
 import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
@@ -92,6 +96,8 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const [breakdownGroupBy, setBreakdownGroupBy] =
     useState<UsageBreakdownGroupBy>("model");
+  const [chartGroupBy, setChartGroupBy] =
+    useState<UsageChartGroupBy>("harness");
   // Defaults to "All hosts" - the whole point of ONE dashboard with a host
   // filter rather than a second per-host surface (ticket 13, user ruling
   // 2026-08-10). Kept in this component rather than in the request memo so
@@ -248,6 +254,8 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         days={days}
         breakdownGroupBy={breakdownGroupBy}
         onBreakdownGroupByChange={setBreakdownGroupBy}
+        chartGroupBy={chartGroupBy}
+        onChartGroupByChange={setChartGroupBy}
         hostNames={props.hostNames}
         hostScopeName={
           hostId === null ? null : resolveUsageHostName(hostId, props.hostNames)
@@ -336,6 +344,8 @@ function UsageSummaryPanelBody(props: {
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
   readonly onBreakdownGroupByChange: (groupBy: UsageBreakdownGroupBy) => void;
+  readonly chartGroupBy: UsageChartGroupBy;
+  readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
   readonly hostNames: ReadonlyMap<string, string>;
   /** The picked host's display name, or `null` for the All-hosts default. */
   readonly hostScopeName: string | null;
@@ -348,6 +358,8 @@ function UsageSummaryPanelBody(props: {
     days,
     breakdownGroupBy,
     onBreakdownGroupByChange,
+    chartGroupBy,
+    onChartGroupByChange,
     hostNames,
     hostScopeName,
   } = props;
@@ -384,8 +396,22 @@ function UsageSummaryPanelBody(props: {
   }
 
   const { summary, coverage, servedBy } = query.data;
-  const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
-  const columns = buildUsageChartColumns(days, summary.buckets, scale, metric);
+  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, "harness");
+  // The chart can regroup by model; the harness split beside the headline
+  // always stacks by harness, so it keeps the harness `scale` while the
+  // chart gets its own. Same slot palette, different key space - the two
+  // sections only share colors when both group by harness.
+  const chartScale =
+    chartGroupBy === "harness"
+      ? scale
+      : buildUsageSeriesScaleForBuckets(summary.buckets, "model");
+  const columns = buildUsageChartColumns({
+    days,
+    buckets: summary.buckets,
+    scale: chartScale,
+    metric,
+    groupBy: chartGroupBy,
+  });
   const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
   const hostRows = buildUsageHostSplitRows(summary.hostBuckets, hostNames);
   const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
@@ -433,7 +459,25 @@ function UsageSummaryPanelBody(props: {
           </p>
         )}
       </div>
-      <UsageDailyChart columns={columns} scale={scale} metric={metric} />
+      <div className="flex flex-col gap-2">
+        <div className="flex justify-end">
+          <UsageChartGroupByToggle
+            groupBy={chartGroupBy}
+            onChange={onChartGroupByChange}
+          />
+        </div>
+        {/* `key` per the prop's contract: the legend's hidden-series state
+            is keyed by the current grouping's series keys, so a grouping
+            switch remounts rather than letting stale harness keys filter
+            (or fail to filter) model bands. */}
+        <UsageDailyChart
+          key={chartGroupBy}
+          columns={columns}
+          scale={chartScale}
+          metric={metric}
+          groupBy={chartGroupBy}
+        />
+      </div>
       <UsageActivitySection
         query={activityQuery}
         fallbackQuery={activityFallbackQuery}

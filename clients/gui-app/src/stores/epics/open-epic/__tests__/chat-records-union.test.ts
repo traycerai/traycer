@@ -525,10 +525,15 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
         origin: "foreign",
       }),
     ]);
+    store.getState().markChatRecordListAuthoritative();
     expect(store.getState().chats.allIds).toEqual(["mine"]);
+    expect(store.getState().chatRecordListAuthoritative).toBe(true);
 
     signedInAs("user-b");
     expect(store.getState().chats.allIds).toEqual(["theirs"]);
+    // User A's answered list cannot authorize deleting rows for user B. The
+    // viewer-keyed query marks the new answer authoritative when it arrives.
+    expect(store.getState().chatRecordListAuthoritative).toBe(false);
     session.handle.dispose();
   });
 

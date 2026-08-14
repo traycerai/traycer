@@ -3,6 +3,7 @@ import {
   applyUsageSeriesVisibility,
   bucketMetricValue,
   buildUsageChartColumns,
+  buildUsageSeriesScaleForBuckets,
   totalTokensForBucket,
   type UsageBucket,
 } from "@/lib/usage-analytics/usage-chart-data";
@@ -47,12 +48,13 @@ describe("buildUsageChartColumns", () => {
   const scale = buildUsageSeriesScale(["claude", "codex"]);
 
   it("zero-fills a day with no buckets rather than compressing the axis", () => {
-    const columns = buildUsageChartColumns(
-      ["2026-08-01", "2026-08-02", "2026-08-03"],
-      [bucket({ day: "2026-08-01", knownCostUsd: 5 })],
+    const columns = buildUsageChartColumns({
+      days: ["2026-08-01", "2026-08-02", "2026-08-03"],
+      buckets: [bucket({ day: "2026-08-01", knownCostUsd: 5 })],
       scale,
-      "cost",
-    );
+      metric: "cost",
+      groupBy: "harness",
+    });
     expect(columns.map((c) => c.day)).toEqual([
       "2026-08-01",
       "2026-08-02",
@@ -64,15 +66,16 @@ describe("buildUsageChartColumns", () => {
   });
 
   it("sums same-day, same-harness buckets (different models) into one series segment", () => {
-    const columns = buildUsageChartColumns(
-      ["2026-08-01"],
-      [
+    const columns = buildUsageChartColumns({
+      days: ["2026-08-01"],
+      buckets: [
         bucket({ harnessId: "claude", model: "a", knownCostUsd: 1 }),
         bucket({ harnessId: "claude", model: "b", knownCostUsd: 2 }),
       ],
       scale,
-      "cost",
-    );
+      metric: "cost",
+      groupBy: "harness",
+    });
     const claudeSegment = columns[0]?.segments.find(
       (s) => s.seriesKey === "claude",
     );
@@ -91,12 +94,13 @@ describe("buildUsageChartColumns", () => {
       "h",
       "overflow-harness",
     ]);
-    const columns = buildUsageChartColumns(
-      ["2026-08-01"],
-      [bucket({ harnessId: "overflow-harness", knownCostUsd: 4 })],
-      nineHarnessScale,
-      "cost",
-    );
+    const columns = buildUsageChartColumns({
+      days: ["2026-08-01"],
+      buckets: [bucket({ harnessId: "overflow-harness", knownCostUsd: 4 })],
+      scale: nineHarnessScale,
+      metric: "cost",
+      groupBy: "harness",
+    });
     const otherSegment = columns[0]?.segments.find(
       (s) => s.seriesKey === USAGE_SERIES_OTHER_KEY,
     );
@@ -105,17 +109,77 @@ describe("buildUsageChartColumns", () => {
   });
 });
 
+describe("groupBy: model", () => {
+  it("buildUsageSeriesScaleForBuckets orders series by model first-appearance", () => {
+    const scale = buildUsageSeriesScaleForBuckets(
+      [
+        bucket({ day: "2026-08-02", harnessId: "claude", model: "b" }),
+        bucket({ day: "2026-08-01", harnessId: "codex", model: "a" }),
+      ],
+      "model",
+    );
+    expect(scale.order).toEqual(["a", "b"]);
+  });
+
+  it("folds same-day buckets from different models into separate segments", () => {
+    const scale = buildUsageSeriesScaleForBuckets(
+      [
+        bucket({ harnessId: "claude", model: "a", knownCostUsd: 1 }),
+        bucket({ harnessId: "claude", model: "b", knownCostUsd: 2 }),
+      ],
+      "model",
+    );
+    const columns = buildUsageChartColumns({
+      days: ["2026-08-01"],
+      buckets: [
+        bucket({ harnessId: "claude", model: "a", knownCostUsd: 1 }),
+        bucket({ harnessId: "claude", model: "b", knownCostUsd: 2 }),
+      ],
+      scale,
+      metric: "cost",
+      groupBy: "model",
+    });
+    const segmentA = columns[0]?.segments.find((s) => s.seriesKey === "a");
+    const segmentB = columns[0]?.segments.find((s) => s.seriesKey === "b");
+    expect(segmentA?.value).toBe(1);
+    expect(segmentB?.value).toBe(2);
+  });
+
+  it("folds two harnesses reporting the same model into one segment", () => {
+    const scale = buildUsageSeriesScaleForBuckets(
+      [bucket({ harnessId: "claude", model: "shared" })],
+      "model",
+    );
+    const columns = buildUsageChartColumns({
+      days: ["2026-08-01"],
+      buckets: [
+        bucket({ harnessId: "claude", model: "shared", knownCostUsd: 1 }),
+        bucket({ harnessId: "codex", model: "shared", knownCostUsd: 2 }),
+      ],
+      scale,
+      metric: "cost",
+      groupBy: "model",
+    });
+    const sharedSegment = columns[0]?.segments.find(
+      (s) => s.seriesKey === "shared",
+    );
+    expect(sharedSegment?.value).toBe(3);
+    expect(columns[0]?.segments.length).toBe(scale.order.length);
+  });
+});
+
 describe("applyUsageSeriesVisibility", () => {
   const scale = buildUsageSeriesScale(["claude", "codex"]);
-  const columns = buildUsageChartColumns(
-    ["2026-08-01"],
-    [
+  const columns = buildUsageChartColumns({
+    days: ["2026-08-01"],
+    buckets: [
       bucket({ harnessId: "claude", knownCostUsd: 3 }),
       bucket({ harnessId: "codex", knownCostUsd: 5 }),
     ],
     scale,
-    "cost",
-  );
+    metric: "cost",
+    groupBy: "harness",
+  });
 
   it("returns the columns unchanged when nothing is hidden", () => {
     expect(applyUsageSeriesVisibility(columns, new Set())).toBe(columns);

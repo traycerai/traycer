@@ -89,14 +89,28 @@ export function createHostQueryInvalidator(
       getConditionPollEpisodeCoordinator(client).resetHostScope(hostId);
       const queryKey = queryKeys.hostScope(hostId);
       if (options.refetchActive) {
-        // Single pass with the exemption in the predicate: the carved-out
-        // catalog entries are skipped outright, so they keep both their data
-        // and their un-invalidated state (see the header - invalidating them
-        // would just move the probe storm to the next picker open).
-        void client.invalidateQueries({
-          queryKey,
-          predicate: (query) => !isActiveRefetchExempt(query),
-        });
+        // Freeze the recovery sweep at the instant the signal arrives. The
+        // cancel below is async; reusing only the broad host predicate after
+        // that await would also invalidate queries mounted in the meantime,
+        // even though they were never stranded by this recovery episode.
+        const affectedQueries = new Set(
+          client
+            .getQueryCache()
+            .findAll({ queryKey })
+            .filter((query) => !isActiveRefetchExempt(query)),
+        );
+        const predicate = (query: Query): boolean => affectedQueries.has(query);
+        // A query waiting in TanStack's retry backoff is still `fetchStatus:
+        // "fetching"`. Invalidating it alone only marks it stale; it does not
+        // interrupt the sleep or start a recovery request. Cancel the affected
+        // active work first, then invalidate so availability recovery produces
+        // an immediate refetch instead of requiring a remount or waiting for
+        // the old retry timer. The carve-outs remain excluded from BOTH passes,
+        // preserving their cache-only refresh doctrine.
+        void (async (): Promise<void> => {
+          await client.cancelQueries({ queryKey, predicate });
+          await client.invalidateQueries({ queryKey, predicate });
+        })();
         return;
       }
       void client.cancelQueries({ queryKey });

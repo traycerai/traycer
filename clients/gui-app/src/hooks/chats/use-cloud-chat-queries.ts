@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  isTransientHostRpcFailure,
   toHostRpcError,
   type HostRpcError,
   type ResponseOfMethod,
@@ -66,10 +67,14 @@ export interface UseCloudChatListArgs {
  * A task's cloud chats: every `task`-visible chat plus the viewer's OWN private
  * ones, from every host they have ever used.
  *
- * Not polled. A published head changes only when its owning host publishes
- * again and this reader has no signal for that, so an interval would spend
- * requests on a list that is almost always identical. It refetches on host/auth
- * transitions (the key is host-scoped) and on explicit invalidation.
+ * Not polled after success. A published head changes only when its owning host
+ * publishes again and this reader has no signal for that, so a success cadence
+ * would spend requests on a list that is almost always identical. A generic
+ * transient transport failure, however, retries on TanStack's capped
+ * exponential backoff for as long as an observer needs the answer: record
+ * absence cannot be classified without it, and otherwise a startup failure
+ * remains stranded until the tab remounts. Host/auth transitions and transport
+ * recovery also invalidate the host-scoped key and retry it immediately.
  */
 export function useCloudChatList(
   args: UseCloudChatListArgs,
@@ -92,10 +97,13 @@ export function useCloudChatList(
       enabled:
         args.enabled && args.taskId.length > 0 && viewerUserId.length > 0,
       staleTime: 30_000,
-      // An older host answers `E_HOST_UNSUPPORTED` immediately and will keep
-      // doing so; retrying only delays the moment the surface can hide itself.
-      retry: (failureCount, error) =>
-        error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
+      // Only transport failures (or fatal frames explicitly marked retryable)
+      // can recover without a user decision. Authorization, compatibility and
+      // semantic refusals are terminal; an older host's E_HOST_UNSUPPORTED is
+      // also the authoritative doc-only answer. TanStack caps the delay at
+      // 30s, so a prolonged outage costs a bounded request cadence and a
+      // recovered list heals without a remount.
+      retry: (_failureCount, error) => isTransientHostRpcFailure(error),
     },
   });
 }

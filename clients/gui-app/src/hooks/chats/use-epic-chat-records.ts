@@ -75,11 +75,17 @@ export function useEpicSyncChatRecords(epicId: string): void {
   });
 
   const chats = query.data?.chats ?? null;
+  const recordListAuthoritative =
+    query.isSuccess ||
+    (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
   const store = handle?.store ?? null;
   useEffect(() => {
-    if (chats === null || store === null) return;
-    store.getState().applyChatRecords(chats);
-  }, [chats, store]);
+    if (store === null || !recordListAuthoritative) return;
+    if (chats !== null) {
+      store.getState().applyChatRecords(chats);
+    }
+    store.getState().markChatRecordListAuthoritative();
+  }, [chats, recordListAuthoritative, store]);
 }
 
 /**
