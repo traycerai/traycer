@@ -291,10 +291,42 @@ export function OwnerWorkspaceMetadataContent(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly pending: boolean;
+  /** No host client to ask - the facts are unknown, not absent. */
+  readonly hostUnavailable: boolean;
   readonly error: boolean;
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
-  if (props.pending && props.binding === null) {
+  const items = ownerWorkspaceMetadataItems(
+    props.binding,
+    props.worktrees,
+    props.workspaces,
+  );
+  // Ahead of the spinner, because this is the state that CANNOT resolve on its
+  // own. The owner's host is unreachable, so no request is in flight and none
+  // is coming; a spinner here waits for an event that never arrives. It also
+  // outranks "No workspace linked", which would claim the owner runs nowhere
+  // when the truth is only that nobody could be asked.
+  if (props.hostUnavailable && items.length === 0) {
+    return (
+      <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
+        Workspace unknown — host unreachable
+      </span>
+    );
+  }
+  // Gated on having NOTHING TO SHOW, not on `binding === null`, and that
+  // difference is the whole point. "No workspace linked" is a definitive claim
+  // about an owner - it is what the card says when a chat really runs nowhere -
+  // so it must never be the answer while a read that could contradict it is
+  // still in flight. The old condition only covered the FIRST load: once a
+  // `{ binding: null }` had been cached, a later re-open served that null with
+  // `isPending` false and printed the definitive negative over a refetch that
+  // was about to replace it (`ownerMetadataPending` documents the matching
+  // half). A chat with a perfectly good workspace read "No workspace linked"
+  // until the refetch landed.
+  //
+  // Owners that DO have items keep rendering them through a refetch, so the
+  // spinner only ever replaces the empty state, never populated content.
+  if (props.pending && items.length === 0) {
     return (
       <span className="flex items-center gap-2 px-3 py-2 text-ui-xs">
         <AgentSpinningDots
@@ -313,11 +345,6 @@ export function OwnerWorkspaceMetadataContent(props: {
       </span>
     );
   }
-  const items = ownerWorkspaceMetadataItems(
-    props.binding,
-    props.worktrees,
-    props.workspaces,
-  );
   if (items.length === 0) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
