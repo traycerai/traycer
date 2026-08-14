@@ -127,6 +127,8 @@ import {
 import {
   listChatRecordsRequestSchema,
   listChatRecordsResponseSchema,
+  getChatRunSettingsRequestSchema,
+  getChatRunSettingsResponseSchema,
 } from "@traycer/protocol/host/epic/chat-records";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
@@ -729,6 +731,18 @@ export const epicListChatRecordsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listChatRecordsRequestSchema,
   responseSchema: listChatRecordsResponseSchema,
+});
+
+// The per-chat run-settings tuple the row above deliberately does not carry.
+// Optional and host-local for the same reason as the list: it answers out of
+// this host's own chat store. A client without it renders the harness mark the
+// row already gave it, which is exactly what such a host's client showed
+// before this method existed.
+export const epicGetChatRunSettingsV10 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
+  responseSchema: getChatRunSettingsResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

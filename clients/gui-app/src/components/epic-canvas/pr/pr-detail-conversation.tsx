@@ -1,12 +1,14 @@
 import {
-  useCallback,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
-  type SyntheticEvent,
 } from "react";
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Eye,
   FileCode,
@@ -232,11 +234,13 @@ function PrConversationRow(props: {
 }
 
 /**
- * A review's inline findings: open ones in full, resolved ones behind a count.
+ * A review's inline findings: open ones in full, resolved ones as one
+ * collapsed row each.
  *
  * The split is the tab's whole premise - Feedback answers "what is blocking
- * this" - but resolved threads stay one click away rather than vanishing,
- * because "was this already dealt with?" is the next question a reader asks.
+ * this" - but a resolved finding keeps a one-line footprint naming the file it
+ * pointed at, because "was this already dealt with?" is the next question a
+ * reader asks and the file is usually enough to answer it.
  */
 function PrReviewThreadList(props: {
   readonly threads: readonly PrReviewThread[];
@@ -245,7 +249,7 @@ function PrReviewThreadList(props: {
   const { open, resolved } = partitionThreadsByResolution(props.threads);
   return (
     <div
-      className="mt-3 flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3"
+      className="mt-3 flex min-w-0 flex-col gap-2 border-t border-border/50 px-4 pt-3 pb-3.5"
       data-testid="pr-detail-review-threads"
     >
       {open.map((thread) => (
@@ -253,66 +257,102 @@ function PrReviewThreadList(props: {
           key={thread.id}
           thread={thread}
           onQuoteThread={props.onQuoteThread}
+          onCollapse={null}
         />
       ))}
-      {resolved.length > 0 ? (
-        <PrResolvedThreads
-          threads={resolved}
+      {resolved.map((thread) => (
+        <PrResolvedThreadRow
+          key={thread.id}
+          thread={thread}
           onQuoteThread={props.onQuoteThread}
         />
-      ) : null}
+      ))}
     </div>
   );
 }
 
 /**
- * Resolved findings, mounted only once opened.
+ * A resolved finding: a collapsed row that expands in place into the full
+ * thread card.
  *
- * `<details>` hides its children with CSS, so an uncontrolled one would still
- * mount every collapsed thread - and each thread now mounts a real diff
- * renderer that parses and highlights its hunk off the main thread. On a bot
- * pass with fifteen findings that is fifteen highlight jobs for panels nobody
- * has asked to see.
+ * Collapsed is a real unmount, not `<details>` CSS hiding: every expanded
+ * thread mounts a diff renderer that parses and highlights its hunk off the
+ * main thread, and a bot pass with fifteen resolved findings must not pay for
+ * fifteen highlight jobs nobody has asked to see. Per-row expansion keeps the
+ * bill itemised - opening one finding mounts one renderer.
  */
-function PrResolvedThreads(props: {
-  readonly threads: readonly PrReviewThread[];
+function PrResolvedThreadRow(props: {
+  readonly thread: PrReviewThread;
   readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
 }): ReactNode {
   const [isOpen, setIsOpen] = useState(false);
-  const handleToggle = useCallback(
-    (event: SyntheticEvent<HTMLDetailsElement>): void => {
-      setIsOpen(event.currentTarget.open);
-    },
-    [],
-  );
+  const swapRef = useRef<HTMLDivElement | null>(null);
+  const movesFocus = useRef(false);
+  // Toggling unmounts the control the keyboard was on - row and chevron are
+  // different elements - so focus would fall back to <body> and the next Tab
+  // would restart at the top of the page instead of entering the thread. Hand
+  // focus to whichever control replaced it, found by the `aria-expanded` that
+  // defines a disclosure and reached through the DOM rather than a ref crossing
+  // into the card, which would read to the React Compiler as this card
+  // touching a ref mid-render. Only on a toggle: the same effect runs on mount,
+  // where stealing focus for every resolved row would be its own bug.
+  useLayoutEffect(() => {
+    if (!movesFocus.current) {
+      return;
+    }
+    movesFocus.current = false;
+    swapRef.current
+      ?.querySelector<HTMLButtonElement>("button[aria-expanded]")
+      ?.focus();
+  }, [isOpen]);
+  const anchor = prReviewThreadAnchor(props.thread);
   return (
-    <details
-      className="min-w-0"
-      data-testid="pr-detail-resolved-threads"
-      onToggle={handleToggle}
-    >
-      <summary className="cursor-pointer list-none text-ui-xs text-muted-foreground/70 transition-colors hover:text-foreground">
-        {props.threads.length} resolved
-      </summary>
+    <div className="min-w-0" ref={swapRef}>
       {isOpen ? (
-        <div className="mt-2 flex min-w-0 flex-col gap-2">
-          {props.threads.map((thread) => (
-            <PrReviewThreadCard
-              key={thread.id}
-              thread={thread}
-              onQuoteThread={props.onQuoteThread}
-            />
-          ))}
-        </div>
-      ) : null}
-    </details>
+        <PrReviewThreadCard
+          thread={props.thread}
+          onQuoteThread={props.onQuoteThread}
+          onCollapse={() => {
+            movesFocus.current = true;
+            setIsOpen(false);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            movesFocus.current = true;
+            setIsOpen(true);
+          }}
+          aria-expanded={false}
+          data-testid="pr-detail-resolved-thread"
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <ChevronRight
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+          <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
+            {anchor.label}
+          </StartTruncatedText>
+          <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+            Resolved
+          </span>
+        </button>
+      )}
+    </div>
   );
 }
 
-/** One finding: where it points, the hunk it points at, and the discussion. */
+/**
+ * One finding: where it points, the hunk it points at, and the discussion.
+ * `onCollapse` is non-null when the card was expanded from a resolved row - it
+ * renders the chevron that folds the card back into that row.
+ */
 function PrReviewThreadCard(props: {
   readonly thread: PrReviewThread;
   readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
+  readonly onCollapse: (() => void) | null;
 }): ReactNode {
   const { thread } = props;
   const anchor = prReviewThreadAnchor(thread);
@@ -327,10 +367,24 @@ function PrReviewThreadCard(props: {
       data-resolved={thread.isResolved}
     >
       <div className="group/header flex min-w-0 items-center gap-2 border-b border-border/50 px-2.5 py-1.5">
-        <FileCode
-          className="size-3.5 shrink-0 text-muted-foreground"
-          aria-hidden
-        />
+        {props.onCollapse === null ? (
+          <FileCode
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+        ) : (
+          // The only way to fold the card back, so the hit target has to clear
+          // a fingertip - negative margin buys it without moving the chevron.
+          <button
+            type="button"
+            onClick={props.onCollapse}
+            aria-expanded
+            aria-label={`Collapse the resolved thread on ${anchor.label}`}
+            className="-m-1.5 shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <ChevronDown className="size-3.5" aria-hidden />
+          </button>
+        )}
         <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
           {anchor.label}
         </StartTruncatedText>
