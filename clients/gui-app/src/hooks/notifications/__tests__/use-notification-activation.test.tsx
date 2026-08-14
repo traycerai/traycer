@@ -114,6 +114,8 @@ function createTestDirectory(
     findById: (hostId) =>
       entries.find((entry) => entry.hostId === hostId) ?? null,
     refresh: () => Promise.resolve(entries),
+    refreshForEra: () => Promise.resolve(entries),
+    invalidateInFlightRefresh: () => undefined,
     getSelected: () => selected,
     selectById: (hostId) => {
       selected =
@@ -896,7 +898,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     bindingState.current = {
       hostClient: client,
       directory: createTestDirectory(
-        [{ ...hostB, status: "unavailable" }],
+        [{ ...hostB, transportDialability: "not-dialable" }],
         () => undefined,
       ),
     };

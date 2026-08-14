@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   isNotificationPayloadRoutable,
   type NotificationPayload,
@@ -32,7 +33,6 @@ import {
 } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * Mounted consumer of `useNotificationEventsStore.notificationEvent` - the
@@ -141,8 +141,7 @@ export function NotificationFocusBridge(): null {
         route: envelope.route,
         feedSource: envelope.feed.source,
         originHostId: envelope.originHostId,
-        originHostAvailable:
-          originHostEntry !== null && isHostReachable(originHostEntry.status),
+        originHostRoutable: isOriginHostRoutable(originHostEntry),
         activeHostId,
         requiresOriginHost,
         directory: hostDirectory,
@@ -183,18 +182,34 @@ export function NotificationFocusBridge(): null {
   return null;
 }
 
+/**
+ * DERIVATION, not the coarse bit. A `true` here reroutes a click that was
+ * already made into the "originating host is unavailable" centre instead of
+ * opening what the person asked for, so it must not fire on the cloud merely
+ * failing to read liveness — that turned a healthy approval prompt into a dead
+ * end for as long as one degraded Redis read persisted.
+ *
+ * Routable therefore means "the transport would attempt this", which is exactly
+ * `dialableHostEndpoint`: `indeterminate` dials, a CONFIRMED refusal
+ * (`offline` / `plan-restricted`) does not, and a directory-absent host has
+ * nothing to dial at all.
+ */
+function isOriginHostRoutable(entry: HostDirectoryEntry | null): boolean {
+  return dialableHostEndpoint(entry) !== null;
+}
+
 function isOriginUnavailable(input: {
   readonly route: NotificationPayload;
   readonly feedSource: NotificationActivationEnvelopeFeedSource;
   readonly originHostId: string | null;
-  readonly originHostAvailable: boolean;
+  readonly originHostRoutable: boolean;
   readonly activeHostId: string | null;
   readonly requiresOriginHost: boolean;
   readonly directory: HostDirectoryService | null;
   readonly client: HostClient<HostRpcRegistry> | null;
 }): boolean {
   if (input.requiresOriginHost) {
-    return input.originHostId === null || !input.originHostAvailable;
+    return input.originHostId === null || !input.originHostRoutable;
   }
   if (input.feedSource === "cloud" && input.route.kind !== "hostSurface") {
     return false;

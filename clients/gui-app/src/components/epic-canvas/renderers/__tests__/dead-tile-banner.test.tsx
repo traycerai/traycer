@@ -28,6 +28,7 @@ describe("<TerminalDeadTileBanner />", () => {
       <TerminalDeadTileBanner
         hostLabel="mac-mini"
         ownerKind="terminal"
+        unavailability="offline"
         onClose={() => undefined}
         testId="terminal-tile-1"
       />,
@@ -43,6 +44,7 @@ describe("<TerminalDeadTileBanner />", () => {
       <TerminalDeadTileBanner
         hostLabel="mac-mini"
         ownerKind="agent"
+        unavailability="offline"
         onClose={() => undefined}
         testId="terminal-agent-tile-1"
       />,
@@ -62,6 +64,7 @@ describe("<TerminalDeadTileBanner />", () => {
       <TerminalDeadTileBanner
         hostLabel="h"
         ownerKind="agent"
+        unavailability="offline"
         onClose={() => undefined}
         testId="t-agent"
       />,

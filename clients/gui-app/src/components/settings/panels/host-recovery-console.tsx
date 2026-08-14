@@ -601,6 +601,13 @@ export function HostRecoveryConsole(
               <HostRegistryUpdates
                 key={registryItem.hostId}
                 item={registryItem}
+                // Structurally `null` here, not a placeholder: this console
+                // renders only when the local host is unreachable or not
+                // installed, so there is no process answering `host.status` and
+                // therefore no live session count to state. The drain notice
+                // and its "ends N sessions" force correctly withhold.
+                liveBusySessionCount={null}
+                settledBusySessionCount={null}
               />
             )}
           </div>

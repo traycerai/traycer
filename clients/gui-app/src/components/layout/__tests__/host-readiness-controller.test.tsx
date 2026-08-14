@@ -135,6 +135,7 @@ describe("<SurfaceReadinessBoundary />", () => {
         directoryEntries: [],
         hasLocalHost: false,
         hasMobileNoHost: true,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "ready" });
     expect(
@@ -147,6 +148,7 @@ describe("<SurfaceReadinessBoundary />", () => {
         directoryEntries: [],
         hasLocalHost: true,
         hasMobileNoHost: false,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "restoring-request-context" });
     expect(
@@ -159,6 +161,7 @@ describe("<SurfaceReadinessBoundary />", () => {
         directoryEntries: [],
         hasLocalHost: false,
         hasMobileNoHost: true,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "mobile-no-host" });
     expect(
@@ -175,11 +178,12 @@ describe("<SurfaceReadinessBoundary />", () => {
             kind: "remote",
             websocketUrl: "ws://host-b",
             version: "1.0.0",
-            status: "available",
+            transportDialability: "dialable",
           },
         ],
         hasLocalHost: true,
         hasMobileNoHost: false,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "ready" });
     expect(
@@ -192,8 +196,44 @@ describe("<SurfaceReadinessBoundary />", () => {
         directoryEntries: [],
         hasLocalHost: true,
         hasMobileNoHost: false,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "unavailable-host" });
+    // The ready-session input must actually reach the refusal gate: the same
+    // registry-refused tab host flips to ready when this client holds a live
+    // session to it (firsthand evidence outranks the cloud verdict), and the
+    // gate reads the CALLER-supplied reactive answer, not the pull-only cache.
+    const refusedTabArgs = {
+      scope: "tab-host",
+      tabHostId: "host-b",
+      authStatus: "signed-in",
+      activeHostId: "host-a",
+      requestContextUserId: "user-a",
+      directoryEntries: [
+        {
+          hostId: "host-b",
+          label: "Bound host",
+          kind: "remote",
+          websocketUrl: "ws://host-b",
+          version: "1.0.0",
+          transportDialability: "not-dialable",
+        },
+      ],
+      hasLocalHost: true,
+      hasMobileNoHost: false,
+    } as const;
+    expect(
+      resolveSurfaceReadiness({
+        ...refusedTabArgs,
+        hasReadySessionFor: () => false,
+      }),
+    ).toEqual({ kind: "unavailable-host" });
+    expect(
+      resolveSurfaceReadiness({
+        ...refusedTabArgs,
+        hasReadySessionFor: (hostId) => hostId === "host-b",
+      }),
+    ).toEqual({ kind: "ready" });
     expect(
       resolveSurfaceReadiness({
         scope: "default-host",
@@ -208,11 +248,12 @@ describe("<SurfaceReadinessBoundary />", () => {
             kind: "local",
             websocketUrl: null,
             version: "1.0.0",
-            status: "unavailable",
+            transportDialability: "not-dialable",
           },
         ],
         hasLocalHost: true,
         hasMobileNoHost: false,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "unavailable-host" });
     expect(
@@ -229,11 +270,12 @@ describe("<SurfaceReadinessBoundary />", () => {
             kind: "local",
             websocketUrl: "ws://host-a",
             version: "1.0.0",
-            status: "available",
+            transportDialability: "dialable",
           },
         ],
         hasLocalHost: true,
         hasMobileNoHost: false,
+        hasReadySessionFor: () => false,
       }),
     ).toEqual({ kind: "ready" });
   });

@@ -39,7 +39,7 @@ const activeHostEntry = vi.hoisted(() => ({
   kind: "mock" as const,
   websocketUrl: "ws://default-host.test/stream",
   version: null,
-  status: "available" as const,
+  transportDialability: "dialable" as const,
 }));
 
 const activeHostClient = vi.hoisted(() => ({

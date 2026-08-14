@@ -125,7 +125,7 @@ function host(
     kind: "local",
     websocketUrl: null,
     version: null,
-    status: "available",
+    transportDialability: "dialable",
     ...over,
   };
 }

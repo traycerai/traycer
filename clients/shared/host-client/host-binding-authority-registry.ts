@@ -1,5 +1,7 @@
 import type { HostRequestAuthority } from "../host-transport/host-messenger";
-import { isHostReachable, type HostDirectoryEntry } from "./host-directory";
+import type { HostDirectoryEntry } from "./host-directory";
+import { isConfirmedTransportRefusal } from "./remote-fetcher";
+import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 
 /** Immutable binding portion of a request authority, shared per host id. */
 export interface HostBindingAuthority {
@@ -15,21 +17,30 @@ interface StoredBindingAuthority extends HostBindingAuthority {
   readonly transport: HostTransportSnapshot;
 }
 
+/**
+ * The fields that make one binding generation a DIFFERENT route from the next.
+ *
+ * `transportDialability` is deliberately absent, and its absence is load-
+ * bearing. Renewing a binding aborts the previous generation's in-flight
+ * requests, so anything in here is a reason to cancel work — which is a claim
+ * about the route, not about how confident the directory currently feels. A
+ * failed liveness read flips the coarse bit on a host whose address never
+ * moved; including it meant one degraded read on the cloud side cancelled every
+ * request riding the socket that read said nothing about. What DOES belong is
+ * the directory positively refusing the route, and that arrives through
+ * `isConfirmedTransportRefusal` below rather than through the coarse bit.
+ */
 interface HostTransportSnapshot {
   readonly hostId: string;
   readonly kind: HostDirectoryEntry["kind"];
   readonly websocketUrl: string | null;
   readonly version: string | null;
   /**
-   * Dialability, not the raw `status`. A binding is renewed whenever any field
-   * here changes, and renewing ABORTS the previous generation's in-flight
-   * requests - so folding in the raw status would make an available <-> busy
-   * flicker (a probe result, not a transport change) cancel live work and
-   * throw `StaleHostBindingAuthorityError` at routed callers holding a
-   * still-perfectly-good entry. Reachability is the part that actually
-   * describes the transport.
+   * The directory has positively refused this route (confirmed `offline`, or
+   * `plan-restricted`) — the same gate the transport dials on, so a binding is
+   * torn down exactly when a re-dial would be refused and not one flip sooner.
    */
-  readonly reachable: boolean;
+  readonly refused: boolean;
 }
 
 /** A routed entry no longer describes the directory's current transport. */
@@ -108,7 +119,10 @@ function snapshot(entry: HostDirectoryEntry): HostTransportSnapshot {
     kind: entry.kind,
     websocketUrl: entry.websocketUrl,
     version: entry.version,
-    reachable: isHostReachable(entry.status),
+    refused: isConfirmedTransportRefusal(
+      entry,
+      hasReadyRemoteSession(entry.hostId),
+    ),
   };
 }
 
@@ -128,6 +142,6 @@ function sameSnapshot(
     left.kind === right.kind &&
     left.websocketUrl === right.websocketUrl &&
     left.version === right.version &&
-    left.reachable === right.reachable
+    left.refused === right.refused
   );
 }

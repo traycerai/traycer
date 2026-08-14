@@ -1,8 +1,11 @@
 import { Check, Globe, Monitor, Server, type LucideIcon } from "lucide-react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hostUnavailability,
+  type HostUnavailability,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { cn } from "@/lib/utils";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-import { isHostReachable } from "@traycer-clients/shared/host-client/host-directory";
 
 const HOST_KIND_ICONS: Record<HostDirectoryEntry["kind"], LucideIcon> = {
   remote: Globe,
@@ -66,7 +69,7 @@ export function HostSection(props: HostSectionProps) {
                   <span className="min-w-0 flex-1 truncate text-left">
                     {entry.label}
                   </span>
-                  <HostStatusDot status={entry.status} />
+                  <HostStatusDot unavailability={hostUnavailability(entry)} />
                   {isActive ? (
                     <Check className="size-3.5 text-foreground" />
                   ) : null}
@@ -85,23 +88,49 @@ function HostKindIcon(props: { readonly kind: HostDirectoryEntry["kind"] }) {
   return <Icon className="size-4 shrink-0 text-muted-foreground" />;
 }
 
+/**
+ * DERIVATION, not a coarse read: this dot and its `aria-label` are the only
+ * thing a person is told about the machine before they pick it, and three
+ * unrelated situations used to collapse into one grey "Unavailable" — a host
+ * that is genuinely off, a host the account's plan cannot reach remotely, and a
+ * host the cloud simply failed to read. Calling the last two "Unavailable" sent
+ * someone to restart a machine that was working, and hid the upgrade that was
+ * the actual remedy.
+ *
+ * `indeterminate` renders as its own muted state rather than as unavailable —
+ * the picker deliberately keeps such rows selectable (the transport dials on
+ * it), so the dot must not contradict the row it sits on.
+ *
+ * A `busy` local host reaches this as `dialable` and keeps the reachable dot:
+ * the shell proved the process is alive and only one probe went unanswered, so
+ * greying it would be the picker telling someone their working machine is gone.
+ * Distinguishing busy from available VISUALLY is the copy follow-up's job
+ * (int #47), not this dot's.
+ */
 function HostStatusDot(props: {
-  readonly status: HostDirectoryEntry["status"];
+  readonly unavailability: HostUnavailability | null;
 }) {
+  const presentation = HOST_STATUS_DOT[props.unavailability ?? "dialable"];
   return (
     <span
-      // Reachability, not probe freshness. A `busy` host is one this picker can
-      // still select and dial, so it keeps the reachable dot; giving it the
-      // grey "Unavailable" affordance would be the picker telling the user
-      // their working machine is gone. Distinguishing busy from available
-      // visually is the copy follow-up's (int #47), not this dot's.
-      aria-label={isHostReachable(props.status) ? "Available" : "Unavailable"}
-      className={cn(
-        "size-1.5 rounded-full",
-        isHostReachable(props.status)
-          ? "bg-emerald-500"
-          : "bg-muted-foreground/40",
-      )}
+      aria-label={presentation.label}
+      className={cn("size-1.5 rounded-full", presentation.className)}
     />
   );
 }
+
+const HOST_STATUS_DOT: Record<
+  HostUnavailability | "dialable",
+  { readonly label: string; readonly className: string }
+> = {
+  dialable: { label: "Available", className: "bg-emerald-500" },
+  offline: { label: "Offline", className: "bg-muted-foreground/40" },
+  "plan-restricted": {
+    label: "Local only",
+    className: "bg-muted-foreground/40",
+  },
+  indeterminate: {
+    label: "Status unknown",
+    className: "bg-muted-foreground/40",
+  },
+};

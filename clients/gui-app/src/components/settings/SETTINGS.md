@@ -279,12 +279,29 @@ registry-backed presence words and the local service words ("Running" /
 "Stopped" / "Not installed"). It keeps a coarse `state` a person acts on plus a
 `detail` fragment carrying the nuance the old design spent a row of pills on.
 `stopped` and `not-installed` stay distinct from `offline` because they are the
-two a person can act on; for the local machine the live service snapshot
-outranks the cloud lease. It DELEGATES to `deriveHostPresence`
-(`panels/my-hosts-model.ts`) rather than re-deriving it - that function's
-invariants (no green dot without live evidence; live-session evidence outranks
-the lease; an expired lease under degraded presence reads "unknown", never a
-false "Offline") are tested and load-bearing.
+two a person can act on. It DELEGATES to `deriveHostPresence`
+(`panels/my-hosts-model.ts`) rather than re-deriving it.
+
+The precedence across the two is one chain, and each step outranks the next for
+a stated reason: **local process read** (a direct read of the service on this
+box) -> **live session** (an open E2E connection is firsthand proof) ->
+`status.connectivity` (the cloud's relay-attachment answer, and the only one
+available for a host this client has never dialled).
+
+`connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
+plus a separate relay-attach bit, and with them the states that existed only to
+narrate those two disagreeing ("Reconnecting", "Not reporting"). Its remaining
+invariants are tested and load-bearing: no green dot without live evidence;
+`unknown` (liveness unreadable) never renders as a false "Offline"; and
+`local-only` - a host the account's plan will never expose remotely - is an
+upgrade prompt, not an outage.
+
+Two things a reader of this file will look for and not find in the DTO:
+`busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
+cannot carry, so they come from `host.status@1.1` over a live connection (or
+the notification room's `hostRuntimeStatus` awareness field). No live source
+means the drain UI renders NOTHING - never a zero, which would offer to end
+"0 sessions" on a host that never told us how many it had.
 
 ## Sections
 

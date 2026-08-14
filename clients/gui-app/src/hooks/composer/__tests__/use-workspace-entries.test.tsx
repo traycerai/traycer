@@ -16,7 +16,7 @@ const OTHER_HOST_ENTRY: HostDirectoryEntry = {
   kind: "mock",
   websocketUrl: "ws://host2.test",
   version: "test",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 let messenger: MockHostMessenger<HostRpcRegistry>;
@@ -39,7 +39,7 @@ function createHostClient(): HostClient<HostRpcRegistry> {
     kind: "mock",
     websocketUrl: "ws://host.test",
     version: "test",
-    status: "available",
+    transportDialability: "dialable",
   });
   client.setRequestContext(
     createRequestContext({

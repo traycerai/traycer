@@ -114,7 +114,7 @@ const ORIGIN_HOST: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://build-box.traycer.invalid/rpc",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const WORKTREE_SETTINGS_ROUTE: NotificationPayload = {
@@ -133,7 +133,7 @@ const UNREACHABLE_ORIGIN_CASES: ReadonlyArray<{
   { label: "absent from the directory", remoteHosts: [] },
   {
     label: "marked unavailable",
-    remoteHosts: [{ ...ORIGIN_HOST, status: "unavailable" }],
+    remoteHosts: [{ ...ORIGIN_HOST, transportDialability: "not-dialable" }],
   },
   {
     label: "missing a websocket url",
@@ -185,6 +185,8 @@ async function mountBridge(options: {
   let remoteHosts = options.remoteHosts;
   const directory = new HostDirectoryService({
     runnerHost,
+    authContextId: null,
+    credentialGeneration: null,
     remoteFetcher: () =>
       Promise.resolve({ kind: "hosts" as const, entries: remoteHosts }),
     localHostIdSeeder: null,
@@ -501,7 +503,7 @@ describe("NotificationFocusBridge origin-host activation", () => {
 
   it("names the unreachable origin in the center when the directory knows it", async () => {
     await mountBridge({
-      remoteHosts: [{ ...ORIGIN_HOST, status: "unavailable" }],
+      remoteHosts: [{ ...ORIGIN_HOST, transportDialability: "not-dialable" }],
       signedIn: true,
     });
 

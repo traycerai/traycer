@@ -1,5 +1,7 @@
 import {
+  chatSubscribeLiveSchemaVersion,
   chatSubscribeServerFrameSchema,
+  chatSubscribeSnapshotServerFrameShallowSchema,
   type ChatSubscribeClientFrame,
   type ChatSubscribeServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -194,11 +196,49 @@ export class ChatStreamClient {
     this.session.close();
   }
 
+  /**
+   * Whether THIS session negotiated exactly the live `chat.subscribe` line.
+   * Gates the shallow snapshot path: on any other (older) line the host sends
+   * pre-image shapes that only the deep parse's compatibility defaults
+   * up-convert to the current `Message`/`ChatEvent` types.
+   */
+  private isOnLiveSchemaLine(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      version.major === chatSubscribeLiveSchemaVersion.major &&
+      version.minor === chatSubscribeLiveSchemaVersion.minor
+    );
+  }
+
   private handleServerFrame(
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
     if (binaryPayload !== null) return;
+    if (envelope.kind === "snapshot" && this.isOnLiveSchemaLine()) {
+      // Snapshots are the one frame whose size scales with chat history
+      // (10s-100s of MB under full-chat-on-subscribe); a deep zod parse over
+      // the message/event histories is seconds of render-thread CPU per
+      // snapshot. Envelope + every bounded field stay deep-validated; the two
+      // history arrays are checked structurally - same trust domain as the
+      // blockDelta frames that stream the identical content.
+      //
+      // LIVE-LINE ONLY: the deep schemas' compatibility defaults
+      // (`imageResolutions: []`, `serviceTier: null`, ...) are what
+      // up-convert a down-negotiated host's pre-image messages; the
+      // structural check skips them, so a 1.6 snapshot taken shallow would
+      // hand the GUI assistant messages missing fields it types as present
+      // (`imageResolutions.map` throws). Down-negotiated hosts predate
+      // full-chat-on-subscribe, so their snapshots are the small ones the
+      // deep parse below always handled.
+      const shallow =
+        chatSubscribeSnapshotServerFrameShallowSchema.safeParse(envelope);
+      if (shallow.success) {
+        this.callbacks.onSnapshot(shallow.data);
+      }
+      return;
+    }
     const parsed = chatSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;

@@ -49,12 +49,9 @@ const REGISTRY_ITEM: HostListItem = {
   createdAt: "2026-01-01T00:00:00Z",
   updatePolicy: "manual",
   status: {
-    presenceLease: "fresh",
-    hostRelayAttached: true,
+    connectivity: "connectable",
     viewerReachability: "unknown",
     clientCloud: "ok",
-    busy: false,
-    busySessionCount: 0,
     updateState: "current",
     appVersion: "1.4.2",
     lastSeenAt: "2026-01-01T00:00:00Z",
@@ -131,7 +128,6 @@ describe("Overview capability split without host management", () => {
       status: {
         ...REGISTRY_ITEM.status,
         updateState: "pending",
-        busySessionCount: 2,
       },
     };
     const host = hostScopeOptionFixture({
