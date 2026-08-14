@@ -946,6 +946,17 @@ async function forceStopDesktopManagedHost(
         details: { label: label.id, agentLabel: agent.agentLabelId },
         exitCode: 1,
       });
+    case "identity-unverified":
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host stop --force: could not verify that pid=${outcome.pid} is still the host process pid.json describes (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is wedged, run 'traycer host service uninstall' and relaunch the Traycer app.`,
+        details: {
+          label: label.id,
+          agentLabel: agent.agentLabelId,
+          pid: outcome.pid,
+        },
+        exitCode: 1,
+      });
     case "hung":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
@@ -988,12 +999,14 @@ async function standDownDesktopManagedHost(
 ): Promise<RestartStop> {
   if (force) {
     // Every force outcome relaunches by RECYCLING the job: the child was
-    // killed (or could not be found), the supervisor may still be winding
-    // down, and `kickstart -k` is correct in every one of those states
-    // where a plain kickstart can silently no-op. A `hung`/`no-metadata`
-    // outcome is not terminal here for the same reason the cooperative
-    // path's unreachable outcome is not: the caller is about to recycle
-    // the job either way.
+    // killed (or could not be found, or could not be verified as ours), the
+    // supervisor may still be winding down, and `kickstart -k` is correct in
+    // every one of those states where a plain kickstart can silently no-op.
+    // A `hung`/`no-metadata`/`identity-unverified` outcome is not terminal
+    // here for the same reason the cooperative path's unreachable outcome is
+    // not: the caller is about to recycle the job either way, and the
+    // recycle kills the JOB's own process as launchd tracks it - never a
+    // pid.json pid - so it is safe even when pid.json is stale.
     await forceStopHostProcess(label.environment, "restart");
     return { forcedRecycle: true };
   }

@@ -7,8 +7,10 @@ import { SHUTDOWN_CLAIM_MAX_TTL_MS } from "@traycer/protocol/host/lifecycle/sche
 import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
+  removeHostPidMetadata,
 } from "../../host/pid-metadata";
 import { isProcessAlive } from "../../store/cli-lock";
+import { getPublishedProcessIdentityVerdict } from "../../store/process-identity";
 import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
 import { createCliLogger } from "../../logger";
 import type { Environment } from "../../runner/environment";
@@ -177,12 +179,20 @@ export type ForcedShutdownOutcome =
   // The host process was observed to exit (or was already gone by the time
   // the signal landed).
   | { readonly kind: "stopped" }
-  // PROVEN absent: pid metadata was read and the process it names is gone.
+  // PROVEN absent: pid metadata was read and the process it names is gone -
+  // either nothing occupies the pid, or an identity comparison proved the
+  // occupant is an unrelated process on a recycled pid.
   | { readonly kind: "no-host" }
   // Pid metadata could not be read at all, so there is no process to signal.
   // Same non-proof caveat as `CooperativeShutdownOutcome`: a booting host may
   // not have published its endpoint yet.
   | { readonly kind: "no-metadata" }
+  // pid.json RECORDS a start identity but the live occupant's could not be
+  // read/compared right now. Something holds the pid and we cannot prove it
+  // is the host, so nothing may be signalled: the error directions are not
+  // symmetric - a refused force stop is retryable, a SIGKILL delivered to a
+  // recycled pid's unrelated occupant is not.
+  | { readonly kind: "identity-unverified"; readonly pid: number }
   // The process survived SIGTERM through the exit grace AND a follow-up
   // SIGKILL - it is unkillable from here (uninterruptible sleep, or not ours).
   | { readonly kind: "hung"; readonly pid: number };
@@ -214,7 +224,26 @@ export async function forceStopHostProcess(
   if (metadata === null) {
     return { kind: "no-metadata" };
   }
-  if (!isProcessAlive(metadata.pid)) {
+  // Identity before signal. A pid.json that survived a host crash can name a
+  // RECYCLED pid, and liveness alone would aim SIGTERM/SIGKILL at whatever
+  // unrelated process occupies it now. When the record carries the kernel's
+  // start identity, require a byte-for-byte match ("current") before any
+  // signal; "mismatch" proves the host is gone (only an impostor holds the
+  // pid) and "indeterminate" means we cannot tell, which forbids killing.
+  // A pre-identity pid.json (null field) degrades to the liveness check -
+  // the best answer available for those hosts, same as every other reader.
+  if (metadata.processStartIdentity !== null) {
+    const identity = await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      metadata.processStartIdentity,
+    );
+    if (identity === "dead" || identity === "mismatch") {
+      return { kind: "no-host" };
+    }
+    if (identity === "indeterminate") {
+      return { kind: "identity-unverified", pid: metadata.pid };
+    }
+  } else if (!isProcessAlive(metadata.pid)) {
     return { kind: "no-host" };
   }
   logger.warn("Force-stopping the running host", {
@@ -237,6 +266,23 @@ export async function forceStopHostProcess(
     return { kind: "stopped" };
   }
   if (await waitForCooperativeExit(metadata.pid)) {
+    // SIGKILL never lets the host's shutdown handler run, so the writer
+    // contract ("the HOST removes pid.json on graceful shutdown") is broken
+    // here by construction - and a dead pid with pid.json still present is
+    // exactly the signal the desktop's health watchdog reads as a crash and
+    // auto-respawns on, undoing the stop the user just forced. Complete the
+    // contract on the host's behalf, the same way the Windows taskkill stop
+    // path does. Best-effort: the stop itself already succeeded.
+    try {
+      await removeHostPidMetadata(environment);
+    } catch (error) {
+      logger.warn("Could not remove pid.json after a forced SIGKILL stop", {
+        environment,
+        operation,
+        pid: metadata.pid,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
     return { kind: "stopped" };
   }
   return { kind: "hung", pid: metadata.pid };

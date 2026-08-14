@@ -258,6 +258,52 @@ describe("withStopIntent", () => {
     expect(stopped).toBe(true);
   });
 
+  it("refuses a FORCED stop on darwin when the intent could not be recorded, and the inner stop never runs", async () => {
+    // `force` makes the record load-bearing on EVERY platform, not just
+    // win32: a forced stop kills only the host child, so the supervisor is
+    // never signalled and the sentinel is the only thing telling it the
+    // death was asked for. Without it the kill would land, the supervisor
+    // would read an unexplained exit as a crash, and the host would come
+    // back while `--force` reported success.
+    mocks.platform = "darwin";
+    mocks.persisted = false;
+    let stopped = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => {
+          stopped = true;
+        },
+      }),
+    );
+
+    await expect(controller.stop(label, { force: true })).rejects.toThrow(
+      /could not record the stop request/,
+    );
+    await expect(controller.stop(label, { force: true })).rejects.toThrow(
+      /forced stop kills only the host process/,
+    );
+    expect(stopped).toBe(false);
+  });
+
+  it("a non-forced stop on darwin still proceeds when the intent could not be recorded", async () => {
+    // Contrast with the row above on the identical platform/persistence
+    // staging: only `force` changes the outcome, not the platform.
+    mocks.platform = "darwin";
+    mocks.persisted = false;
+    let stopped = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => {
+          stopped = true;
+        },
+      }),
+    );
+
+    await controller.stop(label, { force: false });
+
+    expect(stopped).toBe(true);
+  });
+
   it("refuses a RESTART on win32 when the intent could not be recorded", async () => {
     // `host free-port-and-restart` reaches the controller's `restart` directly,
     // and that path kills the host exactly as `stop` does - `schtasks /End` plus

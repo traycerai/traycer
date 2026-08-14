@@ -216,7 +216,17 @@ export function HostOverviewPanel(props: {
   // stays the default path for every host; force is the explicit consent to
   // end the sessions the claim protects.
   const management = useRunnerHostOrNull()?.hostManagement ?? null;
-  const forceRestart = useMutation<HostRestartRequestResult>({
+  // Variables carry the INITIATING host's id and name (host-swap rule:
+  // capture the host with the mutation, never read it back from whichever
+  // render is live when it settles). The user can scope this page to another
+  // host while the bridge is still killing and relaunching; the settle
+  // callbacks below must neither clear that other host's busy notice nor
+  // toast under its name.
+  const forceRestart = useMutation<
+    HostRestartRequestResult,
+    Error,
+    { readonly hostId: string; readonly hostName: string }
+  >({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => {
       if (management === null) {
@@ -224,24 +234,37 @@ export function HostOverviewPanel(props: {
       }
       return management.restartHost();
     },
-    onSuccess: (result) => {
-      setRestartBusyCount(null);
+    onSuccess: (result, variables) => {
+      if (variables.hostId === scope.hostId) {
+        setRestartBusyCount(null);
+      }
       // `declined` survives even a forced respawn (removed-by-user, another
       // process holds the management lock) - informational, not an error.
       if (result.kind === "declined") {
         toastHostRestartDeclined(result.message);
         return;
       }
-      toast.success(`Restarting ${displayName}`);
+      toast.success(`Restarting ${variables.hostName}`);
     },
     onError: (error) => {
       toastFromRunnerError(error, "Couldn't restart host");
     },
   });
-  const canForceRestart =
+  // Pending for THIS page's busy notice only when this host initiated it;
+  // the page-wide write gate (`corePending`) includes the unscoped pending
+  // instead, since a bridge respawn recycles the local host process and no
+  // lifecycle write should dispatch beside that regardless of scope.
+  const forceRestartPendingHere =
+    forceRestart.isPending && forceRestart.variables.hostId === scope.hostId;
+  // The id the force offer would act on, or null when no offer can be made.
+  // Carrying the id (not a boolean) is what lets the mutate call below pass
+  // a `string` without re-narrowing `scope.hostId`'s `string | null`.
+  const forceRestartHostId =
     (host?.isLocalMachine ?? false) &&
     props.hasLocalBridge &&
-    management !== null;
+    management !== null
+      ? scope.hostId
+      : null;
 
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
@@ -304,6 +327,10 @@ export function HostOverviewPanel(props: {
   const updateInFlight = view.updateProgress?.state === "updating";
   const corePending =
     restart.isPending ||
+    // Unscoped on purpose: the forced bridge respawn replaces the LOCAL host
+    // process, and no lifecycle write on this page should dispatch beside
+    // that regardless of which host the page is currently scoped to.
+    forceRestart.isPending ||
     identitySet.isPending ||
     updateInFlight ||
     policyMutation.isPending;
@@ -578,9 +605,15 @@ export function HostOverviewPanel(props: {
             }}
             onDismiss={() => setRestartBusyCount(null)}
             onForceRestart={
-              canForceRestart ? () => forceRestart.mutate() : null
+              forceRestartHostId === null
+                ? null
+                : () =>
+                    forceRestart.mutate({
+                      hostId: forceRestartHostId,
+                      hostName: displayName,
+                    })
             }
-            forcePending={forceRestart.isPending}
+            forcePending={forceRestartPendingHere}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a

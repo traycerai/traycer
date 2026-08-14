@@ -1602,6 +1602,26 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
+    it("stop with --force surfaces a control-failed error when the pid's identity could not be verified", async () => {
+      // `forceStopHostProcess` itself refuses to signal a pid it cannot
+      // prove is still the host (a recycled-pid impostor risk) - this pins
+      // that the macOS routing surfaces that refusal as an honest error
+      // rather than silently reporting success or crashing on an unhandled
+      // outcome variant.
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not verify"),
+      });
+    });
+
     it("stop names the takeover escape hatch when the host RPC is unreachable", async () => {
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({

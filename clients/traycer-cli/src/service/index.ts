@@ -263,12 +263,24 @@ const FAILED_STOP_CONSEQUENCE: Readonly<
 async function announceStop(
   environment: ServiceLabel["environment"],
   reason: "stop" | "restart" | "uninstall",
+  // A FORCED stop makes the record load-bearing on every platform, not just
+  // win32. The POSIX "proceed on a failed write" rationale is that launchd/
+  // systemd signal the supervisor directly - but the force path kills only
+  // the host CHILD, so the supervisor is never signalled and the file is the
+  // only thing telling it the death was asked for. Proceeding without it
+  // means the kill lands, the supervisor reads a crash, and the host comes
+  // back while `--force` reports success - the win32 failure mode, imported.
+  force: boolean,
 ): Promise<void> {
   const persisted = await writeStopIntent(environment, reason);
-  if (persisted || osPlatform() !== "win32") return;
+  if (persisted) return;
+  if (!force && osPlatform() !== "win32") return;
+  const why = force
+    ? "a forced stop kills only the host process, so that record is the only thing that stops the supervisor bringing it back"
+    : "on Windows that record is the only thing that stops the supervisor bringing the host back";
   throw cliError({
     code: CLI_ERROR_CODES.HOST_STOP_INTENT_UNWRITABLE,
-    message: `could not record the stop request, and on Windows that record is the only thing that stops the supervisor bringing the host back. ${FAILED_STOP_CONSEQUENCE[reason]} Check that the Traycer host directory is writable, then try again.`,
+    message: `could not record the stop request, and ${why}. ${FAILED_STOP_CONSEQUENCE[reason]} Check that the Traycer host directory is writable, then try again.`,
     details: { environment, reason },
     exitCode: 1,
   });
@@ -328,7 +340,7 @@ export function withStopIntent(
     // there hands the old supervisor a window in which it sees neither intent
     // nor an incumbent, and it relaunches. One restart, two hosts.
     stop: async (label, options) => {
-      await announceStop(label.environment, "stop");
+      await announceStop(label.environment, "stop", options.force);
       try {
         return await controller.stop(label, options);
       } catch (error) {
@@ -337,7 +349,7 @@ export function withStopIntent(
       }
     },
     stopForRestart: async (label, options) => {
-      await announceStop(label.environment, "restart");
+      await announceStop(label.environment, "restart", options.force);
       try {
         return await controller.stopForRestart(label, options);
       } catch (error) {
@@ -346,7 +358,7 @@ export function withStopIntent(
       }
     },
     uninstall: async (options) => {
-      await announceStop(options.label.environment, "uninstall");
+      await announceStop(options.label.environment, "uninstall", false);
       try {
         return await controller.uninstall(options);
       } catch (error) {
@@ -355,7 +367,7 @@ export function withStopIntent(
       }
     },
     restart: async (label) => {
-      await announceStop(label.environment, "restart");
+      await announceStop(label.environment, "restart", false);
       try {
         return await controller.restart(label);
       } catch (error) {
