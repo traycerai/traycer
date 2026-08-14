@@ -39,6 +39,8 @@ export function useOverviewOsService(input: {
   readonly hostName: string;
   readonly status: HostServiceStatusResponse | undefined;
   readonly loading: boolean;
+  /** The CURRENT read failed; retained data is history, not the present. */
+  readonly statusFailed: boolean;
   readonly statusDegrade: OverviewDegradeReason | null;
   readonly registerDegrade: OverviewDegradeReason | null;
   readonly deregisterDegrade: OverviewDegradeReason | null;
@@ -68,25 +70,13 @@ export function useOverviewOsService(input: {
     input.scopeUsable,
     input.refetchStatus,
   );
-  const ok = input.status?.outcome === "ok" ? input.status : null;
-  // A registration someone ELSE owns — Desktop's SMAppService, or the external
-  // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both
-  // verbs are withheld rather than disabled: the CLI either refuses the write
-  // or, worse, installs a second unit beside the owner's, so there is no state
-  // in which offering them here is honest.
-  const externallyManaged = ok?.state === "externally-managed";
-  // The status read has affirmatively said there is NO CLI on that machine.
-  // Both verbs run that same CLI, so offering them is advertising a
-  // deterministic `cli-unavailable` toast. Only the affirmative answer hides
-  // them: a failed or unreadable status says nothing about whether the CLI
-  // exists, and withdrawing repair verbs on ambiguity would take Re-register
-  // away exactly when someone is debugging a flaky host.
-  const cliUnavailable = input.status?.outcome === "cli-unavailable";
+  const { status, ok, externallyManaged, cliUnavailable, statusUnresolved } =
+    deriveServiceStatusView(input);
 
   return {
     hostName,
     description: describeServiceState({
-      status: input.status,
+      status,
       loading: input.loading,
       hostName,
     }),
@@ -106,7 +96,7 @@ export function useOverviewOsService(input: {
     registerPending: register.isPending || registerRestartLikely,
     deregisterPending: deregister.isPending || deregisterAccepted,
     settledBusySessionCount: input.settledBusySessionCount,
-    busy: input.busy,
+    busy: input.busy || statusUnresolved,
     onRegister: () => {
       register.mutate(undefined, {
         onSuccess: (response) => {
@@ -160,6 +150,47 @@ export function useOverviewOsService(input: {
           toastFromHostError(error, "Couldn't deregister the service."),
       });
     },
+  };
+}
+
+/**
+ * The section's read-side facts, derived once.
+ *
+ * - A failed CURRENT read demotes whatever TanStack retained to history:
+ *   deriving visibility from an old `externally-managed` or `cli-unavailable`
+ *   answer could hide the repair verbs indefinitely, since this query has no
+ *   poll. `undefined` routes the description to "couldn't read" while the
+ *   verbs keep their repair posture.
+ * - `externallyManaged`: a registration someone ELSE owns - Desktop's
+ *   SMAppService, or the env-var supervisor. Both verbs are withheld: the CLI
+ *   either refuses the write or installs a second unit beside the owner's.
+ * - `cliUnavailable`: the read affirmatively said there is NO CLI. Only the
+ *   affirmative answer hides the verbs - ambiguity keeps Re-register exactly
+ *   when someone is debugging a flaky host.
+ * - `statusUnresolved`: the FIRST read is still in flight; a quick Deregister
+ *   click beside "Checking service registration…" would be a destructive
+ *   write against a state the page has not seen. Folded into `busy`, so the
+ *   buttons render disabled rather than vanish for a moment.
+ */
+function deriveServiceStatusView(input: {
+  readonly status: HostServiceStatusResponse | undefined;
+  readonly loading: boolean;
+  readonly statusFailed: boolean;
+}): {
+  readonly status: HostServiceStatusResponse | undefined;
+  readonly ok: Extract<HostServiceStatusResponse, { outcome: "ok" }> | null;
+  readonly externallyManaged: boolean;
+  readonly cliUnavailable: boolean;
+  readonly statusUnresolved: boolean;
+} {
+  const status = input.statusFailed ? undefined : input.status;
+  const ok = status?.outcome === "ok" ? status : null;
+  return {
+    status,
+    ok,
+    externallyManaged: ok?.state === "externally-managed",
+    cliUnavailable: status?.outcome === "cli-unavailable",
+    statusUnresolved: status === undefined && input.loading,
   };
 }
 

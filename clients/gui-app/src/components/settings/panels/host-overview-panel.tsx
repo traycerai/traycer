@@ -180,6 +180,11 @@ export function HostOverviewPanel(props: {
 
   const identitySet = useHostIdentitySet(client);
   const restart = useHostRestart(client);
+  // Instantiated BEFORE the busy gate: its most consequential write is the
+  // drain-force PATCH ("Apply now" sets force: true so the host bypasses its
+  // session drain), and a gate that excluded it left Restart and the service
+  // verbs live in exactly the window that write exists to make exclusive.
+  const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
 
   const view = useOverviewDisplay({
     scope,
@@ -298,7 +303,10 @@ export function HostOverviewPanel(props: {
   // someone needs to retry.
   const updateInFlight = view.updateProgress?.state === "updating";
   const corePending =
-    restart.isPending || identitySet.isPending || updateInFlight;
+    restart.isPending ||
+    identitySet.isPending ||
+    updateInFlight ||
+    policyMutation.isPending;
 
   const serviceStatusQuery = useHostServiceStatusQuery({
     client,
@@ -309,6 +317,7 @@ export function HostOverviewPanel(props: {
     hostName: displayName,
     status: serviceStatusQuery.data,
     loading: serviceStatusQuery.isPending,
+    statusFailed: serviceStatusQuery.isError,
     statusDegrade: serviceStatusDegrade,
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
@@ -394,8 +403,6 @@ export function HostOverviewPanel(props: {
     busy: updateGatePending,
   });
   const anyPending = updateGatePending || updates.summary.installing;
-  const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
-
   if (host === null) return null;
 
   const registryItem = host.item;

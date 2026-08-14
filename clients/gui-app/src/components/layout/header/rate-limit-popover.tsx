@@ -703,8 +703,14 @@ function RateLimitPopoverBody({
     return (
       <RateLimitPopoverResizeSurface variant="content">
         {header}
-        <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
           <RateLimitHostUnavailableNotice scope={scope} />
+          {/* The ACCOUNT-scoped half survives the host being down: Traycer
+              Inference usage comes through the AuthService with no host
+              binding involved, so only the host-RPC provider panes go with
+              the route. Hiding this too both took working data away and had
+              the notice claim more than is true. */}
+          <UnscopedTraycerUsage />
         </div>
       </RateLimitPopoverResizeSurface>
     );
@@ -957,7 +963,7 @@ function RateLimitHostUnavailableNotice({
       <p className="text-ui-sm text-muted-foreground">
         {scope.status === "vanished"
           ? "It was removed or signed out, so its usage limits can't be read."
-          : "Usage limits are read from the host itself, so they're unavailable while it's offline."}
+          : "Provider usage limits are read from the host itself, so they're unavailable while it's offline."}
       </p>
       <button
         type="button"
@@ -2042,6 +2048,21 @@ function RateLimitProviderBody({
  * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
  * `null` on the single-provider detail tab.
  */
+/**
+ * The account-scoped Usage half for a popover whose host-scoped half cannot
+ * render: eligible Traycer Inference usage, framed like a pane. Returns null
+ * for ineligible accounts, so the caller mounts it unconditionally.
+ */
+function UnscopedTraycerUsage(): ReactNode {
+  const traycerSubscription = useTraycerSubscription();
+  if (!traycerSubscription.eligible) return null;
+  return (
+    <div className="w-full max-w-full rounded-md border border-border/60 bg-muted/20 p-3">
+      <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
+    </div>
+  );
+}
+
 function TraycerRateLimitBlock({
   variant,
   onReady,

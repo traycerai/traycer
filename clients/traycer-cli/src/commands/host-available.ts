@@ -3,6 +3,11 @@ import {
   currentHostPlatformKey,
   resolveManifestUrl,
 } from "../registry";
+import {
+  evaluateHostClientFloor,
+  isHostClientFloorRefusal,
+} from "../registry/client-floor";
+import { resolveCliVersion } from "../cli-version";
 import type {
   HostPlatformKey,
   HostVersionEntry,
@@ -19,6 +24,8 @@ interface HostAvailableListingArgs {
   readonly manifestUrl: string;
   readonly platformKey: HostPlatformKey;
   readonly includePreReleases: boolean;
+  /** THIS CLI's version - the floor is about the runner, not the archive. */
+  readonly cliVersion: string;
 }
 
 interface HostAvailableListing {
@@ -42,6 +49,7 @@ export function buildHostAvailableCommand(args: HostAvailableArgs): CommandFn {
       manifestUrl: urlInfo.url,
       platformKey,
       includePreReleases: args.includePreReleases,
+      cliVersion: resolveCliVersion(process.env),
     });
     return {
       data: {
@@ -66,7 +74,13 @@ export function buildHostAvailableListing(
   const versions = filterHostAvailableVersions(
     args.manifest.versions,
     args.includePreReleases,
-  ).map((entry) => projectPlatformAsset(entry, args.platformKey));
+  ).map((entry) =>
+    projectClientFloor(
+      projectPlatformAsset(entry, args.platformKey),
+      args.platformKey,
+      args.cliVersion,
+    ),
+  );
   const manifest: HostVersionsManifest = {
     ...args.manifest,
     versions,
@@ -136,6 +150,37 @@ function projectPlatformAsset(
   return {
     ...entry,
     platforms: asset === undefined ? {} : { [platformKey]: asset },
+  };
+}
+
+// Project the CLI floor into availability, with the registry client's OWN
+// evaluator so the listing and the install path cannot disagree about one
+// value: `client.ts` rejects a floored target with HOST_CLIENT_FLOOR_UNMET
+// only at download time, AFTER the RPC has answered `accepted` - so a listing
+// that ignored the floor advertised installs that could only terminate as
+// floor failures. The unreleased-CLI waiver applies here exactly as there (a
+// dev build is below every floor by SemVer and is deliberately let through).
+function projectClientFloor(
+  entry: HostVersionEntry,
+  platformKey: HostPlatformKey,
+  cliVersion: string,
+): HostVersionEntry {
+  const asset = entry.platforms[platformKey];
+  if (asset === undefined || !asset.available) return entry;
+  const floor = evaluateHostClientFloor({
+    cliVersion,
+    requiredCliVersion: entry.requiredCliVersion,
+  });
+  if (!isHostClientFloorRefusal(floor)) return entry;
+  return {
+    ...entry,
+    platforms: {
+      [platformKey]: {
+        ...asset,
+        available: false,
+        unavailableReason: `Needs Traycer CLI ${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`,
+      },
+    },
   };
 }
 
