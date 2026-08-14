@@ -157,7 +157,7 @@ const futureEvent: JsonObject = {
 };
 
 const futureHarnessShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 0 },
+  schemaVersion: { major: 1, minor: 1 },
   chatId: "chat-future",
   section: "messages",
   messages: [
@@ -194,11 +194,18 @@ const futureHarnessShard: JsonObject = {
 };
 
 const futureHarnessHead: JsonObject = {
-  schemaVersion: { major: 1, minor: 0 },
+  schemaVersion: { major: 1, minor: 1 },
   parentHeadSha256: null,
   throughRecordSeq: 7,
   capturedAt: 1_700_000_000_000,
-  minReaderVersion: null,
+  minReaderVersion: { major: 1, minor: 1 },
+  cdc: {
+    algorithm: "fastcdc-gear-v1",
+    mask: 65_535,
+    target: 65_536,
+    min: 16_384,
+    max: 262_144,
+  },
   core: {
     chatId: "chat-future",
     parentChatId: null,

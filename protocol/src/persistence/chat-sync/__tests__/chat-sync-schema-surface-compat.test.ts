@@ -92,11 +92,18 @@ describe("registered chat-sync persistence surface is frozen", () => {
  */
 describe("chat-sync storage projections describe the wire", () => {
   const wireHead: JsonObject = {
-    schemaVersion: { major: 1, minor: 0 },
+    schemaVersion: { major: 1, minor: 1 },
     parentHeadSha256: null,
     throughRecordSeq: 4,
     capturedAt: 1_700_000_000_000,
-    minReaderVersion: null,
+    minReaderVersion: { major: 1, minor: 1 },
+    cdc: {
+      algorithm: "fastcdc-gear-v1",
+      mask: 65_535,
+      target: 65_536,
+      min: 16_384,
+      max: 262_144,
+    },
     core: {
       chatId: "chat-1",
       parentChatId: null,
@@ -121,7 +128,7 @@ describe("chat-sync storage projections describe the wire", () => {
   // PROJECTION cannot express that - a refinement has no JSON-Schema form - so
   // this record has to satisfy both to prove the two describe the same wire.
   const wireShard: JsonObject = {
-    schemaVersion: { major: 1, minor: 0 },
+    schemaVersion: { major: 1, minor: 1 },
     chatId: "chat-1",
     section: "messages",
     messages: [
