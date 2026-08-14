@@ -288,14 +288,8 @@ export function ProviderMcpAddDialog(props: {
   const mutate = useProvidersMcpMutate();
   const form = useForm({
     defaultValues,
-    validators: {
-      onSubmit: ({ value }) => submissionFromValues(value).error,
-    },
     onSubmit: ({ value }) => {
       submitValues(value);
-    },
-    onSubmitInvalid: () => {
-      setFormError(null);
     },
   });
 
@@ -513,6 +507,13 @@ export function ProviderMcpAddDialog(props: {
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
+            const validationError = submissionFromValues(
+              form.state.values,
+            ).error;
+            if (validationError !== undefined) {
+              setFormError(validationError);
+              return;
+            }
             void form.handleSubmit();
           }}
         >
@@ -527,11 +528,10 @@ export function ProviderMcpAddDialog(props: {
           <form.Subscribe
             selector={(state) => ({
               values: state.values,
-              validationError: state.errorMap.onSubmit,
               isDefaultValue: state.isDefaultValue,
             })}
           >
-            {({ values, validationError, isDefaultValue }) => {
+            {({ values, isDefaultValue }) => {
               const effectiveKind = computeEffectiveKind(
                 multiTransport,
                 values.kind,
@@ -544,7 +544,6 @@ export function ProviderMcpAddDialog(props: {
                 );
               const authOptions =
                 effectiveKind === "local" ? [] : capabilities.authTypes;
-              const visibleError = formError ?? validationError;
               return (
                 <>
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-2">
@@ -677,10 +676,8 @@ export function ProviderMcpAddDialog(props: {
                       </>
                     )}
 
-                    {visibleError !== undefined ? (
-                      <p className="text-ui-xs text-destructive">
-                        {visibleError}
-                      </p>
+                    {formError !== null ? (
+                      <p className="text-ui-xs text-destructive">{formError}</p>
                     ) : null}
                   </div>
 

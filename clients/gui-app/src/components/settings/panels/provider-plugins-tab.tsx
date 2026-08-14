@@ -178,7 +178,7 @@ function PluginsScopeToolbar(props: {
             onClick={props.onToggleAdd}
           >
             <Plus className="size-3.5" />
-            Add From Source
+            Add from source
           </Button>
         ) : null}
       </div>
