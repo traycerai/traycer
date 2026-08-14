@@ -14,6 +14,7 @@ import {
 } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
@@ -58,6 +59,7 @@ interface TuiHeaderFields {
 export function WorktreeOwnerSettingsHeader(props: {
   readonly ownerId: string;
   readonly hostId: string;
+  readonly epicId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
 }): ReactNode {
   const chat = useChatById(props.ownerId);
@@ -65,7 +67,25 @@ export function WorktreeOwnerSettingsHeader(props: {
     selectTuiAgent(state.tuiAgents.byId, props.ownerId),
   );
   const isChat = props.ownerKind === "chat";
-  const chatSettings = ownerChatSettings(isChat, chat?.settings ?? null);
+  const localChatSettings = ownerChatSettings(isChat, chat?.settings ?? null);
+  // Pinned to the OWNER's host, not the tab's or the app-active one - shared
+  // with the provider-list read below, which needs the same host for the same
+  // reason. A chat on another of the viewer's hosts is served by that host.
+  const hostClient = useHostClientForHostId(props.hostId);
+  // Terminal agents still carry their settings on the store projection, so this
+  // is CHAT-ONLY: the single-write pivot took the doc chat entry away and left
+  // the registry row's harness-id summary, which is not a tuple. Skipped when
+  // the store already has one - a pre-pivot chat whose frozen doc entry
+  // survived, or one this session opened - so the common case still paints from
+  // local state with no round trip, and the read is what covers the rest.
+  const runSettingsQuery = useChatRunSettings({
+    client: hostClient,
+    epicId: props.epicId,
+    chatId: props.ownerId,
+    enabled: isChat && localChatSettings === null,
+  });
+  const chatSettings =
+    localChatSettings ?? runSettingsQuery.data?.settings ?? null;
   const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
@@ -84,7 +104,6 @@ export function WorktreeOwnerSettingsHeader(props: {
   // harness mark; a managed id needs the live list for its label and accent,
   // while an unknown/tombstoned id silently stays bare.
   const profileActivity = ownerProfileActivity(isChat, tuiAgent);
-  const hostClient = useHostClientForHostId(props.hostId);
   // Chats preserve their cache-only behavior. A managed terminal profile
   // actively resolves against this owner's fixed host, so the hover card is
   // self-sufficient even if no other profile surface warmed the query first.

@@ -20,6 +20,13 @@ const tuiAgent = vi.hoisted(() => ({
 const wireProfiles = vi.hoisted(() => ({
   current: [] as ReadonlyArray<ProviderProfile>,
 }));
+/** What the host answers `epic.getChatRunSettings` with, and whether it was
+ *  asked at all - the second half matters as much as the first, because the
+ *  read must stay OFF for the owners that still have local settings. */
+const fetchedSettings = vi.hoisted(() => ({
+  current: null as ChatRunSettings | null,
+  lastEnabled: null as boolean | null,
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () =>
@@ -70,6 +77,18 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     },
   }),
 }));
+// Records `enabled` rather than ignoring it: a mock that always answers would
+// let the header read a fetched tuple it never actually requested, and the
+// "store settings win, no round trip" half of the contract would pass
+// vacuously.
+vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
+  useChatRunSettings: (args: { readonly enabled: boolean }) => {
+    fetchedSettings.lastEnabled = args.enabled;
+    return {
+      data: args.enabled ? { settings: fetchedSettings.current } : undefined,
+    };
+  },
+}));
 
 function profile(
   profileId: string,
@@ -118,6 +137,7 @@ function renderChatHeader(args: {
     <WorktreeOwnerSettingsHeader
       ownerId="owner-1"
       hostId="host-1"
+      epicId="epic-1"
       ownerKind="chat"
     />,
   );
@@ -140,6 +160,7 @@ function renderTuiHeader(args: {
     <WorktreeOwnerSettingsHeader
       ownerId="owner-1"
       hostId="host-1"
+      epicId="epic-1"
       ownerKind="terminal-agent"
     />,
   );
@@ -175,6 +196,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
     chatSettings.current = null;
     tuiAgent.current = null;
     wireProfiles.current = [];
+    fetchedSettings.current = null;
+    fetchedSettings.lastEnabled = null;
   });
 
   it("renders a distinct icon for each permission mode", () => {
@@ -351,5 +374,97 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.getByTestId("owner-settings-model").textContent).toContain(
       "Claude Sonnet 4.5",
     );
+  });
+});
+
+/**
+ * The single-write regression: a chat that exists only as a host registry row
+ * has `settings: null` on its projection (`chatProjectionFromRecord`), because
+ * the row carries a harness-id summary and not the tuple. Before the per-chat
+ * read this header returned `null` for such a chat and the whole line - model,
+ * reasoning, permission mode, profile dot and the relative timestamp - simply
+ * vanished from the hover card.
+ */
+describe("chat settings sourced from the host", () => {
+  afterEach(() => {
+    cleanup();
+    chatSettings.current = null;
+    tuiAgent.current = null;
+    wireProfiles.current = [];
+    fetchedSettings.current = null;
+    fetchedSettings.lastEnabled = null;
+  });
+
+  function renderRegistryOnlyChat(): void {
+    // A registry-only chat: the projection exists (so the row renders and has
+    // an `updatedAt`) but carries no settings tuple.
+    chatSettings.current = null;
+    tuiAgent.current = null;
+    wireProfiles.current = [];
+    render(
+      <WorktreeOwnerSettingsHeader
+        ownerId="owner-1"
+        hostId="host-1"
+        epicId="epic-1"
+        ownerKind="chat"
+      />,
+    );
+  }
+
+  it("renders the full settings line from the fetched tuple", () => {
+    fetchedSettings.current = {
+      harnessId: "claude",
+      model: "sonnet-4.5",
+      permissionMode: "full_access",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    renderRegistryOnlyChat();
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
+    expect(screen.getByTestId("owner-settings-reasoning").textContent).toBe(
+      "High",
+    );
+    expect(
+      screen.getByTestId("owner-settings-permissions").textContent,
+    ).toContain("Full access");
+  });
+
+  it("renders nothing while the host has not answered", () => {
+    // `settings: null` from the host is the honest "no tuple here" - a legacy
+    // record, or a chat whose owning host this client cannot reach. It must
+    // read as an absent header, never as a half-populated line.
+    fetchedSettings.current = null;
+
+    renderRegistryOnlyChat();
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.queryByTestId("owner-settings-header")).toBeNull();
+  });
+
+  it("does not ask the host when the projection already has settings", () => {
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(fetchedSettings.lastEnabled).toBe(false);
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
+  });
+
+  it("does not ask the host for a terminal agent", () => {
+    renderTuiHeader({ profileId: null, profiles: [] });
+
+    expect(fetchedSettings.lastEnabled).toBe(false);
   });
 });

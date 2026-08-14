@@ -928,6 +928,17 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
   },
+  // UNPOLLED, unlike the list above, and for the opposite reason: the list has
+  // to notice a chat that appeared elsewhere, while this answers a question
+  // whose subject cannot change without a user action. Run settings move when
+  // somebody moves them, and the surfaces that move them invalidate this key.
+  // Its caller unmounts on close, so a re-open is a fresh read once the entry
+  // goes stale - a cadence would only re-ask the host about a card nobody is
+  // looking at.
+  "epic.getChatRunSettings": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
   "epic.chatBackupStatus": {
