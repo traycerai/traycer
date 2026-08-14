@@ -49,6 +49,7 @@ interface PersistedLeftPanelState {
   readonly state: {
     readonly activePanelIdByTabId: Readonly<Record<string, string>>;
     readonly panelGroups: ReadonlyArray<LeftPanelGroup>;
+    readonly mainCollapsedByTabId: Readonly<Record<string, boolean>>;
     readonly sidebarWidthPx: number;
     readonly panelSectionCollapsedByPanelId: Readonly<Record<string, boolean>>;
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
@@ -319,6 +320,7 @@ describe("useLeftPanelStore", () => {
       state: {
         activePanelIdByTabId: {},
         panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
+        mainCollapsedByTabId: {},
         sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
@@ -351,6 +353,27 @@ describe("useLeftPanelStore", () => {
     useLeftPanelStore.getState().setSidebarWidthPx(Number.NaN);
     expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(
       DEFAULT_SIDEBAR_WIDTH_PX,
+    );
+  });
+
+  it("restores a collapsed sidebar after refresh", async () => {
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
+      "tab-a": true,
+    });
+
+    const persistedBeforeRefresh =
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}";
+    useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+    window.localStorage.setItem(PERSIST_KEY, persistedBeforeRefresh);
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual(
+      {},
     );
   });
 
