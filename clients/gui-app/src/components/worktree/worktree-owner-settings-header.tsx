@@ -91,11 +91,17 @@ export function WorktreeOwnerSettingsHeader(props: {
     chatId: props.ownerId,
     enabled: isChat,
   });
-  // Host first, local second - and local still carries the card while the read
-  // is in flight, unsupported, or answering for a host that cannot be reached,
-  // so this never blanks a row that had something to show.
-  const fetchedChatSettings = runSettingsQuery.data?.settings ?? null;
-  const chatSettings = fetchedChatSettings ?? localChatSettings;
+  // Keyed on whether the read SETTLED, not on whether it produced a tuple.
+  // `{ settings: null }` is a successful answer - the host stating this chat has
+  // no persisted tuple - and it has to outrank a stale local one, so coalescing
+  // with `??` would be wrong: it would fall through to a frozen doc tuple the
+  // host just contradicted. Local carries the card only while there is no answer
+  // to prefer: in flight, errored, `E_HOST_UNSUPPORTED`, or no reachable host to
+  // ask (the query is disabled and never settles). That keeps every fallback
+  // that matters without letting absence-of-answer impersonate an answer.
+  const chatSettings = runSettingsQuery.isSuccess
+    ? runSettingsQuery.data.settings
+    : localChatSettings;
   const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no

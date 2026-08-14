@@ -25,6 +25,20 @@ const wireProfiles = vi.hoisted(() => ({
  *  read must stay OFF for the owners that still have local settings. */
 const fetchedSettings = vi.hoisted(() => ({
   current: null as ChatRunSettings | null,
+  /**
+   * Whether the host read has SETTLED successfully, kept separate from
+   * `current` because the header has to tell an answer of `null` apart from no
+   * answer at all. A settled `{ settings: null }` is the host stating the chat
+   * has no persisted tuple, which OUTRANKS a stale local one; an unsettled read
+   * (in flight, errored, unsupported, or no reachable host) must fall back to
+   * local instead. Collapsing the two into "data is null" is exactly the bug
+   * these tests exist to catch.
+   *
+   * Defaults to NOT answered, so the suites below that are about rendering a
+   * LOCAL tuple keep exercising that path; a settled host answer is opted into
+   * per test.
+   */
+  answered: false,
   lastEnabled: null as boolean | null,
 }));
 
@@ -95,8 +109,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
   useChatRunSettings: (args: { readonly enabled: boolean }) => {
     fetchedSettings.lastEnabled = args.enabled;
+    const settled = args.enabled && fetchedSettings.answered;
     return {
-      data: args.enabled ? { settings: fetchedSettings.current } : undefined,
+      data: settled ? { settings: fetchedSettings.current } : undefined,
+      isSuccess: settled,
     };
   },
 }));
@@ -208,6 +224,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     tuiAgent.current = null;
     wireProfiles.current = [];
     fetchedSettings.current = null;
+    fetchedSettings.answered = false;
     fetchedSettings.lastEnabled = null;
   });
 
@@ -403,6 +420,7 @@ describe("chat settings sourced from the host", () => {
     tuiAgent.current = null;
     wireProfiles.current = [];
     fetchedSettings.current = null;
+    fetchedSettings.answered = false;
     fetchedSettings.lastEnabled = null;
   });
 
@@ -423,6 +441,7 @@ describe("chat settings sourced from the host", () => {
   }
 
   it("renders the full settings line from the fetched tuple", () => {
+    fetchedSettings.answered = true;
     fetchedSettings.current = {
       harnessId: "claude",
       model: "sonnet-4.5",
@@ -447,10 +466,11 @@ describe("chat settings sourced from the host", () => {
     ).toContain("Full access");
   });
 
-  it("renders nothing while the host has not answered", () => {
+  it("renders nothing when the host answers no tuple", () => {
     // `settings: null` from the host is the honest "no tuple here" - a legacy
-    // record, or a chat whose owning host this client cannot reach. It must
-    // read as an absent header, never as a half-populated line.
+    // record with nothing persisted. With no local tuple either, that must read
+    // as an absent header, never as a half-populated line.
+    fetchedSettings.answered = true;
     fetchedSettings.current = null;
 
     renderRegistryOnlyChat();
@@ -467,6 +487,7 @@ describe("chat settings sourced from the host", () => {
     // at whatever it held when the doc was last written. Gating the read on its
     // absence, or letting it win the coalesce, would pin the card to values that
     // stopped being true at the user's first model change.
+    fetchedSettings.answered = true;
     fetchedSettings.current = {
       harnessId: "claude",
       model: "opus-4.1",
@@ -491,9 +512,10 @@ describe("chat settings sourced from the host", () => {
   });
 
   it("falls back to the local tuple while the host read has not answered", () => {
-    // In flight, unsupported, or an unreachable owner host - all arrive here as
-    // no fetched tuple, and none of them should blank a row that already had
-    // something true enough to show.
+    // In flight, errored, unsupported, or an unreachable owner host whose query
+    // never runs - none of them should blank a row that already had something
+    // true enough to show.
+    fetchedSettings.answered = false;
     fetchedSettings.current = null;
 
     renderChatHeader({
@@ -506,6 +528,26 @@ describe("chat settings sourced from the host", () => {
     expect(screen.getByTestId("owner-settings-model").textContent).toContain(
       "Claude Sonnet 4.5",
     );
+  });
+
+  it("honors a settled null over a frozen local tuple", () => {
+    // The other side of the fallback, and the one that is easy to get wrong: a
+    // SUCCESSFUL `{ settings: null }` is the host saying this chat has no
+    // persisted tuple, not the absence of an answer. Coalescing the two with
+    // `??` would fall through to the frozen doc tuple the host just
+    // contradicted, which is the very staleness this read exists to end.
+    fetchedSettings.answered = true;
+    fetchedSettings.current = null;
+
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.queryByTestId("owner-settings-header")).toBeNull();
   });
 
   it("does not ask the host for a terminal agent", () => {
