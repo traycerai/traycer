@@ -4,7 +4,10 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostTransportFailureError,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostDoctorResponse,
   HostGetInstallationInfoResponse,
@@ -343,6 +346,21 @@ export function useHostServiceRegister(
       onSuccess: (response, _variables, context) => {
         if (response.outcome !== "ok") return;
         if (context.hostId === null) return;
+        for (const method of ["host.service.status", "host.status"] as const) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(context.hostId, method),
+          });
+        }
+      },
+      onError: (error, _variables, context) => {
+        // A dropped connection on this method is the EXPECTED shape of
+        // success on macOS — the bootout/bootstrap cycle replaces the very
+        // process answering the call — so the caches must not be left
+        // describing the pre-register service. Marked stale rather than
+        // refetched: the refetch happens when the restarted host is next
+        // answerable, not against a socket known to be down.
+        if (!(error instanceof HostTransportFailureError)) return;
+        if (context === undefined || context.hostId === null) return;
         for (const method of ["host.service.status", "host.status"] as const) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(context.hostId, method),

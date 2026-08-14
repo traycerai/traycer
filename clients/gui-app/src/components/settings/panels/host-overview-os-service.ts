@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostServiceDeregisterResponse,
@@ -80,12 +81,24 @@ export function useOverviewOsService(input: {
         // A dropped connection here is the EXPECTED shape of success on macOS,
         // where registering is a bootout/bootstrap cycle that replaces the very
         // process answering this call. Reporting it as a failure would tell the
-        // user their registration did not take at the exact moment it did.
-        onError: (error) =>
+        // user their registration did not take at the exact moment it did —
+        // which is exactly what handing this to `toastFromHostError` did: its
+        // transport branch overrides ANY fallback with a generic "Can't reach
+        // the Traycer host" error toast plus a host-error notification. So the
+        // expected disconnect is branched on HERE, as information rather than
+        // failure; everything else keeps the generic mapping.
+        onError: (error) => {
+          if (error instanceof HostTransportFailureError) {
+            toast.info(
+              `Lost contact with ${hostName} while re-registering — it is probably restarting.`,
+            );
+            return;
+          }
           toastFromHostError(
             error,
-            `Lost contact with ${hostName} while re-registering — it is probably restarting.`,
-          ),
+            `Couldn't re-register ${hostName}'s service.`,
+          );
+        },
       });
     },
     onDeregister: () => {
