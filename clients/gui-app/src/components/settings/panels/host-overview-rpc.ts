@@ -19,6 +19,7 @@ import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { useHostServiceWriteLatchStore } from "@/components/settings/panels/host-service-write-latch-store";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -342,10 +343,32 @@ export function useHostServiceRegister(
     mapVariables: () => EMPTY_PARAMS,
     options: {
       mutationKey: hostMaintenanceMutationKeys.serviceRegister(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // The restart latch arms at DISPATCH, not at the transport-drop settle:
+      // `onMutate` is the one callback that cannot be lost, while every settle
+      // callback dies with the observer when the host-keyed panel unmounts
+      // mid-flight. Lost settles therefore fail SAFE - the latch over-locks
+      // until its bounded timer - instead of failing open with live controls
+      // over a restarting host. The settles below RELEASE it on every answer
+      // that refutes a restart.
+      onMutate: () => {
+        const hostId = client?.getActiveHostId() ?? null;
+        if (hostId !== null) {
+          useHostServiceWriteLatchStore
+            .getState()
+            .armRegisterRestartLikely(hostId);
+        }
+        return { hostId };
+      },
       onSuccess: (response, _variables, context) => {
-        if (response.outcome !== "ok") return;
         if (context.hostId === null) return;
+        const latchStore = useHostServiceWriteLatchStore.getState();
+        // An ANSWER arrived over a live connection - whatever it says, the
+        // bootout-restart shape (which never answers) did not happen.
+        latchStore.releaseRegisterRestartLikely(context.hostId);
+        if (response.outcome === "externally-managed") {
+          latchStore.armExternallyManagedRefusal(context.hostId);
+        }
+        if (response.outcome !== "ok") return;
         for (const method of ["host.service.status", "host.status"] as const) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(context.hostId, method),
@@ -353,17 +376,23 @@ export function useHostServiceRegister(
         }
       },
       onError: (error, _variables, context) => {
-        // A dropped connection on this method is the EXPECTED shape of
-        // success on macOS — the bootout/bootstrap cycle replaces the very
-        // process answering the call — so the caches must not be left
-        // describing the pre-register service. `refetchType: "none"` is what
-        // actually makes this stale-only: the default refetches active
-        // observers immediately, against a socket this very branch just
-        // proved is down. The refresh arrives through the observers' own
-        // mechanisms (the 10s `host.status` poll, the next mount) once the
-        // restarted host answers.
-        if (!(error instanceof HostTransportFailureError)) return;
         if (context === undefined || context.hostId === null) return;
+        if (!(error instanceof HostTransportFailureError)) {
+          // A real refusal or host error, not the restart shape: release the
+          // dispatch-armed latch, there is no restart to guard.
+          useHostServiceWriteLatchStore
+            .getState()
+            .releaseRegisterRestartLikely(context.hostId);
+          return;
+        }
+        // The transport DROPPED - the probable-success restart. The latch
+        // stays armed (dispatch armed it). The caches must not be left
+        // describing the pre-register service, and `refetchType: "none"` is
+        // what makes this stale-only: the default refetches active observers
+        // immediately, against a socket this very branch just proved is down.
+        // The refresh arrives through the latch's release paths (scope flip,
+        // or the bounded timer's explicit refetch) once the restarted host
+        // answers.
         for (const method of ["host.service.status", "host.status"] as const) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(context.hostId, method),
@@ -403,7 +432,38 @@ export function useHostServiceDeregister(
     mapVariables: () => EMPTY_PARAMS,
     options: {
       mutationKey: hostMaintenanceMutationKeys.serviceDeregister(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // Same dispatch-arm / settle-release inversion as register's restart
+      // latch, for the same reason: the settle can be lost to a host-keyed
+      // unmount, and a lost settle must over-lock briefly (bounded timer),
+      // never fail open while the detached CLI is stopping the host.
+      onMutate: () => {
+        const hostId = client?.getActiveHostId() ?? null;
+        if (hostId !== null) {
+          useHostServiceWriteLatchStore
+            .getState()
+            .armDeregisterAccepted(hostId);
+        }
+        return { hostId };
+      },
+      onSuccess: (response, _variables, context) => {
+        if (context.hostId === null) return;
+        const latchStore = useHostServiceWriteLatchStore.getState();
+        if (response.outcome === "externally-managed") {
+          latchStore.armExternallyManagedRefusal(context.hostId);
+        }
+        // Any answer OTHER than accepted refutes the dispatch-armed latch:
+        // nothing was dispatched, nothing is shutting down. `accepted` keeps
+        // it - that is the state the latch exists for.
+        if (response.outcome !== "accepted") {
+          latchStore.releaseDeregisterAccepted(context.hostId);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context === undefined || context.hostId === null) return;
+        useHostServiceWriteLatchStore
+          .getState()
+          .releaseDeregisterAccepted(context.hostId);
+      },
     },
   });
 }

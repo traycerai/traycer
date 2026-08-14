@@ -129,15 +129,15 @@ function stubLoadedNonGitWorkspace(): void {
 // The host section now opts the window into the registry liveness poll, and
 // that hook stands on TanStack Query - so these boundary-mocked suites need a
 // client even though every query in them is disabled (signed-out auth store).
+// ONE client for the wrapper's lifetime: constructing it inside the render
+// would hand `rerender` a fresh client while existing observers stay attached
+// to the old one.
+const testQueryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, gcTime: 0 } },
+});
 function TestProviders(props: { readonly children: ReactNode }): ReactNode {
   return (
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: { queries: { retry: false, gcTime: 0 } },
-        })
-      }
-    >
+    <QueryClientProvider client={testQueryClient}>
       {props.children}
     </QueryClientProvider>
   );

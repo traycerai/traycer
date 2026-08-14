@@ -195,6 +195,16 @@ export function HostOverviewPanel(props: {
   // handler is what keeps their success and failure behaviour identical; two
   // copies drifted the moment one of them grew a toast the other did not.
   const { mutate: mutateIdentity } = identitySet;
+  // A rejected rename's draft, kept so a failed save is RETRYABLE. The inline
+  // editor closes on commit - before the mutation settles - so by the time a
+  // rejection arrives the typed name is off screen; the page this replaced
+  // deliberately kept the editor open with its draft on rejection. Cleared on
+  // the next successful write; seeds `value` below so the reopened editor
+  // holds the attempted name, not the persisted one.
+  const [failedRenameDraft, setFailedRenameDraft] = useState<string | null>(
+    null,
+  );
+  const reopenRenameRef = useRef<() => void>(() => undefined);
   const submitRename = (customName: string | null): void => {
     // Belt to the Save button's braces. The button is the UI guard against a
     // no-op write; this is the one that holds if a caller ever routes here
@@ -206,10 +216,14 @@ export function HostOverviewPanel(props: {
       { customName },
       {
         onSuccess: (next) => {
+          setFailedRenameDraft(null);
           toast.success(`Renamed to ${next.effectiveName}`);
         },
-        onError: (error) =>
-          toastFromHostError(error, "Couldn't rename this host."),
+        onError: (error) => {
+          setFailedRenameDraft(customName ?? "");
+          reopenRenameRef.current();
+          toastFromHostError(error, "Couldn't rename this host.");
+        },
       },
     );
   };
@@ -222,9 +236,14 @@ export function HostOverviewPanel(props: {
   // no way to express it.
   const renameDegrade = identitySetDegrade ?? identityDegrade;
   const rename = useInlineRename({
-    value: view.persistedNameDraft,
+    value: failedRenameDraft ?? view.persistedNameDraft,
     canEdit: usable && renameDegrade === null && identity !== null,
     onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
+  });
+  // Ref-carried so `submitRename` (declared above) can reopen the editor from
+  // an async settle without a use-before-define on `rename`.
+  useEffect(() => {
+    reopenRenameRef.current = rename.startEditing;
   });
 
   // Focus restoration: the pencil unmounts while the input is up and comes back
@@ -267,6 +286,7 @@ export function HostOverviewPanel(props: {
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
     busy: corePending,
+    hostId: scope.hostId,
     scopeUsable: usable,
     settledBusySessionCount: view.settledBusySessionCount,
     refetchStatus: () => {
