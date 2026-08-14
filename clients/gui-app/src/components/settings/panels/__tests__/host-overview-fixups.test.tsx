@@ -48,6 +48,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
@@ -59,6 +60,7 @@ import {
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
+  resetHostServiceWriteLatchesForTest();
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};

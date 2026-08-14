@@ -252,7 +252,14 @@ export function HostOverviewPanel(props: {
   const renameDegrade = identitySetDegrade ?? identityDegrade;
   const rename = useInlineRename({
     value: failedRename?.draft ?? view.persistedNameDraft,
-    canEdit: usable && renameDegrade === null && identity !== null,
+    // `!identitySet.isPending`: the editor closes on commit BEFORE the write
+    // settles, and an editor reopened in that window enqueues a second
+    // `host.identity.set` the first one's failure callback would then clobber.
+    canEdit:
+      usable &&
+      renameDegrade === null &&
+      identity !== null &&
+      !identitySet.isPending,
     onCommit: (next) => submitRename(customNameFromIdentityDraft(next)),
   });
   // Ref-carried so the reopen effect below always calls THIS render's
@@ -319,30 +326,6 @@ export function HostOverviewPanel(props: {
   // the section locks the page for the same reason the page locks the section.
   const gatePending =
     corePending || service.registerPending || service.deregisterPending;
-
-  // The update story lives at PAGE level because its two halves now render in
-  // two different containers: the answer — is there an update, install it — as a
-  // band on the identity card, and the decisions behind Advanced down in
-  // Installation. One instance of each hook, so the two halves cannot disagree
-  // about what the last check returned or which write is in flight.
-  //
-  // This is also the single `useHostRegistryUpdateMutation`, which BOTH the
-  // drain gate and the auto-update switch write through. Two instances would
-  // each track their own `isPending`, so one control would stay live while the
-  // other's write was still going.
-  const updates = useHostOverviewUpdates({
-    client,
-    hostName: displayName,
-    installedVersion: view.hostVersion,
-    platformKey: host?.platform ?? null,
-    // The check reads on its own now, so this gate is load-bearing rather than
-    // cosmetic: without it the page would spawn a CLI process on the host from
-    // a scope that has not resolved, and cache the answer under this page's key.
-    enabled: usable,
-    checkDegrade: updateCheckDegrade,
-    installDegrade: updateInstallDegrade,
-    busy: gatePending,
-  });
   // The install REQUEST is in the gate too, not only the detached progress:
   // between pressing Install and the `accepted` answer, `updateProgress` has
   // not started yet, and that gap is exactly wide enough for a Restart or a
@@ -381,10 +364,36 @@ export function HostOverviewPanel(props: {
     }, remaining);
     return () => clearTimeout(timer);
   }, [scope.hostId, updateInstallAcceptedAt, view.updateProgress]);
-  const anyPending =
-    gatePending ||
-    updates.summary.installing ||
-    updateInstallAcceptedAt !== null;
+  // The accepted latch is part of the gate the UPDATE controls consume too:
+  // read before the hook below so Check now, Update now and the version rows
+  // freeze during the accepted-to-first-progress gap, not only the rest of
+  // the page.
+  const updateGatePending = gatePending || updateInstallAcceptedAt !== null;
+
+  // The update story lives at PAGE level because its two halves now render in
+  // two different containers: the answer — is there an update, install it — as a
+  // band on the identity card, and the decisions behind Advanced down in
+  // Installation. One instance of each hook, so the two halves cannot disagree
+  // about what the last check returned or which write is in flight.
+  //
+  // This is also the single `useHostRegistryUpdateMutation`, which BOTH the
+  // drain gate and the auto-update switch write through. Two instances would
+  // each track their own `isPending`, so one control would stay live while the
+  // other's write was still going.
+  const updates = useHostOverviewUpdates({
+    client,
+    hostName: displayName,
+    installedVersion: view.hostVersion,
+    platformKey: host?.platform ?? null,
+    // The check reads on its own now, so this gate is load-bearing rather than
+    // cosmetic: without it the page would spawn a CLI process on the host from
+    // a scope that has not resolved, and cache the answer under this page's key.
+    enabled: usable,
+    checkDegrade: updateCheckDegrade,
+    installDegrade: updateInstallDegrade,
+    busy: updateGatePending,
+  });
+  const anyPending = updateGatePending || updates.summary.installing;
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
 
   if (host === null) return null;
@@ -456,6 +465,7 @@ export function HostOverviewPanel(props: {
           !usable ? null : (
             <HostOverviewNameAction
               hostName={displayName}
+              pendingWrite={identitySet.isPending}
               // The WRITE capability gates the rename affordance, not the read.
               // The pencil and "Retry name" both lead to `host.identity.set`,
               // so a host that can be read but not written must degrade them -

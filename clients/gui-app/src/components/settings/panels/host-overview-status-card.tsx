@@ -117,6 +117,8 @@ export function HostOverviewActionButton(props: {
  */
 export function HostOverviewNameAction(props: {
   readonly hostName: string;
+  /** A `host.identity.set` is unresolved; a second editor would race it. */
+  readonly pendingWrite: boolean;
   readonly degrade: OverviewDegradeReason | null;
   /** The identity read has answered, so there is a name to edit. */
   readonly loaded: boolean;
@@ -158,8 +160,10 @@ export function HostOverviewNameAction(props: {
       size="sm"
       className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
       // Opening a disabled editor is the other half of the same focus-loss
-      // finding: block the TRIGGER while there is no name data to edit.
-      disabled={degrade !== null || !props.loaded}
+      // finding: block the TRIGGER while there is no name data to edit - and
+      // while a write is still settling, since the editor closes before the
+      // settle and a second editor would race it.
+      disabled={degrade !== null || !props.loaded || props.pendingWrite}
       onClick={props.onEdit}
       aria-label="Edit name"
       data-testid="host-overview-edit-name"

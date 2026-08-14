@@ -113,6 +113,11 @@ export const useHostServiceWriteLatchStore = create<HostServiceWriteLatchState>(
   },
 );
 
+/** Test-only: drops every host's latches, mirroring a fresh module load. */
+export function resetHostServiceWriteLatchesForTest(): void {
+  useHostServiceWriteLatchStore.setState({ byHost: {} });
+}
+
 export function hostServiceWriteLatches(
   byHost: Readonly<Record<string, HostServiceWriteLatches>>,
   hostId: string | null,
