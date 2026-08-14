@@ -658,11 +658,6 @@ function PluginRow({
               {plugin.version}
             </span>
           ) : null}
-          {sourceBadge !== null ? (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
-              {sourceBadge}
-            </span>
-          ) : null}
           {pending ? (
             <AgentSpinningDots
               className={undefined}
@@ -682,6 +677,13 @@ function PluginRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {/* Badge rides the trailing edge, matching the skills tab: names vary
+            in length, so status anchored here reads as a column. */}
+        {sourceBadge !== null ? (
+          <span className="whitespace-nowrap rounded bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+            {sourceBadge}
+          </span>
+        ) : null}
         {canEnableDisable && !isReadOnly ? (
           <Switch
             checked={plugin.enabled}

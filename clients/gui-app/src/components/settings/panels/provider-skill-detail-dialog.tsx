@@ -176,7 +176,7 @@ function SkillDetailHeader(props: {
         </DialogTitle>
         <span
           className={cn(
-            "rounded border px-1.5 py-0.5 text-ui-xs",
+            "rounded-full border px-2 py-0.5 font-medium text-ui-xs",
             SKILL_SOURCE_TONE[skill.source],
           )}
         >
@@ -191,7 +191,7 @@ function SkillDetailHeader(props: {
           >
             <span
               className={cn(
-                "rounded border px-1.5 py-0.5 text-ui-xs",
+                "rounded-full border px-2 py-0.5 font-medium text-ui-xs",
                 SKILL_CONFLICT_TONE,
               )}
             >

@@ -7,13 +7,21 @@ import {
 import type {
   ProviderSkill,
   ProviderSkillsCapabilities,
+  ProviderSkillSourceBadge,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { ChevronRight, Plus, Sparkles } from "lucide-react";
+import { ChevronRight, ListFilter, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
@@ -39,6 +47,7 @@ import {
   SKILL_CONFLICT_TONE,
   SKILL_CONFLICT_TOOLTIP,
   SKILL_SOURCE_LABEL,
+  SKILL_SOURCE_ORDER,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
 import {
@@ -141,11 +150,23 @@ function ProviderSkillsTabBody({
   // while the composer is mounted and vice versa.
   const [detailError, setDetailError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // Which source badges are filtered OUT. Empty = everything shown, which is
+  // the default and the state the trigger's "active" dot keys off.
+  const [hiddenSources, setHiddenSources] = useState<
+    ReadonlySet<ProviderSkillSourceBadge>
+  >(() => new Set());
 
   const skills = listQuery.data?.skills ?? EMPTY_SKILLS;
+  const sourceFilterActive = hiddenSources.size > 0;
   const filteredSkills = useMemo(
-    () => filterProviderSkills(skills, searchQuery),
-    [skills, searchQuery],
+    () =>
+      filterProviderSkills(
+        sourceFilterActive
+          ? skills.filter((skill) => !hiddenSources.has(skill.source))
+          : skills,
+        searchQuery,
+      ),
+    [skills, hiddenSources, sourceFilterActive, searchQuery],
   );
   const skillSearchActive = isProviderListSearchActive(searchQuery);
   const isMutating = mutate.isPending;
@@ -400,20 +421,6 @@ function ProviderSkillsTabBody({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="text-ui-sm font-medium text-foreground">Skills</div>
-          <p className="text-ui-xs text-muted-foreground">
-            Invoked by the agent when relevant, or manually with / in chat.
-          </p>
-        </div>
-        <SkillEntryButton
-          canAuthor={canAuthorHere}
-          disabled={isMutating}
-          onOpen={openComposer}
-        />
-      </div>
-
       {/*
         Global/project is WHERE the skill files live (host vs workspace). The
         composer's "Available to" control is a different axis — shared
@@ -444,15 +451,27 @@ function ProviderSkillsTabBody({
             }}
           />
         )}
+        <SkillEntryButton
+          canAuthor={canAuthorHere}
+          disabled={isMutating}
+          onOpen={openComposer}
+        />
       </div>
 
       {!projectNeedsWorkspace ? (
-        <ProviderListSearch
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          resultCount={filteredSkills.length}
-          resourceLabel="skills"
-        />
+        <div className="flex items-center gap-2">
+          <ProviderListSearch
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            resultCount={filteredSkills.length}
+            resourceLabel="skills"
+          />
+          <SkillSourceFilterMenu
+            skills={skills}
+            hiddenSources={hiddenSources}
+            onHiddenSourcesChange={setHiddenSources}
+          />
+        </div>
       ) : null}
 
       <SkillsListBody
@@ -465,6 +484,7 @@ function ProviderSkillsTabBody({
         unfilteredSkillCount={skills.length}
         searchQuery={searchQuery}
         searchActive={skillSearchActive}
+        sourceFilterActive={sourceFilterActive}
         canAuthor={canAuthorHere}
         disabled={isMutating}
         onOpenComposer={openComposer}
@@ -509,7 +529,7 @@ function isUpdatePending(isMutating: boolean, pendingKey: string | null) {
 }
 
 /**
- * The header affordance. One Add skill button opens the composer import-first
+ * One Add skill button opens the composer import-first
  * (or write-only when import is not advertised). No menu, no Import/New pair.
  */
 function SkillEntryButton({
@@ -525,7 +545,6 @@ function SkillEntryButton({
   return (
     <Button
       type="button"
-      variant="outline"
       size="sm"
       className="text-ui-xs"
       disabled={disabled}
@@ -534,6 +553,82 @@ function SkillEntryButton({
       <Plus className="size-3.5" />
       Add skill
     </Button>
+  );
+}
+
+/**
+ * Multi-select filter over the source badges, sitting beside search. Options
+ * are the source types actually present in the list (a provider with no plugin
+ * skills gets no dead "Plugin" row); everything starts selected, and
+ * deselecting a type hides its rows.
+ */
+function SkillSourceFilterMenu({
+  skills,
+  hiddenSources,
+  onHiddenSourcesChange,
+}: {
+  readonly skills: readonly ProviderSkill[];
+  readonly hiddenSources: ReadonlySet<ProviderSkillSourceBadge>;
+  readonly onHiddenSourcesChange: (
+    next: ReadonlySet<ProviderSkillSourceBadge>,
+  ) => void;
+}): ReactNode {
+  const present = SKILL_SOURCE_ORDER.filter((source) =>
+    skills.some((skill) => skill.source === source),
+  );
+  if (present.length === 0) return null;
+  const active = hiddenSources.size > 0;
+  const label = active
+    ? "Filter skills by type, some types hidden"
+    : "Filter skills by type";
+  return (
+    <DropdownMenu>
+      <TooltipWrapper label={label} side="top" sideOffset={4} align="center">
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            className="relative shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <ListFilter className="size-3.5" aria-hidden />
+            {/* A dot, not a count: it only has to say "the list is narrowed". */}
+            {active ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
+              />
+            ) : null}
+          </Button>
+        </DropdownMenuTrigger>
+      </TooltipWrapper>
+      <DropdownMenuContent align="end" className="min-w-40">
+        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
+          Show
+        </DropdownMenuLabel>
+        {present.map((source) => (
+          <DropdownMenuCheckboxItem
+            key={source}
+            checked={!hiddenSources.has(source)}
+            // Keep the menu open across toggles - narrowing to one type means
+            // unchecking two, and a menu that closes per click makes that three
+            // openings.
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+            onCheckedChange={(checked) => {
+              const next = new Set(hiddenSources);
+              if (checked) next.delete(source);
+              else next.add(source);
+              onHiddenSourcesChange(next);
+            }}
+          >
+            {SKILL_SOURCE_LABEL[source]}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -622,6 +717,7 @@ function SkillsListBody({
   unfilteredSkillCount,
   searchQuery,
   searchActive,
+  sourceFilterActive,
   canAuthor,
   disabled,
   onOpenComposer,
@@ -636,6 +732,7 @@ function SkillsListBody({
   readonly unfilteredSkillCount: number;
   readonly searchQuery: string;
   readonly searchActive: boolean;
+  readonly sourceFilterActive: boolean;
   readonly canAuthor: boolean;
   readonly disabled: boolean;
   readonly onOpenComposer: () => void;
@@ -689,6 +786,16 @@ function SkillsListBody({
         query={searchQuery}
         resourceLabel="skills"
       />
+    );
+  }
+  if (sourceFilterActive && skills.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
+        <ListFilter className="size-5 text-muted-foreground" aria-hidden />
+        <p className="text-ui-xs text-muted-foreground">
+          No skills match the current filter.
+        </p>
+      </div>
     );
   }
   return (
@@ -806,45 +913,47 @@ function SkillRow({
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
             format carries artwork for one, so anything here would be a glyph
-            we invented rather than the skill's own identity. The source badge
-            beside the name is the real differentiator. Plugin rows keep their
-            tile because plugins DO ship icons. */}
+            we invented rather than the skill's own identity. Plugin rows keep
+            their tile because plugins DO ship icons. */}
         <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-ui-sm font-medium text-foreground">
-              {skill.name}
-            </span>
-            <span
-              className={cn(
-                "rounded border px-1.5 py-0.5 text-ui-xs",
-                SKILL_SOURCE_TONE[skill.source],
-              )}
-            >
-              {SKILL_SOURCE_LABEL[skill.source]}
-            </span>
-            {skill.conflict === true ? (
-              <TooltipWrapper
-                label={SKILL_CONFLICT_TOOLTIP}
-                side="top"
-                sideOffset={4}
-                align="center"
-              >
-                <span
-                  className={cn(
-                    "rounded border px-1.5 py-0.5 text-ui-xs",
-                    SKILL_CONFLICT_TONE,
-                  )}
-                >
-                  {SKILL_CONFLICT_LABEL}
-                </span>
-              </TooltipWrapper>
-            ) : null}
+          <span className="block truncate text-ui-sm font-medium text-foreground">
+            {skill.name}
           </span>
           {skill.description !== null && skill.description.length > 0 ? (
             <span className="mt-0.5 block truncate text-ui-xs text-muted-foreground">
               {skill.description}
             </span>
           ) : null}
+        </span>
+        {/* Badges hold one trailing edge across every row - names vary in
+            length, so anchoring status here is what keeps it scannable as a
+            column instead of drifting with each name. */}
+        <span className="flex shrink-0 items-center gap-1.5">
+          {skill.conflict === true ? (
+            <TooltipWrapper
+              label={SKILL_CONFLICT_TOOLTIP}
+              side="top"
+              sideOffset={4}
+              align="center"
+            >
+              <span
+                className={cn(
+                  "whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-ui-xs",
+                  SKILL_CONFLICT_TONE,
+                )}
+              >
+                {SKILL_CONFLICT_LABEL}
+              </span>
+            </TooltipWrapper>
+          ) : null}
+          <span
+            className={cn(
+              "whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-ui-xs",
+              SKILL_SOURCE_TONE[skill.source],
+            )}
+          >
+            {SKILL_SOURCE_LABEL[skill.source]}
+          </span>
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
