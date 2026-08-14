@@ -23,6 +23,7 @@ import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
+  useEpicChatRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
   useEpicSnapshotLoaded,
   useEpicTitle,
@@ -425,6 +426,7 @@ export function useEpicRouteSynchronization(
   // projection, which is also correct across a host switch (the records
   // swap with the host, and so does the policing identity).
   const activeHostId = useReactiveActiveHostId();
+  const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
 
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
@@ -475,7 +477,11 @@ export function useEpicRouteSynchronization(
           isTileRefRecordLive(
             tab,
             pendingCreateArtifactIds,
-            { hasLiveRecord, isCloudKnown },
+            {
+              hasLiveRecord,
+              isCloudKnown,
+              recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+            },
             activeHostId,
           )
         ) {
@@ -487,6 +493,7 @@ export function useEpicRouteSynchronization(
   }, [
     snapshotLoaded,
     cloudChatsAuthorizeSweep,
+    chatRecordListAuthoritative,
     canvas,
     records,
     cloudChats.data,

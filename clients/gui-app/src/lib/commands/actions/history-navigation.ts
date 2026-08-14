@@ -140,12 +140,15 @@ function preservedTileRecordIsLive(
       : () => true;
   const activeHostId =
     getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null;
+  const recordListAuthorizesChatAbsence =
+    epicHandle?.store.getState().chatRecordListAuthoritative ?? false;
   return isTileRefRecordLive(
     preserved.node,
     pendingCreateArtifactIds,
     {
       hasLiveRecord,
       isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
+      recordListAuthorizesChatAbsence,
     },
     activeHostId,
   );
