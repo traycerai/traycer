@@ -154,8 +154,17 @@ export function useHostOverviewUpdates(input: {
   };
 
   const latest = manifest?.latest ?? null;
+  // PRECEDENCE, not equality: a host running a hotfix or RC AHEAD of the
+  // stable channel is not outdated, and offering Update now there submits a
+  // target the CLI short-circuits as `installed-up-to-date` - an update that
+  // announces itself and performs no work. `latest` must be STRICTLY newer to
+  // offer anything; equal precedence (build-metadata differences included)
+  // and incomparable pairs both count as up to date for the SUMMARY - the
+  // picker below stays the surface for deliberate cross-channel moves.
   const upToDate =
-    latest !== null && installedVersion !== null && latest === installedVersion;
+    latest !== null &&
+    installedVersion !== null &&
+    !latestIsStrictlyNewer(installedVersion, latest);
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
@@ -263,6 +272,18 @@ function visibleVersionRows(input: {
           : supersededReason(input.installedVersion, entry.version)),
     };
   });
+}
+
+/**
+ * Whether `latest` is STRICTLY newer than the installed version - the only
+ * state in which the summary offers Update now.
+ */
+function latestIsStrictlyNewer(
+  installedVersion: string,
+  latest: string,
+): boolean {
+  const comparison = compareHostVersions(installedVersion, latest);
+  return comparison.comparable && comparison.ordering === "less";
 }
 
 /**

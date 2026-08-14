@@ -715,6 +715,7 @@ function RateLimitPopoverBody({
       onClose={onClose}
       profileSelection={profileSelection}
       header={header}
+      displayedHostId={scope.hostId}
     />
   );
 }
@@ -730,10 +731,13 @@ function RateLimitPopoverScopedBody({
   onClose,
   profileSelection,
   header,
+  displayedHostId,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly header: ReactNode;
+  /** The host this popover is SHOWING - pinned or followed - for deep links. */
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const displayProviders = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
@@ -765,7 +769,7 @@ function RateLimitPopoverScopedBody({
     if (header === null) {
       return (
         <RateLimitPopoverResizeSurface variant="empty">
-          <RateLimitZeroState onClose={onClose} />
+          <RateLimitZeroState onClose={onClose} displayedHostId={displayedHostId} />
         </RateLimitPopoverResizeSurface>
       );
     }
@@ -773,7 +777,7 @@ function RateLimitPopoverScopedBody({
       <RateLimitPopoverResizeSurface variant="content">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto p-4">
-          <RateLimitZeroState onClose={onClose} />
+          <RateLimitZeroState onClose={onClose} displayedHostId={displayedHostId} />
         </div>
       </RateLimitPopoverResizeSurface>
     );
@@ -808,6 +812,7 @@ function RateLimitPopoverScopedBody({
         className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
       >
         <RateLimitRail
+          displayedHostId={displayedHostId}
           railTabs={railTabs}
           providers={providers}
           traycerRefreshTarget={{
@@ -1011,7 +1016,9 @@ function RateLimitRail({
   activeTab,
   onSelect,
   onClose,
+  displayedHostId,
 }: {
+  readonly displayedHostId: string | null;
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
@@ -1022,7 +1029,7 @@ function RateLimitRail({
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
-    carryUsageHostIntoSettingsScope();
+    carryUsageHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -2324,13 +2331,15 @@ function RateLimitDetailSkeleton(): ReactNode {
  */
 function RateLimitZeroState({
   onClose,
+  displayedHostId,
 }: {
   readonly onClose: () => void;
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
-    carryUsageHostIntoSettingsScope();
+    carryUsageHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -2358,8 +2367,12 @@ function RateLimitZeroState({
  * machine. Only an explicit pin transfers: `null` means "follow the active
  * host", and both surfaces already agree on that default.
  */
-function carryUsageHostIntoSettingsScope(): void {
-  const pinned = useRateLimitPopoverStore.getState().scopedHostId;
-  if (pinned === null) return;
-  useSettingsHostScopeStore.getState().setScopedHostId(pinned);
+function carryUsageHostIntoSettingsScope(displayedHostId: string | null): void {
+  // The DISPLAYED host, pinned or followed. An earlier version transferred
+  // only an explicit pin, reasoning that null means both surfaces agree on
+  // "follow" - but Settings can hold a stale explicit pin of its own, and the
+  // Providers panel resolves through Settings' scope, so the followed case
+  // landed on the wrong machine all the same.
+  if (displayedHostId === null) return;
+  useSettingsHostScopeStore.getState().setScopedHostId(displayedHostId);
 }
