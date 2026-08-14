@@ -1,6 +1,4 @@
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 
 /**
  * Pure helpers for the one Overview page local and remote hosts share.
@@ -77,7 +75,11 @@ export function describeOverviewDegrade(
     case "cli-unavailable":
       return `${hostName} has no Traycer CLI installed to run this, so it can't be done over the connection.`;
     case "externally-managed":
-      return `${hostName}'s updates are managed outside Traycer. Use the version pin below to say what it should run.`;
+      // Deliberately offers no alternative inside Traycer, because there is
+      // none: this host skips the update reconciler entirely, so neither the
+      // version list nor the auto-update switch below reaches it. An earlier
+      // wording sent people to a version pin that this page no longer has.
+      return `${hostName}'s updates are managed outside Traycer. Whatever deploys it decides its version — nothing here will change it.`;
   }
 }
 
@@ -150,64 +152,17 @@ export function splitDoctorIssuesByVantage(
 // reconciliation. `doctorFixRoute` in `host-doctor-actions.ts` is the single
 // source of truth for which mechanism can carry out a fix.
 
-/**
- * One meta line, sourced honestly per host kind.
- *
- * Deliberately carries NO version: the identity line above owns that, and
- * printing it in both places is how the card ended up showing two different
- * numbers when one came from the RPC and the other from the registry row.
- *
- * Local keeps exactly what it always showed — the loopback endpoint and pid,
- * which only the live local snapshot knows. A remote host has neither: there is
- * no loopback URL to print and its pid is a number on another machine that
- * nothing here could act on. What it has instead is where the route goes and
- * what the host says about its own sessions, so that is what it shows. Reading
- * a local pid file for a remote host would have been the one genuinely wrong
- * answer available.
- */
-export function overviewEndpointParts(input: {
-  readonly host: HostScopeOption;
-  readonly busySessionCount: number | null;
-  /** This computer's live host process. Always `null` for a remote row. */
-  readonly localHost: LocalHostSnapshot | null;
-}): readonly string[] {
-  const { host, busySessionCount, localHost } = input;
-  const parts: string[] = [];
-
-  if (host.isLocalMachine) {
-    // A live snapshot exists only while the process is up, and it carries both
-    // fields non-null when it does — so the presence of the snapshot IS the
-    // condition, and there is nothing further to check.
-    if (localHost !== null) {
-      parts.push(localHost.websocketUrl, `pid ${localHost.pid}`);
-    }
-  } else {
-    const relay = relayOrigin(host.entry?.websocketUrl ?? null);
-    if (relay !== null) parts.push(`via ${relay}`);
-  }
-
-  if (busySessionCount !== null && busySessionCount > 0) {
-    parts.push(
-      `${busySessionCount} active session${busySessionCount === 1 ? "" : "s"}`,
-    );
-  }
-  return parts;
-}
-
-/**
- * The relay's ORIGIN, never its full URL.
- *
- * The path carries the rendezvous id — an opaque routing key that changes hands
- * with the registry row. It is not a bearer, but it is also not something a
- * person reads or needs, and printing routing keys into a support-copyable line
- * is a habit worth not starting. The origin answers the only question the line
- * is asked: which relay is this going through.
- */
-function relayOrigin(websocketUrl: string | null): string | null {
-  if (websocketUrl === null || websocketUrl.length === 0) return null;
-  try {
-    return new URL(websocketUrl).host;
-  } catch {
-    return null;
-  }
-}
+// `overviewEndpointParts` and `relayOrigin` lived here and are gone with the
+// meta row they fed (`via relay.dev.traycer.ai · 1 active session`).
+//
+// That row was the page's ONE deliberate local/remote difference — loopback URL
+// and pid for this computer, relay origin for a remote host — and it is the
+// difference that stopped earning its place. Neither half is actionable from
+// Settings: the pid belongs to a process this page cannot signal except through
+// the Restart button already beside it, and the relay origin is infrastructure
+// the account picked. What the row carried that anyone acts on is the session
+// count, which now renders as a chip on the identity line and comes straight
+// off `host.status.busySessionCount` — no per-kind derivation left to do.
+//
+// The local snapshot (`LocalHostSnapshot`) was this module's only reason to
+// know about a host's locality at all, so the Overview no longer takes it.

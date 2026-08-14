@@ -24,4 +24,11 @@ export const hostMaintenanceMutationKeys = {
   logsTail: () => ["host.diagnostics.logsTail"] as const,
   updateCheck: () => ["host.update.check"] as const,
   updateInstall: () => ["host.update.install"] as const,
+  // The OS-service writes. Two keys rather than one `serviceCycle()`: they are
+  // not two directions of one control - registering leaves a supervised host
+  // running, deregistering stops it and does not bring it back - and a shared
+  // key would let a pending Deregister grey out Re-register as though the two
+  // were the same operation in flight.
+  serviceRegister: () => ["host.service.register"] as const,
+  serviceDeregister: () => ["host.service.deregister"] as const,
 };

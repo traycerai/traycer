@@ -10,11 +10,10 @@ import {
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
+import { LocalRecoveryDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
-import { HostRecoveryConsole } from "@/components/settings/panels/host-recovery-console";
-import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
 import { runFixAction } from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { HostRuntimeContext } from "@/lib/host";
@@ -27,33 +26,35 @@ import {
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import type {
   HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
   IHostManagement,
-  IRunnerHost,
-  LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ReactNode } from "react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 /**
- * The one Overview page, and the one decision about which surface it shows.
+ * The one Overview page. No second surface, and so no decision about which to
+ * show.
  *
- * The page proper (`HostOverviewPanel`) reads the SCOPED HOST'S OWN RPC and is
- * identical for a machine on this desk and a machine in a datacenter. The
- * recovery console (`HostRecoveryConsole`) is what remains of the old
- * CLI-bridge page: it renders only for THIS COMPUTER, and only when there is no
- * host process here to answer — install, start and re-register a service that
- * is down.
+ * `HostOverviewPanel` reads the SCOPED HOST'S OWN RPC, and a machine on this
+ * desk renders the same components from the same answers as a machine in a
+ * datacenter. There used to be a second page beside it — a CLI-bridge recovery
+ * console, picked when the subject was THIS COMPUTER and no host process was up
+ * — and the pair is what this file no longer does. The bridge can only ever
+ * speak for the local machine, so anything built on it is a surface a remote
+ * host can never have; a page whose layout depends on which machine you are
+ * looking at, and on whether its process happens to be up, is two products
+ * wearing one name. That is how the offline surface drifted a full redesign
+ * behind the online one without anyone noticing.
  *
- * The split is the SUBJECT plus the presence of a process, never reachability
- * as a page-level gate. Gating the console on dialability is what once removed
- * Install and Start in exactly the state they exist for; gating the RPC page on
- * "is this local?" is what gave remote hosts a thinner page in a different
- * dialect. Both mistakes are named here because both were shipped.
+ * When a host cannot answer, the page says so and shows what the ACCOUNT
+ * REGISTRY already knows — never a hidden local fallback. Restarting a host
+ * that is down belongs to `LocalHostGate`, which owns the app-level "your host
+ * isn't up" surface; that is app state, not a property of the host you happen
+ * to be viewing.
  */
 export function HostSettingsPanel() {
   const scope = useHostScope();
@@ -70,7 +71,6 @@ function HostSettingsPanelInner() {
   const runnerHost = useRunnerHost();
   const compact = useSettingsDensity() === "compact";
   const management = runnerHost.hostManagement;
-  const localHost = useLocalHostSnapshot(runnerHost);
 
   // Re-provided so every hook beneath this resolves to the SELECTED host rather
   // than the ambient one — the Providers-panel pattern, with its `status ===
@@ -88,30 +88,6 @@ function HostSettingsPanelInner() {
   // forgets the gate fails closed.
   const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
 
-  // The fresh-install carve-out. On a first run there is no local host id yet,
-  // so the union has no local row at all: the scope resolves to NOTHING and the
-  // honest-state rule above would leave only an empty notice — while the CLI
-  // bridge sits right here reporting `not-installed`, which is the one state
-  // the install console exists for. An EMPTY account (both lists answered,
-  // nothing failed, no vanished pick) is exactly when this computer's console
-  // is recovery rather than misattribution: there is no other host the controls
-  // could be mistaken for.
-  const emptyAccountLocalRecovery =
-    scope.host === null &&
-    scope.vanishedHostId === null &&
-    scope.hosts.length === 0 &&
-    !scope.isLoading &&
-    !scope.listsFailed;
-
-  // Which surface this computer's host gets, and the bridge that would run it.
-  const recoveryManagement = useRecoveryConsoleManagement({
-    management,
-    localHost,
-    connectable: scope.host?.connectable ?? false,
-    scopedIsLocalMachine,
-    emptyAccountLocalRecovery,
-  });
-
   // The doctor's three repair-a-down-host fixes still run over the bridge when
   // the host being shown is this computer. Owned here rather than inside the
   // sheet because `IHostManagement` is a property of the SHELL, not of the
@@ -122,37 +98,34 @@ function HostSettingsPanelInner() {
   // Keeps a `false` capability answer refutable. See the hook below.
   useOverviewCapabilityProbe(scope);
 
+  const localRecoveryZone = useEmptyAccountLocalRecoveryZone(scope, management);
+
   const description =
     scope.host === null
       ? "Status, updates and maintenance for the selected host."
       : `Status, updates and maintenance for ${scope.host.name}.`;
 
   // Say NOTHING about a host the scope cannot resolve. This is the whole-panel
-  // gate, and it is now safe to use one: unlike the old page, everything below
-  // describes the scoped host, so there is no region that would be wrongly
-  // withheld by it.
+  // gate, and it is safe to use one: everything below describes the scoped
+  // host, so there is no region that would be wrongly withheld by it.
   //
-  // The carve-out is stated as "...and there is no recovery console to offer",
-  // not as the carve-out flag itself. A fresh install has no row to resolve, so
-  // the gate must stand aside for the console that creates the first host — but
-  // a shell with no CLI bridge (web, mobile) has no console either, and there
-  // the gate's "No hosts yet" is the only honest thing on the page.
-  const unresolved =
-    (scope.host === null && recoveryManagement === null) ||
-    scope.status === "vanished";
+  // There is no longer a carve-out PAGE for a first run. The recovery console
+  // this page used to fall back to is GONE, along with the whole idea that a
+  // host which cannot answer gets a different page: one component now describes
+  // every host from whatever source can answer for it, and says plainly when
+  // that is only the account registry. Creating the first host was never
+  // unique to that console anyway — the desktop auto-converges at startup
+  // (`host-launch-converge.ts`) and `LocalHostGate` owns the app-level
+  // "your host is not up" surface with its own Install. What survives of it is
+  // the single VERB above (`localRecoveryZone`), rendered under this gate.
+  const unresolved = scope.host === null || scope.status === "vanished";
 
   const body = renderOverviewBody({
     scope,
     unresolved,
     compact,
-    recoveryManagement,
-    runnerHost,
-    emptyAccountLocalRecovery,
-    // Only ever this computer's snapshot, and only when this computer is the
-    // SUBJECT. Handing it over for a remote row would print a local pid under
-    // another machine's name.
-    localHost: scopedIsLocalMachine ? localHost : null,
     hasLocalBridge: management !== null && scopedIsLocalMachine,
+    localRecoveryZone,
     onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
     localDoctorFixPendingCode: localDoctorFix.isPending
       ? localDoctorFix.variables.code
@@ -214,130 +187,59 @@ function useOverviewCapabilityProbe(scope: HostScope): void {
 }
 
 /**
- * The recovery console's precondition, and the bridge that would drive it.
+ * Two outcomes, not three.
  *
- * Returns the bridge when this computer's host has no process to answer for
- * itself, and `null` otherwise — so the caller narrows `IHostManagement` by
- * using the answer rather than re-deriving it, and there is exactly one place
- * that decides when the CLI-bridge surface appears.
- */
-function useRecoveryConsoleManagement(input: {
-  readonly management: IHostManagement | null;
-  readonly localHost: LocalHostSnapshot | null;
-  readonly connectable: boolean;
-  readonly scopedIsLocalMachine: boolean;
-  readonly emptyAccountLocalRecovery: boolean;
-}): IHostManagement | null {
-  const { management, scopedIsLocalMachine, emptyAccountLocalRecovery } = input;
-  // "Not installed" is a BRIDGE fact with no RPC twin: a host that was never
-  // installed cannot answer `host.getInstallationInfo`, or anything else.
-  //
-  // Reading it for a local scope is free — `useHostScope` runs this exact query
-  // under this exact key for every shell with a bridge, so this observer shares
-  // that cache entry rather than adding a call.
-  const installedQuery = useQuery(
-    queryOptions<HostInstalledRecord | null>({
-      queryKey:
-        management === null
-          ? runnerQueryKeys.hostInstalledRecordUnavailable()
-          : runnerQueryKeys.hostInstalledRecord(management),
-      queryFn:
-        management === null
-          ? skipInstalledRecord
-          : () => management.installedRecord(),
-      enabled:
-        management !== null &&
-        (scopedIsLocalMachine || emptyAccountLocalRecovery),
-      staleTime: 30_000,
-    }),
-  );
-
-  // `deriveStatus`'s "not-installed" state, which is why the live snapshot is
-  // part of it rather than the record alone.
-  //
-  // A live local process outranks a missing install record: someone running the
-  // host from a checkout HAS no record, and reading that as "not installed"
-  // would offer Install for a host answering RPCs right now. It is also what
-  // keeps the page from FLIPPING surfaces. The record arrives asynchronously, so
-  // a record-only rule renders the RPC page first and swaps to the console when
-  // it lands — destroying anything opened in between, which is how a restart
-  // confirmation gets dismissed out from under a click. With the snapshot in the
-  // conjunct a running host never enters this branch, and a stopped one is
-  // already caught by `!connectable` on the very first render.
-  const notInstalled =
-    input.localHost === null &&
-    installedQuery.isSuccess &&
-    installedQuery.data === null;
-
-  const applies =
-    (scopedIsLocalMachine && (!input.connectable || notInstalled)) ||
-    emptyAccountLocalRecovery;
-  return applies ? management : null;
-}
-
-/**
- * Which of the three surfaces the page is showing, in one place.
+ * There used to be a third — a CLI-bridge "recovery console" that replaced this
+ * whole page whenever the local host had no process to answer for itself. It is
+ * gone, and deliberately not replaced by a fallback data source: the bridge can
+ * only ever speak for THIS computer, so anything built on it is a surface a
+ * remote host can never have. A page whose layout depends on which machine you
+ * are looking at, and on whether its process happens to be up, is two products
+ * wearing one name — which is exactly how the offline surface drifted a full
+ * redesign behind the online one without anyone noticing.
  *
- * Extracted from the panel so the decision reads as three named, mutually
- * exclusive outcomes rather than a chain of conditions embedded in JSX — the
- * shape that let "local" and "unresolved" quietly overlap in the old page.
+ * So: either the scope cannot name a host at all, or `HostOverviewPanel`
+ * describes it from whatever source can answer — the host's own RPCs when it is
+ * reachable, the account registry when it is not, and it says which.
  */
 function renderOverviewBody(input: {
   readonly scope: HostScope;
   readonly unresolved: boolean;
   readonly compact: boolean;
-  readonly recoveryManagement: IHostManagement | null;
-  readonly runnerHost: IRunnerHost;
-  readonly emptyAccountLocalRecovery: boolean;
-  readonly localHost: LocalHostSnapshot | null;
   readonly hasLocalBridge: boolean;
+  /** The empty-account uninstall carve-out; `null` in every other state. */
+  readonly localRecoveryZone: ReactNode | null;
   readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
   readonly localDoctorFixPendingCode: string | null;
 }): ReactNode {
-  const { scope, recoveryManagement } = input;
+  const { scope } = input;
   if (input.unresolved) {
     return (
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
-        {null}
-      </HostScopeGate>
-    );
-  }
-  if (recoveryManagement !== null) {
-    return (
-      <div className={cn("flex flex-col", input.compact ? "gap-3.5" : "gap-5")}>
-        <HostRecoveryConsole
-          management={recoveryManagement}
-          runnerHost={input.runnerHost}
+      <div className="flex w-full flex-col gap-5">
+        <HostScopeGate
           scope={scope}
-          emptyAccountLocalRecovery={input.emptyAccountLocalRecovery}
-        />
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {null}
+        </HostScopeGate>
+        {input.localRecoveryZone}
       </div>
     );
   }
   return (
+    // No `key` here: `HostSettingsPanel` already remounts everything below it on
+    // a scope change (`key={scopeKey}`), so a second one would be decoration.
+    // That is also what makes it safe for the update state to live at page level
+    // now that its two halves render in two different containers — an armed
+    // drain-gate confirmation and the manifest the last check returned die with
+    // the host they belonged to, one boundary up.
     <HostOverviewPanel
       scope={scope}
-      localHost={input.localHost}
       hasLocalBridge={input.hasLocalBridge}
       onLocalDoctorFix={input.onLocalDoctorFix}
       localDoctorFixPendingCode={input.localDoctorFixPendingCode}
     />
   );
-}
-
-/**
- * Stand-in `queryFn` for the disabled installed-record query.
- *
- * TanStack requires one even when `enabled` is false, and a rejecting stub is
- * the honest shape: if it ever runs, the `enabled` guard above it is wrong and
- * should fail loudly rather than resolve a fake `null` that would read as
- * "nothing is installed" — and put the install console on screen.
- */
-function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
-  return Promise.reject(new Error("host management bridge unavailable"));
 }
 
 /**
@@ -362,6 +264,51 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
 type LocalDoctorFixOutcome =
   | { readonly applied: true; readonly declinedMessage: null }
   | { readonly applied: false; readonly declinedMessage: string };
+
+// Tripwire, never called: the query above is `enabled` only with a bridge.
+function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+/**
+ * The one carve-out the whole-panel gate still owes: an install that completed
+ * while sign-in did not. An EMPTY account (both lists answered, nothing
+ * failed, no vanished pick) with installed local components has exactly one
+ * thing left to offer — removal over the CLI bridge, which needs no host row —
+ * and `LocalRecoveryDangerZone`'s contract names this page as the only
+ * uninstall surface. Everything else about recovery stays `LocalHostGate`'s
+ * job; this is the verb that must not vanish with the row. The caller decides
+ * whether anything is actually installed — the zone cannot know — so the
+ * bridge's install record is the gate, and only the empty-account state asks.
+ */
+function useEmptyAccountLocalRecoveryZone(
+  scope: HostScope,
+  management: IHostManagement | null,
+): ReactNode | null {
+  const emptyAccountLocalRecovery =
+    scope.host === null &&
+    scope.vanishedHostId === null &&
+    scope.hosts.length === 0 &&
+    !scope.isLoading &&
+    !scope.listsFailed;
+  const installedRecord = useQuery(
+    queryOptions<HostInstalledRecord | null>({
+      queryKey:
+        management === null
+          ? runnerQueryKeys.hostInstalledRecordUnavailable()
+          : runnerQueryKeys.hostInstalledRecord(management),
+      queryFn:
+        management === null
+          ? skipInstalledRecord
+          : () => management.installedRecord(),
+      enabled: management !== null && emptyAccountLocalRecovery,
+      staleTime: 30_000,
+    }),
+  );
+  if (!emptyAccountLocalRecovery || management === null) return null;
+  if ((installedRecord.data ?? null) === null) return null;
+  return <LocalRecoveryDangerZone />;
+}
 
 function useLocalDoctorFixMutation(management: IHostManagement | null) {
   const queryClient = useQueryClient();

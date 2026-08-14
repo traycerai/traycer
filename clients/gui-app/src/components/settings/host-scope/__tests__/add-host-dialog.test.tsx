@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
@@ -227,5 +227,53 @@ describe("<AddHostDialog /> arrival", () => {
     render(<AddHostDialog />);
 
     expect(screen.queryByTestId("add-host-arrived")).toBeNull();
+  });
+});
+
+/**
+ * The instructions are a contract with a machine nobody in this window can
+ * see, and every line of the previous version was wrong: it printed a
+ * `curl … | sh` installer for a URL that redirects to an HTML docs page, an
+ * `install.ps1` that 404s, and then stopped at `traycer login` — which
+ * authenticates and deliberately provisions nothing (`commands/login.ts`). A
+ * person who followed it exactly ended with no host, and this dialog watched
+ * for an arrival that could not come.
+ *
+ * So these lock the two facts that made it wrong, not the prose around them:
+ * the fictional installers are gone, and the steps end on the command that
+ * actually installs and starts the host.
+ */
+describe("<AddHostDialog /> setup instructions", () => {
+  beforeEach(() => {
+    scopeMocks.scope = { hosts: [], isLoading: false, listsFailed: false };
+    useAddHostDialogStore.getState().openDialog([]);
+  });
+
+  it("ends on `host ensure`, not on `login`", () => {
+    render(<AddHostDialog />);
+
+    // The ORDER is the fact under test, not just presence: install, then
+    // sign in, then the command that actually provisions. Presence checks
+    // alone passed with the steps shuffled.
+    const steps = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(steps).toHaveLength(3);
+    expect(steps[0].textContent).toContain("npm install -g @traycerai/cli");
+    expect(steps[1].textContent).toContain("traycer login");
+    // The step whose absence made the whole dialog unreachable.
+    expect(steps[2].textContent).toContain("traycer host ensure");
+  });
+
+  it("no longer prints the curl installer", () => {
+    render(<AddHostDialog />);
+
+    // Substring, not a word-boundary regex: adjacent nodes concatenate with no
+    // separator in `textContent`, and one negative claim per assertion.
+    expect(screen.queryByText(/curl/i)).toBeNull();
+  });
+
+  it("no longer prints the install.ps1 one-liner", () => {
+    render(<AddHostDialog />);
+
+    expect(screen.queryByText(/install\.ps1/i)).toBeNull();
   });
 });

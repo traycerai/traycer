@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CHAT_ARCHIVE_VISIBILITY,
+  CHAT_OWNERSHIP,
   DEFAULT_LEFT_PANEL_GROUPS,
   DEFAULT_LEFT_PANEL_ID,
   DEFAULT_SIDEBAR_WIDTH_PX,
@@ -13,6 +14,7 @@ import {
   moveLeftPanelToGroup,
   moveLeftPanelToGroupPosition,
   moveLeftPanelToPanelPosition,
+  matchesChatOwnershipFilter,
   useLeftPanelGroups,
   useLeftPanelStore,
   useChatArchiveVisibility,
@@ -49,6 +51,7 @@ interface PersistedLeftPanelState {
   readonly state: {
     readonly activePanelIdByTabId: Readonly<Record<string, string>>;
     readonly panelGroups: ReadonlyArray<LeftPanelGroup>;
+    readonly mainCollapsedByTabId: Readonly<Record<string, boolean>>;
     readonly sidebarWidthPx: number;
     readonly panelSectionCollapsedByPanelId: Readonly<Record<string, boolean>>;
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
@@ -319,6 +322,7 @@ describe("useLeftPanelStore", () => {
       state: {
         activePanelIdByTabId: {},
         panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
+        mainCollapsedByTabId: {},
         sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
@@ -329,7 +333,7 @@ describe("useLeftPanelStore", () => {
         chatSortByEpicId: {},
         artifactSortByEpicId: {},
       },
-      version: 2,
+      version: 3,
     });
   });
 
@@ -354,6 +358,27 @@ describe("useLeftPanelStore", () => {
     );
   });
 
+  it("restores a collapsed sidebar after refresh", async () => {
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
+      "tab-a": true,
+    });
+
+    const persistedBeforeRefresh =
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}";
+    useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+    window.localStorage.setItem(PERSIST_KEY, persistedBeforeRefresh);
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual(
+      {},
+    );
+  });
+
   it("restores a persisted sidebar width", async () => {
     window.localStorage.setItem(
       PERSIST_KEY,
@@ -366,6 +391,7 @@ describe("useLeftPanelStore", () => {
   it("persists active chat and artifact filters set through actions", () => {
     act(() => {
       useLeftPanelStore.getState().setChatOrigin("epic-a", "gui");
+      useLeftPanelStore.getState().setChatOwnership("epic-a", "others");
       useLeftPanelStore.getState().toggleArtifactStatus("epic-a", 1);
       useLeftPanelStore.getState().toggleArtifactKind("epic-a", "ticket");
       useLeftPanelStore.getState().setArtifactRead("epic-a", "unread");
@@ -373,7 +399,7 @@ describe("useLeftPanelStore", () => {
 
     const persisted = readPersistedLeftPanelState();
     expect(persisted.state.chatFilterByEpicId).toEqual({
-      "epic-a": { origin: "gui" },
+      "epic-a": { origin: "gui", ownership: "others" },
     });
     expect(persisted.state.artifactFilterByEpicId).toEqual({
       "epic-a": { statuses: [1], kinds: ["ticket"], read: "unread" },
@@ -398,6 +424,7 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().chatFilterByEpicId["epic-a"]).toEqual({
       origin: "gui",
+      ownership: "all",
     });
     expect(
       useLeftPanelStore.getState().artifactFilterByEpicId["epic-a"],
@@ -414,6 +441,13 @@ describe("useLeftPanelStore", () => {
     const persisted = readPersistedLeftPanelState();
     expect(persisted.state.chatFilterByEpicId).toEqual({});
     expect(persisted.state.artifactFilterByEpicId).toEqual({});
+  });
+
+  it("matches viewer ownership for Mine and Others", () => {
+    expect(matchesChatOwnershipFilter(true, CHAT_OWNERSHIP.Mine)).toBe(true);
+    expect(matchesChatOwnershipFilter(false, CHAT_OWNERSHIP.Mine)).toBe(false);
+    expect(matchesChatOwnershipFilter(true, CHAT_OWNERSHIP.Others)).toBe(false);
+    expect(matchesChatOwnershipFilter(false, CHAT_OWNERSHIP.Others)).toBe(true);
   });
 
   it("defaults archive visibility to unarchived only", () => {

@@ -78,6 +78,38 @@ function createManifest(versions: readonly string[]): HostVersionsManifest {
 }
 
 describe("buildHostAvailableListing", () => {
+  it("marks a version above this CLI's floor unavailable, with the floor in the reason", () => {
+    // The registry client rejects a floored target only at download time,
+    // AFTER the RPC answered accepted - so the LISTING must carry the floor,
+    // or the GUI advertises installs that can only terminate as floor
+    // failures. Same evaluator as the client, so the two cannot disagree.
+    const floored = {
+      ...createEntry("1.2.0"),
+      requiredCliVersion: "10.0.0",
+    };
+    const manifest: HostVersionsManifest = {
+      schemaVersion: 1,
+      generatedAt: "2026-06-22T01:00:00.000Z",
+      latest: "1.2.0",
+      versions: [floored, createEntry("1.1.0")],
+    };
+    const listing = buildHostAvailableListing({
+      manifest,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      cliVersion: "9.9.9",
+    });
+
+    const asset = listing.manifest.versions[0].platforms["darwin-arm64"];
+    expect(asset?.available).toBe(false);
+    expect(asset?.unavailableReason).toContain("10.0.0");
+    // The unfloored sibling stays untouched.
+    expect(
+      listing.manifest.versions[1].platforms["darwin-arm64"]?.available,
+    ).toBe(true);
+  });
+
   it("hides prerelease host versions by default", () => {
     const listing = buildHostAvailableListing({
       manifest: createManifest([
@@ -90,6 +122,7 @@ describe("buildHostAvailableListing", () => {
         "https://github.com/traycerai/traycer/releases/download/released-host-versions/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      cliVersion: "9.9.9",
     });
 
     expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
@@ -113,6 +146,7 @@ describe("buildHostAvailableListing", () => {
         "https://github.com/traycerai/traycer/releases/download/released-host-versions/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: true,
+      cliVersion: "9.9.9",
     });
 
     expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
@@ -306,6 +340,7 @@ describe("buildHostAvailableListing platform scoping", () => {
       manifestUrl: "https://example.com/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      cliVersion: "9.9.9",
     });
 
     const entry = listing.manifest.versions[0];
@@ -323,6 +358,7 @@ describe("buildHostAvailableListing platform scoping", () => {
       manifestUrl: "https://example.com/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      cliVersion: "9.9.9",
     });
 
     // Dropped assets must not drop the VERSION - callers distinguish

@@ -486,7 +486,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
     read: "all",
   }),
   useArtifactSort: () => ({ field: "updated", direction: "desc" }),
-  useChatFilter: () => ({ origin: "all" }),
+  useChatFilter: () => ({ origin: "all", ownership: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
   usePanelVisibilityOverrides: () => ({}),

@@ -1,136 +1,103 @@
-import { Check, Globe, Monitor, Server, type LucideIcon } from "lucide-react";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import {
-  hostUnavailability,
-  type HostUnavailability,
-} from "@traycer-clients/shared/host-client/remote-fetcher";
-import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-
-const HOST_KIND_ICONS: Record<HostDirectoryEntry["kind"], LucideIcon> = {
-  remote: Globe,
-  mock: Server,
-  local: Monitor,
-};
+import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import {
+  findHostOption,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 interface HostSectionProps {
-  readonly entries: ReadonlyArray<HostDirectoryEntry>;
+  /**
+   * The account's hosts, from `useHostOptions` — the same merged list Settings
+   * and the usage popover read. This section used to take raw directory
+   * entries, which is why a host you own but cannot dial right now was absent
+   * here and present there: the picker in the composer said the machine did not
+   * exist, the picker in Settings said it was offline.
+   */
+  readonly hosts: readonly HostScopeOption[];
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
   /**
-   * A pending submission owns the host selection. The rows must go inert, not
-   * just have their handler no-op: an interactive row that silently discards
-   * the click reads as a broken control rather than a busy one.
+   * A pending submission (or a surface pinned to one host) owns the selection.
+   * The control goes inert rather than accepting a click and discarding it.
    */
   readonly disabled: boolean;
+  readonly isLoading: boolean;
+  /** A host list request FAILED, so an empty `hosts` proves nothing. */
+  readonly listsFailed: boolean;
+  readonly onRetryLists: () => void;
 }
 
 /**
- * Host list for the worktree picker popovers (git-diff panel, terminal
- * creation, file tree). Clicking a row swaps the app-wide active host via
- * the directory binding; the host-scoped folder queries underneath refetch
- * automatically.
+ * Host block for the workspace/worktree picker surfaces (composer, git-diff
+ * panel, terminal creation, file tree, the fork dialogs). Choosing a host swaps
+ * the app-wide active host via the directory binding; the host-scoped folder
+ * queries underneath refetch automatically.
+ *
+ * It is the same `HostSwitcher` the Settings rail and the usage popover mount —
+ * one row of chrome that names the current host and opens the list — rather
+ * than a flat list of every host inline. The flat list was fine at one host and
+ * became the whole top of the panel at four, pushing the Workspaces section it
+ * heads below the fold on exactly the accounts that own several machines.
+ *
+ * What stays local to this surface is only its framing: the "Host" heading that
+ * pairs with "Workspaces" below it.
  */
-export function HostSection(props: HostSectionProps) {
+export function HostSection(props: HostSectionProps): ReactNode {
+  const { openSettings } = useSystemTabModalActions();
+  // The rows' presence dots come from the registry through a deliberately
+  // NON-polling observer; every surface that shows the dots opts the window
+  // into the liveness poll while it is on screen (the Settings sidebar's
+  // rule, then the usage picker's and the shell host dialog's). This section
+  // mounts only inside open pickers and fork dialogs, so the poll runs
+  // exactly while someone is looking at the dots.
+  useRegisteredHostsPollLiveness();
   return (
     <section
-      aria-label="Host"
       data-testid="host-workspace-selector-host-section"
       className="w-full max-w-full min-w-0"
     >
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Host
       </DropdownMenuLabel>
-      <ul className="flex min-w-0 flex-col gap-0.5">
-        {props.entries.length === 0 ? (
-          <li className="rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground">
-            No hosts available.
-          </li>
-        ) : (
-          props.entries.map((entry) => {
-            const isActive = entry.hostId === props.activeHostId;
-            return (
-              <li key={entry.hostId} className="min-w-0">
-                <button
-                  type="button"
-                  disabled={props.disabled}
-                  data-testid={`host-workspace-selector-host-row-${entry.hostId}`}
-                  data-selected={isActive ? "true" : "false"}
-                  onClick={() => {
-                    props.onSelect(entry.hostId);
-                  }}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm transition-colors hover:bg-accent/50 hover:text-foreground",
-                    isActive ? "text-foreground" : "text-muted-foreground",
-                    "disabled:pointer-events-none disabled:opacity-60",
-                  )}
-                >
-                  <HostKindIcon kind={entry.kind} />
-                  <span className="min-w-0 flex-1 truncate text-left">
-                    {entry.label}
-                  </span>
-                  <HostStatusDot unavailability={hostUnavailability(entry)} />
-                  {isActive ? (
-                    <Check className="size-3.5 text-foreground" />
-                  ) : null}
-                </button>
-              </li>
-            );
-          })
-        )}
-      </ul>
+      <HostSwitcher
+        hosts={props.hosts}
+        // Here the check and the active host are the same fact: this picker
+        // chooses where work LANDS, so the row it marks is the bound one.
+        selected={findHostOption(props.hosts, props.activeHostId)}
+        activeHostId={props.activeHostId}
+        onSelect={props.onSelect}
+        // Binding the window to a host it cannot dial is not a legal answer, so
+        // those rows list with their reason and stay inert.
+        intent="bind"
+        action={{
+          kind: "manage-hosts",
+          onSelect: () => {
+            // The host this surface is SHOWING travels with the jump - same
+            // transfer as the usage popover's cross-scope links. Without it,
+            // a stale explicit Settings pin lands Manage hosts on a machine
+            // other than the one whose row launched it. In a fixed-scope
+            // dialog `activeHostId` IS the pinned host, so the transfer is
+            // right there too.
+            if (props.activeHostId !== null) {
+              useSettingsHostScopeStore
+                .getState()
+                .setScopedHostId(props.activeHostId);
+            }
+            openSettings({ section: "host", resetToGeneral: false });
+          },
+        }}
+        // A field, like the workspace search directly beneath it: inside an
+        // already-open panel a quiet fill does not read as a control at all.
+        surface="field"
+        isLoading={props.isLoading}
+        listsFailed={props.listsFailed}
+        onRetryLists={props.onRetryLists}
+        disabled={props.disabled}
+      />
     </section>
   );
 }
-
-function HostKindIcon(props: { readonly kind: HostDirectoryEntry["kind"] }) {
-  const Icon = HOST_KIND_ICONS[props.kind];
-  return <Icon className="size-4 shrink-0 text-muted-foreground" />;
-}
-
-/**
- * DERIVATION, not a coarse read: this dot and its `aria-label` are the only
- * thing a person is told about the machine before they pick it, and three
- * unrelated situations used to collapse into one grey "Unavailable" — a host
- * that is genuinely off, a host the account's plan cannot reach remotely, and a
- * host the cloud simply failed to read. Calling the last two "Unavailable" sent
- * someone to restart a machine that was working, and hid the upgrade that was
- * the actual remedy.
- *
- * `indeterminate` renders as its own muted state rather than as unavailable —
- * the picker deliberately keeps such rows selectable (the transport dials on
- * it), so the dot must not contradict the row it sits on.
- *
- * A `busy` local host reaches this as `dialable` and keeps the reachable dot:
- * the shell proved the process is alive and only one probe went unanswered, so
- * greying it would be the picker telling someone their working machine is gone.
- * Distinguishing busy from available VISUALLY is the copy follow-up's job
- * (int #47), not this dot's.
- */
-function HostStatusDot(props: {
-  readonly unavailability: HostUnavailability | null;
-}) {
-  const presentation = HOST_STATUS_DOT[props.unavailability ?? "dialable"];
-  return (
-    <span
-      aria-label={presentation.label}
-      className={cn("size-1.5 rounded-full", presentation.className)}
-    />
-  );
-}
-
-const HOST_STATUS_DOT: Record<
-  HostUnavailability | "dialable",
-  { readonly label: string; readonly className: string }
-> = {
-  dialable: { label: "Available", className: "bg-emerald-500" },
-  offline: { label: "Offline", className: "bg-muted-foreground/40" },
-  "plan-restricted": {
-    label: "Local only",
-    className: "bg-muted-foreground/40",
-  },
-  indeterminate: {
-    label: "Status unknown",
-    className: "bg-muted-foreground/40",
-  },
-};

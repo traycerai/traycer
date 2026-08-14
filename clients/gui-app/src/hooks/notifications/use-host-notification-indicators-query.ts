@@ -52,10 +52,8 @@ export interface HostNotificationIndicatorsQuery {
 
 /**
  * One surface-level indicator observer. The visible ids are canonicalized and
- * split into cap-sized requests, so normal surfaces issue one RPC and very
- * large surfaces grow by bounded pages rather than one observer per row.
- * Epic chunks are crossed with chat chunks because every task aggregate must
- * receive the complete live-chat whitelist.
+ * paired into cap-sized requests, so normal surfaces issue one RPC and very
+ * large surfaces grow only by 500-id pages rather than one observer per row.
  */
 export function useHostNotificationIndicators(
   args: UseHostNotificationIndicatorsArgs,
@@ -102,24 +100,11 @@ export function indicatorRequests(
 ): ReadonlyArray<HostNotificationsIndicatorStateRequest> {
   const epicChunks = chunkIds(epicIds);
   const chatChunks = chunkIds(chatIds);
-  if (epicChunks.length === 0) {
-    return chatChunks.map((chatChunk) => ({
-      epicIds: [],
-      chatIds: [...chatChunk],
-    }));
-  }
-  if (chatChunks.length === 0) {
-    return epicChunks.map((epicChunk) => ({
-      epicIds: [...epicChunk],
-      chatIds: [],
-    }));
-  }
-  return epicChunks.flatMap((epicChunk) =>
-    chatChunks.map((chatChunk) => ({
-      epicIds: [...epicChunk],
-      chatIds: [...chatChunk],
-    })),
-  );
+  const count = Math.max(epicChunks.length, chatChunks.length);
+  return Array.from({ length: count }, (_value, index) => ({
+    epicIds: [...(epicChunks[index] ?? [])],
+    chatIds: [...(chatChunks[index] ?? [])],
+  }));
 }
 
 function chunkIds(

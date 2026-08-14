@@ -1,7 +1,7 @@
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import {
   buildUsageSeriesScale,
-  harnessIdsByFirstAppearance,
+  seriesKeysByFirstAppearance,
   USAGE_SERIES_OTHER_KEY,
   type UsageSeriesScale,
 } from "@/lib/usage-analytics/usage-series-scale";
@@ -9,6 +9,20 @@ import {
 export type UsageBucket = UsageSummaryResponse["summary"]["buckets"][number];
 export type UsageMetric = "cost" | "tokens";
 export type UsageTokenTotals = UsageBucket["tokens"];
+
+/**
+ * Which bucket dimension the daily chart stacks by. The buckets are
+ * day×harness×model rows either way - grouping is a client-side fold, so
+ * switching needs no second request.
+ */
+export type UsageChartGroupBy = "harness" | "model";
+
+function bucketSeriesKey(
+  bucket: UsageBucket,
+  groupBy: UsageChartGroupBy,
+): string {
+  return groupBy === "harness" ? bucket.harnessId : bucket.model;
+}
 
 export interface UsageChartSegment {
   readonly seriesKey: string;
@@ -49,21 +63,31 @@ export function bucketMetricValue(
 
 /**
  * Builds the stacked-bar chart's per-day columns, one segment per series
- * (harness, or "Other" for anything past the eight-slot cap), in the
- * scale's fixed stacking order. `days` drives the x-axis so a day with zero
- * activity still gets a zero-height column instead of compressing the axis.
+ * (harness or model per `groupBy`, or "Other" for anything past the
+ * eight-slot cap), in the scale's fixed stacking order. `days` drives the
+ * x-axis so a day with zero activity still gets a zero-height column instead
+ * of compressing the axis. `groupBy` must match the one the `scale` was
+ * built with, or every bucket folds into "Other".
+ *
+ * Takes one input object rather than positional arguments, matching its
+ * sibling `buildUsageChartOption` - `groupBy` was the fifth dimension of the
+ * same fold, and five positional arguments (four of them easy to transpose)
+ * is what the `max-params` rule exists to stop.
  */
-export function buildUsageChartColumns(
-  days: readonly string[],
-  buckets: readonly UsageBucket[],
-  scale: UsageSeriesScale,
-  metric: UsageMetric,
-): readonly UsageChartColumn[] {
+export function buildUsageChartColumns(input: {
+  readonly days: readonly string[];
+  readonly buckets: readonly UsageBucket[];
+  readonly scale: UsageSeriesScale;
+  readonly metric: UsageMetric;
+  readonly groupBy: UsageChartGroupBy;
+}): readonly UsageChartColumn[] {
+  const { days, buckets, scale, metric, groupBy } = input;
   const seriesIndex = new Set(scale.order);
   const byDay = new Map<string, Map<string, number>>();
   for (const bucket of buckets) {
-    const seriesKey = seriesIndex.has(bucket.harnessId)
-      ? bucket.harnessId
+    const bucketKey = bucketSeriesKey(bucket, groupBy);
+    const seriesKey = seriesIndex.has(bucketKey)
+      ? bucketKey
       : USAGE_SERIES_OTHER_KEY;
     const perSeries = byDay.get(bucket.day) ?? new Map<string, number>();
     perSeries.set(
@@ -113,9 +137,14 @@ export function applyUsageSeriesVisibility(
   });
 }
 
-/** Convenience: the fixed-order series scale for a response's buckets. */
+/** Convenience: the fixed-order series scale for a response's buckets under the given grouping. */
 export function buildUsageSeriesScaleForBuckets(
   buckets: readonly UsageBucket[],
+  groupBy: UsageChartGroupBy,
 ): UsageSeriesScale {
-  return buildUsageSeriesScale(harnessIdsByFirstAppearance(buckets));
+  return buildUsageSeriesScale(
+    seriesKeysByFirstAppearance(buckets, (bucket) =>
+      bucketSeriesKey(bucket, groupBy),
+    ),
+  );
 }

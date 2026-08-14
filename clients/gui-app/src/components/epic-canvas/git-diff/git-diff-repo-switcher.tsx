@@ -35,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 export interface GitDiffRepoSwitcherProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -107,6 +108,15 @@ export function GitDiffRepoSwitcher(
         align="start"
         className={cn("w-[min(90vw,30rem)] gap-0 p-0", props.contentClassName)}
         data-testid={props.contentTestId}
+        // The host picker's list is a nested Radix popover: it portals OUTSIDE
+        // this content, so every click in it arrives here as an interaction
+        // from outside. Dismissing on those would close the panel the picker
+        // exists to scope, and no host could ever be chosen from it.
+        onInteractOutside={(event) => {
+          if (isHostSwitcherListInteraction(event.target)) {
+            event.preventDefault();
+          }
+        }}
       >
         {props.hostSection === null ? null : props.hostSection}
         <GitDiffRepoSwitcherDropdown

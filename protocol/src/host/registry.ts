@@ -207,8 +207,13 @@ import {
 import {
   hostDoctorV10,
   hostGetInstallationInfoV10,
+  hostServiceDeregisterV10,
+  hostServiceRegisterV10,
+  hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownV10,
@@ -3954,11 +3959,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The host reads `ctx.schemaVersion.minor` before returning
+          // `already-updating` and renders `cli-failed` for a 1.0 peer, whose
+          // schema would otherwise refuse the frame.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -3971,6 +3984,53 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostGetInstallationInfoV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The three OS-service methods: brand-new v1.0, outside
+  // `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade. A host that predates
+  // them simply lacks them and the client hides the OS service section on the
+  // handshake answer rather than offering buttons that cannot land. Registered
+  // separately rather than as one `host.service` method taking a verb, because
+  // the read is safe to run whenever the section is open and the two writes
+  // stop the host — collapsing them would put one capability answer, and one
+  // degrade decision, over three very different risks.
+  "host.service.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.service.register": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceRegisterV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.service.deregister": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostServiceDeregisterV10,
           upgradeFromPreviousVersion: null,
         },
       },

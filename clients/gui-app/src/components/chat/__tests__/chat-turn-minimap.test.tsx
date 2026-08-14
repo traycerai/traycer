@@ -1368,10 +1368,13 @@ describe("ChatTurnMinimap mouse interaction", () => {
     expect(await screen.findByText("Turn gamma")).toBeTruthy();
   });
 
-  it("does not open the preview while a non-collapsed window selection is active", async () => {
+  it("opens the positive-width hit-strip preview while a non-collapsed selection is active", async () => {
     renderMinimap({ messages: makeThreeTurnTranscript() });
     await flushMinimapFrames(2);
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expectPositiveSafeHitStrip(
+      hitStripWidthFor(WIDE_VIEWPORT_PX, DEFAULT_UI_FONT_SIZE),
+    );
     mockRailGeometry(hitStrip, { top: 100, height: 200 });
 
     const clearSelection = installNonCollapsedSelection(
@@ -1380,21 +1383,21 @@ describe("ChatTurnMinimap mouse interaction", () => {
     onTestFinished(clearSelection);
 
     fireEvent.mouseMove(hitStrip, { clientY: 200 });
-    expect(
-      document.querySelector("[data-chat-turn-minimap-preview]"),
-    ).toBeNull();
+    expect(await screen.findByText("Turn beta")).toBeTruthy();
+    expect(window.getSelection()?.isCollapsed).toBe(false);
 
     clearSelection();
-    fireEvent.mouseMove(hitStrip, { clientY: 200 });
-    expect(await screen.findByText("Turn beta")).toBeTruthy();
   });
 
-  it("does not call onSelect on click while a non-collapsed selection is active", async () => {
+  it("keeps the positive-width hit strip clickable while a non-collapsed selection is active", async () => {
     const { onSelect } = renderMinimap({
       messages: makeThreeTurnTranscript(),
     });
     await flushMinimapFrames(2);
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expectPositiveSafeHitStrip(
+      hitStripWidthFor(WIDE_VIEWPORT_PX, DEFAULT_UI_FONT_SIZE),
+    );
     mockRailGeometry(hitStrip, { top: 100, height: 200 });
     const clearSelection = installNonCollapsedSelection(
       "selected transcript text",
@@ -1404,7 +1407,8 @@ describe("ChatTurnMinimap mouse interaction", () => {
     fireEvent.mouseDown(hitStrip, { clientY: 200 });
     fireEvent.click(hitStrip, { clientY: 200 });
 
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("message-2");
+    expect(window.getSelection()?.isCollapsed).toBe(false);
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
@@ -1440,7 +1444,7 @@ describe("ChatTurnMinimap mouse interaction", () => {
     clearSelection();
   });
 
-  it("resumes click and focus selection after the window selection is cleared", async () => {
+  it("keeps the clicked minimap row active after selection clears", async () => {
     const { onSelect } = renderMinimap({
       messages: makeThreeTurnTranscript(),
     });
@@ -1453,18 +1457,18 @@ describe("ChatTurnMinimap mouse interaction", () => {
     onTestFinished(clearSelection);
 
     fireEvent.click(hitStrip, { clientY: 200 });
-    fireEvent.focus(hitStrip);
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("message-2");
     expect(
       document.querySelector("[data-chat-turn-minimap-preview]"),
     ).toBeNull();
+    onSelect.mockClear();
 
     clearSelection();
 
     fireEvent.focus(hitStrip);
-    expect(await screen.findByText("Turn alpha")).toBeTruthy();
+    expect(await screen.findByText("Turn beta")).toBeTruthy();
     fireEvent.keyDown(hitStrip, { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledWith("message-0");
+    expect(onSelect).toHaveBeenCalledWith("message-2");
     onSelect.mockClear();
 
     fireEvent.click(hitStrip, { clientY: 200 });

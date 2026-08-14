@@ -40,15 +40,16 @@ function seriesList(option: UsageChartOption): readonly LineSeriesOption[] {
 
 const scale = buildUsageSeriesScale(["claude", "codex"]);
 const days = ["2026-08-01", "2026-08-02"] as const;
-const columns = buildUsageChartColumns(
-  [...days],
-  [
+const columns = buildUsageChartColumns({
+  days: [...days],
+  buckets: [
     bucket({ day: "2026-08-01", harnessId: "claude", knownCostUsd: 3 }),
     bucket({ day: "2026-08-02", harnessId: "codex", knownCostUsd: 5 }),
   ],
   scale,
-  "cost",
-);
+  metric: "cost",
+  groupBy: "harness",
+});
 
 describe("buildUsageChartOption", () => {
   const option = buildUsageChartOption({
@@ -168,12 +169,15 @@ describe("buildUsageChartOption — all-zero visible series", () => {
     // series render nothing; the legend chip and tooltip stay.
     const zeroScale = buildUsageSeriesScale(["claude", "grok"]);
     const option = buildUsageChartOption({
-      columns: buildUsageChartColumns(
-        [...days],
-        [bucket({ day: "2026-08-01", harnessId: "claude", knownCostUsd: 9 })],
-        zeroScale,
-        "cost",
-      ),
+      columns: buildUsageChartColumns({
+        days: [...days],
+        buckets: [
+          bucket({ day: "2026-08-01", harnessId: "claude", knownCostUsd: 9 }),
+        ],
+        scale: zeroScale,
+        metric: "cost",
+        groupBy: "harness",
+      }),
       scale: zeroScale,
       metric: "cost",
       hiddenSeries: new Set(),

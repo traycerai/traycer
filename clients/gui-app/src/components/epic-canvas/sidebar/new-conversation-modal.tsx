@@ -92,6 +92,7 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -358,6 +359,15 @@ function NewConversationModalDialog(props: {
         className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
+        // Same portal rule as the worktree pickers: the host switcher's list
+        // mounts outside this dialog, so a click in it reads as an interaction
+        // from outside. Dismissing on that would throw away the form someone is
+        // in the middle of filling, for the crime of choosing a host in it.
+        onInteractOutside={(event) => {
+          if (isHostSwitcherListInteraction(event.target)) {
+            event.preventDefault();
+          }
+        }}
         showCloseButton={false}
         onEscapeKeyDown={(event) => {
           if (dismissPickerRef.current?.() === true) {

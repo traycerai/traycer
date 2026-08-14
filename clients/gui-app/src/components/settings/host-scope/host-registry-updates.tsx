@@ -1,46 +1,24 @@
 import { useState, type ReactNode } from "react";
-import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type {
-  HostVersionPolicyResult,
-  UpdateHostVersionPolicyInput,
-} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
+import { cn } from "@/lib/utils";
+import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import {
   deriveUpdateAffordance,
   deriveUpdatePill,
-  isValidHostVersion,
 } from "@/components/settings/panels/my-hosts-model";
 
-type UpdateHostVersionPolicyMutation = UseMutationResult<
-  HostVersionPolicyResult,
-  Error,
-  UpdateHostVersionPolicyInput
->;
-
 /**
- * The registry-backed half of a host's update story: the auto-update policy,
- * a target-version pin, and — only while the host is genuinely gated on open
- * sessions — the drain-gate force.
+ * The auto-update policy switch.
  *
- * These three used to live on a separate "My Hosts" list, one row per host.
- * That list was the reason host management had two homes, because a row that
- * can change a host's update policy is a lifecycle surface no matter what it
- * is called. They now render inside the Updates region of the ONE page about
- * that host, beside the local controller's own check-now/apply controls.
+ * Now inside the Advanced disclosure, apart from the drain gate below, and the
+ * split is about urgency rather than topic. This is a preference someone sets
+ * once and forgets, so it belongs with the other settings a person opens
+ * Advanced to find; "Apply now — ends N sessions" appears only while an update is
+ * genuinely blocked on open sessions, and hiding THAT behind a collapsed
+ * disclosure would bury the one control here with a deadline on it.
  *
  * Works without a live session on purpose: the policy is stored in the
  * account's host registry and the host reads it on its next check-in, which is
@@ -54,55 +32,40 @@ type UpdateHostVersionPolicyMutation = UseMutationResult<
  * with no live source now shows no drain state at all, which is the only
  * honest answer and — since ending sessions needs a reachable host anyway — not
  * a capability anyone loses.
- *
- * All controls share one mutation instance so concurrent writes to the same
- * host serialize rather than race.
  */
-export function HostRegistryUpdates(props: {
+export function HostAutoUpdateRow(props: {
   readonly item: HostListItem;
-  /**
-   * Open sessions blocking the drain, from `host.status` over the live
-   * connection. `null` when this client has no live read of the host — NOT
-   * zero.
-   *
-   * The DISPLAY read. It drives the labels and nothing else.
-   */
-  readonly liveBusySessionCount: number | null;
-  /**
-   * The same count from a SETTLED read — nothing in flight, not aged out.
-   * Drives the drain force's arm/confirm path, which needs a number it can
-   * stand behind rather than one that is merely the best available.
-   */
-  readonly settledBusySessionCount: number | null;
+  readonly mutation: UpdateHostVersionPolicyMutation;
+  /** Row chrome is the caller's, since the two rows now sit in different boxes. */
+  readonly className: string;
 }): ReactNode {
-  const { item } = props;
-  const mutation = useUpdateHostVersionPolicy(item.hostId);
-  const affordance = deriveUpdateAffordance({
-    updateState: item.status.updateState,
-    liveBusySessionCount: props.liveBusySessionCount,
-  });
+  const { item, mutation } = props;
   const pill = deriveUpdatePill(item.status.updateState);
   const isAuto = item.updatePolicy === "auto";
 
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/40 px-5 py-3">
-        <Switch
-          checked={isAuto}
-          disabled={mutation.isPending}
-          onCheckedChange={(checked) => {
-            mutation.mutate({
-              updatePolicy: checked ? "auto" : "manual",
-              desiredVersion: undefined,
-              force: undefined,
-            });
-          }}
-          aria-label={isAuto ? "Turn off auto-update" : "Turn on auto-update"}
-          data-testid={`host-auto-update-${item.hostId}`}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-ui-sm text-foreground">Auto-update</p>
-          {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-2",
+        props.className,
+      )}
+    >
+      <Switch
+        checked={isAuto}
+        disabled={mutation.isPending}
+        onCheckedChange={(checked) => {
+          mutation.mutate({
+            updatePolicy: checked ? "auto" : "manual",
+            desiredVersion: undefined,
+            force: undefined,
+          });
+        }}
+        aria-label={isAuto ? "Turn off auto-update" : "Turn on auto-update"}
+        data-testid={`host-auto-update-${item.hostId}`}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-ui-sm text-foreground">Auto-update</p>
+        {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
               saying "Installs new versions when no sessions are running."
               locally — which was fiction. The pin is applied by the HOST's own
               update reconciler, reading the coordination snapshot its check-in
@@ -122,153 +85,68 @@ export function HostRegistryUpdates(props: {
               cannot tell from this row which case they are in, so the copy
               promises the slower one and lets the faster one be a pleasant
               surprise. */}
-          <p className="text-ui-xs text-muted-foreground">
-            Applied on this host&apos;s next check-in — within ~10 minutes, and
-            only when no sessions are running.
-          </p>
-        </div>
-        {pill === null ? null : (
-          <span
-            className="shrink-0 rounded-sm bg-muted/70 px-1.5 py-px text-ui-xs text-muted-foreground"
-            data-testid={`host-update-pill-${item.hostId}`}
-          >
-            {pill.label}
-          </span>
-        )}
-        {/* `deriveUpdateAffordance` withholds this while the host is `pending`
-            or `updating` — draining sessions, or mid-swap. `MyHostsList`
-            honoured that flag; this rendered the control unconditionally and
-            left `showUpdateNowInput` computed and unread, so a second
-            desired-version write could retarget an update already in flight. */}
-        {affordance.showUpdateNowInput ? (
-          <UpdateNowControl hostId={item.hostId} mutation={mutation} />
-        ) : null}
+        <p className="text-ui-xs text-muted-foreground">
+          Applied on this host&apos;s next check-in — within ~10 minutes, and
+          only when no sessions are running.
+        </p>
       </div>
-      {affordance.applyNowLabel === null ? null : (
-        <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
-          <p className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
-            {affordance.waitingForSessionsLabel ??
-              "Waiting for open sessions before applying."}
-          </p>
-          <ApplyNowControl
-            hostId={item.hostId}
-            label={affordance.applyNowLabel}
-            mutation={mutation}
-            settledBusySessionCount={props.settledBusySessionCount}
-          />
-        </div>
+      {pill === null ? null : (
+        <span
+          className="shrink-0 rounded-sm bg-muted/70 px-1.5 py-px text-ui-xs text-muted-foreground"
+          data-testid={`host-update-pill-${item.hostId}`}
+        >
+          {pill.label}
+        </span>
       )}
-    </>
+    </div>
   );
 }
 
 /**
- * "Update to version…": a small popover collecting the target version,
- * validated client-side against the same dotted-numeric pattern authn-v3's
- * `PATCH /api/v3/hosts/:hostId` enforces server-side (`isValidHostVersion`).
- * There is no "latest release catalog" surfaced to the client, so the input is
- * a plain text field rather than a version picker.
+ * "Apply now — ends N sessions", and NOTHING when no update is waiting on
+ * sessions.
+ *
+ * Rendering nothing is the common case by a wide margin, which is exactly why
+ * this is a separate component: a row that is usually absent should not decide
+ * the layout of the row that is always present.
  */
-function UpdateNowControl(props: {
-  readonly hostId: string;
+export function HostUpdateDrainGateRow(props: {
+  readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
+  /**
+   * Open sessions blocking the drain, from `host.status` over the live
+   * connection. `null` when this client has no live read of the host — NOT
+   * zero.
+   *
+   * The DISPLAY read. It drives the labels and nothing else.
+   */
+  readonly liveBusySessionCount: number | null;
+  /**
+   * The same count from a SETTLED read — nothing in flight, not aged out.
+   * Drives the drain force's arm/confirm path, which needs a number it can
+   * stand behind rather than one that is merely the best available.
+   */
+  readonly settledBusySessionCount: number | null;
 }): ReactNode {
-  const { hostId, mutation } = props;
-  // Same arm-time capture as the drain-gate force below. A version draft typed
-  // for host B must never submit against host C because the scope moved while
-  // the popover was open — pinning a version is not destructive, but it is
-  // still a write aimed at a named host.
-  const [armedHostId, setArmedHostId] = useState<string | null>(null);
-  const [version, setVersion] = useState("");
-  const open = armedHostId !== null;
-  const targetMoved = armedHostId !== null && armedHostId !== hostId;
-  const trimmed = version.trim();
-  const showInvalid = trimmed.length > 0 && !isValidHostVersion(trimmed);
-  const canSubmit =
-    trimmed.length > 0 && isValidHostVersion(trimmed) && !targetMoved;
-
+  const { item, mutation } = props;
+  const affordance = deriveUpdateAffordance({
+    updateState: item.status.updateState,
+    liveBusySessionCount: props.liveBusySessionCount,
+  });
+  if (affordance.applyNowLabel === null) return null;
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setArmedHostId(next ? hostId : null);
-        if (!next) setVersion("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={mutation.isPending}
-          data-testid={`host-update-version-trigger-${hostId}`}
-        >
-          Update to version…
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[min(85vw,16rem)]"
-        align="end"
-        data-testid={`host-update-version-popover-${hostId}`}
-      >
-        <PopoverHeader>
-          <PopoverTitle>Update to version</PopoverTitle>
-          <PopoverDescription>
-            Applied on the host&apos;s next check-in — within ~10 minutes. No
-            live session required.
-          </PopoverDescription>
-        </PopoverHeader>
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!canSubmit) return;
-            mutation.mutate(
-              {
-                updatePolicy: undefined,
-                desiredVersion: trimmed,
-                force: undefined,
-              },
-              {
-                onSuccess: () => {
-                  setArmedHostId(null);
-                  setVersion("");
-                },
-              },
-            );
-          }}
-        >
-          <Input
-            value={version}
-            onChange={(event) => setVersion(event.target.value)}
-            placeholder="1.4.2"
-            aria-invalid={showInvalid}
-            disabled={mutation.isPending}
-            data-testid={`host-update-version-input-${hostId}`}
-          />
-          {showInvalid ? (
-            <p className="text-ui-xs text-destructive">
-              Use a dotted-numeric version, e.g. 1.4.2.
-            </p>
-          ) : null}
-          <Button
-            type="submit"
-            size="sm"
-            disabled={!canSubmit || mutation.isPending}
-            data-testid={`host-update-version-submit-${hostId}`}
-          >
-            {mutation.isPending ? (
-              <AgentSpinningDots
-                testId={undefined}
-                variant={undefined}
-                className={undefined}
-              />
-            ) : null}
-            Update now
-          </Button>
-        </form>
-      </PopoverContent>
-    </Popover>
+    <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
+      <p className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
+        {affordance.waitingForSessionsLabel ??
+          "Waiting for open sessions before applying."}
+      </p>
+      <ApplyNowControl
+        hostId={item.hostId}
+        label={affordance.applyNowLabel}
+        mutation={mutation}
+        settledBusySessionCount={props.settledBusySessionCount}
+      />
+    </div>
   );
 }
 

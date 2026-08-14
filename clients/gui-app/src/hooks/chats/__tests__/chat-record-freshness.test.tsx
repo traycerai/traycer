@@ -33,6 +33,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -158,7 +159,7 @@ function newSession(): OpenEpicStoreHandle {
   return handle;
 }
 
-function createFixture(): Fixture {
+function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
   const records: ChatRecordSummary[] = [];
   const listCalls = { value: 0 };
   const requestSeq = { value: 0 };
@@ -180,6 +181,17 @@ function createFixture(): Fixture {
       handlers: {
         "epic.listChatRecords": () => {
           listCalls.value += 1;
+          if (listFailureCode !== null) {
+            return Promise.reject(
+              new HostRpcError({
+                code: listFailureCode,
+                message: "record list unsupported",
+                requestId: `req-${String(requestSeq.value)}`,
+                method: "epic.listChatRecords",
+                fatalDetails: null,
+              }),
+            );
+          }
           return Promise.resolve({ chats: records.map((row) => ({ ...row })) });
         },
         // The host writes the registry row BEFORE it answers
@@ -260,7 +272,7 @@ beforeEach(() => {
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
   });
-  fixture = createFixture();
+  fixture = createFixture(null);
 });
 
 afterEach(() => {
@@ -283,10 +295,37 @@ function renderChannel<T>(useMutationHook: () => T): { readonly current: T } {
 }
 
 async function settleFirstRead(): Promise<void> {
+  expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+    false,
+  );
   await waitFor(() => {
     expect(fixture.listCalls.value).toBe(1);
   });
+  await waitFor(() => {
+    expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+      true,
+    );
+  });
 }
+
+describe("record-list deletion authority", () => {
+  it("treats E_HOST_UNSUPPORTED as an authoritative doc-only answer", async () => {
+    fixture.handle.store.getState().dispose();
+    fixture = createFixture("E_HOST_UNSUPPORTED");
+
+    renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(fixture.listCalls.value).toBe(1);
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+    });
+    expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
+  });
+});
 
 describe("a create refreshes the record list", () => {
   it("re-reads the records after a create sent on an explicitly resolved host client", async () => {
