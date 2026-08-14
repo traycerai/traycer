@@ -84,10 +84,7 @@ export function ProviderSkillComposerDialog(props: {
             )}
           </DialogTitle>
           <DialogDescription className="text-ui-sm">
-            <ComposerDescription
-              step={draft.step}
-              editing={draft.editing}
-            />
+            <ComposerDescription step={draft.step} editing={draft.editing} />
           </DialogDescription>
         </DialogHeader>
 
@@ -220,7 +217,9 @@ function useComposerDraft(props: {
     props.editTarget?.description ?? "",
   );
   const [body, setBody] = useState(
-    props.editTarget !== undefined ? props.editTarget.body : skillBodyScaffold(),
+    props.editTarget !== undefined
+      ? props.editTarget.body
+      : skillBodyScaffold(),
   );
   const [source, setSource] = useState("");
   const [providerScoped, setProviderScoped] = useState(false);
@@ -340,8 +339,8 @@ function ComposerDescription({
   return (
     <>
       A skill is a folder with a <code>SKILL.md</code> inside it. The agent
-      loads one on its own when the work matches, or you can invoke it
-      directly with <code>/name</code> in chat.
+      loads one on its own when the work matches, or you can invoke it directly
+      with <code>/name</code> in chat.
     </>
   );
 }

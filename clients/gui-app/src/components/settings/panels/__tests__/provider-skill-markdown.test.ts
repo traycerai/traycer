@@ -63,7 +63,8 @@ describe("parseSkillMarkdown", () => {
   });
 
   it("returns the body after stripSkillFrontmatter", () => {
-    const raw = '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n';
+    const raw =
+      '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n';
     const parsed = parseSkillMarkdown(raw);
     expect(parsed.body).toBe(stripSkillFrontmatter(raw));
     expect(parsed.body).toBe("# When to use\n");

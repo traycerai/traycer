@@ -260,7 +260,11 @@ describe("credentials mutation store", () => {
       const out = await store.signOut(null);
       expect(out.outcome).toBe("deleted");
       expect(await readCredentialsFile(credentialsPath)).toBeNull();
-      const back = await store.signIn({ ...CREDS, token: "tok-2" }, false, null);
+      const back = await store.signIn(
+        { ...CREDS, token: "tok-2" },
+        false,
+        null,
+      );
       expect(back.outcome).toBe("applied");
       expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-2");
     });
@@ -319,9 +323,9 @@ describe("credentials mutation store", () => {
       expect(result.outcome).toBe("applied");
       expect(result.credentials?.refreshToken).toBe("");
       expect(result.credentials?.user.id).toBe("u2");
-      expect(
-        (await readCredentialsFile(credentialsPath))?.refreshToken,
-      ).toBe("");
+      expect((await readCredentialsFile(credentialsPath))?.refreshToken).toBe(
+        "",
+      );
     });
   });
 
@@ -631,7 +635,11 @@ describe("credentials mutation store", () => {
         }),
       ).rejects.toThrow();
       // Interactive signIn rebuilds the sidecar and proceeds.
-      const back = await store.signIn({ ...CREDS, token: "rebuilt" }, false, null);
+      const back = await store.signIn(
+        { ...CREDS, token: "rebuilt" },
+        false,
+        null,
+      );
       expect(back.outcome).toBe("applied");
     });
   });

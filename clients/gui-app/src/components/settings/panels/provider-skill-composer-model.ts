@@ -330,8 +330,7 @@ export function isExternalDriftError(error: unknown): boolean {
 /** Fetched source matches what is already installed. */
 export function isSkillUpdateNoOp(error: unknown): boolean {
   return (
-    isProviderNativeRpcError(error) &&
-    error.nativeCode === "no_change_detected"
+    isProviderNativeRpcError(error) && error.nativeCode === "no_change_detected"
   );
 }
 

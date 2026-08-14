@@ -17,7 +17,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { useHostClient } from "@/lib/host";
 import { cn } from "@/lib/utils";
-import { SKILL_ENTRY_FILE, parseSkillMarkdown } from "./provider-skill-markdown";
+import {
+  SKILL_ENTRY_FILE,
+  parseSkillMarkdown,
+} from "./provider-skill-markdown";
 import {
   skillEditPrefill,
   type SkillEditTarget,
@@ -99,10 +102,9 @@ export function ProviderSkillDetailDialog(props: {
   ]);
   const content = fileQuery.data?.content ?? null;
   const truncated = fileQuery.data?.truncated ?? false;
-  const readError =
-    fileQuery.isError
-      ? fileQuery.error.message
-      : (fileQuery.data?.error ?? null);
+  const readError = fileQuery.isError
+    ? fileQuery.error.message
+    : (fileQuery.data?.error ?? null);
   const editReady =
     props.canEdit &&
     !fileQuery.isPending &&

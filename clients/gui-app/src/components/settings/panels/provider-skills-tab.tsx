@@ -131,7 +131,9 @@ function ProviderSkillsTabBody({
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
-  const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(null);
+  const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(
+    null,
+  );
   // Bumped after a successful update so the open detail's file query
   // refetches in place. The list row snapshot is replaced separately.
   const [detailFileEpoch, setDetailFileEpoch] = useState(0);
@@ -282,7 +284,9 @@ function ProviderSkillsTabBody({
         return;
       }
       setUpdateConfirm(null);
-      setDetailError(err instanceof Error ? err.message : "Couldn't update this skill.");
+      setDetailError(
+        err instanceof Error ? err.message : "Couldn't update this skill.",
+      );
     } finally {
       setPendingKey(null);
     }

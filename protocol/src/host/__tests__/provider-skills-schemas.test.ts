@@ -476,9 +476,8 @@ describe("nativeMutationResultSchema skills success kinds", () => {
         .success,
     ).toBe(false);
     expect(
-      nativeMutationResultSchema.safeParse(
-        omitKey(INSPECT_RESULT, "commitSha"),
-      ).success,
+      nativeMutationResultSchema.safeParse(omitKey(INSPECT_RESULT, "commitSha"))
+        .success,
     ).toBe(false);
     expect(
       nativeMutationResultSchema.safeParse(
@@ -625,7 +624,9 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 skill row parse drops origin and conflict", () => {
-    expect(providerSkillSchemaV70.parse(BASE_SKILL_ROW)).toEqual(BASE_SKILL_ROW);
+    expect(providerSkillSchemaV70.parse(BASE_SKILL_ROW)).toEqual(
+      BASE_SKILL_ROW,
+    );
     expect(
       providerSkillSchemaV70.parse({
         ...BASE_SKILL_ROW,

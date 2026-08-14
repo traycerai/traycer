@@ -181,7 +181,11 @@ async function applyInspect(
   // An installed singleton is an overwrite - send it through the picker so
   // the badge and the "this replaces what is on disk" copy are visible
   // before Install commits.
-  if (inspectMode === "fresh" && data.candidates.length === 1 && !only.installed) {
+  if (
+    inspectMode === "fresh" &&
+    data.candidates.length === 1 &&
+    !only.installed
+  ) {
     try {
       await installWithToken(data.token, [only.name], state, sink);
     } catch (err) {

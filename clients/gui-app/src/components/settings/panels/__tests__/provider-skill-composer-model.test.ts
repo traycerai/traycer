@@ -57,25 +57,25 @@ describe("skillAuthoring", () => {
   });
 
   it("opens only write when only create advertises the selected scope", () => {
-    expect(skillAuthoring(capsWith(["global"], [], undefined), "global")).toEqual(
-      {
-        canWrite: true,
-        canImport: false,
-        canInspect: false,
-        canAuthor: true,
-      },
-    );
+    expect(
+      skillAuthoring(capsWith(["global"], [], undefined), "global"),
+    ).toEqual({
+      canWrite: true,
+      canImport: false,
+      canInspect: false,
+      canAuthor: true,
+    });
   });
 
   it("opens only import when only import advertises the selected scope", () => {
-    expect(skillAuthoring(capsWith([], ["global"], undefined), "global")).toEqual(
-      {
-        canWrite: false,
-        canImport: true,
-        canInspect: false,
-        canAuthor: true,
-      },
-    );
+    expect(
+      skillAuthoring(capsWith([], ["global"], undefined), "global"),
+    ).toEqual({
+      canWrite: false,
+      canImport: true,
+      canInspect: false,
+      canAuthor: true,
+    });
   });
 
   it("opens neither when neither action advertises the selected scope", () => {
@@ -118,8 +118,9 @@ describe("skillAuthoring", () => {
       "global",
     );
     expect(authoring.canInspect).toBe(false);
-    expect("inspect" in capsWith(["global"], ["global"], undefined).actionScopes)
-      .toBe(false);
+    expect(
+      "inspect" in capsWith(["global"], ["global"], undefined).actionScopes,
+    ).toBe(false);
   });
 
   it("treats an empty inspect array as no inspect for this scope", () => {
@@ -367,9 +368,9 @@ describe("skillSubmitBlocker", () => {
 describe("skillNamesFromSourceFlags", () => {
   it("returns nothing when the source has no skill flags", () => {
     expect(skillNamesFromSourceFlags("npx skills add owner/repo")).toEqual([]);
-    expect(skillNamesFromSourceFlags("https://github.com/org/skills.git")).toEqual(
-      [],
-    );
+    expect(
+      skillNamesFromSourceFlags("https://github.com/org/skills.git"),
+    ).toEqual([]);
   });
 
   it("parses -s, --skill, and --skill=name forms", () => {
@@ -522,12 +523,9 @@ describe("skillIsEditable", () => {
     },
   );
 
-  it.each(["plugin", "managed"] as const)(
-    "refuses a %s skill",
-    (source) => {
-      expect(skillIsEditable({ ...row, source })).toBe(false);
-    },
-  );
+  it.each(["plugin", "managed"] as const)("refuses a %s skill", (source) => {
+    expect(skillIsEditable({ ...row, source })).toBe(false);
+  });
 
   it("refuses a conflict row even when the source is writable", () => {
     expect(skillIsEditable({ ...row, source: "shared", conflict: true })).toBe(
