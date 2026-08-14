@@ -358,7 +358,13 @@ export function HostOverviewPanel(props: {
   useEffect(() => {
     if (scope.hostId === null || updateInstallAcceptedAt === null) return;
     const hostId = scope.hostId;
-    if (view.updateProgress !== null) {
+    // ONLY an `updating` frame releases: it is the one progress state that
+    // proves the NEW detached updater is publishing. A `failed` frame can be
+    // the terminal state of the PREVIOUS attempt, still on `host.status` when
+    // a retry arms the latch - releasing on it reopened exactly the gap the
+    // latch closes. A retry that itself fails fast without an `updating`
+    // frame is covered by the bounded timer, in the safe direction.
+    if (view.updateProgress?.state === "updating") {
       useHostServiceWriteLatchStore
         .getState()
         .releaseUpdateInstallAccepted(hostId);

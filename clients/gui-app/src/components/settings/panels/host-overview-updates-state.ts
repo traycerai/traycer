@@ -379,7 +379,15 @@ function platformAssetFor(
   const keys = Object.keys(platforms);
   if (keys.length === 1) return platforms[keys[0]] ?? null;
   if (platformKey === null) return null;
-  return platforms[platformKey] ?? null;
+  if (platformKey in platforms) return platforms[platformKey] ?? null;
+  // A registry row can carry an OS-only key ("darwin") while an older CLI's
+  // un-projected manifest is architecture-qualified ("darwin-arm64"). A
+  // UNIQUE prefix match is that OS's one asset and is taken; several
+  // candidates stay a miss rather than a guess - reported as "no asset",
+  // never resolved to the wrong architecture.
+  const prefixed = keys.filter((key) => key.startsWith(`${platformKey}-`));
+  if (prefixed.length === 1) return platforms[prefixed[0]] ?? null;
+  return null;
 }
 
 type PlatformAsset =
