@@ -111,6 +111,108 @@ function completeHandshake(socket: StubStreamWebSocket): void {
   });
 }
 
+/**
+ * Same handshake as `completeHandshake`, except the echoed manifest's
+ * `chat.subscribe` entry is overridden to `schemaVersion` instead of being
+ * echoed back verbatim. `WsStreamClient` negotiates to the OLDER of the
+ * client's own canonical version and whatever the host's `openAck` manifest
+ * advertises (`prepareStreamSubscribeRequest` in `ws-stream-client.ts`), so
+ * this is how a black-box test forces a down-negotiated session without
+ * touching production code.
+ */
+function completeHandshakeAtVersion(
+  socket: StubStreamWebSocket,
+  schemaVersion: { readonly major: number; readonly minor: number },
+): void {
+  socket.fireOpen();
+  const openParsed = JSON.parse(socket.textSent[0]) as {
+    readonly manifest: Record<string, { major: number; minor: number }>;
+  };
+  socket.fireText({
+    kind: "openAck",
+    manifest: {
+      ...openParsed.manifest,
+      "chat.subscribe": schemaVersion,
+    },
+  });
+}
+
+/**
+ * A `chat.subscribe@1.6`-shaped assistant message: no `imageResolutions` key
+ * at all, matching how a pre-image host actually persisted/emitted it (see
+ * `chat-subscribe.test.ts`'s "stays frozen without image fields on every
+ * released minor 1.0-1.6"). Only the deep schema's compatibility default
+ * (`imageResolutions: []`) up-converts this; the shallow schema is
+ * structural-only and leaves it exactly as sent.
+ */
+function frozenPreImageAssistantMessage(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    messageId: "assistant-1",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-1",
+      displayName: "Coder",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        blockId: "text-1",
+        status: "completed",
+        timestamp: 10,
+        parentBlockId: null,
+        type: "text",
+        text: "hello",
+      },
+    ],
+    startedAt: 10,
+    timestamp: 20,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    // Deliberately no `imageResolutions` key.
+  };
+}
+
+function snapshotFrameWithAssistantMessage(
+  assistantMessage: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    snapshot: {
+      chat: {
+        id: "chat-1",
+        parentId: null,
+        userId: "owner-1",
+        hostId: "test-host",
+        title: "Chat",
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        sessionRef: null,
+        messages: [assistantMessage],
+        events: [],
+      },
+      access: { role: "owner", ownerUserId: "owner-1", canAct: true },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChanges: [],
+    },
+  };
+}
+
 function parseText(raw: string): Record<string, unknown> {
   const value = JSON.parse(raw);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -415,5 +517,98 @@ describe("ChatStreamClient", () => {
       code: 1000,
       reason: "closed-by-caller",
     });
+  });
+});
+
+describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
+  function makeNoopCallbacks(
+    onSnapshot: ChatStreamCallbacks["onSnapshot"],
+  ): ChatStreamCallbacks {
+    return {
+      onSnapshot,
+      onActionAck: () => undefined,
+      onMessageAccepted: () => undefined,
+      onQueueChanged: () => undefined,
+      onTurnStateChanged: () => undefined,
+      onBlockDelta: () => undefined,
+      onApprovalRequested: () => undefined,
+      onApprovalResolved: () => undefined,
+      onFileEditApprovalRequested: () => undefined,
+      onFileEditApprovalResolved: () => undefined,
+      onInterviewRequested: () => undefined,
+      onInterviewAnswered: () => undefined,
+      onInterviewErrored: () => undefined,
+      onEventAppended: () => undefined,
+      onRestoreStarted: () => undefined,
+      onRestoreProgress: () => undefined,
+      onRestoreCompleted: () => undefined,
+      onErrorNotice: () => undefined,
+      onWorktreeStateChanged: () => undefined,
+      onManagedCommandsChanged: () => undefined,
+      onConnectionStatus: () => undefined,
+    };
+  }
+
+  it("takes the deep parse path and up-converts a down-negotiated (1.6) snapshot's pre-image assistant message", () => {
+    const { factory, sockets } = makeFactory();
+    const deliveredMessages: unknown[] = [];
+
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks((frame) => {
+        deliveredMessages.push(...frame.snapshot.chat.messages);
+      }),
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+
+    sockets[0].fireText(
+      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
+    );
+
+    expect(deliveredMessages).toHaveLength(1);
+    const [assistant] = deliveredMessages;
+    // The deep schema's compatibility default filled the field the frozen
+    // 1.6 wire shape never carried - proof the deep parse ran, not the
+    // structural-only shallow one, which would have left it absent.
+    expect(assistant).toMatchObject({
+      messageId: "assistant-1",
+      imageResolutions: [],
+    });
+
+    client.close();
+  });
+
+  it("takes the shallow parse path and passes a live (1.7) snapshot's message through structurally unchanged", () => {
+    const { factory, sockets } = makeFactory();
+    const deliveredMessages: unknown[] = [];
+
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks((frame) => {
+        deliveredMessages.push(...frame.snapshot.chat.messages);
+      }),
+    });
+    // Default handshake echoes the client's own manifest verbatim, which
+    // negotiates to the client's canonical chat.subscribe version - today
+    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:7}).
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText(
+      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
+    );
+
+    expect(deliveredMessages).toHaveLength(1);
+    const [assistant] = deliveredMessages;
+    // No deep parse ran, so no compatibility default filled the field: the
+    // structural-only shallow schema hands the message through exactly as
+    // sent, `imageResolutions` genuinely absent.
+    expect(assistant).not.toHaveProperty("imageResolutions");
+    expect(assistant).toMatchObject({ messageId: "assistant-1" });
+
+    client.close();
   });
 });

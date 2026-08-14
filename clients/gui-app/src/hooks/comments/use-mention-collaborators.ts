@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
+import { useHostClient } from "@/lib/host";
 
 /**
  * Mention-picker view over the existing `epic.listCollaborators` query.
@@ -17,7 +18,11 @@ export interface MentionCollaborator {
 export function useMentionCollaborators(
   epicId: string,
 ): ReadonlyArray<MentionCollaborator> {
+  // App-active host, matching the Sharing panel this cache entry is shared
+  // with (see the hook's doc for why the chat tree differs).
+  const client = useHostClient();
   const { data } = useEpicCollaboratorsQuery(epicId, {
+    client,
     poll: false,
     staleTime: undefined,
   });

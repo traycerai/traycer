@@ -239,7 +239,7 @@ export function buildConfigHostFixture(options: {
       ? "ws://127.0.0.1:0"
       : "wss://mock-remote.invalid/rpc",
     version: "1.5.0",
-    status: "available",
+    transportDialability: "dialable",
   };
   client.bind(entry);
   client.setRequestContext(

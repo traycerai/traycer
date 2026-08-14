@@ -195,7 +195,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         hostId: "local",
         kind: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],

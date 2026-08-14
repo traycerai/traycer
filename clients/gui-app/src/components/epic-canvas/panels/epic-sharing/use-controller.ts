@@ -16,6 +16,7 @@ import {
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useEpicSendQueuedInvites } from "@/hooks/epic/use-epic-send-queued-invites-mutation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useHostClient } from "@/lib/host";
 import type { InviteCardProps } from "./invite-card";
 import type { TeamsAccessProps, PeopleWithAccessProps } from "./access-lists";
 import type {
@@ -115,7 +116,14 @@ export function useEpicSharingPanelController(
   const canInvitePeople = currentRole === "owner" || currentRole === "editor";
   const shareableTeams = useEpicShareableTeams();
 
+  // App-active host, deliberately: the panel's grant/revoke/role mutations
+  // ride the app-wide client, and the list must agree with the host those
+  // mutations will land on. Rebinding this panel to the Epic session host is
+  // a wider change than the sharing ticket and would have to move the
+  // mutation hooks with it.
+  const collaboratorsHostClient = useHostClient();
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
+    client: collaboratorsHostClient,
     poll: true,
     staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   });

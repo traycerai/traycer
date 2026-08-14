@@ -35,7 +35,7 @@ const landingMocks = vi.hoisted(() => ({
     kind: "local",
     websocketUrl: "ws://127.0.0.1:4917/rpc",
     version: "0.0.0-test",
-    status: "available",
+    transportDialability: "dialable",
   })),
 }));
 
@@ -138,7 +138,7 @@ describe("useLandingComposerActions", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
-      status: "available",
+      transportDialability: "dialable",
     });
     vi.mocked(toast.error).mockClear();
     vi.mocked(toast.info).mockClear();

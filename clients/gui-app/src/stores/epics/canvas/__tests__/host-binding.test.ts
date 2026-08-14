@@ -175,7 +175,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: "ws://127.0.0.1:5002/rpc",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 
@@ -206,7 +206,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: null,
         version: "1.0.0",
-        status: "unavailable",
+        transportDialability: "not-dialable",
       },
     ];
 
@@ -216,10 +216,10 @@ describe("host binding survives restart", () => {
     expect(result.current.hostLabel).toBe("Local");
   });
 
-  it("useHostReachability still reports `unreachable` for a dialable host marked unavailable", () => {
+  it("useHostReachability still reports `unreachable` for a routable host marked not-dialable", () => {
     // The 2026-08-08 guard proper: a host the directory can still describe -
-    // it has an endpoint - and explicitly marks unavailable is high-confidence
-    // evidence of death, and must keep locking.
+    // it has an endpoint - and explicitly marks not-dialable is
+    // high-confidence evidence of death, and must keep locking.
     directoryEntries.current = [
       {
         hostId: SOURCE_HOST,
@@ -227,7 +227,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: "ws://127.0.0.1:5001/rpc",
         version: "1.0.0",
-        status: "unavailable",
+        transportDialability: "not-dialable",
       },
     ];
 
@@ -244,7 +244,7 @@ describe("host binding survives restart", () => {
         kind: "local",
         websocketUrl: "ws://127.0.0.1:5001/rpc",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 
@@ -274,7 +274,7 @@ describe("host binding survives restart", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "1.0.0",
-        status: "unavailable",
+        transportDialability: "not-dialable",
       },
     ];
 
@@ -292,7 +292,7 @@ describe("host binding survives restart", () => {
         kind: "remote",
         websocketUrl: "wss://relay.traycer.invalid/attach",
         version: "1.0.0",
-        status: "available",
+        transportDialability: "dialable",
       },
     ];
 

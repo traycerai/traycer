@@ -17,7 +17,7 @@ const hostA: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "ws://host-a/rpc",
   version: "1.0.0",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 vi.mock("@/lib/host", () => ({

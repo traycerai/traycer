@@ -52,7 +52,7 @@ const REMOTE_HOST: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://example.invalid/rpc",
   version: "1.0.0",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 function makeBoundClient(): HostClient<HostRpcRegistry> {

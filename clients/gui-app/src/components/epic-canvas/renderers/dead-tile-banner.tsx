@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -39,9 +40,36 @@ import { cn } from "@/lib/utils";
  */
 export type DeadTileOwnerKind = "terminal" | "agent";
 
+function terminalDeadTileMessage(
+  unavailability: HostUnavailability | null,
+  ownerKind: DeadTileOwnerKind,
+  hostLabel: string,
+): string {
+  if (unavailability === "plan-restricted") {
+    return ownerKind === "agent"
+      ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. Upgrade to use that host remotely — the agent and its transcript are kept either way.`
+      : `Host "${hostLabel}" is local only on your current plan, so this terminal cannot be reached from here. Upgrade to use that host remotely, or open this terminal on that machine.`;
+  }
+  return ownerKind === "agent"
+    ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
+    : `Host "${hostLabel}" is unreachable. This terminal is permanently closed.`;
+}
+
 export interface TerminalDeadTileBannerProps {
   readonly hostLabel: string;
   readonly ownerKind: DeadTileOwnerKind;
+  /**
+   * WHY the bound host cannot be reached, from `useHostReachability`.
+   *
+   * `plan-restricted` is the reason this is a prop rather than one string. That
+   * host is running perfectly well; the account's plan simply has no remote
+   * route to it. Telling its owner the terminal is "permanently closed" is
+   * false about a session that is very probably still alive on the other side,
+   * and it names a remedy (there is none) instead of the one that exists.
+   *
+   * `indeterminate` never arrives here: the hook reports it as reachable.
+   */
+  readonly unavailability: HostUnavailability | null;
   readonly onClose: () => void;
   readonly testId: string;
 }
@@ -55,17 +83,10 @@ export function TerminalDeadTileBanner(
       data-testid={props.testId}
     >
       <p className="max-w-md">
-        {props.ownerKind === "agent" ? (
-          <>
-            Host &quot;{props.hostLabel}&quot; is unreachable, so this agent is
-            unavailable until that host is back. The agent and its transcript
-            are kept — closing this tab only removes it from the canvas.
-          </>
-        ) : (
-          <>
-            Host &quot;{props.hostLabel}&quot; is unreachable. This terminal is
-            permanently closed.
-          </>
+        {terminalDeadTileMessage(
+          props.unavailability,
+          props.ownerKind,
+          props.hostLabel,
         )}
       </p>
       <div className="flex flex-wrap justify-center gap-2">
@@ -327,11 +348,19 @@ export function ChatHostStartingBanner(
 }
 
 /**
- * Three distinct causes land on this ONE banner, and no two of them are the
+ * Five distinct causes land on this ONE banner, and no two of them are the
  * same sentence (chat-sync-v2 tickets 35 and 49):
  *
  * - `host-offline` - the bound host is genuinely unreachable. Nothing was
  *   asked and nothing answered, so the host is what has to come back.
+ * - `host-plan-restricted` - the host is running perfectly well and the
+ *   account's plan simply has no remote route to it. It exists because the
+ *   reason had a producer (`useHostReachability`) and no consumer: every
+ *   unreachable result was rendered as `host-offline`, so a free-tier account
+ *   with a persisted remote chat was told a healthy machine was off, and
+ *   offered a restart it could not do instead of the upgrade that is the
+ *   actual remedy. Clone stays offered - moving the thread to a host you CAN
+ *   reach is exactly the way out.
  * - `chat-not-visible` - a reachable host that is NOT this device answered,
  *   and answered that it has nothing for this chat (`chat.subscribe`
  *   terminated `CHAT_NOT_VISIBLE`). "is offline" would be false here.
@@ -348,11 +377,12 @@ export function ChatHostStartingBanner(
  *   or epic-membership loss). The one member of this taxonomy that is not about
  *   a host at all - the chat exists, its host is fine, and it is the VIEWER's
  *   entitlement that changed. It is also the only one with nothing to offer:
- *   the other three all end in "clone it and carry on", which needs read access
+ *   the other four all end in "clone it and carry on", which needs read access
  *   to a transcript this viewer no longer has.
  */
 export type ChatDeadTileBannerReason =
   | "host-offline"
+  | "host-plan-restricted"
   | "chat-not-visible"
   | "chat-not-on-this-host"
   | "chat-no-longer-shared";
@@ -375,7 +405,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     /**
      * Whether this reason ends in an action the reader can actually take.
      *
-     * Three of the four do: the transcript is readable (as a published copy or
+     * Four of the five do: the transcript is readable (as a published copy or
      * from the owner host) and cloning carries it onto a live host. `revoked`
      * does not - the clone would have to read bytes the server just stopped
      * serving this viewer, so offering the button would be an invitation to a
@@ -394,6 +424,19 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent host is offline",
     reportMessage: "The agent's bound host is offline.",
+    offersClone: true,
+  },
+  "host-plan-restricted": {
+    message: (hostLabel) => (
+      <>
+        Bound host &quot;{hostLabel}&quot; is local only on your current plan,
+        so it can&apos;t be reached from here. Upgrade to use it remotely, or
+        continue here to create a new agent on the active host.
+      </>
+    ),
+    reportTitle: "Agent host is not reachable on this plan",
+    reportMessage:
+      "The agent's bound host has no remote route on the current plan.",
     offersClone: true,
   },
   "chat-not-visible": {

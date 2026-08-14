@@ -38,7 +38,13 @@ export function hostStatusProbeQueryKey(hostId: string): readonly unknown[] {
  */
 export interface HostStatusSnapshot {
   readonly busy: boolean;
-  readonly busySessionCount: number;
+  /**
+   * `null` when the peer did not report a count — an older host answering
+   * `host.status@1.0`, which the upgrade path no longer papers over with a
+   * fabricated `0`. Nothing here renders it as a number today; it exists so a
+   * consumer that starts to cannot mistake "did not say" for "said none".
+   */
+  readonly busySessionCount: number | null;
   readonly hostVersion: string;
 }
 
