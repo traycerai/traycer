@@ -111,12 +111,15 @@ function selectHostIndicatorState(
  * snapshots, already filtered for cleared/superseded), and every row carries
  * the entity columns, severity, kind and markers, so it can mirror the host's
  * derivation over rows from EVERY host rather than only the connected one.
- * Pending prompts are ORed normally. Terminal rows first resolve to the newest
- * outcome for each lifecycle group and exact entity within one origin host,
- * whose timestamps share a clock domain. Those per-host winners are then
- * rolled into epic state. This lets a later success replace an earlier failure
- * from the same lifecycle without comparing clocks across hosts or allowing an
- * independent lifecycle, host, or entity's success to hide a real failure.
+ * Unread, unresolved prompt notifications light their respective pending
+ * actions. A resolved-but-unread row remains a notification-stream concern,
+ * not a false claim that its chat is still waiting for an action. Terminal rows
+ * first resolve to the newest outcome for each lifecycle group and exact entity
+ * within one origin host, whose timestamps share a clock domain. Those
+ * per-host winners are then rolled into epic state. This lets a later success
+ * replace an earlier failure from the same lifecycle without comparing clocks
+ * across hosts or allowing an independent lifecycle, host, or entity's success
+ * to hide a real failure.
  * `pendingFork` is always false here: fork truth is host-local and is merged
  * from the host response after this feed-row derivation, never inferred from a
  * retained cloud row.
@@ -300,9 +303,13 @@ function indicatorContribution(
   entry: HostNotificationEntry,
 ): HostNotificationsIndicatorState | null {
   const pendingApproval =
-    entry.kind === "approval.requested" && entry.resolvedAt === null;
+    entry.kind === "approval.requested" &&
+    entry.readAt === null &&
+    entry.resolvedAt === null;
   const pendingInterview =
-    entry.kind === "interview.requested" && entry.resolvedAt === null;
+    entry.kind === "interview.requested" &&
+    entry.readAt === null &&
+    entry.resolvedAt === null;
   if (!pendingApproval && !pendingInterview) {
     return null;
   }
