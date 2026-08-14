@@ -89,8 +89,17 @@ export function createHostQueryInvalidator(
       getConditionPollEpisodeCoordinator(client).resetHostScope(hostId);
       const queryKey = queryKeys.hostScope(hostId);
       if (options.refetchActive) {
-        const predicate = (query: Query): boolean =>
-          !isActiveRefetchExempt(query);
+        // Freeze the recovery sweep at the instant the signal arrives. The
+        // cancel below is async; reusing only the broad host predicate after
+        // that await would also invalidate queries mounted in the meantime,
+        // even though they were never stranded by this recovery episode.
+        const affectedQueries = new Set(
+          client
+            .getQueryCache()
+            .findAll({ queryKey })
+            .filter((query) => !isActiveRefetchExempt(query)),
+        );
+        const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:
         // "fetching"`. Invalidating it alone only marks it stale; it does not
         // interrupt the sleep or start a recovery request. Cancel the affected
