@@ -27,7 +27,7 @@ export function UsageWindowPicker(props: UsageWindowPickerProps): ReactNode {
         }
       }}
     >
-      <TabsList aria-label="Window">
+      <TabsList aria-label="Window" className="max-w-full flex-wrap">
         {WINDOW_OPTIONS.map((option) => (
           <TabsTrigger
             key={option.value}
