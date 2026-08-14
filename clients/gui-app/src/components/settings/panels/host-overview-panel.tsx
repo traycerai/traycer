@@ -210,7 +210,19 @@ export function HostOverviewPanel(props: {
     wasEditingRef.current = rename.isEditing;
   }, [rename.isEditing]);
 
-  const anyPending = restart.isPending || identitySet.isPending;
+  // An accepted `host.update.install` returns the moment the CLI takes the job;
+  // the swap itself continues DETACHED and is reported only through
+  // `host.status.updateProgress`. Gating on the mutation alone therefore
+  // re-enables Update now and every version row the instant the request is
+  // ACCEPTED rather than when the update finishes - and a second selection from
+  // there sends another install that can retarget the one already running.
+  //
+  // `updating` is the only state that means "still going". `failed` is terminal
+  // and deliberately leaves the controls live, because that is exactly when
+  // someone needs to retry.
+  const updateInFlight = view.updateProgress?.state === "updating";
+  const anyPending =
+    restart.isPending || identitySet.isPending || updateInFlight;
 
   // The update story lives at PAGE level because its two halves now render in
   // two different containers: the answer — is there an update, install it — as a
