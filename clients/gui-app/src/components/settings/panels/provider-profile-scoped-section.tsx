@@ -217,14 +217,13 @@ export function ProviderProfileScopedSection(
               <span className="inline-flex">
                 <Button
                   type="button"
-                  size="xs"
-                  variant="outline"
+                  size="sm"
                   className="shrink-0"
                   disabled={addProfileDisabled}
                   onClick={onAddProfile}
                 >
                   <Plus className="size-3.5" />
-                  Add profile
+                  Add Profile
                 </Button>
               </span>
             </TooltipWrapper>

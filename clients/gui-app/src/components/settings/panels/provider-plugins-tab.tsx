@@ -172,14 +172,13 @@ function PluginsScopeToolbar(props: {
         {props.canAdd && !props.projectNeedsWorkspace ? (
           <Button
             type="button"
-            variant="outline"
             size="sm"
             className="text-ui-xs"
             disabled={props.isMutating}
             onClick={props.onToggleAdd}
           >
             <Plus className="size-3.5" />
-            Add from source
+            Add From Source
           </Button>
         ) : null}
       </div>
