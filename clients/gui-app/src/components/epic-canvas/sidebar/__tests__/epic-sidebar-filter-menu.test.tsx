@@ -86,6 +86,25 @@ describe("<ChatFilterMenu />", () => {
     expect(options).not.toContain("Terminal Agents");
   });
 
+  it("offers the ownership axis: All / Mine / Others", () => {
+    open(false);
+    fireEvent.click(screen.getByText("Ownership"));
+
+    expect(
+      screen.getAllByRole("menuitemradio").map((item) => item.textContent),
+    ).toEqual(expect.arrayContaining(["All", "Mine", "Others"]));
+
+    const others = screen
+      .getAllByRole("menuitemradio")
+      .find((item) => item.textContent === "Others");
+    if (others === undefined) throw new Error("no Others ownership option");
+    fireEvent.click(others);
+
+    expect(
+      useLeftPanelStore.getState().chatFilterByEpicId[EPIC_ID].ownership,
+    ).toBe("others");
+  });
+
   it("expands a collapsed section before opening its view menu", () => {
     useLeftPanelStore.getState().setPanelSectionCollapsed("chats", true);
     render(
@@ -186,6 +205,28 @@ describe("<ChatFilterMenu />", () => {
     expect(
       useLeftPanelStore.getState().chatFilterByEpicId[EPIC_ID].origin,
     ).toBe("tui");
+  });
+
+  it("counts interface and ownership as independent filters", () => {
+    const store = useLeftPanelStore.getState();
+    store.setChatOrigin(EPIC_ID, "gui");
+    store.setChatOwnership(EPIC_ID, "mine");
+
+    render(
+      <ChatFilterMenu
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        collapsed={false}
+        canArchive={false}
+        onCollapseAll={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Filter agents, 2 filters active",
+      }).textContent,
+    ).toBe("2");
   });
 
   it("omits archive visibility when the host lacks archive support (B4)", () => {

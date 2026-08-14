@@ -44,6 +44,14 @@ export const CHAT_ORIGIN = {
 } as const;
 export type ChatOriginFilter = (typeof CHAT_ORIGIN)[keyof typeof CHAT_ORIGIN];
 
+export const CHAT_OWNERSHIP = {
+  All: "all",
+  Mine: "mine",
+  Others: "others",
+} as const;
+export type ChatOwnershipFilter =
+  (typeof CHAT_OWNERSHIP)[keyof typeof CHAT_OWNERSHIP];
+
 export const CHAT_ARCHIVE_VISIBILITY = {
   Unarchived: "unarchived",
   Archived: "archived",
@@ -80,6 +88,7 @@ export type ArtifactStatusFilter =
 
 export interface ChatFilter {
   readonly origin: ChatOriginFilter;
+  readonly ownership: ChatOwnershipFilter;
 }
 
 export interface ArtifactFilter {
@@ -92,6 +101,7 @@ export interface ArtifactFilter {
 
 export const EMPTY_CHAT_FILTER: ChatFilter = Object.freeze({
   origin: CHAT_ORIGIN.All,
+  ownership: CHAT_OWNERSHIP.All,
 });
 export const EMPTY_ARTIFACT_FILTER: ArtifactFilter = Object.freeze({
   statuses: Object.freeze([]),
@@ -100,7 +110,24 @@ export const EMPTY_ARTIFACT_FILTER: ArtifactFilter = Object.freeze({
 });
 
 export function isChatFilterActive(filter: ChatFilter): boolean {
-  return filter.origin !== CHAT_ORIGIN.All;
+  return (
+    filter.origin !== CHAT_ORIGIN.All || filter.ownership !== CHAT_OWNERSHIP.All
+  );
+}
+
+export function chatFilterCount(filter: ChatFilter): number {
+  return (
+    (filter.origin === CHAT_ORIGIN.All ? 0 : 1) +
+    (filter.ownership === CHAT_OWNERSHIP.All ? 0 : 1)
+  );
+}
+
+export function matchesChatOwnershipFilter(
+  isOwnedByViewer: boolean,
+  ownership: ChatOwnershipFilter,
+): boolean {
+  if (ownership === CHAT_OWNERSHIP.All) return true;
+  return ownership === CHAT_OWNERSHIP.Mine ? isOwnedByViewer : !isOwnedByViewer;
 }
 
 export function isArtifactFilterActive(filter: ArtifactFilter): boolean {
@@ -318,6 +345,10 @@ interface LeftPanelStore {
   ) => void;
 
   readonly setChatOrigin: (epicId: string, origin: ChatOriginFilter) => void;
+  readonly setChatOwnership: (
+    epicId: string,
+    ownership: ChatOwnershipFilter,
+  ) => void;
   readonly clearChatFilter: (epicId: string) => void;
   readonly setChatArchiveVisibility: (
     epicId: string,
@@ -348,13 +379,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function isChatOriginFilter(value: unknown): value is ChatOriginFilter {
+  return Object.values(CHAT_ORIGIN).some((origin) => origin === value);
+}
+
+function isChatOwnershipFilter(value: unknown): value is ChatOwnershipFilter {
+  return Object.values(CHAT_OWNERSHIP).some((ownership) => ownership === value);
+}
+
+function normalizeChatFilter(value: unknown): ChatFilter {
+  if (!isRecord(value)) return EMPTY_CHAT_FILTER;
+  return {
+    origin: isChatOriginFilter(value.origin) ? value.origin : CHAT_ORIGIN.All,
+    ownership: isChatOwnershipFilter(value.ownership)
+      ? value.ownership
+      : CHAT_OWNERSHIP.All,
+  };
+}
+
 /**
  * v2 replaces the binary `chatShowArchivedByEpicId` preference with the full
  * three-state archive visibility model. A legacy `true` meant exactly what
  * `All` means now; absent/false remains the default unarchived-only view.
+ *
+ * v3 adds ownership to each chat filter. Older origin-only filters retain
+ * their origin and default ownership to All.
  */
 export function migrateLeftPanelPersistedState(persisted: unknown): unknown {
   if (!isRecord(persisted)) return persisted;
+  const chatFilterByEpicId: Record<string, ChatFilter> = {};
+  if (isRecord(persisted.chatFilterByEpicId)) {
+    for (const [epicId, value] of Object.entries(
+      persisted.chatFilterByEpicId,
+    )) {
+      const filter = normalizeChatFilter(value);
+      if (isChatFilterActive(filter)) chatFilterByEpicId[epicId] = filter;
+    }
+  }
   const archiveVisibilityByEpicId: Record<string, ChatArchiveVisibility> = {};
   if (isRecord(persisted.chatArchiveVisibilityByEpicId)) {
     for (const [epicId, visibility] of Object.entries(
@@ -378,6 +439,7 @@ export function migrateLeftPanelPersistedState(persisted: unknown): unknown {
   }
   const migrated = { ...persisted };
   delete migrated.chatShowArchivedByEpicId;
+  migrated.chatFilterByEpicId = chatFilterByEpicId;
   migrated.chatArchiveVisibilityByEpicId = archiveVisibilityByEpicId;
   return migrated;
 }
@@ -1217,18 +1279,39 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
 
       setChatOrigin: (epicId, origin) => {
         set((state) => {
-          const current = getFilterOrEmpty(
-            state.chatFilterByEpicId,
-            epicId,
-            EMPTY_CHAT_FILTER,
+          const current = normalizeChatFilter(
+            getFilterOrEmpty(
+              state.chatFilterByEpicId,
+              epicId,
+              EMPTY_CHAT_FILTER,
+            ),
           );
           if (current.origin === origin) return state;
+          const nextFilter = { ...current, origin };
+          const next = { ...state.chatFilterByEpicId };
+          if (isChatFilterActive(nextFilter)) next[epicId] = nextFilter;
+          else delete next[epicId];
           return {
-            chatFilterByEpicId: {
-              ...state.chatFilterByEpicId,
-              [epicId]: { origin },
-            },
+            chatFilterByEpicId: next,
           };
+        });
+      },
+
+      setChatOwnership: (epicId, ownership) => {
+        set((state) => {
+          const current = normalizeChatFilter(
+            getFilterOrEmpty(
+              state.chatFilterByEpicId,
+              epicId,
+              EMPTY_CHAT_FILTER,
+            ),
+          );
+          if (current.ownership === ownership) return state;
+          const nextFilter = { ...current, ownership };
+          const next = { ...state.chatFilterByEpicId };
+          if (isChatFilterActive(nextFilter)) next[epicId] = nextFilter;
+          else delete next[epicId];
+          return { chatFilterByEpicId: next };
         });
       },
 
@@ -1442,7 +1525,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
     }),
     {
       ...basePersistOptions(PERSIST_KEY),
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => window.localStorage),
       partialize: (state) => ({
         activePanelIdByTabId: getPersistedActivePanelIds(
