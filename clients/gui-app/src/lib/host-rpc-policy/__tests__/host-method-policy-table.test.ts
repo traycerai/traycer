@@ -101,6 +101,32 @@ describe("host method poll policy table", () => {
     expect(HOST_METHOD_POLL_TABLE["agent.roles.relinquish"].mode).toBe("fifo");
   });
 
+  it("declares the two chat-sharing writes as independent fifo queues", () => {
+    // fifo is per (method, params). These two methods never share a
+    // coordinator queue; cross-surface ordering is the client-side
+    // one-in-flight gate, not this table.
+    expect(HOST_METHOD_POLL_TABLE["epic.setCloudChatVisibility"].mode).toBe(
+      "fifo",
+    );
+    expect(HOST_METHOD_POLL_TABLE["epic.setChatSharingDefault"].mode).toBe(
+      "fifo",
+    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("epic.setCloudChatVisibility", {
+        taskId: "task-1",
+        chatId: "chat-1",
+        visibility: "private",
+      }),
+    ).toBe("fifo");
+    expect(
+      hostRpcSchedulingPolicy.modeFor("epic.setChatSharingDefault", {
+        taskId: "task-1",
+        defaultVisibility: "private",
+        applyToExisting: true,
+      }),
+    ).toBe("fifo");
+  });
+
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
     expect(
       hostRpcSchedulingPolicy.modeFor("providers.list", { native: null }),
@@ -121,12 +147,27 @@ describe("host method poll policy table", () => {
   });
 
   it("narrows null and fixed policies", () => {
-    const neverPolled: null = HOST_METHOD_POLL_TABLE["host.status"].poll;
+    const neverPolled: null = HOST_METHOD_POLL_TABLE["host.identity.get"].poll;
     expect(neverPolled).toBeNull();
 
     const fixed = HOST_METHOD_POLL_TABLE["host.getRateLimitUsage"].poll;
     const intervalMs: number = fixed.intervalMs;
     expect(intervalMs).toBe(15 * 60 * 1_000);
+  });
+
+  // `host.status` used to be un-polled entirely. It is now opted in
+  // (`poll: { kind: "fixed", intervalMs: 10_000 }`) for one caller: the
+  // Overview's drain affordance, whose `liveBusySessionCount` must stay a LIVE
+  // reading under the query's 30s `staleTime` — see `host-overview-rpc.ts` and
+  // `liveBusySessionCount` in `my-hosts-model.ts`.
+  it("polls host.status on a fixed 10s cadence, comfortably under its query's staleTime", () => {
+    const policy = HOST_METHOD_POLL_TABLE["host.status"].poll;
+    const intervalMs: number = policy.intervalMs;
+    expect(intervalMs).toBe(10_000);
+    // The interval must stay strictly under the 30s `staleTime` that demotes a
+    // retained `liveBusySessionCount` to `null` — inverting the two would make
+    // a healthy query flicker between live and unknown on every tick.
+    expect(intervalMs).toBeLessThan(30_000);
   });
 
   it("consumes condition cache data as unknown", () => {

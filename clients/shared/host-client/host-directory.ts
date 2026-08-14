@@ -21,7 +21,7 @@
 export type HostKind = "local" | "remote" | "mock";
 
 /**
- * How well a directory entry's host is answering right now.
+ * How well the SHELL's own probe says a local host is answering right now.
  *
  * Three values, not two, because the shell has always known the difference and
  * used to throw it away. A host that is demonstrably ALIVE (pid metadata names
@@ -44,6 +44,13 @@ export type HostKind = "local" | "remote" | "mock";
  * every site that branched on `status === "available"` has to decide whether it
  * meant "answering right now" or "reachable at all", and the incident's lesson
  * is that nearly all of them meant the latter.
+ *
+ * This is the SHELL's vocabulary — what the desktop lifecycle folds
+ * (`foldHostAvailability` / `needsReprobe`) and what a local-host snapshot
+ * publishes over IPC. It is NOT what a directory entry carries: an entry's
+ * coarse field is {@link HostTransportDialability}, projected from this through
+ * {@link isHostReachable}, so `busy` reaches the renderer as `dialable` and can
+ * never be read as death.
  */
 export type HostAvailability = "available" | "busy" | "unavailable";
 
@@ -55,9 +62,8 @@ export type HostAvailability = "available" | "busy" | "unavailable";
 export type LiveHostAvailability = Exclude<HostAvailability, "unavailable">;
 
 /**
- * Can this host be dialed / kept bound right now?
+ * Does this shell-published availability mean the host can be dialed?
  *
- * The one predicate every transport, routing, and lock decision should use.
  * `busy` is reachable: the process is alive, its `websocketUrl` is unchanged,
  * and the renderer's own per-request dials keep completing - the only thing a
  * failed probe proved is that one probe went unanswered.
@@ -65,12 +71,41 @@ export type LiveHostAvailability = Exclude<HostAvailability, "unavailable">;
  * Kept as a named function rather than each call site writing
  * `status !== "unavailable"` because the check used to be `=== "available"` in
  * a dozen places, and the whole point of adding a third value is that those
- * places must not silently keep meaning "answering this instant". Narrow to
- * `=== "available"` only where the answer feeds a BADGE.
+ * places must not silently keep meaning "answering this instant".
+ *
+ * There is now exactly ONE such call site: the directory service's projection
+ * of a local snapshot into a {@link HostDirectoryEntry}'s
+ * {@link HostTransportDialability}. Renderer surfaces no longer see this type
+ * at all — they read the projected field, or the REASON
+ * ({@link hostUnavailability} in `remote-fetcher.ts`). That is deliberate: the
+ * old fan-out of raw availability reads is what the rename below removed.
  */
 export function isHostReachable(status: HostAvailability): boolean {
   return status !== "unavailable";
 }
+
+/**
+ * Can the transport dial this entry right now — and NOTHING else.
+ *
+ * Deliberately renamed from `status: "available" | "unavailable"`, and the
+ * rename is the point. That field was read by a dozen surfaces as if it meant
+ * "is this host alive", which it never did: three different situations collapse
+ * into not-dialable, and only one of them is the host being off. Rendering the
+ * other two as "offline" put dead-tile banners over live sessions and re-homed
+ * people off working machines.
+ *
+ * The old name invited that reading and the old grep-and-fix rounds kept
+ * missing sites — six found, then four more. So the field is renamed rather
+ * than re-documented: every read is now a compile error until someone decides,
+ * at that site, whether a pure yes/no is genuinely what it wants (dialing,
+ * endpoint construction) or whether it needs the REASON
+ * ({@link hostUnavailability} in `remote-fetcher.ts`, or `useHostReachability`
+ * for anything user-facing).
+ *
+ * If you are about to read this to decide what to SHOW someone, you want the
+ * reason, not this.
+ */
+export type HostTransportDialability = "dialable" | "not-dialable";
 
 export interface HostDirectoryEntry {
   readonly hostId: string;
@@ -78,5 +113,5 @@ export interface HostDirectoryEntry {
   readonly kind: HostKind;
   readonly websocketUrl: string | null;
   readonly version: string | null;
-  readonly status: HostAvailability;
+  readonly transportDialability: HostTransportDialability;
 }

@@ -16,7 +16,7 @@ function entry(
       overrides.websocketUrl === undefined
         ? `ws://127.0.0.1:4917/${overrides.hostId}`
         : overrides.websocketUrl,
-    status: overrides.status ?? "available",
+    transportDialability: overrides.transportDialability ?? "dialable",
     hostId: overrides.hostId,
     version: overrides.version,
   };

@@ -303,7 +303,20 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
-  "host.status": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
+  // affordance. Its `busySessionCount` is the number "Apply now — ends N
+  // sessions" promises and then destroys, so the question is not whether the
+  // cached value may be reused but whether it is still TRUE. Going stale does
+  // not refetch on its own, so without a cadence a focused Overview served the
+  // count it read on mount indefinitely.
+  //
+  // Under the query's `staleTime` (30s), deliberately: this interval keeps a
+  // healthy read fresh while `isStale` demotes an unhealthy one to `null`. The
+  // two numbers are one mechanism and must move together.
+  "host.status": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The host's own name: a bounded read that can coalesce. It has no poll —
@@ -703,6 +716,22 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving a chat or terminal-agent record persists its archived flag
   // (optional host capability).
   "epic.setChatArchived": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

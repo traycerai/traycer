@@ -127,8 +127,13 @@ function describeCompatHealth(
   // turns was up and working, whatever else this report says (traycer#860).
   const hostStatus = compatibility.hostStatus;
   if (hostStatus === null || !hostStatus.busy) return verdict;
-  const sessions = hostStatus.busySessionCount === 1 ? "session" : "sessions";
-  return `${verdict}, busy ${hostStatus.busySessionCount} ${sessions}`;
+  // An older host reports `busy` without a count. It used to arrive as a
+  // fabricated `0`, which read as "busy 0 sessions"; it now arrives as `null`,
+  // which would interpolate as the word "null" in a diagnostic someone pastes
+  // into an issue. Say only what the host said.
+  const count = hostStatus.busySessionCount;
+  if (count === null) return `${verdict}, busy`;
+  return `${verdict}, busy ${count} ${count === 1 ? "session" : "sessions"}`;
 }
 
 function compatVerdict(

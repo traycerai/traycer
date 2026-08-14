@@ -36,6 +36,7 @@ import {
 } from "@/components/local-host-gate";
 import { LocalHostLoadingContent } from "@/components/local-host-loading";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { describeHostCompatibilityError, useHostBinding } from "@/lib/host";
 import type { HostSelectionIntent } from "@/lib/host/host-directory-service";
 import {
@@ -69,7 +70,21 @@ export function HostReadinessControllerProvider(props: {
   const activeEntry = directoryEntries.find(
     (entry) => entry.hostId === readiness.hostId,
   );
-  const defaultHostDialable = isHostDialable(activeEntry);
+  // Subscribed, not read at render time: every dialability answer below is
+  // ready-session-aware, and a readiness flip changes no directory value.
+  // The lookup's identity changes exactly when some listed host's readiness
+  // does, which is what re-runs the memoized context value and re-renders
+  // every readiness consumer.
+  const hasReadySessionFor = useRemoteSessionsPollReadiness(
+    useMemo(
+      () => directoryEntries.map((entry) => entry.hostId),
+      [directoryEntries],
+    ),
+  );
+  const defaultHostDialable = isHostDialable(
+    activeEntry,
+    activeEntry !== undefined && hasReadySessionFor(activeEntry.hostId),
+  );
   const selectedEntry =
     binding === null ? null : binding.hostClient.getActiveHost();
   const targetEntry = selectedEntry ?? activeEntry;
@@ -120,7 +135,7 @@ export function HostReadinessControllerProvider(props: {
   // so the card states what the directory actually says rather than inferring
   // it from the readiness kind that brought it here.
   const anyHostDialable = directoryEntries.some((entry) =>
-    isHostDialable(entry),
+    isHostDialable(entry, hasReadySessionFor(entry.hostId)),
   );
 
   return (
@@ -134,6 +149,7 @@ export function HostReadinessControllerProvider(props: {
           activeHostId={readiness.hostId}
           requestContextUserId={readiness.requestContextUserId}
           directoryEntries={directoryEntries}
+          hasReadySessionFor={hasReadySessionFor}
           hasLocalHost={runnerHost.hasLocalHost}
           hasMobileNoHost={
             binding !== null && binding.directory.getCardinality() === "zero"
@@ -162,6 +178,7 @@ function HostReadinessControllerContents(props: {
   readonly activeHostId: string | null;
   readonly requestContextUserId: string | null;
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
+  readonly hasReadySessionFor: (hostId: string) => boolean;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
   readonly lifecycle: HostProvisioningLifecycle;
@@ -216,6 +233,7 @@ function HostReadinessControllerContents(props: {
           activeHostId: props.activeHostId,
           requestContextUserId: props.requestContextUserId,
           directoryEntries: props.directoryEntries,
+          hasReadySessionFor: props.hasReadySessionFor,
           hasLocalHost: props.hasLocalHost,
           hasMobileNoHost: props.hasMobileNoHost,
         });
@@ -238,6 +256,7 @@ function HostReadinessControllerContents(props: {
     props.activeHostId,
     props.authStatus,
     props.directoryEntries,
+    props.hasReadySessionFor,
     props.hasLocalHost,
     props.hasMobileNoHost,
     props.requestContextUserId,

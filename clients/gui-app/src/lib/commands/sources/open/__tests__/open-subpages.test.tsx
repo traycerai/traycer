@@ -233,7 +233,7 @@ vi.mock("@/lib/host", () => ({
           kind: "local",
           websocketUrl: "ws://default-host.test",
           version: null,
-          status: "available",
+          transportDialability: "dialable",
         };
       }
       if (hostId === "terminal-host") {
@@ -245,7 +245,9 @@ vi.mock("@/lib/host", () => ({
             ? "ws://terminal-host.test"
             : null,
           version: null,
-          status: remoteHostAvailableMock.current ? "available" : "unavailable",
+          transportDialability: remoteHostAvailableMock.current
+            ? "dialable"
+            : "not-dialable",
         };
       }
       return null;
@@ -274,7 +276,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "remote",
         websocketUrl: null,
         version: null,
-        status: "available",
+        transportDialability: "dialable",
       },
       {
         hostId: "blank-label-host",
@@ -282,7 +284,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "remote",
         websocketUrl: null,
         version: null,
-        status: "available",
+        transportDialability: "dialable",
       },
       {
         hostId: "terminal-host",
@@ -290,7 +292,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "remote",
         websocketUrl: "ws://terminal-host.test",
         version: null,
-        status: "available",
+        transportDialability: "dialable",
       },
     ],
   }),

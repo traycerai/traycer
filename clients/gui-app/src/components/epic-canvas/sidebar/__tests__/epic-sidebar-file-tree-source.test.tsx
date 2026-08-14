@@ -347,7 +347,7 @@ function installSearchHost(script: Partial<SearchScript>): void {
     kind: "mock",
     websocketUrl: "ws://host.test",
     version: "test",
-    status: "available",
+    transportDialability: "dialable",
   });
   client.setRequestContext(
     createRequestContext({

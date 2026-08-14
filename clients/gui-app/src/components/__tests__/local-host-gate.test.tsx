@@ -90,7 +90,7 @@ const localEntry: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: "ws://127.0.0.1:4917/rpc",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const remoteEntry: HostDirectoryEntry = {
@@ -99,7 +99,7 @@ const remoteEntry: HostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://relay.example.com/rpc",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;

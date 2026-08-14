@@ -158,19 +158,17 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   kind: "remote",
   websocketUrl: "wss://relay.invalid/attach",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
   remoteStatus: {
-    presenceLease: "fresh",
-    hostRelayAttached: true,
+    connectivity: "connectable",
     viewerReachability: "ok",
     clientCloud: "ok",
-    busy: false,
-    busySessionCount: 0,
     updateState: "current",
     appVersion: null,
     lastSeenAt: null,
   },
   publicKey: "pubkey-b",
+  relayFuseGrace: false,
 };
 
 const localEntry: HostDirectoryEntry = {
@@ -179,7 +177,7 @@ const localEntry: HostDirectoryEntry = {
   kind: "local",
   websocketUrl: "ws://127.0.0.1:1/",
   version: "1.2.3",
-  status: "available",
+  transportDialability: "dialable",
 };
 
 const bearer = {

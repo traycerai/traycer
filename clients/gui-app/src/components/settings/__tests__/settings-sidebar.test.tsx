@@ -38,6 +38,16 @@ vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
 }));
 
+// The sidebar now opts into the liveness poll directly (see
+// `useRegisteredHostsPollLiveness` in `settings-sidebar.tsx`). This suite
+// mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the
+// real hook — which calls `useQuery` unconditionally — would throw for want
+// of a query client. It is also irrelevant to navigation, which is what this
+// suite is about.
+vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
+  useRegisteredHostsPollLiveness: () => undefined,
+}));
+
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => <SettingsSidebar mode={{ kind: "route" }} />,

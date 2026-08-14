@@ -23,6 +23,7 @@ import {
 import {
   DefaultRequestContextProvider,
   mintRequestContextFromValidatedIdentity,
+  type AuthEra,
   type RequestContextProvider,
 } from "../request-context-provider";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
@@ -58,6 +59,122 @@ describe("DefaultRequestContextProvider - initial state", () => {
   it("starts with no current context", () => {
     const provider = createProvider();
     expect(provider.current()).toBeNull();
+  });
+});
+
+/**
+ * The counter a destructive fence can safely be built on, and the era every
+ * emission carries.
+ *
+ * The distinction these pin is the whole reason this counter exists next to
+ * the identity-transition one the auth service already had: that one moves on
+ * sign-in / sign-out / dispose, so the case a credential fence is FOR - a
+ * same-user rotation, where the user id is identical and only the token
+ * changed - never moves it at all.
+ */
+describe("DefaultRequestContextProvider - credential generation and emitted era", () => {
+  function signIn(
+    provider: DefaultRequestContextProvider,
+    userId: string,
+    bearerToken: string,
+  ): RequestContext {
+    const user = createAuthenticatedUserFixture({});
+    (user.user as { id: string }).id = userId;
+    return provider.setSignedIn({
+      user,
+      bearerToken,
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+  }
+
+  it("advances on a same-user rotation - the case an identity counter cannot see", () => {
+    const provider = createProvider();
+    signIn(provider, "user-1", "bearer-1");
+    const afterSignIn = provider.getCredentialGeneration();
+
+    provider.rotateCurrentBearer({
+      userId: "user-1",
+      bearerToken: "bearer-2",
+    });
+
+    // Same identity, no emission - and that is exactly why this has to move.
+    // A 401 earned by `bearer-1` arriving after this point is not evidence
+    // about `bearer-2`, and the only thing that can tell them apart is this.
+    expect(provider.current()?.identity.userId).toBe("user-1");
+    expect(provider.getCredentialGeneration()).toBe(afterSignIn + 1);
+  });
+
+  it("advances on every credential change: sign-in, rotation, cross-user, sign-out", () => {
+    const provider = createProvider();
+    expect(provider.getCredentialGeneration()).toBe(0);
+
+    signIn(provider, "user-1", "bearer-1");
+    provider.rotateCurrentBearer({
+      userId: "user-1",
+      bearerToken: "bearer-2",
+    });
+    signIn(provider, "user-2", "bearer-3");
+    provider.signOut();
+
+    expect(provider.getCredentialGeneration()).toBe(4);
+  });
+
+  it("does not advance on an idempotent signOut, which changes no credential", () => {
+    const provider = createProvider();
+    signIn(provider, "user-1", "bearer-1");
+    provider.signOut();
+    const afterSignOut = provider.getCredentialGeneration();
+
+    provider.signOut();
+
+    expect(provider.getCredentialGeneration()).toBe(afterSignOut);
+  });
+
+  it("hands each listener the era its OWN transition committed, post-change", () => {
+    const provider = createProvider();
+    const eras: AuthEra[] = [];
+    provider.onChange((_ctx, era) => {
+      eras.push(era);
+    });
+
+    signIn(provider, "user-1", "bearer-1");
+    // Silent on `onChange` (the context reference is unchanged), so it
+    // contributes no era - but it still consumes a generation, which is what
+    // makes the NEXT era's number differ from a naive emission count.
+    provider.rotateCurrentBearer({
+      userId: "user-1",
+      bearerToken: "bearer-2",
+    });
+    signIn(provider, "user-2", "bearer-3");
+    provider.signOut();
+
+    // A listener that fetches inside an emission runs under the post-
+    // transition credential, so the era it is handed must describe that one.
+    expect(eras).toEqual([
+      { identity: "user-1", credentialGeneration: 1 },
+      { identity: "user-2", credentialGeneration: 3 },
+      { identity: null, credentialGeneration: 4 },
+    ]);
+  });
+
+  it("gives the listener an era matching what the provider reads back DURING the emission", () => {
+    const provider = createProvider();
+    const observed: Array<{ era: AuthEra; live: number }> = [];
+    provider.onChange((_ctx, era) => {
+      // The reorder trap at this layer: a listener reading the accessor
+      // directly, mid-emission, must see the same generation the era names.
+      // If a future edit bumps the counter after the emission instead of
+      // before it, these two disagree here and this fails.
+      observed.push({ era, live: provider.getCredentialGeneration() });
+    });
+
+    signIn(provider, "user-1", "bearer-1");
+    provider.signOut();
+
+    expect(observed.map((entry) => entry.era.credentialGeneration)).toEqual(
+      observed.map((entry) => entry.live),
+    );
   });
 });
 

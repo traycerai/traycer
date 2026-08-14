@@ -168,7 +168,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
     kind: "local",
     websocketUrl: `ws://127.0.0.1:0/${hostId}`,
     version: "0.0.0-mock",
-    status: "available",
+    transportDialability: "dialable",
   });
   return client;
 }

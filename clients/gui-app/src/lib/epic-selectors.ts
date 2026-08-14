@@ -646,6 +646,54 @@ export function useEpicArtifact(
   });
 }
 
+type EpicAgentProjection = ChatProjection | TuiAgentProjection;
+
+const MIN_AGENT_REFERENCE_PREFIX_LENGTH = 4;
+
+function exactEpicAgent(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+  agentId: string,
+): EpicAgentProjection | null {
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    return state.chats.byId[agentId];
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    return state.tuiAgents.byId[agentId];
+  }
+  return null;
+}
+
+/**
+ * Resolves the agent-id syntax accepted by the host: exact id first, then a
+ * unique case-sensitive prefix of at least four characters. Role-claim ids and
+ * artifact ids are deliberately outside this candidate set.
+ */
+function resolveEpicAgentReference(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+  referenceId: string,
+): EpicAgentProjection | null {
+  const exact = exactEpicAgent(state, referenceId);
+  if (exact !== null) return exact;
+  if (referenceId.length < MIN_AGENT_REFERENCE_PREFIX_LENGTH) return null;
+
+  let matchedId: string | null = null;
+  for (const candidateId of [
+    ...state.chats.allIds,
+    ...state.tuiAgents.allIds,
+  ]) {
+    if (!candidateId.startsWith(referenceId)) continue;
+    if (matchedId !== null && matchedId !== candidateId) return null;
+    matchedId = candidateId;
+  }
+  return matchedId === null ? null : exactEpicAgent(state, matchedId);
+}
+
+export function useEpicAgentReference(
+  referenceId: string,
+): EpicAgentProjection | null {
+  return useEpicStore((state) => resolveEpicAgentReference(state, referenceId));
+}
+
 export function useEpicLiveArtifactTitle(
   artifactId: string | null,
 ): string | null {
