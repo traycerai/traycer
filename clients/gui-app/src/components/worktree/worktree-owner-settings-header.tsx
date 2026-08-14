@@ -74,18 +74,28 @@ export function WorktreeOwnerSettingsHeader(props: {
   const hostClient = useHostClientForHostId(props.hostId);
   // Terminal agents still carry their settings on the store projection, so this
   // is CHAT-ONLY: the single-write pivot took the doc chat entry away and left
-  // the registry row's harness-id summary, which is not a tuple. Skipped when
-  // the store already has one - a pre-pivot chat whose frozen doc entry
-  // survived, or one this session opened - so the common case still paints from
-  // local state with no round trip, and the read is what covers the rest.
+  // the registry row's harness-id summary, which is not a tuple.
+  //
+  // Runs for EVERY chat, including one that already has a local tuple, because
+  // that tuple can be stale in a way nothing here can detect. `unionChatsSlice`
+  // deliberately prefers a surviving doc entry's `settings` over the record's,
+  // but since the pivot `epic.updateChatRunSettings` and `epic.updateChatProfile`
+  // write only the host's authoritative store - nothing re-writes that doc entry
+  // ever again. So a pre-pivot chat's frozen tuple survives every subsequent
+  // model, profile and permission change, and gating the read on its absence
+  // would pin the card to values that stopped being true the first time the user
+  // changed anything. The host is the authority; local is the fallback.
   const runSettingsQuery = useChatRunSettings({
     client: hostClient,
     epicId: props.epicId,
     chatId: props.ownerId,
-    enabled: isChat && localChatSettings === null,
+    enabled: isChat,
   });
-  const chatSettings =
-    localChatSettings ?? runSettingsQuery.data?.settings ?? null;
+  // Host first, local second - and local still carries the card while the read
+  // is in flight, unsupported, or answering for a host that cannot be reached,
+  // so this never blanks a row that had something to show.
+  const fetchedChatSettings = runSettingsQuery.data?.settings ?? null;
+  const chatSettings = fetchedChatSettings ?? localChatSettings;
   const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no

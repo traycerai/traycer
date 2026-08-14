@@ -61,6 +61,17 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
             ],
             metadata: {},
           },
+          // A SECOND model, so a host tuple and a local tuple can disagree
+          // visibly - which is the only way to test which one the header trusts.
+          {
+            harnessId: "claude",
+            slug: "opus-4.1",
+            label: "Claude Opus 4.1",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            metadata: {},
+          },
         ],
       },
     ],
@@ -448,7 +459,24 @@ describe("chat settings sourced from the host", () => {
     expect(screen.queryByTestId("owner-settings-header")).toBeNull();
   });
 
-  it("does not ask the host when the projection already has settings", () => {
+  it("prefers the host tuple over a local one that disagrees", () => {
+    // A pre-pivot chat still has a doc entry, and `unionChatsSlice` deliberately
+    // prefers its `settings` over the record's. But since the single-write pivot
+    // NOTHING rewrites that entry - `epic.updateChatRunSettings` and
+    // `epic.updateChatProfile` reach only the host's own store - so it is frozen
+    // at whatever it held when the doc was last written. Gating the read on its
+    // absence, or letting it win the coalesce, would pin the card to values that
+    // stopped being true at the user's first model change.
+    fetchedSettings.current = {
+      harnessId: "claude",
+      model: "opus-4.1",
+      permissionMode: "full_access",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -456,7 +484,25 @@ describe("chat settings sourced from the host", () => {
       serviceTier: null,
     });
 
-    expect(fetchedSettings.lastEnabled).toBe(false);
+    expect(fetchedSettings.lastEnabled).toBe(true);
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Opus 4.1",
+    );
+  });
+
+  it("falls back to the local tuple while the host read has not answered", () => {
+    // In flight, unsupported, or an unreachable owner host - all arrive here as
+    // no fetched tuple, and none of them should blank a row that already had
+    // something true enough to show.
+    fetchedSettings.current = null;
+
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
     expect(screen.getByTestId("owner-settings-model").textContent).toContain(
       "Claude Sonnet 4.5",
     );
