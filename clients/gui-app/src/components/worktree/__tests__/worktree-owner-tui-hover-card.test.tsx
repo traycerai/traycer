@@ -80,6 +80,13 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     },
   }),
 }));
+// Terminal agents keep their settings on the store projection, so this read is
+// disabled for every owner in this suite. Mocked rather than provided for: the
+// real hook needs a `QueryClientProvider`, and standing one up here would be
+// scaffolding for a query that is never issued.
+vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
+  useChatRunSettings: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
   useWorktreeOwnerMetadata: () => ({
     binding: null,
