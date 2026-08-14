@@ -1871,6 +1871,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     taskTodoItems: null,
     error: null,
     agentMessageSend: null,
+    managedCommand: null,
     progress: null,
     backgroundOutput: null,
     startedAt: 4900,

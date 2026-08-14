@@ -2006,6 +2006,34 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "managedCommand": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "commandId": {
+                                                      "type": "string"
+                                                    },
+                                                    "description": {
+                                                      "type": "string"
+                                                    },
+                                                    "monitoring": {
+                                                      "type": "boolean"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "commandId",
+                                                    "description",
+                                                    "monitoring"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "progress": {
                                               "default": null,
                                               "anyOf": [
@@ -2192,6 +2220,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "taskTodoItems",
                                             "error",
                                             "agentMessageSend",
+                                            "managedCommand",
                                             "progress",
                                             "backgroundOutput",
                                             "startedAt",

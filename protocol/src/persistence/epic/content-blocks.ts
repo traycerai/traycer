@@ -258,6 +258,35 @@ export const imageGenerationResultSchema = z.object({
 });
 export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
 
+/**
+ * The shell a `traycer_run_shell` call created, stamped onto the call's own
+ * block so the transcript's start card can find it again.
+ *
+ * The id is the whole point and cannot be derived: it is minted by the host
+ * inside the call and comes back only in the tool RESULT, which is never
+ * persisted. Without it a start card can only guess which shell it is looking
+ * at - and, worse, cannot tell a DELETED shell (look it up, find nothing) from
+ * a block written before this field existed, which are the two states that must
+ * read differently.
+ *
+ * `description` and `monitoring` ride along even though the live record carries
+ * both, because they are exactly what survives the record's death: a deleted
+ * shell's card still names itself "Monitor · deploy watcher" instead of
+ * degrading to an anonymous row. The live record wins whenever there is one -
+ * an agent can rename a shell or turn monitoring off, and the card follows.
+ *
+ * Nullable + defaulted: every other tool call, and every block written before
+ * this existed, carries null.
+ */
+export const toolCallManagedCommandSchema = z.object({
+  commandId: z.string(),
+  description: z.string(),
+  monitoring: z.boolean(),
+});
+export type ToolCallManagedCommand = z.infer<
+  typeof toolCallManagedCommandSchema
+>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -280,6 +309,9 @@ export const toolCallBlockSchema = z.object({
   taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
   error: z.string().nullable(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // The shell a `traycer_run_shell` call created - see
+  // `toolCallManagedCommandSchema`. Null for every other tool call.
+  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
   // Latest intermediate progress line for an in-flight call (replace-latest,
   // never an append-log). Shown by the GUI only while `status === "streaming"`.
   // Nullable + defaulted so blocks persisted before this field parse cleanly.

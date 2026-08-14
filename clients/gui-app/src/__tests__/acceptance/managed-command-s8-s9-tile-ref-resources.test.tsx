@@ -120,6 +120,9 @@ function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
     id: "cmd-res",
     monitoring: true,
     description: "deploy watcher",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_ID,
     createdAtMs: T0,
@@ -382,6 +385,9 @@ describe("S8 · tile-ref minimalism", () => {
       // The creep §9a rules out — none of it may survive a round-trip.
       monitoring: true,
       description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: "/work/repo",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
       status: { state: "running", pid: 4410 },
       name: "Shell · deploy watcher",
     });

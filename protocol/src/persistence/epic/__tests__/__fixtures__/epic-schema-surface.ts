@@ -3285,6 +3285,33 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "managedCommand": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "commandId": {
+                                          "type": "string"
+                                        },
+                                        "description": {
+                                          "type": "string"
+                                        },
+                                        "monitoring": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "commandId",
+                                        "description",
+                                        "monitoring"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "progress": {
                                   "default": null,
                                   "anyOf": [
@@ -10696,6 +10723,34 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "managedCommand": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "commandId": {
+                                          "type": "string"
+                                        },
+                                        "description": {
+                                          "type": "string"
+                                        },
+                                        "monitoring": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "commandId",
+                                        "description",
+                                        "monitoring"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "progress": {
                                   "default": null,
                                   "anyOf": [
@@ -10882,6 +10937,7 @@ export const epicSchemaSurfaceBaseline = {
                                 "taskTodoItems",
                                 "error",
                                 "agentMessageSend",
+                                "managedCommand",
                                 "progress",
                                 "backgroundOutput",
                                 "startedAt",

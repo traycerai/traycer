@@ -85,6 +85,9 @@ const COMMAND: ManagedCommand = {
   id: COMMAND_ID,
   monitoring: true,
   description: "deploy watcher",
+  command: "tail -f deploy.log",
+  cwd: "/work/repo",
+  cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
   createdAtMs: 10,
@@ -336,6 +339,61 @@ describe("managed-command output window", () => {
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
     ).toBe("Exited · code 1");
+  });
+
+  it("answers what is running and where, as CURRENT facts", () => {
+    const stub = installOutputStub();
+    renderTile();
+    openAtTail(stub.emit, [line("stdout", "watching src/")]);
+
+    fireEvent.click(screen.getByTestId("managed-command-output-details"));
+
+    // The log spans every run of this shell, so these describe the shell as it
+    // stands now rather than whatever produced the lines being read - which is
+    // exactly why the transcript's start card freezes its own copy instead.
+    expect(
+      screen.getByTestId("managed-command-output-details-command").textContent,
+    ).toBe("tail -f deploy.log");
+    expect(screen.getByText("/work/repo")).toBeTruthy();
+    // Only while running: a stale pid points at whatever the OS handed out next.
+    expect(screen.getByText("4410")).toBeTruthy();
+    // Cadence reads as what it DOES, not as three numbers to go look up.
+    expect(
+      screen.getByTestId("managed-command-output-details-cadence").textContent,
+    ).toContain("500ms quiet");
+    // Withheld by decision: which shell binary resolved describes the machine.
+    expect(screen.queryByText("/bin/sh")).toBeNull();
+  });
+
+  it("drops the pid once the shell is no longer running", () => {
+    const stub = installOutputStub();
+    renderTile();
+    openAtTail(stub.emit, [line("stdout", "watching src/")]);
+    act(() => {
+      stub.emit().onStatus({
+        ...COMMAND,
+        status: { state: "exited", exitCode: 0, signal: null, exitedAtMs: 90 },
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("managed-command-output-details"));
+    expect(screen.queryByText("4410")).toBeNull();
+  });
+
+  it("keeps the details reachable after the shell is deleted", () => {
+    // The lifecycle verbs go - they would act on nothing - but the log is still
+    // on screen, and "what was this?" is exactly the question left.
+    const stub = installOutputStub();
+    renderTile();
+    openAtTail(stub.emit, [line("stdout", "last words")]);
+    act(() => {
+      stub.emit().onDeleted();
+    });
+
+    expect(screen.getByTestId("managed-command-output-details")).toBeTruthy();
+    expect(
+      screen.queryByTestId(`managed-command-stop-${COMMAND_ID}`),
+    ).toBeNull();
   });
 
   it("keeps its chrome off the log's flow, and reserves a lane for it", () => {

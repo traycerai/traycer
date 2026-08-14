@@ -16,12 +16,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { useStore } from "zustand";
-import { ArrowDownToLine } from "lucide-react";
+import { ArrowDownToLine, Info } from "lucide-react";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { SegmentCopyButton } from "@/components/chat/segments/segment-copy-button";
+import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
@@ -30,7 +39,10 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  ManagedCommand,
+  ManagedCommandCadence,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   ManagedCommandOutputStoreHandle,
   ManagedCommandTimelineLine,
@@ -164,6 +176,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
     <ManagedCommandOutputTileLive
       epicId={epicId}
       node={node}
+      viewTabId={props.viewTabId}
       onClose={closeCanvasTile}
     />
   );
@@ -172,6 +185,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
 function ManagedCommandOutputTileLive(props: {
   readonly epicId: string;
   readonly node: ManagedCommandOutputTileRef;
+  readonly viewTabId: string;
   readonly onClose: () => void;
 }) {
   const { epicId, node } = props;
@@ -196,6 +210,7 @@ function ManagedCommandOutputTileLive(props: {
     <ManagedCommandOutputTileBody
       epicId={epicId}
       node={node}
+      viewTabId={props.viewTabId}
       onClose={props.onClose}
       session={session}
     />
@@ -205,6 +220,7 @@ function ManagedCommandOutputTileLive(props: {
 function ManagedCommandOutputTileBody(props: {
   readonly epicId: string;
   readonly node: ManagedCommandOutputTileRef;
+  readonly viewTabId: string;
   readonly onClose: () => void;
   readonly session: ManagedCommandOutputStoreHandle;
 }) {
@@ -423,6 +439,7 @@ function ManagedCommandOutputTileBody(props: {
             command={command}
             epicId={epicId}
             hostId={node.hostId}
+            viewTabId={props.viewTabId}
             gone={gone}
           />
         )}
@@ -509,6 +526,7 @@ function ManagedCommandOutputControls(props: {
   readonly command: ManagedCommand;
   readonly epicId: string;
   readonly hostId: string;
+  readonly viewTabId: string;
   /** The command is gone - lifecycle verbs would act on nothing. */
   readonly gone: boolean;
 }) {
@@ -529,18 +547,151 @@ function ManagedCommandOutputControls(props: {
         />
         {managedCommandStatusLabel(props.command.status)}
       </span>
-      {props.gone ? null : (
-        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm backdrop-blur-sm">
+      <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm backdrop-blur-sm">
+        <ManagedCommandOutputDetails
+          command={props.command}
+          epicId={props.epicId}
+          hostId={props.hostId}
+          viewTabId={props.viewTabId}
+        />
+        {props.gone ? null : (
           <ManagedCommandLifecycleActions
             command={props.command}
             epicId={props.epicId}
             hostId={props.hostId}
             className={undefined}
           />
-        </span>
-      )}
+        )}
+      </span>
     </div>
   );
+}
+
+/**
+ * Everything about this shell that is not its output, one click away.
+ *
+ * The window used to answer "what exactly is this running, and where?" with
+ * nothing at all - you went to the agent's transcript and found the tool call.
+ * That is the surface refusing to say what it plainly knows, and it is the
+ * question a person reading a log at 3am actually has.
+ *
+ * Every field here is CURRENT, not historical, and says so. The retained log
+ * spans every run of this shell, and a restart can re-spec both the command and
+ * its directory - so these describe the shell as it stands now rather than
+ * whatever produced the lines being read. The transcript's start card is the
+ * other half of that pair: it holds the command the creating call asked for,
+ * frozen.
+ */
+function ManagedCommandOutputDetails(props: {
+  readonly command: ManagedCommand;
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly viewTabId: string;
+}) {
+  const { command } = props;
+  const pid = command.status.state === "running" ? command.status.pid : null;
+  return (
+    <Popover>
+      <TooltipWrapper
+        label="Details"
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Shell details"
+            data-testid="managed-command-output-details"
+            className="size-6 text-muted-foreground hover:text-foreground"
+          >
+            <Info aria-hidden className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent
+        align="end"
+        side="bottom"
+        className="w-[min(90vw,26rem)] p-3 text-ui-xs"
+      >
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+          <DetailRow label="Command">
+            {/* Wrapping, not truncated: a shell command is the one value here
+                worth reading in full, and it is the reason someone opened this.
+                Copyable for the "run it myself" move. */}
+            <span className="flex items-start gap-1">
+              <span
+                className="min-w-0 font-mono wrap-anywhere"
+                data-testid="managed-command-output-details-command"
+              >
+                {command.command.length === 0 ? "—" : command.command}
+              </span>
+              {command.command.length === 0 ? null : (
+                <SegmentCopyButton
+                  value={command.command}
+                  ariaLabel="Copy command"
+                  className={undefined}
+                />
+              )}
+            </span>
+          </DetailRow>
+          <DetailRow label="Directory">
+            <span className="font-mono wrap-anywhere">
+              {command.cwd.length === 0 ? "—" : command.cwd}
+            </span>
+          </DetailRow>
+          {/* Only while it runs: a pid outlives nothing, and a stale one points
+              at whatever the OS handed out next. */}
+          {pid === null ? null : (
+            <DetailRow label="PID">
+              <span className="font-mono tabular-nums">{pid}</span>
+            </DetailRow>
+          )}
+          {command.cadence === null ? null : (
+            <DetailRow label="Notifies">
+              <span data-testid="managed-command-output-details-cadence">
+                {managedCommandCadenceSentence(command.cadence)}
+              </span>
+            </DetailRow>
+          )}
+          <DetailRow label="Started by">
+            <ManagedCommandChatBacklink
+              epicId={props.epicId}
+              tabId={props.viewTabId}
+              chatId={command.chatId}
+              fallbackHostId={props.hostId}
+              testId="managed-command-output-backlink"
+              className={undefined}
+            />
+          </DetailRow>
+        </dl>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function DetailRow(props: {
+  readonly label: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{props.label}</dt>
+      <dd className="min-w-0 text-foreground/90">{props.children}</dd>
+    </>
+  );
+}
+
+/**
+ * The pacing, as a sentence rather than three numbers nobody can order from
+ * memory. Says what each one DOES, because "500 / 15000 / 5000" is data the
+ * reader then has to go look up.
+ */
+function managedCommandCadenceSentence(cadence: ManagedCommandCadence): string {
+  const seconds = (ms: number): string => `${(ms / 1000).toString()}s`;
+  return `On output · batched after ${cadence.debounceMs}ms quiet, forced every ${seconds(cadence.maxWaitMs)}, at most once per ${seconds(cadence.throttleMs)}`;
 }
 
 const CHANNEL_CLASS = {

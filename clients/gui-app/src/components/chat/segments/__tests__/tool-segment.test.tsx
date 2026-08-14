@@ -119,6 +119,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           responseId: "response-1",
           expectReply: true,
         }}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -172,6 +173,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             responseId: "response-1",
             expectReply: true,
           }}
+          managedCommand={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -210,6 +212,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
             responseId: "response-1",
             expectReply: true,
           }}
+          managedCommand={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -241,6 +244,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         {...inputProps("shell", { command: "echo hi" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -271,6 +275,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           responseId: null,
           expectReply: false,
         }}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -311,6 +316,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -342,6 +348,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("mcp__probe__slow_op", {})}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -374,6 +381,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("mcp__probe__slow_op", {})}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -404,6 +412,7 @@ describe("<ToolSegment /> input rendering", () => {
         {...inputProps("glob", { pattern: "**/*.tsx" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -433,6 +442,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -470,6 +480,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -500,6 +511,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error="stopped: user requested stop"
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -532,6 +544,7 @@ describe("<ToolSegment /> input rendering", () => {
         })}
         error="Monitor deadline exceeded"
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped
@@ -572,6 +585,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -606,6 +620,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -655,6 +670,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -698,6 +714,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -725,6 +742,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState="interrupted"
         stopped={false}
@@ -746,6 +764,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}
         agentMessageSend={null}
+        managedCommand={null}
         isStreaming={false}
         endState="superseded"
         stopped={false}

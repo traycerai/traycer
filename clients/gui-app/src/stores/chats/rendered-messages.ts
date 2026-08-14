@@ -3451,6 +3451,7 @@ const BLOCK_HANDLERS: {
     taskTodoItems: block.taskTodoItems,
     error: block.error,
     agentMessageSend: block.agentMessageSend,
+    managedCommand: block.managedCommand,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,
