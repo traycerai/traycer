@@ -98,10 +98,7 @@ function HostSettingsPanelInner() {
   // Keeps a `false` capability answer refutable. See the hook below.
   useOverviewCapabilityProbe(scope);
 
-  const localRecoveryZone = useEmptyAccountLocalRecoveryZone(
-    scope,
-    management,
-  );
+  const localRecoveryZone = useEmptyAccountLocalRecoveryZone(scope, management);
 
   const description =
     scope.host === null
