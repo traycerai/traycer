@@ -42,6 +42,22 @@ export interface HostOptions {
   readonly activeHostId: string | null;
   readonly isLoading: boolean;
   /**
+   * The DIRECTORY has answered (an error is an answer) — i.e. we know which
+   * hosts this client can dial right now.
+   *
+   * It is separate from `listsResolved` because the two lists do not carry the
+   * same weight for every surface. The registry can only ever ADD rows that
+   * cannot be dialled, so a surface whose whole job is to point the app at a
+   * host must not wait on a cloud call to show the machine sitting on the desk.
+   * Gating the Select host dialog on `isLoading` (which folds in the registry
+   * query) left it spinning "Loading hosts…" over a resolved, non-empty
+   * directory whenever that call was slow or refused — which is exactly when a
+   * person is most likely to be opening it.
+   */
+  readonly directoryResolved: boolean;
+  /** The directory request itself failed — nothing dialable could be listed. */
+  readonly directoryFailed: boolean;
+  /**
    * Both lists have ANSWERED (an error is an answer). Callers that decide a
    * host is gone must wait for this, or a slow request reads as a removal.
    */
@@ -178,6 +194,8 @@ export function useHostOptions(): HostOptions {
     hosts,
     activeHostId,
     isLoading: directoryQuery.isLoading || registryQuery.isLoading,
+    directoryResolved: directory !== undefined || directoryQuery.isError,
+    directoryFailed: directoryQuery.isError,
     listsResolved: lists.resolved,
     listsFailed: lists.failed,
     retryLists: () => {

@@ -10,7 +10,10 @@ import {
 } from "@/components/ui/dialog";
 import { useHostBinding } from "@/lib/host";
 import { HostOptionList } from "@/components/settings/host-scope/host-option-list";
-import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  useHostOptions,
+  type HostOptions,
+} from "@/components/settings/host-scope/use-host-options";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -110,7 +113,14 @@ interface HostPickerListProps {
 function HostPickerList(props: HostPickerListProps): ReactNode {
   const options = useHostOptions();
 
-  if (options.isLoading) {
+  // Readiness is the DIRECTORY's, not the merged list's. This dialog exists to
+  // point the window at a host, so the only rows it can act on are dialable
+  // ones — and those all come from the directory. Waiting on the account
+  // registry (a cloud call that can be slow, refused, or signed out) left it
+  // spinning over a resolved directory: "Loading hosts…" above a machine that
+  // was right there, precisely when the network is unhappy and someone is
+  // trying to switch hosts because of it.
+  if (options.hosts.length === 0 && !options.directoryResolved) {
     return (
       <p
         className="flex items-center gap-2 text-ui-sm text-muted-foreground"
@@ -126,11 +136,10 @@ function HostPickerList(props: HostPickerListProps): ReactNode {
     );
   }
 
-  // A FAILED list is not an empty account — the rule this app has now fixed at
-  // the gate, in the switcher's empty state and in its footer. This is its
-  // fourth consumer, and it splits the same two ways: nothing came back at all,
-  // or one source answered and the picture is partial.
-  if (options.listsFailed && options.hosts.length === 0) {
+  // Nothing to list AND the directory itself failed: "you have no hosts" would
+  // be a claim we cannot make — the same "a FAILED list is not an empty
+  // account" rule the switcher enforces, at its fourth consumer.
+  if (options.hosts.length === 0 && options.directoryFailed) {
     return (
       <div
         className="flex items-center gap-2 text-ui-sm text-destructive"
@@ -161,12 +170,15 @@ function HostPickerList(props: HostPickerListProps): ReactNode {
 
   if (options.hosts.length === 0) {
     return (
-      <p
-        className="text-ui-sm text-muted-foreground"
-        data-testid="host-picker-empty"
-      >
-        No hosts available.
-      </p>
+      <div className="flex flex-col gap-2">
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="host-picker-empty"
+        >
+          No hosts available.
+        </p>
+        {options.listsFailed ? <HostPickerPartialFailure options={options} /> : null}
+      </div>
     );
   }
 
@@ -189,21 +201,32 @@ function HostPickerList(props: HostPickerListProps): ReactNode {
         testIdPrefix="host-picker-option"
         emptyLabel="No hosts available."
       />
-      {options.listsFailed ? (
-        <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2">
-          <span className="text-ui-xs text-muted-foreground">
-            Some hosts may be missing
-          </span>
-          <button
-            type="button"
-            onClick={options.retryLists}
-            className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            data-testid="host-picker-retry"
-          >
-            Try again
-          </button>
-        </div>
-      ) : null}
+      {options.listsFailed ? <HostPickerPartialFailure options={options} /> : null}
+    </div>
+  );
+}
+
+/**
+ * One source answered and the other did not, so the rows above (or their
+ * absence) are a partial picture. Said out loud rather than left to look
+ * complete — the same footer the switcher grew for the same reason.
+ */
+function HostPickerPartialFailure(props: {
+  readonly options: HostOptions;
+}): ReactNode {
+  return (
+    <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+      <span className="text-ui-xs text-muted-foreground">
+        Some hosts may be missing
+      </span>
+      <button
+        type="button"
+        onClick={props.options.retryLists}
+        className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        data-testid="host-picker-retry"
+      >
+        Try again
+      </button>
     </div>
   );
 }

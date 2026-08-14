@@ -143,7 +143,9 @@ describe("<HostPicker /> directory-change reactivity", () => {
       );
       expect(option).not.toBeNull();
       expect(option.textContent).toContain(localSnapshot.displayName);
-      expect(option.textContent).toContain("Local");
+      // The kind used to be a `Local` badge; the shared row draws a glyph and
+      // names it for assistive tech instead, so this is the same claim.
+      expect(option.textContent).toContain("This machine");
       expect(screen.queryByTestId("host-picker-empty")).toBeNull();
     },
     HOST_PICKER_TEST_TIMEOUT_MS,
@@ -258,7 +260,7 @@ describe("<HostPicker /> directory-change reactivity", () => {
       );
       expect(options).toHaveLength(1);
       expect(options[0].textContent).toContain(localSnapshot.displayName);
-      expect(options[0].textContent).toContain("Local");
+      expect(options[0].textContent).toContain("This machine");
     },
     HOST_PICKER_TEST_TIMEOUT_MS,
   );

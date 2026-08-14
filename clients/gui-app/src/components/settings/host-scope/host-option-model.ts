@@ -45,3 +45,20 @@ export function hostOptionStatusWord(host: HostScopeOption): string | null {
   if (host.connectable) return null;
   return host.planRestricted ? "requires upgrade" : "unreachable";
 }
+
+/**
+ * What KIND of host this is, in words.
+ *
+ * The row draws this as a glyph, which is `aria-hidden` — so when the Select
+ * host dialog moved onto the shared row it silently dropped the `Local` /
+ * `Remote` badge that had been the only kind information a screen reader ever
+ * got there. The glyph stays the visual carrier; this is its text twin,
+ * rendered `sr-only` beside it, so nobody has to infer a machine's kind from an
+ * icon they cannot see.
+ */
+export function hostOptionKindLabel(host: HostScopeOption): string {
+  if (host.isLocalMachine) return "This machine";
+  if (host.entry?.kind === "remote") return "Remote host";
+  if (host.entry?.kind === "mock") return "Mock host";
+  return "Host";
+}

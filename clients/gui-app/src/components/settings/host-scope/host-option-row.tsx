@@ -5,6 +5,7 @@ import {
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
 import {
+  hostOptionKindLabel,
   hostOptionStatusWord,
   type HostPickIntent,
 } from "@/components/settings/host-scope/host-option-model";
@@ -48,6 +49,7 @@ export function HostOptionRow(props: {
         host={host}
         className="size-4 shrink-0 text-muted-foreground"
       />
+      <span className="sr-only">{hostOptionKindLabel(host)}</span>
       <span className="min-w-0 flex-1 truncate text-left">{host.name}</span>
       {props.picked && props.intent === "view" ? (
         <span className="sr-only">Currently viewing</span>

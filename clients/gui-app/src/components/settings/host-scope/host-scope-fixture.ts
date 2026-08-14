@@ -110,6 +110,8 @@ export function hostOptionsFixture(
     hosts,
     activeHostId: hosts[0]?.hostId ?? null,
     isLoading: false,
+    directoryResolved: true,
+    directoryFailed: false,
     listsResolved: true,
     listsFailed: false,
     retryLists: () => undefined,
