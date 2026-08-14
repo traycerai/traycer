@@ -59,12 +59,15 @@ export function useOverviewOsService(input: {
   const { hostName } = input;
   const register = useHostServiceRegister(input.client);
   const deregister = useHostServiceDeregister(input.client);
-  const { deregisterAccepted, registerRestartLikely, externallyManagedRefusal } =
-    useServiceWriteLatchLifecycle(
-      input.hostId,
-      input.scopeUsable,
-      input.refetchStatus,
-    );
+  const {
+    deregisterAccepted,
+    registerRestartLikely,
+    externallyManagedRefusal,
+  } = useServiceWriteLatchLifecycle(
+    input.hostId,
+    input.scopeUsable,
+    input.refetchStatus,
+  );
   const ok = input.status?.outcome === "ok" ? input.status : null;
   // A registration someone ELSE owns — Desktop's SMAppService, or the external
   // supervisor of a host running with `TRAYCER_HOST_UPDATES=external`. Both

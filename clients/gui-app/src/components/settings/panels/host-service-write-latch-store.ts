@@ -51,8 +51,8 @@ interface HostServiceWriteLatchState {
   readonly releaseAll: (hostId: string) => void;
 }
 
-export const useHostServiceWriteLatchStore =
-  create<HostServiceWriteLatchState>((set) => {
+export const useHostServiceWriteLatchStore = create<HostServiceWriteLatchState>(
+  (set) => {
     const patch = (
       hostId: string,
       change: Partial<HostServiceWriteLatches>,
@@ -90,7 +90,8 @@ export const useHostServiceWriteLatchStore =
         });
       },
     };
-  });
+  },
+);
 
 export function hostServiceWriteLatches(
   byHost: Readonly<Record<string, HostServiceWriteLatches>>,
