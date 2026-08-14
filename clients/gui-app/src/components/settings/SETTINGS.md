@@ -31,6 +31,7 @@ SettingsLayout
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
         ├── HostSettingsPanel
+        ├── AppDiagnosticsSettingsPanel
         ├── DiagnosticsSettingsPanel
         └── UsageSettingsPanel
 ```
@@ -39,6 +40,18 @@ Settings is also presented as a **modal** via `settings-modal-content.tsx`,
 which maps each `SettingsSectionId` to its panel in a `switch`. A new section
 must be added in BOTH places - the route file under `src/routes/` AND the modal
 `switch` - or the modal renders a blank pane for that section.
+
+Six other places enumerate section ids, and four of them fail loudly when one
+is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
+and `report-issue-dialog.tsx`'s `ROUTE_TEMPLATE_LABELS` are exhaustive over a
+union or over `FileRouteTypes["fullPaths"]`, so a compile error catches them.
+`lib/analytics.ts` is exhaustive only because `ANALYTICS_SETTINGS_SECTIONS` is
+built through `satisfies Record<AnalyticsSettingsSection, true>` - that
+`satisfies` is doing real work, and without it a missing id silently drops the
+navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
+`stores/tabs/desktop-tabs-persistence.ts`) are hand-written string sets with no
+gate at all: a section absent from them stops being recognised as a settings
+route for persistence. `devices` was missing from both for its whole life.
 
 ## Key Files
 
@@ -75,11 +88,22 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
 load-bearing rather than cosmetic.
 
-- **Application** - General, Appearance, Keybindings.
+- **Application** - General, Appearance, Keybindings, Diagnostics.
 - **Account** - Sessions, Usage.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Providers, Worktrees, Notifications, Agent
   selection, Shell, Diagnostics - is scoped by that one selection.
+
+**Two sections are both called "Diagnostics"**, one per group, and the group
+heading above each is what distinguishes them - the same way the rail already
+distinguishes everything else. Their ids do not collide: the host one keeps
+`diagnostics` (it is the one in existing bookmarks and remembered tab paths)
+and the app one is `app-diagnostics`. The one surface with no group headings is
+the command palette's settings sub-page, which is a flat list, so
+`navigation.source.ts` gives every section row its group label as a
+`statusBadge` rather than badging only the pair that collides - an absence of
+badge would otherwise start meaning something, and the next duplicate label
+would ship looking unambiguous.
 
 Usage sits in **Account**, not Host (ticket 13). What it reports is the
 ACCOUNT's token and cost spend, with the host as one filter INSIDE the page
@@ -194,8 +218,11 @@ the whole surface guards against:
   `useReactiveActiveHostId`) - which host this window talks to for ambient
   work: notification indicators, the bell, rate limits, the resource monitor,
   and where newly started work lands. Changed ONLY by a labelled verb that
-  states its consequence ("Use this host in this window"), never as a
-  dropdown side effect. Always wears the accent.
+  states its consequence ("Use in this window", in the Overview card's action
+  bar, with the tabs-stay-put asymmetry on its tooltip), never as a dropdown
+  side effect. Always wears the accent - on the Overview that is the `Active`
+  tag beside the host name, which replaced a full-width row asserting the same
+  boolean.
 
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 host-scoped panel reads. Its status enum is the safety contract, because three
@@ -230,16 +257,17 @@ Two mechanisms, and the split matters:
 - `isHostScopeUsable(status)` decides what is **mounted**, and is for host
   reads that live OUTSIDE the gate's children. Those still fire and cache their
   answer whatever the gate renders, so a panel that keeps such a read - as
-  Diagnostics does for the `cli`/`host` log-level rows, which sit in the same
-  card as the app-scoped `desktop` row and so cannot be inside the gate - must
-  ask this before mounting it.
+  Diagnostics does for the `cli`/`host` log-level rows, whose hook is held at
+  panel level - must ask this before mounting it.
 
-Every section in the `host` group mounts the gate. Shell and Diagnostics wrap
-their host-tied bodies in it whole (Diagnostics keeps its app-scoped rows -
-the desktop log level and the memory capture - outside, since their subject
-never changes with the scope), and both re-provide `HostRuntimeContext` for an
-explicit pick through `useScopedHostBinding` - the same `status === "ready"`
-guard Providers uses, so no hook beneath them can resolve to the ambient host.
+Every section in the `host` group mounts the gate, and both Shell and
+Diagnostics wrap their bodies in it whole. Diagnostics used to be the exception,
+keeping its app-scoped rows outside the gate because their subject never changed
+with the scope; splitting those onto Application -> Diagnostics removed the
+exception rather than working around it. Both re-provide `HostRuntimeContext`
+for an explicit pick through `useScopedHostBinding` - the same
+`status === "ready"` guard Providers uses, so no hook beneath them can resolve
+to the ambient host.
 Overview does the same (`host-settings-panel.tsx`), and it mixes the two gate
 styles on purpose because its regions sit on three different capability planes:
 
@@ -248,14 +276,16 @@ styles on purpose because its regions sit on three different capability planes:
   scoped host that defaulted to "local" once put this computer's service
   console under a host that no longer exists.
 - **Installation** is pure host RPC, so it mounts the gate itself and the gate
-  says why it is missing. The status card's ACTIONS (Restart / Run doctor /
-  Edit name) and the host's own update check are withheld outright without a
-  route rather than rendered disabled - "disabled" would read as a capability
-  verdict when the fact is connectivity.
-- the **account-backed** half - update policy, version pin, drain-gate force,
-  and Remove from account - needs no route and keeps rendering for a host that
-  cannot be reached, which is a common moment to want exactly those. The danger
-  zone gates its own rows for the same reason.
+  says why it is missing. The status card's ACTIONS (Restart / Run doctor / Use
+  in this window), the rename pencil, and the host's own update check are
+  withheld outright without a route rather than rendered disabled - "disabled"
+  would read as a capability verdict when the fact is connectivity.
+- the **account-backed** half - update policy, drain-gate force, and Remove
+  from account - needs no route and keeps rendering for a host that cannot be
+  reached, which is a common moment to want exactly those. The danger zone
+  gates its own rows for the same reason. The version PIN used to sit here and
+  no longer does: picking a version means picking one the host listed, so it
+  moved to the RPC half and an unreachable host can no longer be pinned.
 
 The recovery console is the one surface still on the CLI bridge, and it is NOT
 gated on reachability: it exists for a host that is down, so gating it on
@@ -1810,20 +1840,44 @@ aria-live="polite"` carrying the equivalent text for
       bounded released-floor read mounted while any answer is a stale `false`, so a
       host upgraded in place under the same id can overturn it.
   - **Status card** = `HostIdentityCard`, the same component the remote path
-    already used, now carrying an actions cluster plus a `displayName` and a
-    `version` the caller decides. Both follow the SAME two-layer rule: the host's
-    own answer (`host.status`'s `hostVersion`) when there is a route, the
-    registry/directory copy when there is not. Version is single-sourced to that
-    identity line on purpose - it used to also appear in the endpoint line from a
-    different source, so one card could show v1.4.2 (the registry row) above
-    v1.5.0 (the RPC) at the same time, which reads as broken rather than stale.
-    The `ws://…`/pid meta line (`host-overview-endpoint`) therefore carries no
-    version, and is the ONE legitimate local/remote difference: local shows the
-    loopback endpoint and pid from the live snapshot, remote shows
-    `via <relay host>` (origin only - the path carries the rendezvous routing
-    key) plus the host's own session count.
-    Reading a local pid file for a remote host would have been the one genuinely
-    wrong answer available.
+    already used, now carrying a `nameAction` slot, a `sessionCount`, a verb bar
+    plus a `displayName` and a `version` the caller decides. Both names follow
+    the SAME two-layer rule: the host's own answer (`host.status`'s
+    `hostVersion`) when there is a route, the registry/directory copy when there
+    is not. Version is single-sourced to that identity line on purpose - it used
+    to also appear in the endpoint line from a different source, so one card
+    could show v1.4.2 (the registry row) above v1.5.0 (the RPC) at the same
+    time, which reads as broken rather than stale.
+    - **Layout.** Name, rename pencil and tags on one line; presence dot, health
+      label, platform/arch/version and the sessions chip on the next; then a
+      footer verb bar; then Host ID. Rename is a pencil ON the name rather than
+      a third word beside Restart and Run doctor - it was the only one of the
+      three whose object is the name, and as a peer button it read as an equally
+      weighted maintenance verb. Its accessible name is still literally
+      `Edit name`. The verb bar is a footer strip rather than a right-aligned
+      header cluster because the header already carries a name, a pencil and up
+      to two tags, and the two competed for one row at every settings width
+      below full screen.
+    - **The `ws://…`/pid meta row (`host-overview-endpoint`) is GONE**, and with
+      it the page's one deliberate local/remote difference. It showed the
+      loopback endpoint and pid locally, `via <relay host>` remotely; neither
+      half is actionable from Settings - the pid names a process this page can
+      only reach through the Restart button beside it, and the relay origin is
+      infrastructure the account picked. What it carried that anyone acts on is
+      the session count, which is now a chip on the identity line straight off
+      `host.status.busySessionCount`: emerald and pulsing above zero, muted at
+      zero, and ABSENT while the host has not answered, because "No active
+      sessions" is a claim and silence is not. `host-overview-parity.test.tsx`
+      is correspondingly stricter - `endpointText` is no longer a named
+      exception, so the two variants now differ on the "This computer" tag and
+      the danger zone's removal plane and nothing else.
+    - **"Active for this window" is no longer a row.** A full-width bar with its
+      own background asserted one boolean about the WINDOW on the page about a
+      HOST. The binding is an `Active` tag beside the name; when this window is
+      pointed elsewhere, `Use in this window` joins the verb bar and carries the
+      asymmetry sentence ("Tabs you already have open stay on the host they
+      started on") as its tooltip, where it is read at the moment of deciding.
+      `ThisWindowCard` survives for the recovery console, which has no verb bar.
   - **Name precedence, in two layers.** Reachable → `host.identity.get`'s
     `effectiveName`; unreachable → the registry `displayName` the scope row
     already carries (`resolveHostName`, whose local-machine special case was
@@ -1846,23 +1900,51 @@ aria-live="polite"` carrying the equivalent text for
     lost ack idempotent instead of a busy refusal. `{outcome:"busy"}` is NOT an
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
-  - **Updates**: one card, both halves. The host's own immediate "Check now" /
-    "Update to v…" (`host.update.*`) sits above the account registry's
-    auto-update policy, version pin and drain-gate force (`HostRegistryUpdates`,
-    keyed by `hostId`, controls capture their target when armed). The RPC half
-    degrades away WHOLE - Check-now included, leaving the cloud pin as the only
-    update control, plus one line saying why - without the methods, without a
-    CLI (`cli-unavailable`, from the check side or the install side), or on an
-    `externally-managed` refusal. The last two are knowable only from an
-    ATTEMPT, so they are discovered rather than negotiated, and once seen they
-    are STICKY for the mounting: both are facts about how the host is set up,
-    not about that attempt, and leaving Check-now behind would keep offering the
-    one action the host has just said can never lead anywhere. `cli-failed` /
-    `invalid-output` are deliberately NOT sticky - one attempt going wrong with
-    the mechanism intact - so the controls stay and an inline
-    `host-overview-update-attempt-failed` notice clears on the next try.
-    Progress after an accepted install comes from `host.status.updateProgress`,
-    not from the install response, because the swap is detached and outlives it.
+  - **Updates**: one card, both halves. The host's own "Check now" and the
+    VERSION LIST it reveals (`host.update.*`) sit above the account registry's
+    auto-update policy and drain-gate force (`HostRegistryUpdates`, keyed by
+    `hostId`, controls capture their target when armed).
+    - **The version list replaced a free-text pin.** `host.update.check` returns
+      the whole manifest, not just `latest`, so the Overview renders the same
+      per-row-Install list the local recovery console has always had - for a
+      remote host too. Rows are `HostVersionRows`, shared with the bridge-backed
+      `AvailableVersionsList`; each surface projects its own payload to
+      `HostVersionRow` rather than one faking the other's shape (the RPC
+      manifest has no `platformKey`/`manifestUrl`, and inventing them was the
+      first attempt). An install in flight freezes EVERY row, which is where the
+      old `showUpdateNowInput` guard went - it existed so a second
+      `desiredVersion` write could not retarget a draining update.
+    - The asset lookup takes a SOLE `platforms` key as authoritative: the host's
+      CLI projects each entry to `currentHostPlatformKey()` before emitting it,
+      so re-deriving a key here would get win32-arm64 wrong (it resolves to the
+      emulated `win32-x64` build, which the registry row does not know). More
+      than one key means an older CLI that emitted the whole map, and only then
+      is the registry's platform string used - a miss reports "no asset" rather
+      than guessing.
+    - **What this gives up, stated:** the pin was applied by the host's own
+      reconciler on its next check-in and so needed no route. Choosing from what
+      the host reports does need one, so an OFFLINE host can no longer be
+      pinned; the auto-update policy beside it still works without a route.
+      `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
+      went with the input it validated.
+    - Check stays a MUTATION, not a query: it spawns a process on the host and
+      reaches the registry, so it runs when someone asks and not because a
+      settings pane mounted.
+    - The RPC half degrades away WHOLE - Check-now and the list with it,
+      leaving the auto-update policy as the only update control, plus one line
+      saying why - without the methods, without a
+      CLI (`cli-unavailable`, from the check side or the install side), or on an
+      `externally-managed` refusal. The last two are knowable only from an
+      ATTEMPT, so they are discovered rather than negotiated, and once seen they
+      are STICKY for the mounting: both are facts about how the host is set up,
+      not about that attempt, and leaving Check-now behind would keep offering
+      the one action the host has just said can never lead anywhere.
+      `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
+      going wrong with the mechanism intact - so the controls stay and an inline
+      `host-overview-update-attempt-failed` notice clears on the next try.
+      Progress after an accepted install comes from `host.status.updateProgress`,
+      not from the install response, because the swap is detached and outlives
+      it.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
@@ -1908,45 +1990,60 @@ aria-live="polite"` carrying the equivalent text for
     deregistered-host re-enrollment gap itself is a recorded product follow-up,
     not a client-side fix.
 
-  **Recovery console** (`host-recovery-console.tsx`) is what is left of the old
-  CLI-bridge page, and the only remaining `IHostManagement` consumer here. It
-  renders for THIS COMPUTER only, and only when there is no host process to ask:
-  `scopedIsLocalMachine && (!connectable || not-installed)`, plus the
-  `emptyAccountLocalRecovery` carve-out (a first run has no local host id, so
-  hiding Install behind "No hosts yet" left a fresh install with no way to create
-  its first host). `not-installed` here is `deriveStatus`'s state, so it includes
-  "no live local snapshot" - a live process outranks a missing install record,
-  which both keeps Install away from a running tree-run host and stops the page
-  FLIPPING surfaces when the record resolves late. Restart falls back to
-  `HostController.respawn()` here, since an RPC restart needs a process to accept
-  the call. Contents are unchanged: the summary card
-  (`host-settings-summary-card.tsx`) with its progress and terminal-outcome
-  banners, the Updates card, Installation details and **Advanced** (OS service
-  re-register/deregister · release-candidate checkbox · "Pick a different
-  version"), the busy-host force/defer confirmation, and the bridge Doctor. The
-  available-versions list surfaces the real registry error message with its own
-  Retry, independent of the update region's Retry above - the two error/retry
-  paths are separate and can both be live at once. `host.registerService` /
-  `host.deregisterService` RPCs and remote parity for the Advanced section are
-  RECORDED SCOPE DROPS, not omissions.
+  **The recovery console is GONE.** `host-recovery-console.tsx` was what
+  remained of the old CLI-bridge page and the last `IHostManagement` consumer
+  here; it rendered for THIS COMPUTER only, and only when there was no host
+  process to ask. Folding host settings into the Overview removed it along with
+  the `emptyAccountLocalRecovery` carve-out, so Settings no longer has a
+  bridge-backed surface at all and every pane on this page describes its host by
+  asking that host. Getting a machine that has no host process back into a
+  usable state is `local-host-gate.tsx`'s job, upstream of Settings — the gate a
+  person passes before they can reach this page.
   - The legacy `/settings/service` redirect (so any bookmark, remembered tab
     path, or tray command lands on this same pane) is unchanged. Shells without
-    the Traycer CLI (web, mobile) no longer get a reduced page - they render the
-    same RPC Overview and simply have no recovery console.
+    the Traycer CLI (web, mobile) never got a reduced page and still do not:
+    with the console gone, every shell renders the same RPC Overview.
 
-- `Diagnostics` A **Log detail** `SettingsGroup`, a **Memory** group, then a
-  **Recent logs** viewer that may use the remaining height - a design pass
-  (`settings-related-panels-core-flows` artifact) separated capture controls
-  from the evidence viewer and added a reset reminder.
-  - **Mixed scope, stated per row.** `App log level` and the heap capture
-    describe THIS window wherever it points, so they render for every scope,
-    including a host that cannot be reached. `CLI log level`, `Host log level`
-    and the log tails belong to the SELECTED host and are read over its own
-    `config.logLevels.*` / `diagnostics.logs.*` RPCs. Each row arrives as a
-    `LogLevelControl` with its transport already resolved (`log-level-controls.ts`),
-    so `LogLevelRow` is presentational and the **Reset all to Info** sweep walks
-    local and remote rows without knowing which is which.
-  - **Log detail.** Up to three rows (`LogLevelRow`, a `Select` over the full
+- **Diagnostics is TWO panels**, split 2026-08-14. Both render a **Log detail**
+  `SettingsGroup` and a **Recent logs** viewer that may use the remaining height
+  - a design pass (`settings-related-panels-core-flows` artifact) separated
+    capture controls from the evidence viewer and added a reset reminder.
+
+  The split is about REPETITION, not about per-row honesty. The single page was
+  deliberately mixed-scope and said so per row: `App log level`, the heap
+  capture and this window's own log tail described the app, while `CLI log
+level`, `Host log level` and the host's log tails described the selected host.
+  Each row was accurate. But the app half does not vary by host, so an account
+  with four hosts drew four copies of it - four `App log level` selects and four
+  `Capture heap snapshot` buttons writing the same single value, under four
+  different host names. The rule the groups encode ("if it varies by host it
+  sits under the picker") already said where the app half belonged.
+
+  What did NOT split is the presentation. `diagnostics-log-entries.tsx` holds
+  the frame, the tail view and the bridge-backed entry; `LogDetailGroup`
+  (`diagnostics-log-detail-group.tsx`) renders whatever `LogLevelControl[]` its
+  caller passes, so both pages get identical rows and one **Reset all to Info**
+  sweep. With no controls AND a `null` empty state it renders nothing at all -
+  that null case is what keeps the host page from titling an empty "Log detail"
+  card when the logs region below is already stating the host's version. Note it
+  is a `ReactNode` VALUE: passing `<HostLogDetailEmptyReason />` would be truthy
+  however it rendered, so the reason is a function the panel calls.
+
+- `Diagnostics` (Application, `app-diagnostics-settings-panel.tsx`) The app's
+  own `App log level` row, the **Memory** heap capture, and the **Desktop Log**
+  entry. Takes no host scope, mounts no `HostScopeGate`, and stands up no
+  `HostClient` - if any of that becomes necessary to render it, something
+  host-varying has moved back on. Its two bridges are independent
+  (`platform.logLevels` and `platform.diagnostics`), so each states its own
+  unavailability and a shell missing one still gets the other.
+
+- `Diagnostics` (Host, `diagnostics-settings-panel.tsx`) `CLI log level`,
+  `Host log level` and that host's own log files, over its
+  `config.logLevels.*` / `diagnostics.logs.*` RPCs. Each row arrives as a
+  `LogLevelControl` with its transport already resolved
+  (`log-level-controls.ts`), so `LogLevelRow` stays presentational and the sweep
+  walks RPC and bridge rows without knowing which is which.
+  - **Log detail.** Two rows (`LogLevelRow`, a `Select` over the full
     `trace/debug/info/warn/error` scale, `info` labelled "Info (default)") - all
     default Info and apply immediately. The CLI/host thresholds are
     machine-user-global (`~/.traycer/cli/config.json`), which the row copy says:
@@ -1965,29 +2062,36 @@ aria-live="polite"` carrying the equivalent text for
     `shell.showItemInFolder` opens a path on THIS machine, so it is meaningless
     for a remote host - and even locally it would resolve the path itself rather
     than the one the host just named, which is a different file the moment two
-    host slots share a machine. The list is this app's own log (from the
-    support bridge - the only place in the product that surfaces it) followed by
-    the scoped host's own logs from `diagnostics.logs.list`. `diagnostics.logs.tail`
+    host slots share a machine. The list is the scoped host's own logs from
+    `diagnostics.logs.list`; this app's log used to lead it and now lives once,
+    on the Application page. On the local-bridge fallback path the snapshot
+    still carries `desktop` alongside `host` (the bridge answers one question
+    for both pages), so this page filters it out and the app page takes it.
+    `diagnostics.logs.tail`
     answers a discriminated union, so a file that vanished between list and tail
-    reads "This log file is no longer there." rather than an empty tail. A
+    reads "This log file is no longer there." rather than an empty tail.
     Both failures - a tail read and the top-level list load - show inline error
     text plus a report-issue action. They were asymmetric until 2026-08-12,
     which made the panel harder to report from the worse the failure was: one
     log that would not open could be filed, while the read that lists every log
     failing left the user with text and nothing to do.
-  - **Each unavailable state stays inside the group it affects.** The desktop
-    log-levels bridge, the desktop support bridge and the host client are three
-    independent sources; no one of them gates the panel as a whole. A group with
-    nothing to show renders its OWN card with an inline "only available on the
-    desktop app" message in place of its controls, so a shell where the sources
-    disagree still shows both group labels. A zero-log response is likewise
-    explicit ("No log files on &lt;host&gt;.") rather than an empty card.
+  - **Each unavailable state stays inside the group it affects**, and each page
+    now says the thing that is actually true of it. The old shared empty copy
+    ("Log level controls are only available on the desktop app") was a claim
+    about the SHELL, and after the split it would have been the host page's only
+    empty state - telling someone whose host is merely too old to install an app
+    they are already running. The app page keeps that copy, because there it is
+    the real reason; the host page states the host's version instead, or renders
+    no card when the logs region is already stating it. A zero-log response is
+    likewise explicit ("No log files on &lt;host&gt;.") rather than an empty card.
 - `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
   Sessions - see "Scope: the organising idea" above for why it is not under
   the host picker. Groups must stay contiguous in `settings-sections.ts`, so
-  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT`: Shell
-  and Diagnostics are now the two digit-less entries, which are the right two
-  to lose - both are support surfaces and the rarest destinations here). All reading
+  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT` into the
+  digit-less tail. Adding Application -> Diagnostics later pushed **Agent
+  selection** out too, which runs against the rule that support surfaces are the
+  ones to lose digits - it is forced by position, since an Application entry
+  lands in the first four whatever it is. See that file's own note). All reading
   `host.usage.summary` through `UsageSummaryPanel`
   (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
   is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol

@@ -60,7 +60,12 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetchBatch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -104,6 +109,8 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -395,9 +402,13 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
 export function RateLimitPopover({
   onClose,
   profileSelection,
+  scope,
+  hasExplicitPick,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
 }): ReactNode {
   return (
     <PopoverContent
@@ -422,7 +433,13 @@ export function RateLimitPopover({
           target instanceof Element &&
           (target.closest('[data-testid="confirm-destructive-dialog"]') !==
             null ||
-            target.closest('[data-slot="dialog-overlay"]') !== null)
+            target.closest('[data-slot="dialog-overlay"]') !== null ||
+            // The host switcher's own list is a nested Radix popover, so it
+            // portals OUTSIDE this content and every click in it reads as an
+            // interaction outside. Without this, opening the picker closed the
+            // surface the picker exists to scope, and no host could ever be
+            // chosen. Shared with every other container that embeds it.
+            isHostSwitcherListInteraction(target))
         ) {
           event.preventDefault();
         }
@@ -431,6 +448,8 @@ export function RateLimitPopover({
       <RateLimitPopoverBody
         onClose={onClose}
         profileSelection={profileSelection}
+        scope={scope}
+        hasExplicitPick={hasExplicitPick}
       />
     </PopoverContent>
   );
@@ -620,7 +639,7 @@ function RateLimitPopoverResizeSurface({
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
         variant === "content"
-          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          ? "flex h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] flex-col"
           : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
       )}
       style={
@@ -651,9 +670,80 @@ function RateLimitPopoverResizeSurface({
 function RateLimitPopoverBody({
   onClose,
   profileSelection,
+  scope,
+  hasExplicitPick,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
+}): ReactNode {
+  // The picker earns its row once there is a choice to make. One host means
+  // one possible answer, and a control whose only outcome is the state you are
+  // already in is chrome. The `vanished` exception is not a choice but a way
+  // OUT: a pick that no longer resolves must never leave someone stranded on a
+  // notice with the only control that could clear it hidden.
+  const showHostPicker =
+    scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  const header = showHostPicker ? (
+    <RateLimitHostPickerRow scope={scope} onClose={onClose} />
+  ) : null;
+
+  // Everything below reads through this subtree's host binding, and a PICK
+  // that is not `ready` did not produce one - so the providers, the rail and
+  // every block would silently describe the AMBIENT host under the name this
+  // header just printed. Say what happened instead.
+  //
+  // Gated on there being a pick at all, because without one the ambient host
+  // is not a substitution for anything: it is the host this surface has always
+  // reported, an `unreachable` blip on it is what the envelope's last-good
+  // retention exists to survive, and swapping that for a notice would take
+  // working usage away from every single-host user.
+  if (hasExplicitPick && !isHostScopeUsable(scope.status)) {
+    return (
+      <RateLimitPopoverResizeSurface variant="content">
+        {header}
+        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
+          <RateLimitHostUnavailableNotice scope={scope} />
+          {/* The ACCOUNT-scoped half survives the host being down: Traycer
+              Inference usage comes through the AuthService with no host
+              binding involved, so only the host-RPC provider panes go with
+              the route. Hiding this too both took working data away and had
+              the notice claim more than is true. */}
+          <UnscopedTraycerUsage />
+        </div>
+      </RateLimitPopoverResizeSurface>
+    );
+  }
+
+  return (
+    <RateLimitPopoverScopedBody
+      onClose={onClose}
+      profileSelection={profileSelection}
+      header={header}
+      displayedHostId={scope.hostId}
+    />
+  );
+}
+
+/**
+ * The rail + detail body, mounted only once the surface is bound to the host
+ * it names. Split from `RateLimitPopoverBody` so the provider queries below
+ * are not mounted at all under an unusable scope - a hook that runs anyway and
+ * has its output hidden still fires against the ambient host and caches the
+ * answer under its key (`isHostScopeUsable`).
+ */
+function RateLimitPopoverScopedBody({
+  onClose,
+  profileSelection,
+  header,
+  displayedHostId,
+}: {
+  readonly onClose: () => void;
+  readonly profileSelection: RateLimitProfileSelection;
+  readonly header: ReactNode;
+  /** The host this popover is SHOWING - pinned or followed - for deep links. */
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const displayProviders = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
@@ -678,9 +768,29 @@ function RateLimitPopoverBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
+    // The zero state keeps its own compact surface when nothing scopes it. With
+    // a host picker present the row has to stay reachable, or picking the one
+    // host with no providers configured would remove the only way to pick a
+    // different one.
+    if (header === null) {
+      return (
+        <RateLimitPopoverResizeSurface variant="empty">
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
+        </RateLimitPopoverResizeSurface>
+      );
+    }
     return (
-      <RateLimitPopoverResizeSurface variant="empty">
-        <RateLimitZeroState onClose={onClose} />
+      <RateLimitPopoverResizeSurface variant="content">
+        {header}
+        <div className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto p-4">
+          <RateLimitZeroState
+            onClose={onClose}
+            displayedHostId={displayedHostId}
+          />
+        </div>
       </RateLimitPopoverResizeSurface>
     );
   }
@@ -704,36 +814,166 @@ function RateLimitPopoverBody({
   // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
     <RateLimitPopoverResizeSurface variant="content">
-      <RateLimitRail
-        railTabs={railTabs}
-        providers={providers}
-        traycerRefreshTarget={{
-          enabled: traycerSubscription.eligible,
-          rateLimitAccountContexts:
-            traycerSubscription.rateLimitAccountContexts,
-          isFetching: traycerSubscription.query.isFetching,
-          refetch: traycerSubscription.query.refetch,
-        }}
-        activeTab={resolvedTab}
-        onSelect={setActiveTab}
-        onClose={onClose}
-      />
-      <div className="min-h-0 min-w-0 overflow-y-auto p-3">
-        {resolvedTab === "overview" ? (
-          <RateLimitOverview
-            railTabs={railTabs}
-            providers={providers}
-            profileSelection={profileSelection}
-          />
-        ) : (
-          <RateLimitDetailPane
-            tab={resolvedTab}
-            providers={providers}
-            profileSelection={profileSelection}
-          />
-        )}
+      {header}
+      {/* The rail/detail grid, now a row of the surface's flex column rather
+          than the surface itself, so the host picker can head both panes.
+          `minmax(0,1fr)` still pins this row to the surface's height and both
+          columns keep their own `min-h-0` + `overflow-y-auto` scrolling. */}
+      <div
+        data-testid="rate-limit-popover-panes"
+        className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+      >
+        <RateLimitRail
+          displayedHostId={displayedHostId}
+          railTabs={railTabs}
+          providers={providers}
+          traycerRefreshTarget={{
+            enabled: traycerSubscription.eligible,
+            rateLimitAccountContexts:
+              traycerSubscription.rateLimitAccountContexts,
+            isFetching: traycerSubscription.query.isFetching,
+            refetch: traycerSubscription.query.refetch,
+          }}
+          activeTab={resolvedTab}
+          onSelect={setActiveTab}
+          onClose={onClose}
+        />
+        <div className="min-h-0 min-w-0 overflow-y-auto p-3">
+          {resolvedTab === "overview" ? (
+            <RateLimitOverview
+              railTabs={railTabs}
+              providers={providers}
+              profileSelection={profileSelection}
+            />
+          ) : (
+            <RateLimitDetailPane
+              tab={resolvedTab}
+              providers={providers}
+              profileSelection={profileSelection}
+            />
+          )}
+        </div>
       </div>
     </RateLimitPopoverResizeSurface>
+  );
+}
+
+/**
+ * The host row above the rail: which machine's usage the whole surface is
+ * reporting. It heads the rail + detail grid rather than sitting inside either
+ * one, because it scopes BOTH - a picker in the detail pane would read as
+ * scoping only the provider whose tab happens to be open, and the 3rem rail
+ * has no room to say a host's name at all.
+ *
+ * `HostSwitcher` is Settings' picker, reused rather than re-skinned. The two
+ * surfaces answer different questions (administer vs. watch) but the rows
+ * answer the same one - which machine is this, can I reach it, which one is
+ * active - and a second picker over one concept is how two vocabularies for it
+ * start.
+ */
+function RateLimitHostPickerRow({
+  scope,
+  onClose,
+}: {
+  readonly scope: HostScope;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { openSettings } = useSystemTabModalActions();
+  // The registry list this picker renders is served by a NON-polling observer;
+  // the Settings sidebar is normally the surface that opts the window into the
+  // liveness poll. When this popover is the only host-list surface mounted, a
+  // row would otherwise keep an Online dot from the last registry DTO until
+  // something else happened to refetch - so this picker carries the same
+  // opt-in for exactly as long as it is on screen.
+  useRegisteredHostsPollLiveness();
+  return (
+    // Full-bleed on purpose: the strip's own edges ARE the card's, so the
+    // picker's list can drop from it at exactly the card's width. Padding here
+    // would inset the trigger, and with it the list anchored to the trigger,
+    // leaving a few pixels of card showing down both sides of the open list —
+    // the nested-panel look this row is meant to avoid.
+    <div
+      className="flex shrink-0 items-center border-b"
+      data-testid="rate-limit-host-picker-row"
+    >
+      <HostSwitcher
+        hosts={scope.hosts}
+        selected={scope.host}
+        activeHostId={scope.activeHostId}
+        onSelect={scope.setHostId}
+        // Managing hosts — adding, renaming, updating, removing — is Settings'
+        // job, with its own dialogs and failure states; this popover reports
+        // usage. So the list ends in the same gear the model picker offers for
+        // provider settings: one link to where that work already lives, rather
+        // than a second copy of one verb from it.
+        action={{
+          kind: "manage-hosts",
+          onSelect: () => {
+            onClose();
+            // The displayed host travels with the jump - one rule, one
+            // implementation, shared with the provider CTAs.
+            carryUsageHostIntoSettingsScope(scope.hostId);
+            openSettings({ section: "host", resetToGeneral: false });
+          },
+        }}
+        surface="panel-header"
+        intent="view"
+        disabled={false}
+        isLoading={scope.isLoading}
+        listsFailed={scope.listsFailed}
+        onRetryLists={scope.retryLists}
+      />
+    </div>
+  );
+}
+
+/**
+ * Why this surface is showing nothing rather than showing the active host's
+ * numbers under another host's name. Each branch names the remedy it has,
+ * because the three states differ in exactly that: `vanished` needs the pick
+ * dropped, `unreachable` needs the machine back, `connecting` needs a moment.
+ */
+function RateLimitHostUnavailableNotice({
+  scope,
+}: {
+  readonly scope: HostScope;
+}): ReactNode {
+  if (scope.status === "connecting") {
+    return (
+      <span
+        className="flex items-center gap-2 text-ui-sm text-muted-foreground"
+        data-testid="rate-limit-host-connecting"
+      >
+        <MutedAgentSpinner />
+        Finding {scope.hostLabel}…
+      </span>
+    );
+  }
+  return (
+    <div
+      role="status"
+      className="flex max-w-[40ch] flex-col items-center gap-2 text-center"
+      data-testid="rate-limit-host-unavailable"
+    >
+      <p className="text-ui-sm font-medium text-foreground">
+        {scope.status === "vanished"
+          ? `${scope.hostLabel} is no longer connected`
+          : `Can't reach ${scope.hostLabel}`}
+      </p>
+      <p className="text-ui-sm text-muted-foreground">
+        {scope.status === "vanished"
+          ? "It was removed or signed out, so its usage limits can't be read."
+          : "Provider usage limits are read from the host itself, so they're unavailable while it's offline."}
+      </p>
+      <button
+        type="button"
+        onClick={scope.returnToActive}
+        className="rounded-md px-1 py-0.5 text-ui-sm text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        data-testid="rate-limit-host-return-to-active"
+      >
+        Show the active host
+      </button>
+    </div>
   );
 }
 
@@ -781,7 +1021,9 @@ function RateLimitRail({
   activeTab,
   onSelect,
   onClose,
+  displayedHostId,
 }: {
+  readonly displayedHostId: string | null;
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
@@ -792,6 +1034,7 @@ function RateLimitRail({
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryUsageHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -1057,6 +1300,11 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
+  // The ephemeral lane's app-shell default is configured to the app-wide host,
+  // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
+  // popover may not be showing. This scope is derived from the same context
+  // binding as `hostId` and `client` above, so all three name one host.
+  const queueScope = useRateLimitQueueScope();
   const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
   );
@@ -1145,7 +1393,13 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
+    void enqueueRateLimitFetchBatchForScope(
+      queueScope,
+      ephemeralProcessRequests,
+      {
+        force: true,
+      },
+    );
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -1363,6 +1617,9 @@ function ProfileRateLimitProviderBlock({
 }): ReactNode {
   const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
+  // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
+  // must reach the host whose numbers it is redrawing, not the app-wide one.
+  const queueScope = useRateLimitQueueScope();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
   const activeProfileId = resolveRateLimitProfileId(
@@ -1431,7 +1688,8 @@ function ProfileRateLimitProviderBlock({
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      void enqueueRateLimitFetchBatch(
+      void enqueueRateLimitFetchBatchForScope(
+        queueScope,
         refreshEligibleTargets.map((target) => ({
           providerId,
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
@@ -1790,6 +2048,21 @@ function RateLimitProviderBody({
  * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
  * `null` on the single-provider detail tab.
  */
+/**
+ * The account-scoped Usage half for a popover whose host-scoped half cannot
+ * render: eligible Traycer Inference usage, framed like a pane. Returns null
+ * for ineligible accounts, so the caller mounts it unconditionally.
+ */
+function UnscopedTraycerUsage(): ReactNode {
+  const traycerSubscription = useTraycerSubscription();
+  if (!traycerSubscription.eligible) return null;
+  return (
+    <div className="w-full max-w-full rounded-md border border-border/60 bg-muted/20 p-3">
+      <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
+    </div>
+  );
+}
+
 function TraycerRateLimitBlock({
   variant,
   onReady,
@@ -2078,12 +2351,15 @@ function RateLimitDetailSkeleton(): ReactNode {
  */
 function RateLimitZeroState({
   onClose,
+  displayedHostId,
 }: {
   readonly onClose: () => void;
+  readonly displayedHostId: string | null;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
     onClose();
+    carryUsageHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
@@ -2100,4 +2376,23 @@ function RateLimitZeroState({
       </button>
     </div>
   );
+}
+
+/**
+ * The usage view's explicit host pin travels with the jump into Settings.
+ *
+ * Without this, scoping Usage to host B and pressing Provider settings opens
+ * controls for whatever host Settings last showed - the action was invoked
+ * FROM B's numbers, so provider changes made next would target the wrong
+ * machine. Only an explicit pin transfers: `null` means "follow the active
+ * host", and both surfaces already agree on that default.
+ */
+function carryUsageHostIntoSettingsScope(displayedHostId: string | null): void {
+  // The DISPLAYED host, pinned or followed. An earlier version transferred
+  // only an explicit pin, reasoning that null means both surfaces agree on
+  // "follow" - but Settings can hold a stale explicit pin of its own, and the
+  // Providers panel resolves through Settings' scope, so the followed case
+  // landed on the wrong machine all the same.
+  if (displayedHostId === null) return;
+  useSettingsHostScopeStore.getState().setScopedHostId(displayedHostId);
 }

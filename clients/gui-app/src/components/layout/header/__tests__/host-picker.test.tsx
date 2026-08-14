@@ -10,10 +10,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 /**
  * The host picker's paid-plan gating: on a free plan, remote rows are inert
- * with a "Paid plan" affordance and the upsell notice links to subscription
- * management; on a paid plan the same rows select normally. The plan verdict
- * itself is `useRemoteHostsPlanRestricted`'s (tested separately) — here it is
- * driven directly.
+ * ("requires upgrade") and the upsell notice links to subscription
+ * management; on a paid plan the same rows select normally. The plan
+ * verdict itself is `useRemoteHostsPlanRestricted`'s (tested separately) —
+ * here it is driven directly through the row's `planRestricted` /
+ * `connectable` fields, exactly as `buildHostScopeOptions` would set them.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -26,10 +27,6 @@ const mocks = vi.hoisted(() => ({
   // picker's subscription to be observable.
   activeHostId: "local-1",
   hostClientListeners: new Set<() => void>(),
-}));
-
-vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
-  useRemoteHostsPlanRestricted: mocks.planRestricted,
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -67,37 +64,42 @@ vi.mock("@/hooks/host/use-refresh-host-directory-on-open", () => ({
   useRefreshHostDirectoryOnOpen: () => undefined,
 }));
 
-vi.mock("@/hooks/host/use-host-picker-list", () => ({
-  registerHostPickerDirectory: () => "picker-directory-1",
-  useHostPickerList: () => ({
-    isLoading: false,
-    isError: false,
-    // Whole `HostDirectoryEntry` rows, not the three fields this file happens
-    // to read. An untyped factory is exempt from the excess-property check, so
-    // it kept a `status` key for a field that no longer exists and resolved
-    // `transportDialability` to `undefined` — failing closed into "offline"
-    // for both rows, invisibly, while every assertion here still passed
-    // because they are about invalidation and labels.
-    data: [
-      {
-        hostId: "local-1",
-        label: "This Mac",
-        kind: "local",
-        websocketUrl: "ws://127.0.0.1:4917/rpc",
-        version: "1.0.0",
-        transportDialability: "dialable",
-      },
-      {
-        hostId: "remote-1",
-        label: "Office workstation",
-        kind: "remote",
-        websocketUrl: "wss://relay.example.test/attach",
-        version: "1.0.0",
-        transportDialability: "dialable",
-      },
-    ],
-  }),
-}));
+// The dialog now reads the shared merged list (`useHostOptions`) instead of
+// its own directory-only query, so this suite mocks that boundary — the same
+// pattern panel suites use for `useHostScope` — rather than standing up the
+// six hooks it composes. The "checked row follows the active host" behavior
+// stays genuinely reactive: this wraps the REAL `useReactiveActiveHostId`,
+// which is backed by the `@/lib/host` mock above, so the same listener-set
+// trick the old suite used to move `activeHostId` still drives a re-render.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const { useReactiveActiveHostId } =
+    await import("@/hooks/host/use-reactive-active-host-id");
+  return {
+    useHostOptions: () => {
+      const activeHostId = useReactiveActiveHostId();
+      const planRestricted = mocks.planRestricted();
+      return hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({
+            hostId: "local-1",
+            name: "This Mac",
+            isLocalMachine: true,
+          }),
+          hostScopeOptionFixture({
+            hostId: "remote-1",
+            name: "Office workstation",
+            isLocalMachine: false,
+            connectable: !planRestricted,
+            planRestricted,
+          }),
+        ],
+        activeHostId,
+      });
+    },
+  };
+});
 
 import { HostPicker } from "@/components/layout/header/host-picker";
 
@@ -126,14 +128,14 @@ afterEach(() => {
 });
 
 describe("HostPicker paid-plan gating", () => {
-  it("free plan: remote rows are inert with a Paid plan affordance, and the upsell links to subscription management", () => {
+  it("free plan: remote rows are inert with a requires-upgrade affordance, and the upsell links to subscription management", () => {
     mocks.planRestricted.mockReturnValue(true);
     renderPicker();
 
     const remote = screen.getByTestId("host-picker-option-remote-1");
     expect(remote.getAttribute("data-plan-restricted")).toBe("true");
     expect((remote as HTMLButtonElement).disabled).toBe(true);
-    expect(remote.textContent).toContain("Paid plan");
+    expect(remote.textContent).toContain("requires upgrade");
     fireEvent.click(remote);
     expect(mocks.selectById).not.toHaveBeenCalled();
 

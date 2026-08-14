@@ -48,15 +48,20 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
+  openHostOverviewAdvanced,
+  openHostOverviewMenu,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
+  resetHostServiceWriteLatchesForTest();
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -107,7 +112,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-async function waitForButton(name: string): Promise<HTMLElement> {
+async function waitForButton(name: string | RegExp): Promise<HTMLElement> {
   return screen.findByRole("button", { name });
 }
 
@@ -156,7 +161,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     );
     const view = render(makeUi());
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -230,9 +236,12 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
     // be a no-op.
     await screen.findByText("Original Name");
     fireEvent.click(await waitForButton("Edit name"));
-    const input = await screen.findByRole("textbox", { name: "Display Name" });
+    // The name edits IN PLACE now (`useInlineRename`, same hook the tab strips
+    // use), so there is no separate editor row and no Save button — the write
+    // is what Enter commits.
+    const input = await screen.findByTestId("host-overview-name-input");
     fireEvent.change(input, { target: { value: "New Name" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.keyDown(input, { key: "Enter" });
 
     hostBindingMock.current = { hostClient: fixtureB.client };
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
@@ -301,7 +310,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -352,14 +362,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
     await waitFor(() => expect(transitionIds).toHaveLength(1));
 
     // The user tries again after the failure toast.
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -402,7 +414,8 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Restart"));
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -423,7 +436,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
 });
 
 describe("<HostSettingsPanel /> Overview update-install degrade", () => {
-  it("an externally-managed install outcome degrades to the cloud-pin-only UI", async () => {
+  it("an externally-managed install outcome retires the whole update region", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -432,12 +445,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "externally-managed" as const }),
@@ -461,8 +469,8 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     );
 
     fireEvent.click(await waitForButton("Check now"));
-    const installButton = await waitForButton("Update to v1.6.0");
-    fireEvent.click(installButton);
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     // The whole REGION retires, not just the install button. This test used to
     // assert a disabled install button beside a live "Check now", which is the
@@ -475,7 +483,60 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
     });
-    expect(screen.queryByTestId("host-overview-update-install")).toBeNull();
+    expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
+  });
+});
+
+describe("<HostSettingsPanel /> Overview OS service externally-managed outcome", () => {
+  // The OUTCOME axis, distinct from `ok` + `state: "externally-managed"`: the
+  // host refused to consult the CLI because an external supervisor owns its
+  // service lifecycle, so there is no label or manifest line to show and both
+  // verbs are withheld rather than offered-and-refused.
+  it("withholds both service verbs and names the external supervisor", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.service.status": () =>
+          Promise.resolve({ outcome: "externally-managed" as const }),
+      },
+    });
+    // The service methods too: a host that has not negotiated them has no
+    // service section at all, which would make every absence below vacuous.
+    recordNegotiatedHostMethods("host-a", [
+      ...ALL_OVERVIEW_METHODS,
+      "host.service.status",
+      "host.service.register",
+      "host.service.deregister",
+    ]);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHost()}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewAdvanced();
+    const description = await screen.findByTestId(
+      "host-overview-service-description",
+    );
+    await waitFor(() => {
+      expect(description.textContent).toContain(
+        "managed by an external supervisor",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Re-register" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deregister" })).toBeNull();
+    expect(screen.queryByTestId("host-overview-service-manifest")).toBeNull();
   });
 });
 
@@ -506,7 +567,8 @@ describe("<HostSettingsPanel /> Overview doctor structured failure", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await waitForButton("Run doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     const message = await screen.findByTestId("host-doctor-message");
     expect(message.textContent).toContain("no Traycer CLI installed");
     expect(toast.error).not.toHaveBeenCalled();
@@ -540,15 +602,20 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       </QueryClientProvider>,
     );
 
-    const restart = await waitForButton("Restart");
+    await openHostOverviewMenu();
+    const restart = await screen.findByTestId("host-overview-restart");
     await waitFor(() => {
       expect(restart.getAttribute("data-degraded")).toBe("unsupported");
     });
-    expect(restart.hasAttribute("disabled")).toBe(true);
+    // `aria-disabled`, not the `disabled` ATTRIBUTE. These are Radix
+    // `DropdownMenuItem`s — divs with `role="menuitem"` — so `hasAttribute
+    // ("disabled")` is false for every one of them, enabled or not, and the
+    // assertion it replaces could never have failed.
+    expect(restart.getAttribute("aria-disabled")).toBe("true");
 
-    const doctor = screen.getByRole("button", { name: "Run doctor" });
+    const doctor = screen.getByTestId("host-overview-run-doctor");
     expect(doctor.getAttribute("data-degraded")).toBeNull();
-    expect(doctor.hasAttribute("disabled")).toBe(false);
+    expect(doctor.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   it("does NOT degrade any button when NO manifest has been recorded yet (null tri-state)", async () => {
@@ -574,11 +641,12 @@ describe("<HostSettingsPanel /> Overview per-button capability degrade", () => {
       </QueryClientProvider>,
     );
 
-    const restart = await waitForButton("Restart");
-    const doctor = screen.getByRole("button", { name: "Run doctor" });
+    await openHostOverviewMenu();
+    const restart = await screen.findByTestId("host-overview-restart");
+    const doctor = screen.getByTestId("host-overview-run-doctor");
     expect(restart.getAttribute("data-degraded")).toBeNull();
-    expect(restart.hasAttribute("disabled")).toBe(false);
+    expect(restart.getAttribute("aria-disabled")).not.toBe("true");
     expect(doctor.getAttribute("data-degraded")).toBeNull();
-    expect(doctor.hasAttribute("disabled")).toBe(false);
+    expect(doctor.getAttribute("aria-disabled")).not.toBe("true");
   });
 });

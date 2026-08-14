@@ -32,6 +32,7 @@ import {
   usePanelHeaderMenuOpen,
   usePanelHeaderMenuStore,
 } from "@/stores/epics/panel-header-menu-store";
+import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
@@ -102,6 +103,15 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         align="start"
         className="w-[min(90vw,28rem)] gap-0 p-0"
         data-testid="new-terminal-picker-popover"
+        // The host picker's list is a nested Radix popover: it portals OUTSIDE
+        // this content, so every click in it arrives here as an interaction
+        // from outside. Dismissing on those would close the panel the picker
+        // exists to scope, and no host could ever be chosen from it.
+        onInteractOutside={(event) => {
+          if (isHostSwitcherListInteraction(event.target)) {
+            event.preventDefault();
+          }
+        }}
         // Keep Radix from focusing the first focusable element (a host row);
         // the workspace search input auto-focuses itself instead so the user
         // can immediately type/arrow through workspaces.

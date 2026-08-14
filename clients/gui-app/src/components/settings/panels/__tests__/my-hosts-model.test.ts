@@ -11,7 +11,6 @@ import {
   deriveUpdatePill,
   formatHostMeta,
   formatLastSeen,
-  isValidHostVersion,
   liveBusySessionCount,
   settledBusySessionCount,
   type HostPresenceView,
@@ -310,50 +309,9 @@ describe("formatHostMeta", () => {
   });
 });
 
-describe("isValidHostVersion", () => {
-  it("accepts dotted-numeric versions with 1-3 segments", () => {
-    expect(isValidHostVersion("1")).toBe(true);
-    expect(isValidHostVersion("1.4")).toBe(true);
-    expect(isValidHostVersion("1.4.2")).toBe(true);
-  });
-
-  it("trims surrounding whitespace before matching", () => {
-    expect(isValidHostVersion("  1.4.2  ")).toBe(true);
-  });
-
-  it("rejects non-dotted-numeric or malformed input", () => {
-    expect(isValidHostVersion("")).toBe(false);
-    expect(isValidHostVersion("v1.4.2")).toBe(false);
-    expect(isValidHostVersion("1.4.2.1")).toBe(false);
-    expect(isValidHostVersion("1..4")).toBe(false);
-    expect(isValidHostVersion("latest")).toBe(false);
-    expect(isValidHostVersion("1.4.2-beta")).toBe(false);
-  });
-});
-
 describe("deriveUpdateAffordance", () => {
-  it("shows the Update now input for current/available/required/failed, hides it for pending/updating", () => {
-    const shown: HostUpdateState[] = [
-      "current",
-      "available",
-      "required",
-      "failed",
-    ];
-    const hidden: HostUpdateState[] = ["pending", "updating"];
-    for (const updateState of shown) {
-      expect(
-        deriveUpdateAffordance({ updateState, liveBusySessionCount: null })
-          .showUpdateNowInput,
-      ).toBe(true);
-    }
-    for (const updateState of hidden) {
-      expect(
-        deriveUpdateAffordance({ updateState, liveBusySessionCount: null })
-          .showUpdateNowInput,
-      ).toBe(false);
-    }
-  });
-
+  // The `showUpdateNowInput` cases that sat here are gone with the free-text
+  // version pin they gated - see the note above `HostUpdateAffordanceView`.
   it("shows no drain-gate copy when not pending, even with a live count above zero", () => {
     const view = deriveUpdateAffordance({
       updateState: "current",
@@ -427,17 +385,6 @@ describe("deriveUpdateAffordance", () => {
       expect(zeroView.showApplyNowForce).toBe(false);
       expect(nullView.waitingForSessionsLabel).toBeNull();
       expect(zeroView.waitingForSessionsLabel).toBeNull();
-    });
-
-    it("still hides the Update now input while pending with no live session source", () => {
-      // `showUpdateNowInput` is registry-backed and gates purely on
-      // `updateState` (hidden for `pending`/`updating`), independent of the
-      // live-count question — a missing live source does not reopen it.
-      const view = deriveUpdateAffordance({
-        updateState: "pending",
-        liveBusySessionCount: null,
-      });
-      expect(view.showUpdateNowInput).toBe(false);
     });
   });
 });

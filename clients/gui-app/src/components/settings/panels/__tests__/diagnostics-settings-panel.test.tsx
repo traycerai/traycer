@@ -44,16 +44,13 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogLevel } from "@traycer/protocol/config/log-level";
+import type {
+  ConfigLogLevelsResponse,
+  ConfigLogLevelsSetRequest,
+  ConfigLogLevelsSetResponse,
+} from "@traycer/protocol/host/config/index";
 import type { DiagnosticsLogDescriptor } from "@traycer/protocol/host/diagnostics/index";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
@@ -69,19 +66,17 @@ import {
   type ConfigHostFixture,
   type DiagnosticsLogFixtureEntry,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
-import type {
-  LogLevelScope,
-  LogLevelsBridge,
-  LogLevelsSnapshot,
-} from "@/lib/desktop-log-levels";
-import type {
-  DesktopSupportBridge,
-  DesktopSupportLogTailResult,
-  DesktopSupportLogTarget,
-  DesktopSupportSnapshot,
-} from "@/lib/windows/types";
+import {
+  chooseLogLevelOption,
+  clearRunnerHostBridges,
+  defaultSnapshot,
+  installLogLevelsBridge,
+  makeHost,
+  makeSupportBridge,
+  openLogLevelSelect,
+} from "@/components/settings/panels/__tests__/diagnostics-test-support";
+import type { DesktopSupportBridge } from "@/lib/windows/types";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
 
@@ -92,221 +87,6 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
-
-interface GlobalWithRunnerHost {
-  runnerHost:
-    | {
-        readonly platform: {
-          readonly logLevels: LogLevelsBridge | undefined;
-        };
-      }
-    | undefined;
-}
-
-const globalWithRunnerHost = globalThis as typeof globalThis &
-  GlobalWithRunnerHost;
-
-function defaultSnapshot(): LogLevelsSnapshot {
-  return {
-    desktopLogLevel: "info",
-    cliLogLevel: "info",
-    hostLogLevel: "info",
-  };
-}
-
-function scopeField(scope: LogLevelScope): keyof LogLevelsSnapshot {
-  switch (scope) {
-    case "desktop":
-      return "desktopLogLevel";
-    case "cli":
-      return "cliLogLevel";
-    case "host":
-      return "hostLogLevel";
-  }
-}
-
-interface LogLevelsBridgeMocks {
-  readonly bridge: LogLevelsBridge;
-  readonly getMock: Mock<() => Promise<LogLevelsSnapshot>>;
-  readonly setMock: Mock<
-    (scope: LogLevelScope, level: LogLevel) => Promise<LogLevelsSnapshot>
-  >;
-  readonly getSnapshot: () => LogLevelsSnapshot;
-}
-
-function installLogLevelsBridge(
-  initial: LogLevelsSnapshot,
-): LogLevelsBridgeMocks {
-  let snapshot = initial;
-  const getMock = vi.fn(() => Promise.resolve(snapshot));
-  const setMock = vi.fn((scope: LogLevelScope, level: LogLevel) => {
-    snapshot = {
-      ...snapshot,
-      [scopeField(scope)]: level,
-    };
-    return Promise.resolve(snapshot);
-  });
-  const bridge: LogLevelsBridge = {
-    get: getMock,
-    set: setMock,
-  };
-  globalWithRunnerHost.runnerHost = {
-    platform: { logLevels: bridge },
-  };
-  return {
-    bridge,
-    getMock,
-    setMock,
-    getSnapshot: () => snapshot,
-  };
-}
-
-interface HeldLogLevelsBridgeMocks extends LogLevelsBridgeMocks {
-  readonly flushNextSet: () => void;
-}
-
-/**
- * Same as installLogLevelsBridge, but each set() stays pending until
- * flushNextSet() so callers can assert in-flight disable state during reset.
- */
-function installHeldLogLevelsBridge(
-  initial: LogLevelsSnapshot,
-): HeldLogLevelsBridgeMocks {
-  let snapshot = initial;
-  const pendingFlushes: Array<() => void> = [];
-  const getMock = vi.fn(() => Promise.resolve(snapshot));
-  const setMock = vi.fn(
-    (scope: LogLevelScope, level: LogLevel) =>
-      new Promise<LogLevelsSnapshot>((resolve) => {
-        pendingFlushes.push(() => {
-          snapshot = {
-            ...snapshot,
-            [scopeField(scope)]: level,
-          };
-          resolve(snapshot);
-        });
-      }),
-  );
-  const bridge: LogLevelsBridge = {
-    get: getMock,
-    set: setMock,
-  };
-  globalWithRunnerHost.runnerHost = {
-    platform: { logLevels: bridge },
-  };
-  return {
-    bridge,
-    getMock,
-    setMock,
-    getSnapshot: () => snapshot,
-    flushNextSet: () => {
-      const next = pendingFlushes.shift();
-      if (next === undefined) {
-        throw new Error("No pending log-levels set() to flush");
-      }
-      next();
-    },
-  };
-}
-
-function clearLogLevelsBridge(): void {
-  globalWithRunnerHost.runnerHost = undefined;
-}
-
-function readySupportSnapshot(): DesktopSupportSnapshot {
-  return {
-    appName: "Traycer",
-    appVersion: "1.0.0",
-    platform: "darwin",
-    arch: "arm64",
-    user: { status: "signed-out", userName: null, email: null },
-    versions: { electron: "1", chrome: "1", node: "1" },
-    host: { status: "ready", version: "1", pid: 1, hostId: "host-1" },
-    // Only the desktop row is sourced from the support snapshot now - a
-    // host's own logs come from `diagnostics.logs.list` over RPC.
-    logs: [
-      {
-        target: "desktop",
-        label: "Desktop app",
-        path: "/tmp/desktop.log",
-      },
-    ],
-    links: [],
-    supportEmail: "support@traycer.ai",
-    privateDeliveryAvailable: true,
-  };
-}
-
-function makeSupportBridge(overrides: {
-  readonly getSnapshot?: DesktopSupportBridge["getSnapshot"];
-  readonly tailLog?: DesktopSupportBridge["tailLog"];
-  readonly revealLog?: DesktopSupportBridge["revealLog"];
-}): DesktopSupportBridge {
-  return {
-    getSnapshot:
-      overrides.getSnapshot ?? (() => Promise.resolve(readySupportSnapshot())),
-    revealLog:
-      overrides.revealLog ??
-      ((target) => Promise.resolve({ target, path: `/tmp/${target}.log` })),
-    submitReport: vi.fn(() =>
-      Promise.resolve({
-        status: "delivered" as const,
-        reportId: "report-1",
-      }),
-    ),
-    tailLog:
-      overrides.tailLog ??
-      ((input) =>
-        Promise.resolve<DesktopSupportLogTailResult>({
-          target: input.target,
-          path: `/tmp/${input.target}.log`,
-          lines: [`line-one-${input.target}`, `line-two-${input.target}`],
-          truncated: false,
-        })),
-    freezeEvidence: () => Promise.resolve({ reportId: "report-1" }),
-    discardFrozenEvidence: () => Promise.resolve(),
-    readFrozenLogTail: (input) =>
-      Promise.resolve<DesktopSupportLogTailResult>({
-        target: input.target,
-        path: `/tmp/${input.target}.log`,
-        lines: [],
-        truncated: false,
-      }),
-    saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
-    getFingerprintOccurrence: () => Promise.resolve(null),
-    buildPublicDraft: () =>
-      Promise.resolve({
-        template: "bug_report.yml",
-        title: "",
-        fields: {
-          "what-happened": "",
-          version: "",
-          os: "",
-          component: "",
-          repro: "",
-        },
-        truncated: false,
-      }),
-  };
-}
-
-function makeHost(support: DesktopSupportBridge | null): IRunnerHost {
-  const host = new MockRunnerHost({
-    signInUrl: "https://example.invalid/signin",
-    authnBaseUrl: "https://example.invalid",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
-  const proto = Object.getPrototypeOf(host) as object;
-  return Object.assign(Object.create(proto) as IRunnerHost, host, {
-    hostManagement: null,
-    hostTray: null,
-    support,
-  });
-}
 
 /**
  * Renders the panel with NO host RPC client bound (default scope: local,
@@ -421,34 +201,65 @@ function renderPanelOverRpc(options: {
   return { fixture, queryClient };
 }
 
-async function openLogLevelSelect(scope: LogLevelScope): Promise<HTMLElement> {
-  const trigger = await waitFor(() => {
-    const element = screen.getByTestId(`settings-log-level-${scope}`);
-    if (element.hasAttribute("disabled")) {
-      throw new Error(`Log level select for ${scope} still disabled`);
-    }
-    return element;
-  });
-  fireEvent.pointerDown(trigger, {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
-  fireEvent.click(trigger);
-  return trigger;
+interface HeldLogLevels {
+  readonly handlers: {
+    // The GET contract's own type: the SET response aliases the same schema
+    // today, but naming each keeps this fixture honest if they diverge.
+    readonly "config.logLevels.get": () => ConfigLogLevelsResponse;
+    readonly "config.logLevels.set": (
+      request: ConfigLogLevelsSetRequest,
+    ) => Promise<ConfigLogLevelsSetResponse>;
+  };
+  readonly pendingCount: () => number;
+  readonly flushNext: () => void;
 }
 
-async function chooseLogLevelOption(label: string): Promise<void> {
-  const option = await screen.findByRole("option", { name: label });
-  fireEvent.pointerUp(option);
-  fireEvent.click(option);
+/**
+ * A `config.logLevels.set` that stays pending until flushed, over its own
+ * `get`.
+ *
+ * The RPC-path counterpart of the bridge's `installHeldLogLevelsBridge`, which
+ * this page no longer reaches: with `desktop` gone, every write here is an RPC,
+ * so holding one in flight has to be done at the handler.
+ *
+ * It owns BOTH halves deliberately. Overriding `set` alone leaves the fixture's
+ * `get` answering from state the override never mutates, so the invalidating
+ * re-read after a flush hands back the level the reset just cleared — and the
+ * reminder this asserts on never goes away.
+ */
+function heldLogLevels(initial: ConfigLogLevelsSetResponse): HeldLogLevels {
+  const pending: Array<() => void> = [];
+  let levels = initial;
+  return {
+    handlers: {
+      "config.logLevels.get": () => ({ ...levels }),
+      "config.logLevels.set": (request) =>
+        new Promise<ConfigLogLevelsSetResponse>((resolve) => {
+          pending.push(() => {
+            levels =
+              request.scope === "cli"
+                ? { ...levels, cliLogLevel: request.level }
+                : { ...levels, hostLogLevel: request.level };
+            resolve({ ...levels });
+          });
+        }),
+    },
+    pendingCount: () => pending.length,
+    flushNext: () => {
+      const next = pending.shift();
+      if (next === undefined) {
+        throw new Error("No pending config.logLevels.set to flush");
+      }
+      next();
+    },
+  };
 }
 
 describe("<DiagnosticsSettingsPanel />", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -460,13 +271,13 @@ describe("<DiagnosticsSettingsPanel />", () => {
 
   afterEach(() => {
     cleanup();
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     scopeOverrides.current = {};
     hostBindingMock.current = null;
     resetNegotiatedManifests();
   });
 
-  it("renders the full page for a remote host: desktop row, memory, host cli/host rows, and the host's own log entries", async () => {
+  it("renders the full page for a remote host: cli/host rows and the host's own log entries", async () => {
     installLogLevelsBridge(defaultSnapshot());
     renderPanelOverRpc({
       hostId: "host-remote",
@@ -480,14 +291,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
       ],
     });
 
-    expect(
-      await screen.findByTestId("settings-log-level-desktop"),
-    ).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Memory" })).toBeTruthy();
-
-    expect(await screen.findByText("Desktop app")).toBeTruthy();
     expect(await screen.findByText("Host")).toBeTruthy();
     expect(await screen.findByText("CLI")).toBeTruthy();
 
@@ -498,48 +303,32 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
   });
 
-  it("shows independent unavailable states when both bridges are absent", () => {
-    renderPanelWithoutRpc(makeHost(null));
+  it("carries nothing app-scoped, even with both desktop bridges installed", async () => {
+    // The split, pinned from this side. The log-levels bridge IS installed and
+    // the support snapshot DOES carry its `desktop` entry, so each absence
+    // below is this page declining to render something available to it rather
+    // than something it could not have shown.
+    installLogLevelsBridge(defaultSnapshot());
+    renderPanelOverRpc({
+      support: makeSupportBridge({}),
+      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
+      diagnosticsLogs: [
+        { target: "host", label: "Host", path: "/var/host.log", lines: ["h1"] },
+      ],
+    });
 
-    expect(screen.getByRole("heading", { name: "Log detail" })).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Log level controls are only available on the desktop app.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(screen.queryByTestId("settings-log-level-desktop")).toBeNull();
-
+    expect(screen.queryByText("App log level")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
     expect(
-      screen.getByRole("heading", { name: "Recent logs · Last 100 lines" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Recent logs are only available on the desktop app."),
-    ).toBeTruthy();
-    expect(screen.queryByTestId("diagnostics-log-toggle-desktop")).toBeNull();
-  });
-
-  it("keeps Recent logs usable when only the log-levels bridge is absent", async () => {
-    renderPanelWithoutRpc(makeHost(makeSupportBridge({})));
-
-    expect(
-      screen.getByText(
-        "Log level controls are only available on the desktop app.",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByTestId("settings-log-level-desktop")).toBeNull();
-
-    expect(
-      await screen.findByRole("heading", {
-        name: "Recent logs · Last 100 lines",
-      }),
-    ).toBeTruthy();
-    expect(await screen.findByText("Desktop app")).toBeTruthy();
-    expect(
-      screen.queryByText("Recent logs are only available on the desktop app."),
+      screen.queryByTestId("diagnostics-capture-heap-snapshot"),
     ).toBeNull();
+    expect(screen.queryByTestId("diagnostics-log-entry-desktop")).toBeNull();
+    expect(screen.queryByText("Desktop Log")).toBeNull();
   });
 
-  it("keeps Log detail usable when only the support bridge is absent", async () => {
+  it("keeps Log detail usable when the support bridge is absent", async () => {
     installLogLevelsBridge(defaultSnapshot());
     renderPanelOverRpc({
       support: null,
@@ -549,21 +338,18 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(
       await screen.findByRole("heading", { name: "Log detail" }),
     ).toBeTruthy();
-    expect(screen.getByTestId("settings-log-level-desktop")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
 
     expect(
       screen.getByRole("heading", { name: "Recent logs · Last 100 lines" }),
     ).toBeTruthy();
-    // The support bridge is absent, so there is no desktop-app entry - but the
-    // host is still reachable over RPC, so its (empty) log list still answers
-    // rather than falling back to the desktop-only unavailable copy.
+    // The support bridge is irrelevant on this page now - the host is reachable
+    // over RPC, so its (empty) log list answers for itself.
     expect(await screen.findByText("No log files on host-a.")).toBeTruthy();
-    expect(screen.queryByTestId("diagnostics-log-toggle-desktop")).toBeNull();
   });
 
-  it("renders the Log detail group with the three scope selectors", async () => {
+  it("renders the Log detail group with the two host scope selectors", async () => {
     installLogLevelsBridge(defaultSnapshot());
     renderPanelOverRpc({
       support: null,
@@ -573,10 +359,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(
       await screen.findByRole("heading", { name: "Log detail" }),
     ).toBeTruthy();
-    expect(screen.getByTestId("settings-log-level-desktop")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
-    expect(screen.getByText("App log level")).toBeTruthy();
     expect(screen.getByText("CLI log level")).toBeTruthy();
     expect(screen.getByText("Host log level")).toBeTruthy();
   });
@@ -588,27 +372,29 @@ describe("<DiagnosticsSettingsPanel />", () => {
       logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
     });
 
-    await screen.findByTestId("settings-log-level-desktop");
     await screen.findByTestId("settings-log-level-cli");
+    await screen.findByTestId("settings-log-level-host");
     expect(screen.queryByTestId("diagnostics-log-detail-reminder")).toBeNull();
     expect(screen.queryByTestId("diagnostics-reset-log-levels")).toBeNull();
   });
 
-  it("shows the reminder after raising one level, then resets all non-default scopes to Info", async () => {
-    const { setMock } = installLogLevelsBridge(defaultSnapshot());
-    renderPanelOverRpc({
+  it("shows the reminder after raising one level, then resets the non-default scope to Info", async () => {
+    const { fixture } = renderPanelOverRpc({
       support: null,
       logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
     });
 
-    await screen.findByTestId("settings-log-level-desktop");
+    await screen.findByTestId("settings-log-level-cli");
     expect(screen.queryByTestId("diagnostics-log-detail-reminder")).toBeNull();
 
-    await openLogLevelSelect("desktop");
+    await openLogLevelSelect("cli");
     await chooseLogLevelOption("Debug");
 
     await waitFor(() => {
-      expect(setMock).toHaveBeenCalledWith("desktop", "debug");
+      expect(fixture.setLogLevelCalls).toContainEqual({
+        scope: "cli",
+        level: "debug",
+      });
     });
     expect(
       await screen.findByTestId("diagnostics-log-detail-reminder"),
@@ -622,50 +408,16 @@ describe("<DiagnosticsSettingsPanel />", () => {
     fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
 
     await waitFor(() => {
-      expect(setMock).toHaveBeenCalledWith("desktop", "info");
-    });
-    // Only the desktop scope was non-default, so reset mutates once.
-    expect(
-      setMock.mock.calls.filter(
-        (call) => call[0] === "desktop" && call[1] === "info",
-      ),
-    ).toHaveLength(1);
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("diagnostics-log-detail-reminder"),
-      ).toBeNull();
-    });
-  });
-
-  it("resets every non-default scope when multiple levels are elevated, including the host-RPC cli/host rows", async () => {
-    const { setMock } = installLogLevelsBridge({
-      desktopLogLevel: "debug",
-      cliLogLevel: "info",
-      hostLogLevel: "info",
-    });
-    const { fixture } = renderPanelOverRpc({
-      support: null,
-      logLevels: { cliLogLevel: "warn", hostLogLevel: "info" },
-    });
-
-    expect(
-      await screen.findByTestId("diagnostics-log-detail-reminder"),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
-
-    await waitFor(() => {
-      expect(setMock).toHaveBeenCalledTimes(1);
-    });
-    expect(setMock).toHaveBeenCalledWith("desktop", "info");
-    // The cli scope went out as a REAL config.logLevels.set RPC to the scoped
-    // host's client, not the desktop bridge.
-    await waitFor(() => {
       expect(fixture.setLogLevelCalls).toContainEqual({
         scope: "cli",
         level: "info",
       });
     });
+    // Only cli was non-default, so the reset writes exactly one scope - `host`
+    // was already Info and must not be written back over the wire.
+    expect(
+      fixture.setLogLevelCalls.filter((call) => call.scope === "host"),
+    ).toHaveLength(0);
     await waitFor(() => {
       expect(
         screen.queryByTestId("diagnostics-log-detail-reminder"),
@@ -673,201 +425,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
     });
   });
 
-  it("disables all three log-level selects while Reset all to Info is in flight", async () => {
-    const held = installHeldLogLevelsBridge({
-      desktopLogLevel: "debug",
-      cliLogLevel: "info",
-      hostLogLevel: "info",
-    });
-    renderPanelOverRpc({
-      support: null,
-      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
-    });
-
-    expect(
-      await screen.findByTestId("diagnostics-log-detail-reminder"),
-    ).toBeTruthy();
-
-    // Wait until the selects have finished their initial load (enabled).
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("settings-log-level-desktop")
-          .hasAttribute("disabled"),
-      ).toBe(false);
-    });
-
-    fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
-
-    await waitFor(() => {
-      expect(held.setMock).toHaveBeenCalledTimes(1);
-    });
-    expect(
-      screen.getByTestId("settings-log-level-desktop").hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByTestId("settings-log-level-cli").hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByTestId("settings-log-level-host").hasAttribute("disabled"),
-    ).toBe(true);
-
-    held.flushNextSet();
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("settings-log-level-desktop")
-          .hasAttribute("disabled"),
-      ).toBe(false);
-    });
-    expect(
-      screen.getByTestId("settings-log-level-cli").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(
-      screen.getByTestId("settings-log-level-host").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(screen.queryByTestId("diagnostics-log-detail-reminder")).toBeNull();
-  });
-
-  it("restores focus to the log-detail wrapper when Reset all removes the reminder", async () => {
-    // When the reminder (and its Reset button) unmounts, focus must move to
-    // the tabIndex=-1 content wrapper - not drop to <body>.
-    const { setMock } = installLogLevelsBridge({
-      desktopLogLevel: "debug",
-      cliLogLevel: "info",
-      hostLogLevel: "info",
-    });
-    renderPanelOverRpc({
-      support: null,
-      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
-    });
-
-    const resetButton = await screen.findByTestId(
-      "diagnostics-reset-log-levels",
-    );
-    resetButton.focus();
-    expect(document.activeElement).toBe(resetButton);
-
-    fireEvent.click(resetButton);
-
-    await waitFor(() => {
-      expect(setMock).toHaveBeenCalledWith("desktop", "info");
-    });
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("diagnostics-log-detail-reminder"),
-      ).toBeNull();
-    });
-
-    const desktopTrigger = screen.getByTestId("settings-log-level-desktop");
-    const focusTarget = desktopTrigger.closest("[tabindex='-1']");
-    expect(focusTarget instanceof HTMLElement).toBe(true);
-    if (!(focusTarget instanceof HTMLElement)) return;
-    expect(focusTarget.getAttribute("tabindex")).toBe("-1");
-    expect(document.activeElement).toBe(focusTarget);
-    expect(document.activeElement).not.toBe(document.body);
-  });
-
-  it("preserves the select trigger focus when a row change removes the reminder", async () => {
-    const { setMock } = installLogLevelsBridge({
-      desktopLogLevel: "debug",
-      cliLogLevel: "info",
-      hostLogLevel: "info",
-    });
-    renderPanelOverRpc({
-      support: null,
-      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
-    });
-
-    expect(
-      await screen.findByTestId("diagnostics-log-detail-reminder"),
-    ).toBeTruthy();
-
-    const desktopTrigger = await openLogLevelSelect("desktop");
-    await chooseLogLevelOption("Info (default)");
-
-    await waitFor(() => {
-      expect(setMock).toHaveBeenCalledWith("desktop", "info");
-    });
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("diagnostics-log-detail-reminder"),
-      ).toBeNull();
-    });
-    await waitFor(() => {
-      expect(document.activeElement).toBe(desktopTrigger);
-    });
-  });
-
-  it("does not duplicate the per-scope toast for a single-scope reset failure", async () => {
-    const snapshot: LogLevelsSnapshot = {
-      desktopLogLevel: "debug",
-      cliLogLevel: "info",
-      hostLogLevel: "info",
-    };
-    const setMock = vi.fn(() =>
-      Promise.reject<LogLevelsSnapshot>(new Error("desktop set failed")),
-    );
-    globalWithRunnerHost.runnerHost = {
-      platform: {
-        logLevels: {
-          get: vi.fn(() => Promise.resolve(snapshot)),
-          set: setMock,
-        },
-      },
-    };
-
-    vi.mocked(toast.error).mockClear();
-    renderPanelOverRpc({
-      support: null,
-      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
-    });
-
-    fireEvent.click(await screen.findByTestId("diagnostics-reset-log-levels"));
-
-    await waitFor(() => {
-      expect(setMock).toHaveBeenCalledWith("desktop", "info");
-    });
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        "Couldn't update log level",
-        expect.objectContaining({ description: "desktop set failed" }),
-      );
-    });
-    expect(toast.error).not.toHaveBeenCalledWith(
-      "Couldn't reset 1 of 1 log level",
-    );
-  });
-
-  it("continues resetting remaining scopes after one set() fails and toasts the aggregate", async () => {
-    // Reset-all must attempt EVERY non-default scope even if an earlier one
-    // rejects - previously a single outer try/catch stopped the loop early.
-    let snapshot: LogLevelsSnapshot = {
-      desktopLogLevel: "debug",
-      cliLogLevel: "warn",
-      hostLogLevel: "info",
-    };
-    const getMock = vi.fn(() => Promise.resolve(snapshot));
-    const setMock = vi.fn((scope: LogLevelScope, level: LogLevel) => {
-      if (scope === "desktop") {
-        return Promise.reject(new Error("desktop set failed"));
-      }
-      snapshot = {
-        ...snapshot,
-        [scopeField(scope)]: level,
-      };
-      return Promise.resolve(snapshot);
-    });
-    const bridge: LogLevelsBridge = {
-      get: getMock,
-      set: setMock,
-    };
-    globalWithRunnerHost.runnerHost = {
-      platform: { logLevels: bridge },
-    };
-
-    vi.mocked(toast.error).mockClear();
+  it("resets every non-default scope over the host's own config RPC", async () => {
     const { fixture } = renderPanelOverRpc({
       support: null,
       logLevels: { cliLogLevel: "warn", hostLogLevel: "error" },
@@ -879,12 +437,8 @@ describe("<DiagnosticsSettingsPanel />", () => {
 
     fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
 
-    // desktop goes through the bridge (fails); cli/host go through the RPC
-    // client (succeed) - one bridge call, two RPC calls.
-    await waitFor(() => {
-      expect(setMock).toHaveBeenCalledTimes(1);
-    });
-    expect(setMock).toHaveBeenCalledWith("desktop", "info");
+    // Both went out as REAL config.logLevels.set RPCs to the scoped host's
+    // client. Nothing on this page writes the local bridge any more.
     await waitFor(() => {
       expect(fixture.setLogLevelCalls).toHaveLength(2);
     });
@@ -896,89 +450,201 @@ describe("<DiagnosticsSettingsPanel />", () => {
       scope: "host",
       level: "info",
     });
-
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        "Couldn't reset 1 of 3 log levels",
-      );
+      expect(
+        screen.queryByTestId("diagnostics-log-detail-reminder"),
+      ).toBeNull();
     });
-
-    // Failed desktop scope stays elevated - reminder remains visible.
-    expect(screen.getByTestId("diagnostics-log-detail-reminder")).toBeTruthy();
-    expect(snapshot.desktopLogLevel).toBe("debug");
     expect(fixture.getLogLevels()).toEqual({
       cliLogLevel: "info",
       hostLogLevel: "info",
     });
   });
 
-  it("loads recent logs, expands tail output, copies, and reveals a log file", async () => {
-    installLogLevelsBridge(defaultSnapshot());
-    const revealLog = vi.fn((target: DesktopSupportLogTarget) =>
-      Promise.resolve({ target, path: `/tmp/${target}.log` }),
-    );
-    const tailLog = vi.fn(
-      (input: {
-        readonly target: DesktopSupportLogTarget;
-        readonly tailLines: number;
-      }) =>
-        Promise.resolve<DesktopSupportLogTailResult>({
-          target: input.target,
-          path: `/tmp/${input.target}.log`,
-          lines: ["alpha", "beta"],
-          truncated: false,
-        }),
-    );
-    const support = makeSupportBridge({ revealLog, tailLog });
+  it("disables both log-level selects while Reset all to Info is in flight", async () => {
+    const held = heldLogLevels({ cliLogLevel: "debug", hostLogLevel: "info" });
     renderPanelOverRpc({
-      support,
-      logLevels: { cliLogLevel: "info", hostLogLevel: "info" },
+      support: null,
+      logLevels: { cliLogLevel: "debug", hostLogLevel: "info" },
+      overrideHandlers: held.handlers,
     });
 
     expect(
-      await screen.findByRole("heading", {
-        name: "Recent logs · Last 100 lines",
-      }),
+      await screen.findByTestId("diagnostics-log-detail-reminder"),
     ).toBeTruthy();
-    expect(await screen.findByText("Desktop app")).toBeTruthy();
-    const logList = screen.getByTestId("diagnostics-log-list");
-    expect(logList.className).toContain("min-h-0");
-    expect(logList.className).toContain("max-h-full");
-    expect(logList.className).toContain("overflow-y-auto");
-    expect(logList.className).not.toContain("flex-1");
 
-    // Copy is only present while expanded.
+    // Wait until the selects have finished their initial load (enabled).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("settings-log-level-cli").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
+
+    await waitFor(() => {
+      expect(held.pendingCount()).toBe(1);
+    });
     expect(
-      screen.queryByRole("button", { name: "Copy Desktop app log" }),
-    ).toBeNull();
+      screen.getByTestId("settings-log-level-cli").hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByTestId("settings-log-level-host").hasAttribute("disabled"),
+    ).toBe(true);
 
-    fireEvent.click(screen.getByTestId("diagnostics-log-toggle-desktop"));
+    held.flushNext();
 
-    const output = await screen.findByTestId("diagnostics-log-output-desktop");
     await waitFor(() => {
-      expect(output.textContent).toContain("alpha");
-      expect(output.textContent).toContain("beta");
+      expect(
+        screen.getByTestId("settings-log-level-cli").hasAttribute("disabled"),
+      ).toBe(false);
     });
-    expect(tailLog).toHaveBeenCalledWith({
-      target: "desktop",
-      tailLines: 100,
+    expect(
+      screen.getByTestId("settings-log-level-host").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.queryByTestId("diagnostics-log-detail-reminder")).toBeNull();
+  });
+
+  it("restores focus to the log-detail wrapper when Reset all removes the reminder", async () => {
+    // When the reminder (and its Reset button) unmounts, focus must move to
+    // the tabIndex=-1 content wrapper - not drop to <body>.
+    const { fixture } = renderPanelOverRpc({
+      support: null,
+      logLevels: { cliLogLevel: "debug", hostLogLevel: "info" },
     });
 
-    const copyButton = screen.getByRole("button", {
-      name: "Copy Desktop app log",
-    });
-    fireEvent.click(copyButton);
+    const resetButton = await screen.findByTestId(
+      "diagnostics-reset-log-levels",
+    );
+    resetButton.focus();
+    expect(document.activeElement).toBe(resetButton);
+
+    fireEvent.click(resetButton);
+
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith("alpha\nbeta");
+      expect(fixture.setLogLevelCalls).toContainEqual({
+        scope: "cli",
+        level: "info",
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("diagnostics-log-detail-reminder"),
+      ).toBeNull();
     });
 
-    const entryRoot = screen.queryByTestId("diagnostics-log-entry-desktop");
-    expect(entryRoot instanceof HTMLElement).toBe(true);
-    if (!(entryRoot instanceof HTMLElement)) return;
-    fireEvent.click(within(entryRoot).getByRole("button", { name: "Reveal" }));
-    await waitFor(() => {
-      expect(revealLog).toHaveBeenCalledWith("desktop");
+    const focusTarget = screen
+      .getByTestId("settings-log-level-cli")
+      .closest("[tabindex='-1']");
+    expect(focusTarget instanceof HTMLElement).toBe(true);
+    if (!(focusTarget instanceof HTMLElement)) return;
+    expect(focusTarget.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(focusTarget);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("preserves the select trigger focus when a row change removes the reminder", async () => {
+    const { fixture } = renderPanelOverRpc({
+      support: null,
+      logLevels: { cliLogLevel: "debug", hostLogLevel: "info" },
     });
+
+    expect(
+      await screen.findByTestId("diagnostics-log-detail-reminder"),
+    ).toBeTruthy();
+
+    const cliTrigger = await openLogLevelSelect("cli");
+    await chooseLogLevelOption("Info (default)");
+
+    await waitFor(() => {
+      expect(fixture.setLogLevelCalls).toContainEqual({
+        scope: "cli",
+        level: "info",
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("diagnostics-log-detail-reminder"),
+      ).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(cliTrigger);
+    });
+  });
+
+  it("does not add an aggregate toast for a single-scope reset failure", async () => {
+    const attempted: Array<string> = [];
+    vi.mocked(toast.error).mockClear();
+    renderPanelOverRpc({
+      support: null,
+      logLevels: { cliLogLevel: "debug", hostLogLevel: "info" },
+      overrideHandlers: {
+        "config.logLevels.set": (request) => {
+          attempted.push(request.scope);
+          throw new Error("cli set failed");
+        },
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("diagnostics-reset-log-levels"));
+
+    // The write was attempted and rejected - this is the failing path, not a
+    // reset that quietly had nothing to do.
+    await waitFor(() => {
+      expect(attempted).toEqual(["cli"]);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    // With one control, the mutation's own host-error toast already said it -
+    // an aggregate line would double-report a single failure. The message is
+    // NOT pinned: `toastFromHostError` maps host error codes to their own copy,
+    // and this test is about the second toast that must not exist.
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Couldn't reset"),
+    );
+    // The level stayed elevated, so the reminder is still up.
+    expect(screen.getByTestId("diagnostics-log-detail-reminder")).toBeTruthy();
+  });
+
+  it("continues resetting remaining scopes after one set() fails and toasts the aggregate", async () => {
+    // Reset-all must attempt EVERY non-default scope even if an earlier one
+    // rejects - previously a single outer try/catch stopped the loop early.
+    const attempted: Array<{ scope: string; level: LogLevel }> = [];
+    vi.mocked(toast.error).mockClear();
+    renderPanelOverRpc({
+      support: null,
+      logLevels: { cliLogLevel: "warn", hostLogLevel: "error" },
+      overrideHandlers: {
+        "config.logLevels.set": (request) => {
+          attempted.push({ scope: request.scope, level: request.level });
+          if (request.scope === "cli") throw new Error("cli set failed");
+          return { cliLogLevel: "warn", hostLogLevel: request.level };
+        },
+      },
+    });
+
+    expect(
+      await screen.findByTestId("diagnostics-log-detail-reminder"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("diagnostics-reset-log-levels"));
+
+    // `host` is only reached if the loop kept going past `cli`'s rejection.
+    await waitFor(() => {
+      expect(attempted).toHaveLength(2);
+    });
+    expect(attempted).toContainEqual({ scope: "cli", level: "info" });
+    expect(attempted).toContainEqual({ scope: "host", level: "info" });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't reset 1 of 2 log levels",
+      );
+    });
+
+    // The failed cli scope stays elevated - reminder remains visible.
+    expect(screen.getByTestId("diagnostics-log-detail-reminder")).toBeTruthy();
   });
 
   it("reads a host's own log over diagnostics.logs.tail with Copy path instead of Reveal", async () => {
@@ -1061,7 +727,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(screen.queryByTestId("diagnostics-log-toggle-host")).toBeNull();
   });
 
-  it("shows the unsupported notice for a REMOTE old host, without crashing, while the app-scoped rows keep working", async () => {
+  it("states a REMOTE old host's version once, and drops the Log detail card rather than titling an empty one", async () => {
     installLogLevelsBridge(defaultSnapshot());
     renderPanelOverRpc({
       hostId: "host-old",
@@ -1072,14 +738,18 @@ describe("<DiagnosticsSettingsPanel />", () => {
       methods: ["host.status"],
     });
 
-    const notice = await screen.findByTestId("host-config-unsupported-notice");
-    expect(notice.textContent).toContain("running an older version");
+    const notices = await screen.findAllByTestId(
+      "host-config-unsupported-notice",
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain("running an older version");
     expect(screen.queryByTestId("settings-log-level-cli")).toBeNull();
     expect(screen.queryByTestId("settings-log-level-host")).toBeNull();
 
-    // App-scoped rows are unaffected by the host's version.
-    expect(screen.getByTestId("settings-log-level-desktop")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Memory" })).toBeTruthy();
+    // The logs region's notice covers "logs and log levels", so Log detail has
+    // nothing left to say - and a titled card with an empty body is worse than
+    // no card. This is the branch that made `LogDetailGroup` return null.
+    expect(screen.queryByRole("heading", { name: "Log detail" })).toBeNull();
     // A remote host has no local truth to fall back to.
     expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
   });
@@ -1097,17 +767,21 @@ describe("<DiagnosticsSettingsPanel />", () => {
 
     const notice = await screen.findByTestId("local-config-fallback-notice");
     expect(notice.getAttribute("data-reason")).toBe("host-stopped");
-    expect(screen.getByTestId("settings-log-level-desktop")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
+    expect(screen.queryByTestId("settings-log-level-desktop")).toBeNull();
     expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+
+    // The bridge snapshot carries `desktop` and `host`; only the host half
+    // belongs on this page.
+    expect(await screen.findByText("Host Log")).toBeTruthy();
+    expect(screen.queryByText("Desktop Log")).toBeNull();
 
     await openLogLevelSelect("host");
     await chooseLogLevelOption("Debug");
 
     // The write actually reached the local bridge, not an RPC handler - the
-    // bridge is machine-user-global, so cli/host share the same `set()` the
-    // desktop row uses.
+    // bridge is machine-user-global, so cli/host share one `set()`.
     await waitFor(() => {
       expect(setMock).toHaveBeenCalledWith("host", "debug");
     });
@@ -1172,7 +846,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -1182,7 +856,7 @@ describe("<DiagnosticsSettingsPanel /> capability-probe self-heal", () => {
 
   afterEach(() => {
     cleanup();
-    clearLogLevelsBridge();
+    clearRunnerHostBridges();
     scopeOverrides.current = {};
     hostBindingMock.current = null;
     resetNegotiatedManifests();

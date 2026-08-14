@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -6,6 +7,9 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import type { RenderResult } from "@testing-library/react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { FileTreeWorkspacePicker } from "../file-tree-workspace-picker";
 
@@ -29,24 +33,22 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => listQuery.current,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: [
-      {
-        hostId: "host-1",
-        label: "MacBook",
-        kind: "local",
-        websocketUrl: null,
-        version: null,
-        transportDialability: "dialable",
-      },
-    ],
-  }),
-}));
-
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
-}));
+// This suite is about the WORKSPACE list, not the host list, so it mocks
+// `useHostOptions` at the boundary (the same pattern panel suites use for
+// `useHostScope`) rather than standing up the six hooks it composes. The host
+// section itself is now a collapsed `HostSwitcher` trigger (one host here, so
+// its nested popover renders no search box, just the one option row).
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" })],
+        activeHostId: "host-1",
+      }),
+  };
+});
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBinding,
@@ -124,11 +126,32 @@ function stubLoadedNonGitWorkspace(): void {
   };
 }
 
+// The host section now opts the window into the registry liveness poll, and
+// that hook stands on TanStack Query - so these boundary-mocked suites need a
+// client even though every query in them is disabled (signed-out auth store).
+// ONE client for the wrapper's lifetime: constructing it inside the render
+// would hand `rerender` a fresh client while existing observers stay attached
+// to the old one.
+const testQueryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, gcTime: 0 } },
+});
+function TestProviders(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={testQueryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderWithClient(ui: ReactElement): RenderResult {
+  return render(ui, { wrapper: TestProviders });
+}
+
 function openPicker(
   selectedPath: string | null,
   onSelectPath: (path: string) => void,
 ): void {
-  render(
+  renderWithClient(
     <FileTreeWorkspacePicker
       epicId="epic-1"
       hostId="host-1"
@@ -151,7 +174,7 @@ describe("<FileTreeWorkspacePicker />", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens a popover with the host section and flat workspace rows", () => {
+  it("opens a popover with the host section and workspace rows", () => {
     openPicker("/work/traycer", () => undefined);
 
     expect(refreshDirectory).toHaveBeenCalledTimes(1);
@@ -161,6 +184,10 @@ describe("<FileTreeWorkspacePicker />", () => {
     expect(
       screen.getByTestId("host-workspace-selector-host-section"),
     ).toBeDefined();
+    // The host section is now a collapsed switcher trigger, not a flat row
+    // list - its rows are one click away, not asserted here.
+    const hostTrigger = screen.getByTestId("settings-host-switcher");
+    expect(hostTrigger.getAttribute("aria-label")).toBe("Host: MacBook");
     const workspacesHeader = screen.getByText("Workspaces");
     const search = screen.getByRole("combobox");
     expect(screen.getAllByText("Workspaces")).toHaveLength(1);
@@ -175,7 +202,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("refreshes the host directory once per picker open", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"
@@ -201,7 +228,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("uses the git-diff picker trigger style without a changes badge", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"
@@ -217,7 +244,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   });
 
   it("left-truncates the selected workspace path in the trigger", () => {
-    render(
+    renderWithClient(
       <FileTreeWorkspacePicker
         epicId="epic-1"
         hostId="host-1"
@@ -359,9 +386,9 @@ describe("<FileTreeWorkspacePicker />", () => {
     const onSelectPath = vi.fn();
     openPicker("/work/traycer", onSelectPath);
 
-    fireEvent.click(
-      screen.getByTestId("host-workspace-selector-host-row-host-1"),
-    );
+    // The host row is one click behind the switcher trigger now.
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-1"));
 
     expect(selectById).toHaveBeenCalledWith("host-1");
     expect(onSelectPath).not.toHaveBeenCalled();

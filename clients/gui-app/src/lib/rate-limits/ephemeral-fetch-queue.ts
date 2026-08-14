@@ -280,7 +280,15 @@ export function enqueueRateLimitFetchForScope(
   );
 }
 
-function enqueueRateLimitFetchBatchForScope(
+/**
+ * The batch form of `enqueueRateLimitFetchForScope`, for a caller that already
+ * holds its own scope. The popover's "Refresh all" is the reason it is
+ * exported: it may be reading a host other than the app-wide default, and the
+ * unscoped `enqueueRateLimitFetchBatch` above resolves to whatever host the
+ * app shell configured - which would refresh one host while the panel that
+ * spun to say so displayed another.
+ */
+export function enqueueRateLimitFetchBatchForScope(
   scope: RateLimitQueueConfig | null,
   targets: ReadonlyArray<RateLimitQueueBatchTarget>,
   opts: { readonly force: boolean },
