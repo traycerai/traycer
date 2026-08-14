@@ -200,6 +200,10 @@ export function useEpicSnapshotLoaded(): boolean {
   return useEpicStore((s) => s.snapshotLoaded);
 }
 
+export function useEpicChatRecordListAuthoritative(): boolean {
+  return useEpicStore((s) => s.chatRecordListAuthoritative);
+}
+
 export function useEpicSnapshotFetchError(): SnapshotFetchError | null {
   return useEpicStore((s) => s.snapshotFetchError);
 }

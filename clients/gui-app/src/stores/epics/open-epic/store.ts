@@ -308,6 +308,13 @@ export interface OpenEpicState {
    */
   readonly chatRecords: ChatsSlice;
   /**
+   * Whether `epic.listChatRecords` has produced an answer this session.
+   * Missing rows are not deletion evidence until this is true. Transient
+   * failures leave it false; `E_HOST_UNSUPPORTED` marks it true because an
+   * older host's doc projection is its authoritative record table.
+   */
+  readonly chatRecordListAuthoritative: boolean;
+  /**
    * Chats the record plane RETRACTED while this session was open, and why.
    *
    * Written only by {@link OpenEpicState.applyChatRecordDelta}'s `remove` arm,
@@ -473,6 +480,8 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (records: readonly ChatRecordSummary[]) => void;
+  /** Marks the record list authoritative after success or unsupported. */
+  markChatRecordListAuthoritative: () => void;
   /**
    * Applies ONE `host.chatRecords.subscribe` delta - the push half of the same
    * record table {@link OpenEpicState.applyChatRecords} fills from the poll.
@@ -2713,6 +2722,7 @@ export function createOpenEpicStore(
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
           chatRecords: EMPTY_CHATS_SLICE,
+          chatRecordListAuthoritative: false,
           chatRetractions: EMPTY_CHAT_RETRACTIONS,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
           artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
@@ -2840,6 +2850,11 @@ export function createOpenEpicStore(
               chatRecordRows.set(recordKey(row.ownerUserId, row.chatId), row);
             }
             publishChatRecords(null);
+          },
+
+          markChatRecordListAuthoritative: () => {
+            if (disposed || get().chatRecordListAuthoritative) return;
+            set({ chatRecordListAuthoritative: true });
           },
 
           applyChatRecordDelta: (delta) => {
@@ -3101,6 +3116,10 @@ export function createOpenEpicStore(
     const nextUserId = state.profile?.userId ?? null;
     const prevUserId = prevState.profile?.userId ?? null;
     if (nextUserId === prevUserId || disposed) return;
+    // An answer scoped to the previous viewer cannot authorize absence for the
+    // next one. The viewer-keyed query will set this again when its own result
+    // is applied.
+    store.setState({ chatRecordListAuthoritative: false });
     // Re-derive the record slice from the RETAINED raw rows first. It is built
     // for one owner (a `byId` keyed on `chatId` can hold no more), so a user
     // switch has to rebuild it rather than merely re-filter downstream - a

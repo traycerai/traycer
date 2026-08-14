@@ -21,7 +21,10 @@ import {
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useHostClient } from "@/lib/host";
-import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  cloudChatListAuthorizesRecordSweep,
+  useCloudChatList,
+} from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import {
   PaneActivationFocusIntentContext,
@@ -37,6 +40,7 @@ import {
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
+  useEpicChatRecordListAuthoritative,
   useEpicChatRetraction,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
@@ -674,6 +678,7 @@ function usePublishedChatFallbackRef(args: {
   readonly ownerHostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly isCloudKnown: boolean;
+  readonly cloudListAuthorizesChatAbsence: boolean;
 } {
   const { activeTab, epicId, liveArtifact, activeHostId } = args;
   const isChat = activeTab.type === "chat";
@@ -777,6 +782,8 @@ function usePublishedChatFallbackRef(args: {
     ownerHostLabel: reachability.hostLabel,
     reason,
     isCloudKnown: cloudChatRecord !== null,
+    cloudListAuthorizesChatAbsence:
+      cloudChatListAuthorizesRecordSweep(cloudChats),
   };
 }
 
@@ -807,6 +814,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   );
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
+  const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
   const liveArtifact = useEpicArtifact(activeTab.id);
   // The projection feeding `liveArtifact` is served by the app-wide active
   // host; cross-host CHAT refs are exempt from its record gate (see
@@ -820,6 +828,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     ownerHostLabel,
     reason: deadTileBannerReason,
     isCloudKnown,
+    cloudListAuthorizesChatAbsence,
   } = usePublishedChatFallbackRef({
     activeTab,
     epicId,
@@ -860,6 +869,8 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           isPendingCreate,
           projectionHostId: activeHostIdForRecordGate,
           isCloudKnown,
+          cloudListAuthorizesChatAbsence,
+          recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
           retractedAsDeleted: chatRetraction === "deleted",
         });
   const isActive = role !== null && props.selected && props.globallyActive;
@@ -1052,11 +1063,23 @@ interface ComputeIsRemoteDeletedArgs {
    * substitution ref so the two never disagree).
    */
   readonly isCloudKnown: boolean;
+  /** Whether cloud-list absence is an answered fact, not pending/error. */
+  readonly cloudListAuthorizesChatAbsence: boolean;
+  /** Whether the local record list has answered for this epic session. */
+  readonly recordListAuthorizesChatAbsence: boolean;
   /**
    * The record plane said this chat was DELETED (a `remove` delta whose reason
    * is `deleted`), as opposed to merely absent from a projection.
    */
   readonly retractedAsDeleted: boolean;
+}
+
+function chatAbsenceIsAuthoritative(args: ComputeIsRemoteDeletedArgs): boolean {
+  return (
+    args.projectionHostId !== null &&
+    args.cloudListAuthorizesChatAbsence &&
+    args.recordListAuthorizesChatAbsence
+  );
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -1080,6 +1103,12 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   // exemption (a published copy outliving the chat is exactly the ghost row
   // the record plane's tombstones exist to retract).
   if (leafArtifact.type === "chat" && retractedAsDeleted) return true;
+  // Until the app-wide host binding and both record lists answer, absence
+  // cannot be classified. A disabled or failed query is not evidence that the
+  // bound chat disappeared.
+  if (leafArtifact.type === "chat" && !chatAbsenceIsAuthoritative(args)) {
+    return false;
+  }
   // A CHAT ref bound to another host is invisible to this device's
   // projection by construction - chat records are host-authoritative, so a
   // cross-host live tab (reachable owner opened from the unified sidebar)

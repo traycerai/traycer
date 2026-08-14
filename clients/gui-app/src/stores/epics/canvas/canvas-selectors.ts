@@ -140,6 +140,7 @@ export function useEpicArtifactRecords(
 export interface TileRefLivenessCheck {
   readonly hasLiveRecord: (id: string) => boolean;
   readonly isCloudKnown: (id: string) => boolean;
+  readonly recordListAuthorizesChatAbsence: boolean;
 }
 
 export function isTileRefRecordLive(
@@ -150,6 +151,9 @@ export function isTileRefRecordLive(
 ): boolean {
   const { hasLiveRecord, isCloudKnown } = liveness;
   if (!isTileRefRecordBacked(ref)) return true;
+  // With no projection host yet, a disabled record query cannot classify a
+  // chat as same-host or cross-host and therefore cannot prove it disappeared.
+  if (ref.type === "chat" && projectionHostId === null) return true;
   // A chat ref bound to ANOTHER host is not policed by this device's
   // projection. Chat records are HOST-AUTHORITATIVE (each host's own chat
   // registry), so a cross-host live tab - a reachable owner's chat opened
@@ -168,7 +172,9 @@ export function isTileRefRecordLive(
   }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
   if (hasLiveRecord(ref.id)) return true;
-  return ref.type === "chat" && isCloudKnown(ref.id);
+  if (ref.type !== "chat") return false;
+  if (isCloudKnown(ref.id)) return true;
+  return !liveness.recordListAuthorizesChatAbsence;
 }
 
 export function makeSelectEpicCanvas(tabId: string | undefined) {
