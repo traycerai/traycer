@@ -11,6 +11,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -74,7 +75,12 @@ function shell(over: Partial<ManagedCommand>): ManagedCommand {
   };
 }
 
-function tree(node: ReactNode): ReactNode {
+/**
+ * Every provider a card needs EXCEPT the chat transcript identity - kept
+ * apart so the "owner unknown" test can render without it, the way a
+ * transcript with no bound host does.
+ */
+function treeWithoutTranscript(node: ReactNode): ReactNode {
   return (
     <EpicSessionContext.Provider value={epicHandle}>
       <TabHostProvider hostId="host-1">
@@ -84,44 +90,57 @@ function tree(node: ReactNode): ReactNode {
   );
 }
 
+function tree(node: ReactNode): ReactNode {
+  return (
+    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: "host-1" }}>
+      {treeWithoutTranscript(node)}
+    </ChatTranscriptProvider>
+  );
+}
+
+function startCallElement(input: {
+  readonly variant: "card" | "row";
+  readonly correlated: boolean;
+}): ReactNode {
+  return (
+    <ToolSegment
+      id="tool-1"
+      toolName="mcp__traycer_a2a__traycer_run_shell"
+      inputSummary={COMMAND_LINE}
+      inputDetail={{ kind: "command", command: COMMAND_LINE }}
+      error={null}
+      agentMessageSend={null}
+      managedCommand={
+        input.correlated
+          ? {
+              event: "started",
+              commandId: COMMAND_ID,
+              description: "deploy watcher",
+              monitoring: true,
+              cwd: "/work/repo",
+            }
+          : null
+      }
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      progress={null}
+      backgroundOutput={null}
+      backgroundTask={false}
+      startedAt={10}
+      durationMs={null}
+      imageResults={[]}
+      variant={input.variant}
+      headerFindUnitId={null}
+    />
+  );
+}
+
 function renderCall(input: {
   readonly variant: "card" | "row";
   readonly correlated: boolean;
 }): void {
-  render(
-    tree(
-      <ToolSegment
-        id="tool-1"
-        toolName="mcp__traycer_a2a__traycer_run_shell"
-        inputSummary={COMMAND_LINE}
-        inputDetail={{ kind: "command", command: COMMAND_LINE }}
-        error={null}
-        agentMessageSend={null}
-        managedCommand={
-          input.correlated
-            ? {
-                event: "started",
-                commandId: COMMAND_ID,
-                description: "deploy watcher",
-                monitoring: true,
-                cwd: "/work/repo",
-              }
-            : null
-        }
-        isStreaming={false}
-        endState={null}
-        stopped={false}
-        progress={null}
-        backgroundOutput={null}
-        backgroundTask={false}
-        startedAt={10}
-        durationMs={null}
-        imageResults={[]}
-        variant={input.variant}
-        headerFindUnitId={null}
-      />,
-    ),
-  );
+  render(tree(startCallElement(input)));
 }
 
 beforeEach(() => {
@@ -202,12 +221,19 @@ describe("the run_shell start card", () => {
       ]);
     });
 
+    // Expand the body and read what actually rendered, rather than merely
+    // asserting the live re-spec's absence: the persisted call command has to
+    // be the thing shown, not just "nothing else is".
+    fireEvent.click(screen.getByText("Monitor · deploy watcher"));
+
+    expect(screen.getByText(COMMAND_LINE)).toBeTruthy();
     expect(screen.queryByText(/--since 1h/)).toBeNull();
   });
 
   it("keeps its identity and disables the door once the shell is deleted", () => {
     renderCall({ variant: "card", correlated: true });
     act(() => {
+      session.setConnectionStatus("open");
       session.setCommands([shell({})]);
     });
     expect(screen.getByText("Running")).toBeTruthy();
@@ -224,6 +250,68 @@ describe("the run_shell start card", () => {
     // Deleting a shell destroys its log, so the tab would open onto a banner.
     const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
     expect(door.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps the door open before the owning chat's set has arrived", () => {
+    // Pre-hydration: a session is installed (beforeEach) but its stream is
+    // still "connecting" and has sent no commands. Absence proves nothing
+    // until the owning stream is open, so the door must stay a live button -
+    // never the aria-disabled "deleted" marker.
+    renderCall({ variant: "card", correlated: true });
+
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door).toBe(screen.getByRole("button", { name: "Open in tab" }));
+    expect(door.getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.focus(door);
+    expect(screen.queryByText("This shell was deleted")).toBeNull();
+  });
+
+  it("disables the door with the exact deletion tooltip once the owning stream confirms absence", () => {
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommands([]);
+    });
+
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("aria-disabled")).toBe("true");
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay (see tooltip-hit-testing.test.tsx).
+    fireEvent.focus(door);
+    expect(screen.getByRole("tooltip").textContent).toBe(
+      "This shell was deleted",
+    );
+  });
+
+  it("shows live status and keeps the door open once the owning stream confirms the shell", () => {
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommands([shell({})]);
+    });
+
+    expect(screen.getByText("Running")).toBeTruthy();
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("claims no deletion when there is no chat transcript identity to attribute absence to", () => {
+    // The stream is open and the shell is absent - but with no chat identity
+    // in scope there is no OWNER for that absence to be authoritative for, so
+    // the card must not claim a deletion it cannot honestly attribute.
+    render(
+      treeWithoutTranscript(
+        startCallElement({ variant: "card", correlated: true }),
+      ),
+    );
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommands([]);
+    });
+
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("stays a generic tool row when the host never correlated the call", () => {

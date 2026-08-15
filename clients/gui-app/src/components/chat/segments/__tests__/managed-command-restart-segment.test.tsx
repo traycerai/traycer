@@ -15,6 +15,7 @@ import type {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -100,11 +101,13 @@ function restartPayload(
 
 function tree(node: ReactNode): ReactNode {
   return (
-    <EpicSessionContext.Provider value={epicHandle}>
-      <TabHostProvider hostId="host-1">
-        <TooltipProvider>{node}</TooltipProvider>
-      </TabHostProvider>
-    </EpicSessionContext.Provider>
+    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: "host-1" }}>
+      <EpicSessionContext.Provider value={epicHandle}>
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider>{node}</TooltipProvider>
+        </TabHostProvider>
+      </EpicSessionContext.Provider>
+    </ChatTranscriptProvider>
   );
 }
 
@@ -319,6 +322,27 @@ describe("the restart shell card", () => {
     expect(card.className).not.toContain("destructive");
   });
 
+  it("keeps the door open before the owning chat's set has arrived", () => {
+    // Pre-hydration: a session is installed (beforeEach) but its stream is
+    // still "connecting" and has sent no commands. Absence proves nothing
+    // until the owning stream is open, so the door must stay a live button.
+    renderCall({
+      variant: "card",
+      managedCommand: restartPayload({}),
+      id: "tool-1",
+      headerFindUnitId: null,
+    });
+
+    const door = screen.getByTestId(
+      `managed-command-restart-door-${COMMAND_ID}`,
+    );
+    expect(door).toBe(screen.getByRole("button", { name: "Open in tab" }));
+    expect(door.getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.focus(door);
+    expect(screen.queryByText("This shell was deleted")).toBeNull();
+  });
+
   it("keeps its title, delta and frozen outcome after the shell is deleted, disables the door, and still expands", () => {
     const restart = restartPayload({});
     const { container } = renderCall({
@@ -328,6 +352,9 @@ describe("the restart shell card", () => {
       headerFindUnitId: "restart-deleted",
     });
     act(() => {
+      // Only the owning stream saying OPEN makes the absence below
+      // authoritative - a still-connecting stream would leave the door open.
+      session.setConnectionStatus("open");
       session.setCommands([]);
     });
 
