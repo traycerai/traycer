@@ -1,6 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -334,11 +335,22 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
+            publishedAt: publishedCopyStamp(state.read),
           })}
         />
       </PublishedChatSourceProvider>
     </div>
   );
+}
+
+/**
+ * When the copy on screen was published, off the row the transcript read
+ * returned rather than any later cloud state - the reader's question is about
+ * the bytes in front of them. `null` on a row published by a build that
+ * predates the stamp.
+ */
+function publishedCopyStamp(read: CloudChatRead): number | null {
+  return read.chat?.publishedAt ?? null;
 }
 
 /**

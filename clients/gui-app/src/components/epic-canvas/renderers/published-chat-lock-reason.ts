@@ -3,8 +3,9 @@
  *
  * Their own module so `published-chat-tile.tsx` exports only its component: a
  * file that exports both components and non-components breaks fast refresh for
- * everything importing it. Pure string builders, moved unchanged.
+ * everything importing it. Pure string builders.
  */
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
  * The locked composer's reason, in one sentence a reader can act on.
@@ -14,6 +15,14 @@
  * is unreachable (so they do not read the lock as a permission problem), and
  * that this is the last published copy (so they do not assume they are seeing
  * a turn that finished after the host went away).
+ *
+ * The copy's AGE follows, when the row carries it: "Published <date>." is
+ * passive and unconditional - it never alarms, and it is the one fact about
+ * freshness this tile can state without cross-checking anything. It is
+ * deliberately NOT paired with a "behind"/"current" verdict: proving staleness
+ * would mean comparing a publication watermark against a record head that
+ * arrives by a different route, and this tile does not hold both in one unit.
+ * A date the reader can weigh for themselves is what the evidence supports.
  *
  * A fidelity gap is appended rather than shown as a separate banner: it is the
  * same sentence's subject - what you are looking at - and a second notice
@@ -32,13 +41,21 @@ export function publishedChatLockReason(input: {
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
+  /** When the copy on screen was published. `null` when the row omits it. */
+  readonly publishedAt: number | null;
 }): string {
-  const base = publishedCopySentence(input);
-  if (input.unreadableCount > 0) {
-    return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
+  const parts = [publishedCopySentence(input)];
+  if (input.publishedAt !== null) {
+    parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
   }
-  if (input.fidelityNotice !== null) return `${base} ${input.fidelityNotice}`;
-  return base;
+  // The pre-existing tail, unchanged: a fidelity gap is reported only when
+  // nothing unreadable already claimed the slot.
+  if (input.unreadableCount > 0) {
+    parts.push(unreadableItemsSentence(input.unreadableCount));
+  } else if (input.fidelityNotice !== null) {
+    parts.push(input.fidelityNotice);
+  }
+  return parts.join(" ");
 }
 
 /**
