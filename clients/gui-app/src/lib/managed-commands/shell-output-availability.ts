@@ -175,11 +175,17 @@ export function shellOutputStreamAvailability(
 }
 
 /**
- * The host closes an output stream for good under three names, and only one
- * of them means the shell is gone. `UNAUTHORIZED` is about the viewer;
- * anything else (`MANAGED_COMMAND_OUTPUT_FAILED`, an `INCOMPATIBLE` mirror
- * verdict) is about the stream. Routed by the code the host actually sent,
- * never by whether a snapshot happened to arrive first.
+ * The host closes an output stream for good under four names, and only one of
+ * them means the shell is gone. `UNAUTHORIZED` is about the viewer,
+ * `INCOMPATIBLE` about the host's age, and anything else
+ * (`MANAGED_COMMAND_OUTPUT_FAILED`) about the stream. Routed by the code the
+ * host actually sent, never by whether a snapshot happened to arrive first.
+ *
+ * `INCOMPATIBLE` is a capability verdict, not a failure: a REMOTE host's method
+ * support never resolves to `"unsupported"` client-side (it stays `"unknown"`
+ * and the subscription is closed with this code instead), so leaving it in the
+ * default branch offered a Retry button that could only ever fetch the same
+ * refusal. It reads as the permanent state the local case already reads as.
  */
 function classifyFatalClose(
   details: FatalErrorDetails,
@@ -189,6 +195,8 @@ function classifyFatalClose(
       return { kind: "gone", cause: "not-found" };
     case "UNAUTHORIZED":
       return { kind: "unauthorized" };
+    case "INCOMPATIBLE":
+      return { kind: "unsupported-host" };
     default:
       return { kind: "stream-error", message: details.reason };
   }

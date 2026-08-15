@@ -780,9 +780,10 @@ describe("managed-command output window", () => {
     // nothing to keep in view yet, and a top strip reads as chrome.
     expect(screen.queryByRole("log")).toBeNull();
     expect(screen.getByText("Connecting…")).not.toBeNull();
-    const connecting = screen.getByTestId(
-      "managed-command-output-availability",
-    );
+    // The panel announces itself: queried by its live-region role, not by a
+    // test hook. (`status` is not a name-from-content role, so the visible
+    // copy is asserted separately rather than as an accessible name.)
+    const connecting = screen.getByRole("status");
     expect(connecting.getAttribute("data-availability")).toBe("bootstrapping");
     expect(connecting.getAttribute("data-phase")).toBe("connecting");
 

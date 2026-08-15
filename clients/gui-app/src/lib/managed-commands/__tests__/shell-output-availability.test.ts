@@ -92,12 +92,16 @@ describe("shellOutputStreamAvailability", () => {
       shellOutputStreamAvailability(signals({ fatalClose: outputFailed })),
     ).toEqual({ kind: "stream-error", message: outputFailed.reason });
 
-    // Not one of the two named codes, same as the mirror's own INCOMPATIBLE
-    // verdict - a stream failure, never a claim about the shell.
-    const incompatible = fatal("INCOMPATIBLE");
+    // A remote host too old for the method never resolves to `"unsupported"`
+    // client-side - its support stays `"unknown"` and the subscription is
+    // closed with this code instead. So it must read as the same permanent
+    // capability state the local case does, not as a failure with a Retry
+    // button that can only fetch the same refusal.
     expect(
-      shellOutputStreamAvailability(signals({ fatalClose: incompatible })),
-    ).toEqual({ kind: "stream-error", message: incompatible.reason });
+      shellOutputStreamAvailability(
+        signals({ fatalClose: fatal("INCOMPATIBLE") }),
+      ),
+    ).toEqual({ kind: "unsupported-host" });
   });
 
   it("stays connecting until the opening snapshot lands, whatever the transport or line count say", () => {

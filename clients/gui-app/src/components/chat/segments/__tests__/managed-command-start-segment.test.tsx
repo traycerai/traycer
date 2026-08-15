@@ -252,7 +252,11 @@ describe("the run_shell start card", () => {
     // card claiming to know something it does not.
     expect(screen.queryByText("Running")).toBeNull();
     // Deleting a shell destroys its log, so the tab would open onto a banner.
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    // The disabled door still carries its reason in its own name, for a reader
+    // who cannot hover a tooltip.
+    const door = screen.getByRole("button", {
+      name: "Open in tab - this shell was deleted",
+    });
     expect(door.getAttribute("aria-disabled")).toBe("true");
   });
 
@@ -263,8 +267,7 @@ describe("the run_shell start card", () => {
     // never the aria-disabled "deleted" marker.
     renderCall({ variant: "card", correlated: true });
 
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
-    expect(door).toBe(screen.getByRole("button", { name: "Open in tab" }));
+    const door = screen.getByRole("button", { name: "Open in tab" });
     expect(door.getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.focus(door);
@@ -278,7 +281,9 @@ describe("the run_shell start card", () => {
       session.setCommands([]);
     });
 
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    const door = screen.getByRole("button", {
+      name: "Open in tab - this shell was deleted",
+    });
     expect(door.getAttribute("aria-disabled")).toBe("true");
     // Focus, not hover: Radix honours it immediately, where pointer-enter
     // sits behind the provider's open delay (see tooltip-hit-testing.test.tsx).
@@ -296,8 +301,11 @@ describe("the run_shell start card", () => {
     });
 
     expect(screen.getByText("Running")).toBeTruthy();
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
-    expect(door.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Open in tab" })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
   });
 
   it("claims no deletion while the stream is open but the snapshot has not landed", () => {
@@ -313,7 +321,7 @@ describe("the run_shell start card", () => {
 
     expect(
       screen
-        .getByTestId(`managed-command-start-door-${COMMAND_ID}`)
+        .getByRole("button", { name: "Open in tab" })
         .getAttribute("aria-disabled"),
     ).toBeNull();
 
@@ -323,9 +331,31 @@ describe("the run_shell start card", () => {
     });
     expect(
       screen
-        .getByTestId(`managed-command-start-door-${COMMAND_ID}`)
+        .getByRole("button", {
+          name: "Open in tab - this shell was deleted",
+        })
         .getAttribute("aria-disabled"),
     ).toBe("true");
+  });
+
+  it("keeps a proven deletion disabled across a reconnect blip", () => {
+    // The host has already said the shell is gone; a dropped socket does not
+    // un-delete it. Re-arming the door mid-reconnect would offer a tile onto a
+    // log that no longer exists.
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommands([]);
+    });
+    const deletedName = "Open in tab - this shell was deleted";
+    expect(screen.getByRole("button", { name: deletedName })).toBeTruthy();
+
+    act(() => {
+      session.setConnectionStatus("reconnecting");
+    });
+
+    expect(screen.getByRole("button", { name: deletedName })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open in tab" })).toBeNull();
   });
 
   it("keeps the deleted door focusable and says why in its own name", () => {
@@ -340,9 +370,6 @@ describe("the run_shell start card", () => {
     const door = screen.getByRole("button", {
       name: "Open in tab - this shell was deleted",
     });
-    expect(door).toBe(
-      screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`),
-    );
     door.focus();
     expect(document.activeElement).toBe(door);
   });
@@ -366,8 +393,13 @@ describe("the run_shell start card", () => {
     });
 
     expect(screen.queryByText("Running")).toBeNull();
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
-    expect(door.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Open in tab - this shell was deleted",
+        })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 
   it("claims no deletion when there is no chat transcript identity to attribute absence to", () => {
@@ -384,8 +416,11 @@ describe("the run_shell start card", () => {
       session.setCommands([]);
     });
 
-    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
-    expect(door.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Open in tab" })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
   });
 
   it("stays a generic tool row when the host never correlated the call", () => {

@@ -150,21 +150,30 @@ export function useManagedCommandOnHost(args: {
 /**
  * Whether a shell still exists, as far as this card can honestly tell.
  *
- * Read from the OWNER's session alone - the chat the transcript belongs to, on
- * the host that transcript is bound to. A clone carries the source
- * transcript's blocks, so a lookup by command id alone would find the SOURCE
- * host's shell and let a clone's card pulse it as live while its door opened a
- * tile on a host that cannot own it. Presence is a per-host fact, like every
- * other tab-bound one.
+ * Scoped to the transcript's bound HOST - never to the epic, and not to the
+ * owner chat alone. A cross-host clone carries the source transcript's blocks,
+ * so a lookup by command id alone would find the SOURCE host's shell and let
+ * the clone's card pulse it as live while its door opened a tile on a host
+ * that cannot own it. Within the host the chat does not narrow it further: a
+ * same-host fork copies those blocks too, and the shell they name is owned by
+ * the source chat while being perfectly alive and openable here.
  *
- * Absence is only a verdict once the owner's snapshot has landed: that is the
- * moment its command set is the host's word rather than a placeholder. An open
- * stream is not enough - a session opens with an empty set and stays that way
- * until the snapshot arrives, and a card that read that as "deleted" told every
- * reader, on every chat open, that every shell was gone for the first few
- * frames. Anything less is `unknown`, and a surface treats unknown as "still
- * there" - the door stays open, and the output window it opens has its own
- * honest account of what it finds.
+ * Absence is a verdict once the owner's snapshot has landed, and only then:
+ * that is the moment its command set is the host's word rather than a
+ * placeholder. A session opens with an empty set and stays that way until the
+ * snapshot arrives, and a card that read that as "deleted" told every reader,
+ * on every chat open, that every shell was gone for the first few frames.
+ *
+ * The live connection status is deliberately NOT part of it. A shell the host
+ * has already said nothing about does not come back when the socket blips, so
+ * demoting a proven deletion to `unknown` for the length of a reconnect would
+ * re-arm doors onto a shell whose log is gone. `snapshotLoaded` is the honest
+ * gate at both ends: it is false before the first word and false again after a
+ * re-subscribe, when the new stream has yet to speak.
+ *
+ * Anything less is `unknown`, and a surface treats unknown as "still there" -
+ * the door stays open, and the output window it opens has its own honest
+ * account of what it finds.
  */
 export type ManagedCommandPresence =
   | { readonly kind: "present"; readonly command: ManagedCommand }
@@ -177,22 +186,24 @@ export function useManagedCommandPresence(args: {
   readonly owner: { readonly chatId: string; readonly hostId: string } | null;
 }): ManagedCommandPresence {
   const { epicId, commandId, owner } = args;
+  // Presence is read across the owner's HOST, not just the owner chat: a
+  // same-host fork copies the source transcript's blocks verbatim, so a card
+  // there points at a shell the SOURCE chat owns. That shell is alive and its
+  // output opens fine on this host, and the fork's own set - which will never
+  // hold it - is no evidence about it.
+  const live = useManagedCommandOnHost({
+    epicId: epicId ?? "",
+    hostId: owner?.hostId ?? "",
+    commandId,
+  });
+  // ...but only the owner chat's session can date the evidence: its snapshot is
+  // the "the host has now spoken" mark this verdict waits for.
   const ownerStore = useChatSliceStore(
     epicId ?? "",
     owner?.chatId ?? "",
     owner?.hostId ?? "",
   );
-  // The record keeps its identity until the host sends a new set, so selecting
-  // it out of the array is stable enough to subscribe on.
-  const live = useStore(
-    ownerStore,
-    (state) =>
-      state.managedCommands.find((command) => command.id === commandId) ?? null,
-  );
-  const ownerAnswered = useStore(
-    ownerStore,
-    (state) => state.connectionStatus === "open" && state.snapshotLoaded,
-  );
+  const ownerAnswered = useStore(ownerStore, (state) => state.snapshotLoaded);
   if (epicId === null || owner === null) return { kind: "unknown" };
   if (live !== null) return { kind: "present", command: live };
   return ownerAnswered ? { kind: "absent" } : { kind: "unknown" };
