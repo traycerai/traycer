@@ -117,7 +117,7 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
     settleOpenDelay();
 
     const label = screen.getByTestId("owner-workspace-checked-at").textContent;
-    expect(label).toMatch(/^Workspace snapshot /u);
+    expect(label).toMatch(/^Workspace snapshot · /u);
     expect(label).not.toContain("Checked");
   });
 
