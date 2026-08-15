@@ -498,6 +498,36 @@ describe("global scope support", () => {
     handle.dispose();
   });
 
+  // A remote session that is already ready but does not advertise the method
+  // rejects the subscribe synchronously, and `LogicalStream.onStatusChange`
+  // REPLAYS that terminal close the moment a handler is installed — which the
+  // typed wrapper does in its constructor. So the verdict lands while
+  // `streamClientFactory` is still running. Nothing follows a terminal close to
+  // republish it, so losing it here strands the surface forever.
+  it("keeps a verdict published while the stream was still being constructed", () => {
+    const handle = createResourcesStore({
+      scope: { kind: "global" },
+      streamClientFactory: (_scope, callbacks) => {
+        callbacks.onScopeSupport("unsupported");
+        callbacks.onConnectionStatus("closed", {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "host does not advertise resources.subscribe",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        });
+        return { close: () => undefined };
+      },
+    });
+
+    expect(handle.store.getState().scopeSupport).toBe("unsupported");
+    expect(handle.store.getState().connectionStatus).toBe("closed");
+
+    handle.dispose();
+  });
+
   it("reads unknown with no global entry to ask", () => {
     expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("unknown");
   });

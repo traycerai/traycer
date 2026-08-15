@@ -207,6 +207,18 @@ export class ResourcesStreamClient {
       // is about this attempt, not about what the host can serve. Holding the
       // previous verdict is what keeps a terminal incompatible close STANDING:
       // it is disposed, so nothing follows it that could clear the notice.
+      //
+      // KNOWN LIMIT, and it is only this branch. A version verdict SELF-HEALS:
+      // that stream stays open, so a drop takes its negotiated version with it
+      // (see below), the verdict falls back to "unknown", and the resume
+      // re-negotiates - an upgraded host clears itself. A terminal close has no
+      // such path: an incompatible METHOD fails only the stream
+      // (`RemoteSession.openSubscription` calls `goFatal` and deletes the
+      // subscription) while the shared session stays healthy, so the transport
+      // identity never changes and nothing re-probes. A host that advertises no
+      // bridgeable `resources.subscribe` at all and is then upgraded in place
+      // keeps this verdict until the surface remounts. Narrow, and strictly
+      // better than the wait-forever it replaces, but not self-correcting.
       return isMethodIncompatibleClose(reason) ? "unsupported" : null;
     }
     // Otherwise the verdict is worth exactly what this session's negotiated
