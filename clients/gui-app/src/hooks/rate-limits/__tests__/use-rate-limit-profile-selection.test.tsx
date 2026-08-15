@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
@@ -19,6 +19,17 @@ import type {
   EpicCanvasState,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
+
+// The header rate-limit surfaces read per-harness profile memory scoped to
+// the APP-WIDE active host (`useReactiveActiveHostId()`), which is separate
+// from the focused chat tile's own bound host (`CHAT_TILE.hostId`/
+// `TERMINAL_TILE.hostId` below). No `<TabHostProvider>`/`<HostRuntimeProvider>`
+// is mounted in this suite, so left unmocked the active host resolves `null`
+// and every `recordProfileSelection` write below would land in a bucket this
+// hook never reads. Pin it to a fixed host id the test seeds memory under.
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-a",
+}));
 
 const CODEX_TERMINAL_SETTINGS: ChatRunSettings = {
   harnessId: "codex",
@@ -164,11 +175,12 @@ afterEach(() => {
 describe("rate-limit profile selection", () => {
   it("uses the focused chat profile for its harness and per-harness memory for the other glyph", () => {
     const memory = useComposerHarnessMemoryStore.getState();
-    memory.recordProfileSelection("codex", "personal-profile");
-    memory.recordProfileSelection("claude", "claude-work");
+    memory.recordProfileSelection("host-a", "codex", "personal-profile");
+    memory.recordProfileSelection("host-a", "claude", "claude-work");
     useComposerRunSettingsStore
       .getState()
       .setGlobalRunSettings(
+        "host-a",
         { ...CODEX_TERMINAL_SETTINGS, profileId: "personal-profile" },
         1,
       );
@@ -217,8 +229,8 @@ describe("rate-limit profile selection", () => {
 
   it("uses per-harness memory when the focused pane is not a chat and falls back to Terminal for stale ids", () => {
     const memory = useComposerHarnessMemoryStore.getState();
-    memory.recordProfileSelection("codex", "personal-profile");
-    memory.recordProfileSelection("claude", "removed-profile");
+    memory.recordProfileSelection("host-a", "codex", "personal-profile");
+    memory.recordProfileSelection("host-a", "claude", "removed-profile");
     registerChatSession()
       .store.getState()
       .setCurrentComposerSettings({

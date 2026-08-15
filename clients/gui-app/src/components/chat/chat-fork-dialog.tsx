@@ -174,7 +174,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
-    { hostClient: tabHostClient, tuiOnly: false },
+    { hostClient: tabHostClient, hostId: tabHostId, tuiOnly: false },
   );
   const modelResolved = useStore(
     toolbarStore,
@@ -234,6 +234,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagingKey,
       seedIntent: target.workspaceSeed.intent,
       fallbackWorkspace: target.workspaceSeed.workspace,
+      hostId,
     });
     const workspaceMode = deriveWorkspaceMode(
       launchWorkspace.folderCount,

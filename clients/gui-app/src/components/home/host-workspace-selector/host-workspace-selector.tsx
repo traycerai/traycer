@@ -384,6 +384,10 @@ export function ActiveHostWorkspaceControls(
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
+    // The scope-correct host: the FIXED host when pinned, else the app-wide
+    // active one - the same resolution every other host-derived read in this
+    // component uses, so the folder bucket can never disagree with them.
+    activeHostId,
   );
   const workspaceSource = useMemo<HomeWorkspaceSource>(
     () =>
@@ -407,6 +411,7 @@ export function ActiveHostWorkspaceControls(
   const resolved = useResolvedWorkspaceFolders(
     workspaceSource.source,
     activeHostClient,
+    activeHostId,
   );
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;

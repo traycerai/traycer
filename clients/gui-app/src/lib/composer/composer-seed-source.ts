@@ -9,11 +9,12 @@ import type { HostRpcRegistry } from "@/lib/host";
  *
  * - `none`: no seed at all (a brand-new node with nothing to carry forward).
  * - `fallback`: a picker default - a persisted fallback store
- *   (composer-run-settings-store's epic/global last-run, a landing draft's
- *   frozen snapshot, a settings-store default, ...) that is NEITHER
- *   host-scoped NOR kept in sync with live profile removals. Its `profileId`
- *   is validated against `client`'s live `providers.list` and corrected to
- *   ambient if the profile no longer exists - nobody is relying on it.
+ *   (composer-run-settings-store's per-host epic/global last-run, a landing
+ *   draft's frozen snapshot, a settings-store default, ...) that is not kept
+ *   in sync with live profile removals (and, for the draft snapshot and
+ *   settings default, not host-scoped either). Its `profileId` is validated
+ *   against `client`'s live `providers.list` and corrected to ambient if the
+ *   profile no longer exists - nobody is relying on it.
  * - `authoritative`: a real commitment - the surface's OWN settings (e.g. a
  *   chat's `chat.settings`). Its `profileId` is passed through unvalidated so
  *   `useProviderReauthGate` can detect and block a dead pin with a banner,

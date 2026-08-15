@@ -1,6 +1,9 @@
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   readStagedWorktreeIntent,
   type WorktreeStagingKey,
@@ -30,11 +33,15 @@ export function readSeededLaunchWorkspace(args: {
   readonly stagingKey: WorktreeStagingKey;
   readonly seedIntent: WorktreeIntent | null;
   readonly fallbackWorkspace: LandingDraftWorkspaceSnapshot | null;
+  /** The launch host: its per-host folder bucket backs the global fallback
+   *  (folder paths are host-local, so another host's bucket would launch
+   *  against paths that may not exist on the target machine). */
+  readonly hostId: string | null;
 }): SeededLaunchWorkspace {
   const workspace =
     readSeededWorkspaceSnapshot(args.stagingKey) ??
     args.fallbackWorkspace ??
-    readGlobalWorkspaceSnapshot();
+    readGlobalWorkspaceSnapshot(args.hostId);
   return {
     worktreeIntent: effectiveWorktreeIntent({
       workspace,
@@ -45,11 +52,16 @@ export function readSeededLaunchWorkspace(args: {
   };
 }
 
-function readGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  const workspace = useWorkspaceFoldersStore.getState();
+function readGlobalWorkspaceSnapshot(
+  hostId: string | null,
+): LandingDraftWorkspaceSnapshot {
+  const bucket = selectWorkspaceFoldersBucket(
+    useWorkspaceFoldersStore.getState(),
+    hostId,
+  );
   return {
-    folders: workspace.folders,
-    folderInfoByPath: workspace.folderInfoByPath,
-    primaryPath: workspace.primaryPath,
+    folders: bucket.folders,
+    folderInfoByPath: bucket.folderInfoByPath,
+    primaryPath: bucket.primaryPath,
   };
 }

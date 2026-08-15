@@ -82,6 +82,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      hostId: null,
     });
 
     const { result, rerender } = renderHook(
@@ -360,6 +361,7 @@ function mountSubmitHook(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    hostId: null,
   });
 
   return renderHook(() =>
