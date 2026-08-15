@@ -169,6 +169,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  SearchX,
   Trash2,
   Users,
 } from "lucide-react";
@@ -198,8 +199,9 @@ import {
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
 import {
   applyVisibleFilter,
-  collectWithAncestors,
   isFilteredTreeEmpty,
+  isTypeToFilterEditableTarget,
+  isTypeToFilterKey,
   mergeForcedExpanded,
   SidebarFilterVisibilityContext,
   SidebarSortContext,
@@ -223,6 +225,18 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
+import { ChatSearchHeaderInput } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-search";
+import {
+  chatSearchMatchIds,
+  expandMatchesToVisibleIds,
+  filterCloudChatsBySearch,
+  intersectMatchIds,
+} from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
+import {
+  usePanelHeaderSearchOpen,
+  usePanelHeaderSearchQuery,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
 import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
@@ -553,29 +567,35 @@ function usePanelRootIds(
 }
 
 /**
- * Visible-id set for active interface and ownership filters, expanded to
- * include ancestors so filtered nodes stay reachable. Every local agent is
- * owned by the viewer; collaborators' agents arrive only as cloud rows.
- * `null` when neither filter is active.
+ * Nodes the active interface and ownership filters MATCH - the raw matches, with
+ * no ancestor expansion. Every local agent is owned by the viewer;
+ * collaborators' agents arrive only as cloud rows. `null` when neither filter is
+ * active.
+ *
+ * Ancestor expansion is deliberately NOT done here. A path ancestor is a
+ * rendering concession, not a match, and expanding before combining with search
+ * would let one narrowing's concession satisfy the other's predicate - see
+ * {@link intersectMatchIds}.
  */
-function useChatVisibleIds(epicId: string): ReadonlySet<string> | null {
+function useChatFilterMatchIds(epicId: string): ReadonlySet<string> | null {
   const filter = useChatFilter(epicId);
   const liveRecords = useEpicArtifactRecords();
-  const tree = useEpicTreeIndex();
   return useMemo(() => {
     if (!isChatFilterActive(filter)) return null;
     const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
-    const matches = liveRecords.flatMap((record): string[] =>
-      includeLocal &&
-      CHATS_TREE_FILTER(record.type) &&
-      (filter.origin === CHAT_ORIGIN.All ||
-        (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
-        (filter.origin === CHAT_ORIGIN.Tui && record.type === "terminal-agent"))
-        ? [record.id]
-        : [],
+    return new Set(
+      liveRecords.flatMap((record): string[] =>
+        includeLocal &&
+        CHATS_TREE_FILTER(record.type) &&
+        (filter.origin === CHAT_ORIGIN.All ||
+          (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
+          (filter.origin === CHAT_ORIGIN.Tui &&
+            record.type === "terminal-agent"))
+          ? [record.id]
+          : [],
+      ),
     );
-    return collectWithAncestors(matches, tree.nodeById);
-  }, [filter, liveRecords, tree]);
+  }, [filter, liveRecords]);
 }
 
 /**
@@ -640,8 +660,74 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [sort],
   );
   const allRootIds = usePanelRootIds(panelId, comparator);
-  const filterVisibleIds = useChatVisibleIds(epicId);
+  const filterMatchIds = useChatFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
+  // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
+  // the selection actions before it ever considers the search row), so while
+  // selection mode is on there is no search input to type into, to read a query
+  // back from, or to press Escape in. Treating search as INACTIVE for that whole
+  // window is what keeps an already-open query from silently narrowing the very
+  // rows the user is trying to select, with no visible control to undo it.
+  const bulkSelection = useMaybeSidebarBulkSelection();
+  const selectionMode = bulkSelection?.selectionMode === true;
+  // Fuzzy title search is a SECOND narrowing layered on the filters, not a
+  // replacement for the tree. Reading the query as "" while search is closed
+  // keeps a half-typed query from narrowing a tree with no visible search box.
+  const searchOpen = usePanelHeaderSearchOpen(tabId, panelId);
+  const rawSearchQuery = usePanelHeaderSearchQuery(tabId, panelId);
+  const searchQuery = searchOpen && !selectionMode ? rawSearchQuery : "";
+  const searchActive = searchQuery.trim().length > 0;
+  const searchMatchIds = useMemo(
+    () =>
+      chatSearchMatchIds({
+        query: searchQuery,
+        nodeById: tree.nodeById,
+        treeFilter: CHATS_TREE_FILTER,
+      }),
+    [searchQuery, tree],
+  );
+  // Intersect the two narrowings as MATCHES, then expand ancestors once. Doing
+  // it the other way round lets a path-only ancestor of one narrowing satisfy
+  // the other's predicate - see `intersectMatchIds`.
+  const narrowedMatchIds = useMemo(
+    () => intersectMatchIds(filterMatchIds, searchMatchIds),
+    [filterMatchIds, searchMatchIds],
+  );
+  const narrowedVisibleIds = useMemo(
+    () => expandMatchesToVisibleIds(narrowedMatchIds, tree.nodeById),
+    [narrowedMatchIds, tree],
+  );
+  // Filter-only, still ancestor-expanded: the indicator query below reads this
+  // one so it does not refetch on every keystroke.
+  const filterVisibleIds = useMemo(
+    () => expandMatchesToVisibleIds(filterMatchIds, tree.nodeById),
+    [filterMatchIds, tree],
+  );
+  // Type-to-filter: a bare printable key anywhere in the focused tree enters
+  // search mode seeded with that character, so the keystroke that started the
+  // search is not swallowed by the focus handoff to the header input.
+  //
+  // Subscribed imperatively rather than via `onKeyDown` for the same reason the
+  // artifact panel does it: a JSX key handler on this region would oblige it to
+  // claim an interactive role it does not have (the tree inside owns
+  // `role="tree"`).
+  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  const treeRegionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const region = treeRegionRef.current;
+    if (region === null) return;
+    // Selection mode: the keystroke would open a search whose input the header
+    // has no room to render.
+    if (searchOpen || selectionMode) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (isTypeToFilterEditableTarget(event.target)) return;
+      if (!isTypeToFilterKey(event)) return;
+      event.preventDefault();
+      openSearch(tabId, panelId, event.key);
+    };
+    region.addEventListener("keydown", onKeyDown);
+    return () => region.removeEventListener("keydown", onKeyDown);
+  }, [tabId, panelId, searchOpen, selectionMode, openSearch]);
   const archiveVisibility = useChatArchiveVisibility(epicId);
   // The filter's own value, for the cloud rows. The local tree consumes it as
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
@@ -661,8 +747,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
   const filterRootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, filterVisibleIds),
-    [allRootIds, filterVisibleIds],
+    () => applyVisibleFilter(allRootIds, narrowedVisibleIds),
+    [allRootIds, narrowedVisibleIds],
   );
 
   // Indicators must be fetched BEFORE archive hiding is applied. Archived
@@ -733,8 +819,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [filterRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(filterVisibleIds, archiveHiddenIds, tree),
-    [filterVisibleIds, archiveHiddenIds, tree],
+    () => combineSidebarVisibleIds(narrowedVisibleIds, archiveHiddenIds, tree),
+    [narrowedVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
@@ -811,14 +897,21 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // No attention-reveal exception, unlike the local side's `alwaysVisibleIds`:
   // that exists so a row whose activity THIS device tracks cannot be archived
   // into invisibility, and a cloud row's indicators belong to its owner.
+  //
+  // Search narrows them for the same reason: a cloud row is an agent in this
+  // task's list, so a query that hides every local non-match while leaving
+  // remote rows in place would be the list contradicting its own search box.
   const filterMatchingCloudChats = useMemo(
     () =>
-      unfoldedCloudChats.filter(
-        (chat) =>
-          cloudRowMatchesOriginFilter(chatFilter) &&
-          cloudRowMatchesOwnershipFilter(chat, chatFilter),
+      filterCloudChatsBySearch(
+        unfoldedCloudChats.filter(
+          (chat) =>
+            cloudRowMatchesOriginFilter(chatFilter) &&
+            cloudRowMatchesOwnershipFilter(chat, chatFilter),
+        ),
+        searchQuery,
       ),
-    [unfoldedCloudChats, chatFilter],
+    [unfoldedCloudChats, chatFilter, searchQuery],
   );
   const visibleCloudChats = useMemo(
     () =>
@@ -871,11 +964,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Filter-only: see `combineSidebarVisibleIds`. Archive hiding must never
-  // reach here.
+  // Filter- and search-only: see `combineSidebarVisibleIds`. Archive hiding must
+  // never reach here. A search match nested under a collapsed parent forces that
+  // parent open for the same reason a filter match does.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, filterVisibleIds),
-    [ancestorIdsOfActive, filterVisibleIds],
+    () => mergeForcedExpanded(ancestorIdsOfActive, narrowedVisibleIds),
+    [ancestorIdsOfActive, narrowedVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -903,7 +997,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
     [expandedIds, toggleExpanded, ensureExpanded],
   );
-  const bulkSelection = useMaybeSidebarBulkSelection();
   const selectableIds = useMemo(
     () =>
       collectVisibleSidebarTreeIds({
@@ -928,7 +1021,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [resetSelection],
   );
-  const selectionMode = bulkSelection?.selectionMode ?? false;
   const selectedIds = bulkSelection?.selectedIds ?? EMPTY_SELECTED_IDS;
   const toggleSelection = bulkSelection?.toggleSelection ?? noopToggleSelection;
   const hasPendingRootRows =
@@ -941,7 +1033,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // matching remote row still rendered on screen.
   const filteredTreeEmpty =
     isFilteredTreeEmpty({
-      visibleIds: filterVisibleIds,
+      visibleIds: narrowedVisibleIds,
       rootIds: filterRootIds,
       localRootPending: renderedLocalRootPending,
       acknowledgedRootPending: renderedAcknowledgedRootPending,
@@ -961,6 +1053,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [rootIds, tree.nodeById, visibleCloudChats, comparator],
   );
+  // What the live region announces. Counted from the MATCHES, not `listEntries`:
+  // that list holds only local roots (nested matches render recursively beneath
+  // them, so two siblings under one parent would announce as one) and it counts
+  // path-only ancestors that matched nothing. Archive-hidden matches are
+  // excluded because they are not on screen to be counted.
+  const searchResultCount = useMemo(() => {
+    if (narrowedMatchIds === null) return 0;
+    let localMatches = 0;
+    for (const id of narrowedMatchIds) {
+      if (!archiveHiddenIds.has(id)) localMatches += 1;
+    }
+    return localMatches + visibleCloudChats.length;
+  }, [narrowedMatchIds, archiveHiddenIds, visibleCloudChats]);
   // "No agents yet" is now a statement about the TASK rather than this device,
   // so a task whose only agents live on an unreachable host is not empty - it
   // is a list of locked rows. That is the whole restoration.
@@ -1000,6 +1105,22 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         title="No agents yet."
         description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
+      />
+    );
+  } else if (filteredTreeEmpty && searchActive) {
+    // Search is the narrowing the user is actively driving, so it owns the
+    // empty state even when a filter is also on - blaming the filter chips for
+    // a query that matches nothing would send them to the wrong control.
+    panelContent = (
+      <SidebarPanelEmptyState
+        icon={SearchX}
+        title="No agents match your search."
+        description={
+          isChatFilterActive(chatFilter)
+            ? "The current filters may also be hiding matches."
+            : null
+        }
+        testId="epic-chat-sidebar-search-empty"
       />
     );
   } else if (filteredTreeEmpty) {
@@ -1120,9 +1241,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           <SidebarViewerContext.Provider value={isViewer}>
             <SidebarSortContext.Provider value={comparator}>
               <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                {searchOpen && !selectionMode ? (
+                  <ChatSearchHeaderInput
+                    tabId={tabId}
+                    resultCount={searchResultCount}
+                  />
+                ) : null}
                 <SidebarContent className="gap-0">
                   <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                    <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+                    <SidebarGroupContent
+                      ref={treeRegionRef}
+                      className="flex min-h-0 flex-1 flex-col"
+                      data-testid="epic-chat-tree-region"
+                    >
                       {panelContent}
                     </SidebarGroupContent>
                   </SidebarGroup>

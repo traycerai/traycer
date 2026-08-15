@@ -2,10 +2,14 @@
  * Active-query artifact search for the Epic sidebar's artifact panel.
  *
  * Search is a MODE, not a permanent fixture: there is no resting search box.
- * The panel header owns the affordance (a search icon, shown only once the
- * Epic has enough artifacts for filtering to beat scanning), and entering
- * search trades the header row for the input rather than stacking a second row
- * under it. Typing into the focused tree enters the mode too; Escape leaves it.
+ * The panel header's overflow menu owns the affordance, and entering search
+ * trades the header row for the input rather than stacking a second row under
+ * it. Typing into the focused tree enters the mode too; Escape leaves it.
+ *
+ * The affordance is UNCONDITIONAL. It used to be gated on the Epic holding at
+ * least ten artifacts, on the theory that scanning a short tree beats filtering
+ * it - but a control that silently disappears below a threshold reads as a
+ * removed feature, not as a considered default, so the gate is gone.
  *
  * While the mode is on, the input's DOM is portaled into the header's slot but
  * the component tree is unchanged - so the host query, same-scope retention,
@@ -63,8 +67,11 @@ import {
   STATUS_LABELS,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
+import {
+  isTypeToFilterEditableTarget,
+  isTypeToFilterKey,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
-import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import {
   usePanelHeaderSearchOpen,
   usePanelHeaderSearchQuery,
@@ -86,16 +93,6 @@ const EMPTY_HITS: ReadonlyArray<SearchArtifactHit> = Object.freeze([]);
 
 /** The panel whose header this search takes over while it is active. */
 const ARTIFACTS_PANEL_ID = "artifacts";
-
-/**
- * A bare printable character with no modifier - the type-to-filter trigger.
- * Excludes space so it can keep its tree-row activation meaning, and anything
- * carrying a modifier so shortcuts still reach their handlers.
- */
-function isTypeToFilterKey(event: globalThis.KeyboardEvent): boolean {
-  if (event.ctrlKey || event.metaKey || event.altKey) return false;
-  return event.key.length === 1 && event.key !== " ";
-}
 
 interface ArtifactPanelSearchShellProps {
   readonly epicId: string;
@@ -121,7 +118,6 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     ARTIFACTS_PANEL_ID,
   );
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
-  const searchAvailable = useArtifactSearchAvailable();
 
   const debouncedRaw = useDebouncedValue(searchQuery, 200);
   // Treat an empty/whitespace box as immediate: clearing or leaving search must
@@ -154,22 +150,16 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   useEffect(() => {
     const region = treeScrollRef.current;
     if (region === null) return;
-    if (!searchAvailable || searchOpen) return;
+    if (searchOpen) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("input, textarea, [contenteditable='true']") !==
-          null
-      ) {
-        return;
-      }
+      if (isTypeToFilterEditableTarget(event.target)) return;
       if (!isTypeToFilterKey(event)) return;
       event.preventDefault();
       openSearch(props.tabId, ARTIFACTS_PANEL_ID, event.key);
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [props.tabId, searchAvailable, searchOpen, openSearch]);
+  }, [props.tabId, searchOpen, openSearch]);
 
   return (
     // `overflow-hidden` overrides SidebarContent's default `overflow-auto` so the
