@@ -54,17 +54,6 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "PR-diff byte-path token fixtures (protocol 1.1 pathBytes sidecars). Each value is base64 of a NON-UTF-8 test FILENAME ('bad-\\xff.txt' / 'bad-\\xfe.txt'), which the generic-api-key rule matches only because the test constants are literally named *_TOKEN. A path token is a public wire identity, never a credential. Value-pinned and path-scoped to the two suites; fetch-depth: 0 means the PR scan sees the introducing commit on the in-flight branch, so this cannot wait for a rename."
-condition = "AND"
-regexTarget = "secret"
-paths = [
-  '''^clients/gui-app/src/components/epic-canvas/(?:pr/__tests__/pr-local-diff-body|renderers/__tests__/pr-diff-tile-find)\.test\.tsx$''',
-]
-regexes = [
-  '''^YmFkLf[84]udHh0$''',
-]
-
-[[allowlists]]
 description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
 condition = "AND"
 regexTarget = "secret"
