@@ -78,6 +78,30 @@ Every host RPC / AuthService / RunnerHost request goes through Query. No
 Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
 surfaces use `useReactiveActiveHostId()` / `useHostClient()`. Don't mix.
 
+Composers have a **target host** (tab host, fork dialog's fixed host, the
+new-conversation modal's host). `null` means "follow the app-wide default":
+that is the landing page, whose picker rebinds that default, and the
+new-conversation modal opened from the app-wide sidebar trigger, which sits
+outside every `TabHostProvider`. Every host RPC around a
+composer — mentions, slash commands, harness/model catalog, providers/profiles,
+pack retry, catalog refresh — and every surface that dispatches into the
+focused composer (the palette's Pick provider/model, via
+`FocusedComposerEntry.hostClient`) resolves through that host's client
+(`…ForClient` hooks / `runTargetHostId` → `useHostClientForHostId`). The
+default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
+`useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
+a palette with no focused composer) — never inside a composer surface.
+
+**Deliberate exception — dictation.** `useDictationAvailability` /
+`useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a
+host-pinned composer. They describe the person at the keyboard, not the run:
+`speech.dictate` streams live microphone audio and `speech.ensureModel`
+downloads an on-device model, so following a remote run target would ship a
+user's audio to a machine they only picked to execute a turn on, and drop a
+model download there. The cost is real and accepted — a composer pinned to
+host B gates its mic on the app-wide host's model, not B's. Scope a NEW
+composer RPC to the target host unless it is about the human's input devices.
+
 ## Routing
 
 - Auth/redirects → route `beforeLoad`; search → `validateSearch`; critical
