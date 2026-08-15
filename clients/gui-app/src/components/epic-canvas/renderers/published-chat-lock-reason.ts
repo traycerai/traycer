@@ -1,36 +1,11 @@
 /**
- * The locked-composer reason sentences for the two read-only chat copies, and
- * the one predicate that decides what they may claim.
+ * The locked-composer reason sentences for the two read-only chat copies.
  *
  * Their own module so `published-chat-tile.tsx` exports only its component: a
  * file that exports both components and non-components breaks fast refresh for
- * everything importing it. Everything here is pure.
+ * everything importing it. Pure string builders.
  */
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
-
-/**
- * Whether a published copy is PROVEN to be behind the chat it copies.
- *
- * `revision` is the owning host's durable record head; `throughRecordSeq` is
- * how far the head this copy was rendered from reaches. Both are positions in
- * the same per-chat log written by the same host, so the comparison is in one
- * unit and needs no clock - unlike the two timestamps on the same row, which
- * come from different clocks (server and host) and would report skew as
- * staleness.
- *
- * STRICTLY greater, so the window where a head lands before the metadata
- * projection covering the same records - leaving the copy transiently AHEAD -
- * reads as current rather than behind. Either side missing is no evidence at
- * all, never zero: absence means unproven, and the caller's answer to unproven
- * is to state the copy's age and claim nothing further.
- */
-export function isPublishedCopyBehind(input: {
-  readonly revision: number | null;
-  readonly throughRecordSeq: number | null;
-}): boolean {
-  if (input.revision === null || input.throughRecordSeq === null) return false;
-  return input.revision > input.throughRecordSeq;
-}
 
 /**
  * The locked composer's reason, in one sentence a reader can act on.
@@ -40,6 +15,14 @@ export function isPublishedCopyBehind(input: {
  * is unreachable (so they do not read the lock as a permission problem), and
  * that this is the last published copy (so they do not assume they are seeing
  * a turn that finished after the host went away).
+ *
+ * The copy's AGE follows, when the row carries it: "Published <date>." is
+ * passive and unconditional - it never alarms, and it is the one fact about
+ * freshness this tile can state without cross-checking anything. It is
+ * deliberately NOT paired with a "behind"/"current" verdict: proving staleness
+ * would mean comparing a publication watermark against a record head that
+ * arrives by a different route, and this tile does not hold both in one unit.
+ * A date the reader can weigh for themselves is what the evidence supports.
  *
  * A fidelity gap is appended rather than shown as a separate banner: it is the
  * same sentence's subject - what you are looking at - and a second notice
@@ -60,15 +43,11 @@ export function publishedChatLockReason(input: {
   readonly fidelityNotice: string | null;
   /** When the copy on screen was published. `null` when the row omits it. */
   readonly publishedAt: number | null;
-  /**
-   * Whether the owner's log is PROVEN to run past this copy. See
-   * {@link publishedCopyFreshnessSentence} for what "proven" buys.
-   */
-  readonly copyIsBehind: boolean;
 }): string {
   const parts = [publishedCopySentence(input)];
-  const freshness = publishedCopyFreshnessSentence(input);
-  if (freshness !== null) parts.push(freshness);
+  if (input.publishedAt !== null) {
+    parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
+  }
   // The pre-existing tail, unchanged: a fidelity gap is reported only when
   // nothing unreadable already claimed the slot.
   if (input.unreadableCount > 0) {
@@ -77,43 +56,6 @@ export function publishedChatLockReason(input: {
     parts.push(input.fidelityNotice);
   }
   return parts.join(" ");
-}
-
-/**
- * How fresh the copy on screen is - the two facts a reader of a published copy
- * can act on, and nothing else.
- *
- * AGE is passive and unconditional: it never alarms, and it is the only thing
- * that stays honest in the case the sequence check cannot see. If the owning
- * host stops syncing altogether, both sequences freeze together and the
- * comparison reads "not behind" while the copy ages - so the timestamp, which
- * cannot lie about itself, is what bounds that.
- *
- * BEHIND is shown ONLY on proof, and stays silent when healthy. There is no
- * hedged middle state on purpose: a "may be behind" that fires on suspicion
- * teaches readers to ignore the one that fires on evidence. The evidence is a
- * sequence comparison in a single unit (see `ChatProjection.revision`), never a
- * timestamp difference - `publishedAt` is stamped by the server and the record
- * head by the owning host, so treating their difference as lag would be
- * reading clock skew as staleness.
- *
- * Not quantified. The delta counts transcript RECORDS, which is not a unit a
- * reader thinks in - a single turn moves it by many - so a number here would
- * look precise while meaning little.
- */
-function publishedCopyFreshnessSentence(input: {
-  readonly publishedAt: number | null;
-  readonly copyIsBehind: boolean;
-}): string | null {
-  if (input.publishedAt === null) {
-    return input.copyIsBehind
-      ? "The agent has continued since this copy was published."
-      : null;
-  }
-  const published = `Published ${formatAbsoluteDateTime(input.publishedAt)}`;
-  return input.copyIsBehind
-    ? `${published}; the agent has continued since.`
-    : `${published}.`;
 }
 
 /**

@@ -20,7 +20,6 @@ function chat(
     hostId: "host-1",
     isTitleEditedByUser: false,
     archivedAt: null,
-    revision: null,
     settings: null,
   };
 }

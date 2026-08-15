@@ -1,11 +1,7 @@
-import {
-  useCallback,
-  useMemo,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+import { useMemo, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -13,9 +9,7 @@ import {
   useHostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
-import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 import { isCloudChatsUnsupported } from "@/lib/chats/cloud-chat-read-port";
@@ -29,7 +23,6 @@ import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
-  isPublishedCopyBehind,
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
@@ -188,11 +181,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.name,
   ]);
 
-  // ── Point-of-read freshness ──────────────────────────────────────────────
-  const { publishedAt: copyPublishedAt, throughRecordSeq: copyThroughSeq } =
-    publishedCopyStamp(state);
-  const copyIsBehind = usePublishedCopyIsBehind(node.chatId, copyThroughSeq);
-
   // The doc-replica fallback: enabled ONLY once the cloud read has settled
   // `unpublished` - every other refusal (needs-newer-app, ambiguous-identity,
   // corrupt) keeps its own notice, unmasked.
@@ -347,8 +335,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
-            publishedAt: copyPublishedAt,
-            copyIsBehind,
+            publishedAt: publishedCopyStamp(state.read),
           })}
         />
       </PublishedChatSourceProvider>
@@ -357,70 +344,13 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 }
 
 /**
- * Whether the owner's log is PROVEN to run past the copy on screen.
- *
- * The record row carries that host's durable head (own rows directly, foreign
- * rows through the inbox), and it is the one number comparable with the head's
- * `throughRecordSeq` - both are positions in the same per-chat log, written by
- * the same host.
- *
- * Reads the Epic store through the OPTIONAL handle, never `useEpicStore`. A
- * tile must not require an Epic session merely to decorate itself: the surface
- * host publishes nothing until `EpicSessionGate` opens (see `TileSurfaceSlot`),
- * so a throwing `useOpenEpicHandle` here would take the whole transcript down
- * for a sentence clause. No handle = no evidence = `false`.
- *
- * Collapsed to a boolean inside the snapshot rather than returning `revision`:
- * the owner advancing its log would otherwise re-render this transcript on
- * every turn to change a value nothing renders. As a boolean the tile repaints
- * once, when the answer actually flips.
+ * When the copy on screen was published, off the row the transcript read
+ * returned rather than any later cloud state - the reader's question is about
+ * the bytes in front of them. `null` on a row published by a build that
+ * predates the stamp.
  */
-function usePublishedCopyIsBehind(
-  chatId: string,
-  throughRecordSeq: number | null,
-): boolean {
-  const handle = useMaybeOpenEpicHandle();
-  const store = handle?.store ?? null;
-  const subscribe = useCallback(
-    (onChange: () => void): (() => void) =>
-      store === null ? NO_OP_UNSUBSCRIBE : store.subscribe(onChange),
-    [store],
-  );
-  const getSnapshot = useCallback((): boolean => {
-    if (store === null) return false;
-    const chats = store.getState().chats.byId;
-    if (!Object.hasOwn(chats, chatId)) return false;
-    return isPublishedCopyBehind({
-      revision: chats[chatId].revision,
-      throughRecordSeq,
-    });
-  }, [store, chatId, throughRecordSeq]);
-  // Safe as its own server snapshot: the value is a primitive, so identity
-  // cannot churn between renders.
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-function NO_OP_UNSUBSCRIBE(): void {}
-
-/**
- * What the copy on screen actually IS: the head it was rendered from, and when
- * that head was published.
- *
- * Read off the row the transcript read returned rather than from any later
- * cloud state, because the question a reader of a copy has is about the bytes
- * in front of them. Both are `null` until the read is `ready` - and
- * `throughRecordSeq` can be `null` even then, on a row published by a build
- * that predates it.
- */
-function publishedCopyStamp(state: CloudChatTranscriptState): {
-  readonly publishedAt: number | null;
-  readonly throughRecordSeq: number | null;
-} {
-  const row = state.kind === "ready" ? state.read.chat : null;
-  return {
-    publishedAt: row?.publishedAt ?? null,
-    throughRecordSeq: row?.throughRecordSeq ?? null,
-  };
+function publishedCopyStamp(read: CloudChatRead): number | null {
+  return read.chat?.publishedAt ?? null;
 }
 
 /**

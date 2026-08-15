@@ -135,7 +135,6 @@ function chat(
     hostId,
     isTitleEditedByUser: false,
     archivedAt: null,
-    revision: null,
     settings: null,
   };
 }

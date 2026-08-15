@@ -512,7 +512,6 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     hostId: "host-a",
     isTitleEditedByUser: false,
     archivedAt: null,
-    revision: null,
     settings,
   };
 }

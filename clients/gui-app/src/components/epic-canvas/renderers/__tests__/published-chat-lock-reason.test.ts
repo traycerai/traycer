@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isPublishedCopyBehind,
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
@@ -28,7 +27,6 @@ describe("publishedChatLockReason", () => {
       unreadableCount: 0,
       fidelityNotice: null,
       publishedAt: null,
-      copyIsBehind: false,
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
@@ -43,7 +41,6 @@ describe("publishedChatLockReason", () => {
       unreadableCount: 0,
       fidelityNotice: null,
       publishedAt: null,
-      copyIsBehind: false,
     });
 
     expect(reason).toContain("last published copy");
@@ -67,7 +64,6 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 0,
         fidelityNotice: null,
         publishedAt: null,
-        copyIsBehind: false,
       });
       expect(reason).toContain("which is offline");
       expect(reason).toContain("Sending resumes when that host is back.");
@@ -85,7 +81,6 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 2,
         fidelityNotice: null,
         publishedAt: null,
-        copyIsBehind: false,
       }),
     ).toContain("2 items need a newer version of Traycer to render.");
     expect(
@@ -96,13 +91,15 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
         publishedAt: null,
-        copyIsBehind: false,
       }),
     ).toContain("1 attachment is unavailable.");
   });
 
-  describe("freshness sentence", () => {
-    it("says nothing about freshness when there is no evidence either way", () => {
+  describe("published-at clause", () => {
+    it("says nothing about age when the row carries no publish time", () => {
+      // A row published by a build that predates the stamp, or a read that
+      // has not settled. Silence, not an invented date and not a "behind"
+      // guess - the clause states a fact or stays out of the sentence.
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
@@ -110,30 +107,15 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 0,
         fidelityNotice: null,
         publishedAt: null,
-        copyIsBehind: false,
       });
 
       expect(reason).not.toContain("Published");
-      expect(reason).not.toContain("continued");
     });
 
-    it("reports the agent has continued when behind is proven but there is no publish time", () => {
-      const reason = publishedChatLockReason({
-        ownerIsReachable: true,
-        ownerIsThisHost: true,
-        ownerLabel: "Ada's Mac",
-        unreadableCount: 0,
-        fidelityNotice: null,
-        publishedAt: null,
-        copyIsBehind: true,
-      });
-
-      expect(reason).toContain(
-        "The agent has continued since this copy was published.",
-      );
-    });
-
-    it("states when the copy was published when it is not behind", () => {
+    it("states when the copy was published, and claims nothing further", () => {
+      // The date is the whole of what this tile can honestly say about
+      // freshness: it holds no record head to compare against. Pinned so a
+      // future "behind"/"current" verdict has to earn its evidence first.
       const publishedAt = Date.parse("2026-08-14T12:00:00Z");
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
@@ -142,30 +124,13 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 0,
         fidelityNotice: null,
         publishedAt,
-        copyIsBehind: false,
       });
 
       expect(reason).toContain(
         `Published ${formatAbsoluteDateTime(publishedAt)}.`,
       );
       expect(reason).not.toContain("continued");
-    });
-
-    it("states when the copy was published and that the agent has continued since when behind", () => {
-      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
-      const reason = publishedChatLockReason({
-        ownerIsReachable: true,
-        ownerIsThisHost: true,
-        ownerLabel: "Ada's Mac",
-        unreadableCount: 0,
-        fidelityNotice: null,
-        publishedAt,
-        copyIsBehind: true,
-      });
-
-      expect(reason).toContain(
-        `Published ${formatAbsoluteDateTime(publishedAt)}; the agent has continued since.`,
-      );
+      expect(reason).not.toContain("behind");
     });
 
     it("sits before the unreadable-items tail", () => {
@@ -177,7 +142,6 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 2,
         fidelityNotice: null,
         publishedAt,
-        copyIsBehind: false,
       });
 
       const freshnessIndex = reason.indexOf(
@@ -199,7 +163,6 @@ describe("publishedChatLockReason", () => {
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
         publishedAt,
-        copyIsBehind: false,
       });
 
       const freshnessIndex = reason.indexOf(
@@ -238,51 +201,5 @@ describe("replicaChatLockReason", () => {
     expect(reason).not.toContain("lives on");
     expect(reason).not.toContain("Ada's Mac");
     expect(reason).not.toContain("from this device");
-  });
-});
-
-/**
- * The predicate behind the "has continued since" clause. It decides what the
- * footer is ALLOWED to claim, so its boundaries matter more than its happy
- * path: one-off in either direction is the difference between a silent healthy
- * copy, a correct staleness notice, and a false alarm during a reporting race.
- */
-describe("isPublishedCopyBehind", () => {
-  it("is behind when the owner's log runs past the copy", () => {
-    expect(isPublishedCopyBehind({ revision: 12, throughRecordSeq: 7 })).toBe(
-      true,
-    );
-  });
-
-  it("is not behind when the copy reaches exactly the owner's head", () => {
-    // The boundary: equal means the copy contains every record the owner has
-    // durably recorded, so a `>=` here would alarm on every healthy chat.
-    expect(isPublishedCopyBehind({ revision: 7, throughRecordSeq: 7 })).toBe(
-      false,
-    );
-  });
-
-  it("is not behind when the copy reads AHEAD of the record projection", () => {
-    // A head that lands before the metadata projection covering the same
-    // records. A race in the reporting, not staleness - and the one case a
-    // naive `!==` comparison would report as behind.
-    expect(isPublishedCopyBehind({ revision: 7, throughRecordSeq: 12 })).toBe(
-      false,
-    );
-  });
-
-  it("treats a missing sequence on either side as no evidence, not as zero", () => {
-    // `null` reaches here from a doc-projected chat (no record plane) and from
-    // a row published by a build that predates `throughRecordSeq`. Reading
-    // either as 0 would make every such copy look behind.
-    expect(isPublishedCopyBehind({ revision: null, throughRecordSeq: 7 })).toBe(
-      false,
-    );
-    expect(
-      isPublishedCopyBehind({ revision: 12, throughRecordSeq: null }),
-    ).toBe(false);
-    expect(
-      isPublishedCopyBehind({ revision: null, throughRecordSeq: null }),
-    ).toBe(false);
   });
 });

@@ -104,21 +104,6 @@ export interface ChatProjection {
    * read as active.
    */
   readonly archivedAt: number | null;
-  /**
-   * The owning host's durable record head for this chat - how far its local
-   * log reaches. `null` for projections that carry no record row (doc entries,
-   * the optimistic overlay), which is why every reader must treat absence as
-   * "no evidence" rather than zero.
-   *
-   * The only consumer is the published-copy freshness check, which compares it
-   * against the `throughRecordSeq` of the head a copy was rendered from. Both
-   * numbers are positions in the SAME per-chat log stamped by the SAME writer
-   * (the owning host), so the comparison is in one unit and needs no clock;
-   * they merely arrive by different routes (this one through the record
-   * projection, the other through the content publication). That asymmetry is
-   * what lets the gap open up, and the gap IS the publication backlog.
-   */
-  readonly revision: number | null;
 }
 
 export interface ChatsSlice {
