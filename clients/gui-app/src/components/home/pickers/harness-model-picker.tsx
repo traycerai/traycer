@@ -24,6 +24,7 @@ import {
   useGuiHarnessModelsQueryForClient,
   useGuiHarnessesQueryForClient,
   useRefreshHarnessCatalogForClient,
+  type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   buildAllHarnessModelRows,
@@ -457,12 +458,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     const commands = selectedCommandsQueryRef.current;
     if (harnessCatalogEntryNeedsRefresh(commands)) void commands.refetch();
   }, []);
-  // Explicit intent edges, and the ONLY thing that refreshes a model catalog
-  // outside the app-load fill and the manual refresh button - every model query
-  // is cache-only now (see `use-gui-harness-catalog.ts`). They refresh just the
-  // selected harness, so opening the picker no longer fans out across every
-  // provider, and only once its cached entry has aged past the window, so an
-  // open on warm cache costs nothing. That also makes them the intent-driven
+  // Explicit intent edges - the only thing that RE-fetches an already-warm
+  // model catalog outside the app-load fill and the manual refresh button
+  // (first loads belong to `selectedModelsQuery` / `activeProviderModelsQuery`
+  // below via TanStack's no-data path; every model query is cache-only, see
+  // `use-gui-harness-catalog.ts`). They refresh just the selected harness, so
+  // opening the picker never fans out across every provider, and only once
+  // its cached entry has aged past the window, so an open on warm cache costs
+  // nothing. That also makes them the intent-driven
   // prewarm for a reaped OpenCode-backed server (the age threshold is the
   // host's idle timeout) and the error-recovery path, now that a failed fetch
   // no longer self-heals on a background timer.
@@ -479,9 +482,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     runSelectedHarnessIntentRefetch();
   }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
   const catalogActive = activityEnabled && visibleOpen;
+  // `"cached-only"`: the open popover renders every rail entry's models from
+  // whatever the run-target host's cache slots hold (the prefetcher's app-load
+  // fill on the default host; nothing, at first, on a cold remote one). The
+  // fetches are the picker's own and per-harness - `selectedModelsQuery` above
+  // for the committed selection, `activeProviderModelsQuery` below for the
+  // browsed rail entry - so opening the picker on a cold host spawns at most
+  // the one provider the user is looking at, never the whole rail.
   const catalog = useGuiHarnessCatalogForClient(runTargetClient, null, {
     enabled: catalogActive,
     subscribed: catalogActive,
+    modelsFetch: "cached-only",
   });
   // In terminal mode the rail/rows only offer TUI-capable harnesses; GUI-only
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
@@ -561,10 +572,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileHostIsLocal,
     loginCapabilityByHarnessId.get(resolvedActiveProviderId),
   );
-  const activeProvider =
-    catalogHarnesses.find(
-      (harness) => harness.id === resolvedActiveProviderId,
-    ) ?? null;
+  const activeProvider = useBrowsedProviderCatalogEntry({
+    runTargetClient,
+    browsedProviderId: resolvedActiveProviderId,
+    catalogHarnesses,
+    catalogActive,
+  });
   // The profile browsed/selected within the active provider: prefer the
   // reducer's `activeProfileId` (a strip click or ⌘-digit rail switch) if it
   // belongs to this harness, else the committed selection's profile if it
@@ -1041,6 +1054,53 @@ function modelPickerSelectionSummary(
   if (label.length === 0) return null;
   if (reasoningLabel === null) return label;
   return `${label} · Thinking ${reasoningLabel}`;
+}
+
+/**
+ * The browsed rail provider's catalog entry, with its models fetched on the
+ * picker's own gate now that the catalog fan-out is `"cached-only"`: browsing
+ * a rail entry is the intent edge that loads - and, for an OpenCode-backed
+ * provider on a cold host, spawns - exactly that provider. Committing a
+ * selection points `selectedModelsQuery` at the same cache key, so the common
+ * browse==selection case dedupes into one fetch; a degraded-but-available
+ * entry (browsable without committing) is covered by THIS query alone.
+ * Unavailable entries stay unfetched (mirroring `selectedHarnessRefetchGate`:
+ * their panel shows a CTA instead of rows), and a warm slot is never
+ * re-pulled (`staleTime: Infinity`).
+ *
+ * `modelsLoading` is overridden from this hook's own query rather than read
+ * off the catalog entry: the catalog's flag mirrors the shared slot's fetch
+ * state, which only turns on once the query here actually dispatches - one
+ * painted frame after a cold browse. This observer knows it is ABOUT to fetch
+ * (`isPending` behind the gate covers that optimistic pre-dispatch render),
+ * so the panel's spinner shows from the first frame instead of flashing "No
+ * models available".
+ */
+function useBrowsedProviderCatalogEntry(input: {
+  readonly runTargetClient: HostClient<HostRpcRegistry> | null;
+  readonly browsedProviderId: ProviderId;
+  readonly catalogHarnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
+  readonly catalogActive: boolean;
+}): GuiHarnessCatalogEntry | null {
+  const entry =
+    input.catalogHarnesses.find(
+      (harness) => harness.id === input.browsedProviderId,
+    ) ?? null;
+  const fetchGate = input.catalogActive && entry?.available === true;
+  const modelsQuery = useGuiHarnessModelsQueryForClient(
+    input.runTargetClient,
+    input.browsedProviderId,
+    null,
+    {
+      enabled: fetchGate,
+      subscribed: input.catalogActive,
+    },
+  );
+  const modelsLoading = fetchGate && modelsQuery.isPending;
+  return useMemo(
+    () => (entry === null ? null : { ...entry, modelsLoading }),
+    [entry, modelsLoading],
+  );
 }
 
 // Restrict to harnesses whose adapter advertises a TUI surface. Runtime

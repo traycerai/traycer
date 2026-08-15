@@ -15,7 +15,10 @@ import {
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
-import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  useGuiHarnessCatalogForClient,
+  useGuiHarnessModelsWarmup,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useChatById } from "@/lib/epic-selectors";
@@ -50,15 +53,19 @@ interface TuiHeaderFields {
  * labels remain pure cache reads; managed terminal profiles can fetch the same
  * live provider list their launch/fork surfaces use. The catalog is NOT free,
  * though: the harnesses query carries a finite 15-min staleTime, so opening
- * the card on a stale availability query can refetch it, and if that surfaces a
- * newly-available harness with no cached model list the `listModels` fan-out
- * follows (which, per that module's header, can spawn the OpenCode server and
- * reset the host's idle-reap clock) - and both now land on the OWNER's host.
- * For an owner on the default host that is the steady state as before: the
- * app-load prefetcher filled the same host-id-keyed cache slot and models are
+ * the card on a stale availability query can refetch it - on the OWNER's host.
+ * Models are narrower still: the catalog read is `"cached-only"` (the
+ * all-harness `listModels` fan-out belongs to the app-load fill alone - per
+ * that module's header, a cold fan-out is one spawned provider server per rail
+ * entry), and the ONE harness this card actually labels - the subject tuple's -
+ * is warmed by a targeted `useGuiHarnessModelsWarmup`. For an owner on the
+ * default host that is the steady state as before: the app-load prefetcher
+ * filled the same host-id-keyed cache slot and models are
  * `staleTime: Infinity`, so an open renders straight from cache. For an owner
- * on another host the first open fetches that host's catalog cold - the same
- * self-sufficiency trade the provider-list read below already makes.
+ * on another host the first open fetches that host's harness list and the
+ * subject harness's models cold - the same self-sufficiency trade the
+ * provider-list read below already makes, at the cost of one provider rather
+ * than the fleet.
  */
 export function WorktreeOwnerSettingsHeader(props: {
   readonly ownerId: string;
@@ -107,10 +114,11 @@ export function WorktreeOwnerSettingsHeader(props: {
     ? runSettingsQuery.data.settings
     : localChatSettings;
   const hasSubject = ownerHasSubject(isChat, chatSettings, tuiAgent);
+  const subjectHarnessId = ownerHarnessId(chatSettings, tuiAgent);
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
-  // settings never mounts the catalog fan-out at all. Warm entries render from
-  // cache; see the component doc above for when an open can still refetch.
+  // settings never mounts the reads at all. Warm entries render from cache;
+  // see the component doc above for when an open can still refetch.
   //
   // Scoped to the OWNER's host like the provider-list read below: the tuple
   // being labeled is what THAT host runs, so a model only that host offers
@@ -120,8 +128,28 @@ export function WorktreeOwnerSettingsHeader(props: {
   // refetches. A `null` client (owner's host missing from the directory,
   // signed out) disables the read and labels fall back to raw slugs - honest,
   // rather than borrowing another host's catalog under this host's name.
+  //
+  // `"cached-only"` + a targeted warmup: this card labels exactly ONE model
+  // tuple, so the only model list it may pull on a cold host is the subject
+  // harness's own - an all-harness fan-out here would spawn every provider
+  // server on the owner's host to render one line of text.
   const catalog = useGuiHarnessCatalogForClient(hostClient, null, {
     enabled: hasSubject,
+    subscribed: hasSubject,
+    modelsFetch: "cached-only",
+  });
+  // Gated on the subject's availability, not just `hasSubject`: the tuple is
+  // persisted history, so it can name a harness the owner's host has since
+  // disabled or lost - and an availability-blind warmup would hit that
+  // provider's `listModels` on every card open (the fan-out and the picker
+  // both fetch available harnesses only). Until the harness list resolves,
+  // availability is unknown and the warmup simply waits; an unavailable
+  // subject keeps the documented raw-slug fallback.
+  const subjectAvailable =
+    catalog.harnesses.find((harness) => harness.id === subjectHarnessId)
+      ?.available === true;
+  useGuiHarnessModelsWarmup(hostClient, subjectHarnessId, {
+    enabled: hasSubject && subjectAvailable,
     subscribed: hasSubject,
   });
 
@@ -148,7 +176,7 @@ export function WorktreeOwnerSettingsHeader(props: {
     harnesses: catalog.harnesses,
     profiles: harnessProfiles(
       providersList.data?.providers ?? null,
-      ownerHarnessId(chatSettings, tuiAgent),
+      subjectHarnessId,
     ),
   });
   if (view === null) return null;
