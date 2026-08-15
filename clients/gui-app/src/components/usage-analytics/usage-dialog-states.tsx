@@ -20,7 +20,13 @@ export function UsageDialogSkeleton(
   props: UsageDialogSkeletonProps,
 ): ReactNode {
   return (
-    <div aria-busy="true" data-testid="usage-dialog-skeleton">
+    <div role="status" aria-busy="true" data-testid="usage-dialog-skeleton">
+      {/* The blocks below are decorative (`aria-hidden`), so without this the
+          state has no accessible name at all and a screen reader gets nothing
+          between open and data - the spinner this replaced at least carried a
+          "Loading usage…" label. `role="status"` announces it politely and
+          again when the data swaps it out. */}
+      <span className="sr-only">Loading usage…</span>
       <div
         aria-hidden
         className={cn(
@@ -94,6 +100,14 @@ function ChatUsageSkeletonBlocks(): ReactNode {
 export interface UsageDialogEmptyProps {
   readonly headline: string;
   readonly hint: string;
+  /**
+   * The plane/scope qualification that `UsageCostFigure` carries on a loaded
+   * read (`servedByScopeNote`) - `null` when the read needs none. Empty is a
+   * CLAIM ("no usage"), and a local-plane zero only means this machine has
+   * none, so the qualification has to survive the route into this state
+   * rather than disappearing with the figure that used to render it.
+   */
+  readonly note: string | null;
   /** Action chips below the hint (the epic dialog's wider-window offers) - `null` when the state has no action to offer. */
   readonly children: ReactNode;
 }
@@ -113,6 +127,14 @@ export function UsageDialogEmpty(props: UsageDialogEmptyProps): ReactNode {
         <p className="mx-auto max-w-[36ch] text-ui-sm text-muted-foreground">
           {props.hint}
         </p>
+        {props.note === null ? null : (
+          <p
+            className="mx-auto max-w-[36ch] text-ui-xs text-muted-foreground/80"
+            data-testid="usage-served-by-local-note"
+          >
+            {props.note}
+          </p>
+        )}
       </div>
       {props.children}
     </div>

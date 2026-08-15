@@ -19,7 +19,14 @@ import {
   type UsageChartGroupBy,
 } from "@/lib/usage-analytics/usage-chart-data";
 import { buildUsageHarnessSplitRows } from "@/lib/usage-analytics/usage-harness-split";
-import { buildUsageStatTiles } from "@/lib/usage-analytics/usage-stat-tiles";
+import {
+  buildUsageStatTiles,
+  usageCompletenessAbsentNote,
+} from "@/lib/usage-analytics/usage-stat-tiles";
+import {
+  servedByScopeNote,
+  type UsageServedBy,
+} from "@/lib/usage-analytics/cost-format";
 import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
 import { cn } from "@/lib/utils";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
@@ -182,6 +189,7 @@ function EpicUsageDialogBody(props: {
       <EpicUsageEmptyState
         windowDays={props.windowDays}
         onWindowDaysChange={props.onWindowDaysChange}
+        servedBy={query.data.servedBy}
       />
     );
   }
@@ -210,12 +218,17 @@ function widerWindows(
 function EpicUsageEmptyState(props: {
   readonly windowDays: UsageSummaryWindowDays;
   readonly onWindowDaysChange: (windowDays: UsageSummaryWindowDays) => void;
+  readonly servedBy: UsageServedBy;
 }): ReactNode {
   const wider = widerWindows(props.windowDays);
   return (
     <UsageDialogEmpty
       headline={`No usage in the last ${String(props.windowDays)} days`}
       hint="Chats and agents in this epic haven't recorded usage in this window."
+      // A local-plane read only speaks for THIS machine, so an unqualified
+      // "no usage" would overclaim - the same note `UsageCostFigure` carries
+      // on the loaded branch (`hostScopeName` null for the reason below).
+      note={servedByScopeNote(props.servedBy, null)}
     >
       {wider.length === 0 ? null : (
         <div className="flex flex-wrap justify-center gap-2">
@@ -268,6 +281,14 @@ function EpicUsageLoadedBody(props: {
   });
   const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
   const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
+  // Travels with the tiles wherever they render, per the note's own
+  // contract: turns that reported no usage at all still add a silent zero to
+  // every token sum in them, so unqualified tiles read as "this work used no
+  // cache" rather than "this work reported nothing". Settings pairs the two
+  // the same way - this dialog only needs it because it now shows tiles.
+  const absentNote = usageCompletenessAbsentNote(
+    summary.usageCompletenessBreakdown,
+  );
   const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
@@ -303,7 +324,17 @@ function EpicUsageLoadedBody(props: {
             showTokens={false}
           />
         </div>
-        <UsageStatTiles tiles={statTiles} variant="curated" />
+        <div className="flex flex-col gap-1.5">
+          <UsageStatTiles tiles={statTiles} variant="curated" />
+          {absentNote === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground/80"
+              data-testid="usage-stat-tiles-absent-note"
+            >
+              {absentNote}
+            </p>
+          )}
+        </div>
       </div>
       <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

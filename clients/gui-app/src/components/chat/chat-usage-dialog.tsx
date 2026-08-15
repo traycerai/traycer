@@ -15,6 +15,7 @@ import {
   useUsageSummaryForClient,
   type UsageSummaryResponse,
 } from "@/hooks/usage-analytics/use-usage-summary-query";
+import { servedByScopeNote } from "@/lib/usage-analytics/cost-format";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageTurnDrilldown } from "@/components/usage-analytics/usage-turn-drilldown";
 import {
@@ -153,6 +154,9 @@ function ChatUsageDialogContent(props: {
       <UsageDialogEmpty
         headline="No usage recorded"
         hint="Turns in this chat haven't reported any usage yet."
+        // Same qualification the loaded branch's figure carries: on the local
+        // plane "no usage" is a claim about this machine only.
+        note={servedByScopeNote(servedBy, null)}
       >
         {null}
       </UsageDialogEmpty>

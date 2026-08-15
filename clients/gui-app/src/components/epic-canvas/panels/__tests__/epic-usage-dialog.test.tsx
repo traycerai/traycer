@@ -373,6 +373,54 @@ describe("<EpicUsageDialog />", () => {
     expect(screen.queryByTestId("usage-empty-window-90")).toBeNull();
   });
 
+  it("qualifies an empty local-plane read instead of claiming an account-wide zero", async () => {
+    renderDialog((_request: UsageSummaryRequest): UsageSummaryResponse => {
+      const base = usageSummaryResponse();
+      return {
+        ...base,
+        // A local read speaks for THIS machine only, so its zero is not the
+        // account's zero. The loaded branch carries that qualification on
+        // the cost figure; routing to the empty state must not drop it.
+        servedBy: "local",
+        summary: {
+          ...base.summary,
+          totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+          buckets: [],
+          chatBuckets: [],
+        },
+      };
+    });
+
+    await screen.findByTestId("usage-dialog-empty");
+    expect(
+      screen.getByTestId("usage-served-by-local-note").textContent,
+    ).toContain("This machine's usage only");
+  });
+
+  it("keeps the absent-usage disclaimer with the stat tiles", async () => {
+    renderDialog((_request: UsageSummaryRequest): UsageSummaryResponse => {
+      const base = usageSummaryResponse();
+      return {
+        ...base,
+        summary: {
+          ...base.summary,
+          // Turns that reported nothing add a silent zero to every token sum
+          // in the tiles, so the tiles cannot stand unqualified.
+          usageCompletenessBreakdown: { measured: 1, partial: 0, absent: 2 },
+        },
+      };
+    });
+
+    const note = await screen.findByTestId("usage-stat-tiles-absent-note");
+    expect(note.textContent).toContain("2 turns");
+    // Paired with the tiles themselves, the way Settings pairs them.
+    expect(
+      within(screen.getByTestId("epic-usage-hero")).getByTestId(
+        "usage-stat-tiles-absent-note",
+      ),
+    ).toBeTruthy();
+  });
+
   it("renders the layout skeleton inside the constant frame while loading", async () => {
     renderDialog(usageSummaryResponse);
 
@@ -380,7 +428,12 @@ describe("<EpicUsageDialog />", () => {
     // the layout-mirroring skeleton, never a spinner line, while the frame
     // (window picker, footer) is already in place around it.
     expect(screen.getByTestId("usage-dialog-skeleton")).toBeTruthy();
-    expect(screen.queryByText("Loading usage…")).toBeNull();
+    // The skeleton blocks are `aria-hidden`, so the state carries its name
+    // in an sr-only status instead - visually a skeleton, audibly still
+    // "Loading usage…", which the spinner line it replaced used to say.
+    const status = screen.getByRole("status");
+    expect(status.getAttribute("data-testid")).toBe("usage-dialog-skeleton");
+    expect(screen.getByText("Loading usage…").className).toContain("sr-only");
     expect(screen.getByTestId("usage-window-7")).toBeTruthy();
     expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
 
