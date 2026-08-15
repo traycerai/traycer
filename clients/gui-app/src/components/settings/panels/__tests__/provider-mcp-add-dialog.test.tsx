@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -190,7 +191,7 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(within(dialog).getByLabelText("Env var 1 value")).toBeDefined();
   });
 
-  it("serializes every header row, not just the first", () => {
+  it("serializes every header row, not just the first", async () => {
     renderDialog({
       capabilities: REMOTE_HTTP_SSE_CAPS,
       providerId: "amp",
@@ -224,7 +225,7 @@ describe("<ProviderMcpAddDialog />", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(mcpMocks.mutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     const call = mcpMocks.mutate.mock.calls[0][0];
     expect(expectRemoteAuth(call)).toEqual({
       type: "header",
@@ -234,7 +235,7 @@ describe("<ProviderMcpAddDialog />", () => {
     });
   });
 
-  it("codex env auth sends only an env-var name reference, never a value field", () => {
+  it("codex env auth sends only an env-var name reference, never a value field", async () => {
     renderDialog({
       capabilities: CODEX_CAPS,
       providerId: "codex",
@@ -264,7 +265,7 @@ describe("<ProviderMcpAddDialog />", () => {
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(mcpMocks.mutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     const call = mcpMocks.mutate.mock.calls[0][0];
     expect(expectRemoteAuth(call)).toEqual({
       type: "env",
@@ -332,7 +333,7 @@ describe("<ProviderMcpAddDialog />", () => {
     ).toBeDefined();
   });
 
-  it("lets the user pick SSE instead of always forcing HTTP", () => {
+  it("lets the user pick SSE instead of always forcing HTTP", async () => {
     renderDialog({
       capabilities: REMOTE_HTTP_SSE_CAPS,
       providerId: "amp",
@@ -351,9 +352,29 @@ describe("<ProviderMcpAddDialog />", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "SSE" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(mcpMocks.mutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     const call = mcpMocks.mutate.mock.calls[0][0];
     expect(expectAddTransport(call).type).toBe("sse");
+  });
+
+  it("shows unsupported remote transports as disabled with an explanation", async () => {
+    renderDialog({
+      capabilities: CODEX_CAPS,
+      providerId: "codex",
+      mode: "add",
+      initialServer: null,
+      existingNames: [],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    const http = within(dialog).getByRole("button", { name: "HTTP" });
+    const sse = within(dialog).getByRole("button", { name: "SSE" });
+    expect(http.getAttribute("aria-pressed")).toBe("true");
+    expect(sse.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.focus(sse);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "SSE isn’t supported by this provider.",
+    );
   });
 
   it("does not offer a transport-kind chip when only stdio is supported", () => {
@@ -444,6 +465,44 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(nameInput.value).toBe("GITHUB_TOKEN");
   });
 
+  it("enables Save changes only after an edit becomes dirty", async () => {
+    const server: ProviderMcpServer = {
+      name: "srv",
+      enabled: true,
+      transport: {
+        type: "http",
+        url: "https://mcp.example.com",
+        auth: null,
+      },
+      status: "connected",
+      statusSource: "probe",
+      statusDetail: null,
+      tools: [],
+      discoveryPending: false,
+      instructions: null,
+      configOnly: false,
+      stdioDegraded: false,
+    };
+    renderDialog({
+      capabilities: REMOTE_HTTP_SSE_CAPS,
+      providerId: "amp",
+      mode: "edit",
+      initialServer: server,
+      existingNames: ["srv"],
+    });
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    const save = within(dialog).getByRole<HTMLButtonElement>("button", {
+      name: "Save changes",
+    });
+    expect(save.disabled).toBe(true);
+
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Server URL" }),
+      { target: { value: "https://mcp.example.com/v2" } },
+    );
+    await waitFor(() => expect(save.disabled).toBe(false));
+  });
+
   it("gates the 'Add header' affordance off capability.supportsMultipleHeaders (no row silently dropped)", () => {
     renderDialog({
       capabilities: SINGLE_HEADER_CAPS,
@@ -479,7 +538,7 @@ describe("<ProviderMcpAddDialog />", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("serializes every stdio env row via a masked per-row editor, not a cleartext textarea", () => {
+  it("serializes every stdio env row via a masked per-row editor, not a cleartext textarea", async () => {
     renderDialog({
       capabilities: STDIO_ONLY_CAPS,
       providerId: "amp",
@@ -514,7 +573,7 @@ describe("<ProviderMcpAddDialog />", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add server" }));
 
-    expect(mcpMocks.mutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mcpMocks.mutate).toHaveBeenCalledTimes(1));
     const call = mcpMocks.mutate.mock.calls[0][0];
     const transport = expectAddTransport(call);
     if (transport.type !== "stdio") {
@@ -526,7 +585,7 @@ describe("<ProviderMcpAddDialog />", () => {
     ]);
   });
 
-  it("caps dialog height and scrolls the body instead of overflowing", () => {
+  it("grows downward from a stable top edge and scrolls before overflowing", () => {
     renderDialog({
       capabilities: REMOTE_HTTP_SSE_CAPS,
       providerId: "amp",
@@ -535,7 +594,9 @@ describe("<ProviderMcpAddDialog />", () => {
       existingNames: [],
     });
     const dialog = screen.getByTestId("provider-mcp-add-dialog");
-    expect(dialog.className).toContain("max-h-[min(85vh,42rem)]");
+    expect(dialog.className.split(" ")).toContain("top-[15vh]");
+    expect(dialog.className.split(" ")).toContain("translate-y-0");
+    expect(dialog.className.split(" ")).toContain("max-h-[min(85vh,42rem)]");
     expect(dialog.className).toContain("overflow-hidden");
   });
 

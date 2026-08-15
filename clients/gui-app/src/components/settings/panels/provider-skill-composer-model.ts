@@ -1,8 +1,11 @@
 import type {
   ProviderNativeScope,
   ProviderSkill,
+  ProviderSkillInspectCandidate,
   ProviderSkillsCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
+import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { parseSkillMarkdown } from "./provider-skill-markdown";
 
 /**
  * Pure decision layer for the Skills authoring surface.
@@ -29,7 +32,37 @@ export const SKILL_DESCRIPTION_SOFT_LIMIT = 1024;
 /** The shared, cross-provider skills directory, relative to its root. */
 const SHARED_SKILLS_RELATIVE = ".agents/skills";
 
-export type SkillComposerTab = "write" | "import";
+export type SkillComposerStep = "import" | "picker" | "write";
+
+/**
+ * Prefill payload for opening the composer on an existing skill.
+ * Submit hashes `baseline` into the edit mutation's compare-and-swap guard.
+ */
+export type SkillEditTarget = {
+  readonly path: string;
+  readonly name: string;
+  readonly description: string;
+  readonly body: string;
+  readonly baseline: string;
+};
+
+export function skillEditPrefill(
+  skill: ProviderSkill,
+  raw: string,
+): SkillEditTarget {
+  const parsed = parseSkillMarkdown(raw);
+  return {
+    path: skill.path,
+    name:
+      parsed.name !== null && parsed.name.length > 0 ? parsed.name : skill.name,
+    description:
+      parsed.description !== null
+        ? parsed.description
+        : (skill.description ?? ""),
+    body: parsed.body,
+    baseline: raw,
+  };
+}
 
 /**
  * Which authoring paths this provider actually offers for the selected scope.
@@ -38,12 +71,19 @@ export type SkillComposerTab = "write" | "import";
  * for project must not light a button while the user is viewing Global (and
  * vice versa). The tab sends mutations at the same scope it lists, so testing
  * the scope that is actually invoked is the point.
+ *
+ * `canInspect` is the skew gate: absent `actionScopes.inspect` (old host)
+ * means the composer keeps today's single-shot import. Do not default the
+ * capability to `[]` at parse time - absent is the signal - but treat a
+ * missing key as no scopes here, matching host helpers.
  */
 export interface SkillAuthoring {
-  /** Author a new SKILL.md from the composer's Write tab. */
+  /** Author a new SKILL.md from the composer's write form. */
   readonly canWrite: boolean;
-  /** Pull one in from a git URL or a local folder. */
+  /** Pull skills in from a source string. */
   readonly canImport: boolean;
+  /** Host advertises inspect for this scope, so the picker path is live. */
+  readonly canInspect: boolean;
   /** Either path is open, so the composer has something to do. */
   readonly canAuthor: boolean;
 }
@@ -54,21 +94,34 @@ export function skillAuthoring(
 ): SkillAuthoring {
   const canWrite = caps.actionScopes.create.includes(effectiveScope);
   const canImport = caps.actionScopes.import.includes(effectiveScope);
-  return { canWrite, canImport, canAuthor: canWrite || canImport };
+  const inspectScopes = caps.actionScopes.inspect ?? [];
+  const canInspect = inspectScopes.includes(effectiveScope);
+  return {
+    canWrite,
+    canImport,
+    canInspect,
+    canAuthor: canWrite || canImport,
+  };
 }
 
 /**
- * Which tabs the composer shows, and which one opens first.
+ * Whether the "<Provider> only" radio is an honest choice for this listing.
  *
- * Empty when there is nothing to choose: a provider that can only import gets
- * the import form with no tab strip above it, rather than a one-tab strip that
- * looks like a control but selects nothing.
+ * Keyed on advertised create/import scopes, not on existing rows: a project
+ * listing with zero provider-sourced skills must still be able to create the
+ * first one. The host already advertises those verbs only where a native
+ * destination exists. Destination copy falls back to a generic label when
+ * no row has revealed the provider root yet.
  */
-export function skillComposerTabs(
-  authoring: SkillAuthoring,
-): readonly SkillComposerTab[] {
-  if (authoring.canWrite && authoring.canImport) return ["write", "import"];
-  return [];
+export function skillProviderScopeVisible(args: {
+  readonly effectiveScope: ProviderNativeScope;
+  readonly createScopes: readonly ProviderNativeScope[];
+  readonly importScopes: readonly ProviderNativeScope[];
+}): boolean {
+  return (
+    args.createScopes.includes(args.effectiveScope) ||
+    args.importScopes.includes(args.effectiveScope)
+  );
 }
 
 export interface SkillDestination {
@@ -202,14 +255,21 @@ export function skillNameError(name: string): string | null {
  * whole surface was rewritten to remove.
  */
 export function skillSubmitBlocker(args: {
-  readonly tab: SkillComposerTab;
+  readonly step: SkillComposerStep;
   readonly name: string;
   readonly description: string;
   readonly source: string;
+  readonly selectedNames: readonly string[];
 }): string | null {
-  if (args.tab === "import") {
+  if (args.step === "import") {
     if (args.source.trim().length === 0) {
-      return "Enter a git URL or a folder path to import from.";
+      return "Enter a source to import from.";
+    }
+    return null;
+  }
+  if (args.step === "picker") {
+    if (args.selectedNames.length === 0) {
+      return "Select at least one skill to install.";
     }
     return null;
   }
@@ -220,6 +280,92 @@ export function skillSubmitBlocker(args: {
     return "Add a description — the agent reads it to decide when to use this skill.";
   }
   return null;
+}
+
+/**
+ * Names requested via `-s` / `--skill` on a pasted `npx skills add` command.
+ *
+ * Full source parsing (wrapper strip, owner/repo, tree URL) is host-side.
+ * The GUI only needs these flags to preselect picker rows.
+ */
+export function skillNamesFromSourceFlags(source: string): readonly string[] {
+  // Built per call: a module-level `/g` regex would leak `lastIndex` across
+  // invocations and skip later flags.
+  const pattern = /(?:^|\s)(?:-s|--skill)(?:\s+|=)(?<name>[^\s,]+)/gi;
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const match of source.matchAll(pattern)) {
+    const name = match.groups?.name;
+    if (name === undefined || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+/** Intersection of inspect candidates with `-s` / `--skill` flags. */
+export function preselectSkillNames(
+  candidates: readonly ProviderSkillInspectCandidate[],
+  flagged: readonly string[],
+): readonly string[] {
+  if (flagged.length === 0) return [];
+  const wanted = new Set(flagged);
+  const selected: string[] = [];
+  for (const candidate of candidates) {
+    if (wanted.has(candidate.name)) selected.push(candidate.name);
+  }
+  return selected;
+}
+
+/**
+ * Host maps `NativeWriteError("external_drift")` onto the wire for both
+ * inspect SHA drift (expired-token re-clone moved) and update-from-source
+ * when canon hash ≠ recorded `installedHash`. The GUI preserves that as
+ * `ProviderNativeRpcError.nativeCode`. The verb is what distinguishes them.
+ */
+export function isExternalDriftError(error: unknown): boolean {
+  return (
+    isProviderNativeRpcError(error) && error.nativeCode === "external_drift"
+  );
+}
+
+/** Fetched source matches what is already installed. */
+export function isSkillUpdateNoOp(error: unknown): boolean {
+  return (
+    isProviderNativeRpcError(error) && error.nativeCode === "no_change_detected"
+  );
+}
+
+/**
+ * Absent `actionScopes.edit` / `update` is the old-host skew gate: hide
+ * the feature rather than offering a verb the host will refuse.
+ */
+export function skillActionAdvertised(
+  scopes: readonly ProviderNativeScope[] | undefined,
+  effectiveScope: ProviderNativeScope,
+): boolean {
+  if (scopes === undefined) return false;
+  return scopes.includes(effectiveScope);
+}
+
+export function skillIsEditable(skill: ProviderSkill): boolean {
+  if (skill.conflict === true) return false;
+  return skill.source === "shared" || skill.source === "provider";
+}
+
+export function skillOriginDisplay(skill: ProviderSkill): string | null {
+  const origin = skill.origin;
+  if (origin === undefined || origin === null) return null;
+  const trimmed = origin.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function composerErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const trimmed = error.message.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return "Couldn't add this skill.";
 }
 
 /**
@@ -238,7 +384,7 @@ function joinPath(left: string, right: string): string {
  * The parent of a skill directory, honouring whichever separator the host's
  * path already uses. Returns null when there is no parent segment to take.
  */
-function parentDir(path: string): string | null {
+export function parentDir(path: string): string | null {
   const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
   const trimmed = path.endsWith(separator) ? path.slice(0, -1) : path;
   const index = trimmed.lastIndexOf(separator);

@@ -378,6 +378,7 @@ function WorkspaceFileTileLive(props: {
     tabHostClient,
     node.workspacePath,
     node.filePath,
+    undefined,
   );
   const rawContent = readFileContent(query.data);
   const payloadError = readFilePayloadError(query.data);
