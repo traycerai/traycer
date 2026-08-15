@@ -78,6 +78,18 @@ Every host RPC / AuthService / RunnerHost request goes through Query. No
 Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
 surfaces use `useReactiveActiveHostId()` / `useHostClient()`. Don't mix.
 
+Composers have a **target host** (tab host, fork dialog's fixed host, the
+new-conversation modal's pinned host; `null` = app-wide default only on the
+landing page, whose picker rebinds that default). Every host RPC around a
+composer — mentions, slash commands, harness/model catalog, providers/profiles,
+pack retry, catalog refresh — and every surface that dispatches into the
+focused composer (the palette's Pick provider/model, via
+`FocusedComposerEntry.hostClient`) resolves through that host's client
+(`…ForClient` hooks / `runTargetHostId` → `useHostClientForHostId`). The
+default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
+`useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
+a palette with no focused composer) — never inside a composer surface.
+
 ## Routing
 
 - Auth/redirects → route `beforeLoad`; search → `validateSearch`; critical

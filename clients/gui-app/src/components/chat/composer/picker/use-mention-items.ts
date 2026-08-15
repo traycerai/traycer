@@ -331,6 +331,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     refetch: refetchEpicMentions,
   } = useEpicMentionEntries({
     requests: epicRequests,
+    client: hostClient,
   });
   const epicTitleByIdFromCache = useMemo(() => {
     if (cachedEpicTasks.length === 0) return EMPTY_TITLE_MAP;

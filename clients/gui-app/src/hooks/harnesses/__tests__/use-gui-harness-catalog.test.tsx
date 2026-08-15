@@ -5,7 +5,7 @@ import {
   type Query,
   type QueryClient,
 } from "@tanstack/react-query";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -14,6 +14,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   GuiHarnessId,
   ListGuiHarnessesResponse,
+  ListGuiAgentCommandsResponse,
   ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -26,9 +27,14 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import {
   useGuiHarnessCatalog,
+  useGuiHarnessCatalogForClient,
+  useGuiHarnessCommandsQuery,
   useGuiHarnessesQuery,
+  useGuiHarnessesQueryForClient,
   useGuiHarnessModelsQuery,
+  useGuiHarnessModelsQueryForClient,
   useRefreshHarnessCatalog,
+  useRefreshHarnessCatalogForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 const hostBindingMock = vi.hoisted(() => ({
@@ -688,5 +694,233 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(hidden.result.current.harnesses).toHaveLength(0);
+  });
+});
+
+// Coverage for the composer host-scoping migration: every `…ForClient`
+// catalog hook takes its client explicitly rather than resolving the
+// app-wide default via `useHostBinding()`. These guard the two invariants a
+// regression to the old default-host resolution would break: a refresh must
+// hit ONLY the client's own host (never bleed into a sibling host's cache),
+// and a `null` client (a composer whose host hasn't resolved yet) must
+// disable the query outright rather than quietly falling back to whatever
+// `useHostBinding()` currently reports.
+describe("…ForClient catalog hooks are scoped to the client argument, not the app-wide default", () => {
+  afterEach(() => {
+    hostBindingMock.current = null;
+    cleanup();
+  });
+
+  interface HostCallCounts {
+    harnesses: number;
+    models: number;
+    commands: number;
+  }
+
+  function buildHostClient(
+    queryClient: QueryClient,
+    hostId: string,
+    calls: HostCallCounts,
+  ): HostClient<HostRpcRegistry> {
+    let requestCounter = 0;
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-${hostId}-${String(requestCounter)}`;
+        },
+        handlers: {
+          "agent.gui.listHarnesses": () => {
+            calls.harnesses += 1;
+            return { harnesses: harnesses(["opencode"]) };
+          },
+          "agent.gui.listModels": () => {
+            calls.models += 1;
+            return modelsResponse(1);
+          },
+          "agent.gui.listCommands": (): ListGuiAgentCommandsResponse => {
+            calls.commands += 1;
+            return { harnessId: "opencode", commands: [] };
+          },
+        },
+      }),
+    });
+    client.bind({
+      hostId,
+      label: hostId,
+      kind: "local",
+      websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+      version: "0.0.0-mock",
+      transportDialability: "dialable",
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: `tok-${hostId}`,
+      }),
+    );
+    return client;
+  }
+
+  it("useRefreshHarnessCatalogForClient invalidates only the target host's three catalog methods, leaving another host's cache untouched", async () => {
+    const queryClient = createAppQueryClient();
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const hostACalls: HostCallCounts = { harnesses: 0, models: 0, commands: 0 };
+    const hostBCalls: HostCallCounts = { harnesses: 0, models: 0, commands: 0 };
+    const clientA = buildHostClient(queryClient, "host-a", hostACalls);
+    const clientB = buildHostClient(queryClient, "host-b", hostBCalls);
+
+    renderHook(
+      () => {
+        useGuiHarnessesQueryForClient(clientA, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessModelsQueryForClient(clientA, "opencode", null, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessCommandsQuery(clientA, "opencode", [], {
+          enabled: true,
+          subscribed: true,
+        });
+      },
+      { wrapper: Wrapper },
+    );
+    renderHook(
+      () => {
+        useGuiHarnessesQueryForClient(clientB, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+          enabled: true,
+          subscribed: true,
+        });
+        useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+          enabled: true,
+          subscribed: true,
+        });
+      },
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+      expect(hostBCalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+    });
+
+    const { result } = renderHook(
+      () => useRefreshHarnessCatalogForClient(clientB),
+      { wrapper: Wrapper },
+    );
+    await act(async () => {
+      await result.current();
+    });
+
+    // Host B's three catalog methods were re-fetched by the refresh...
+    await waitFor(() => {
+      expect(hostBCalls).toEqual({ harnesses: 2, models: 2, commands: 2 });
+    });
+    // ...and host A's cache - a DIFFERENT client, never passed to the
+    // refresh - was never touched. A regression that resolved the refresh
+    // target through the app-wide default (rather than the `client`
+    // argument) would either refresh the wrong host or refresh both.
+    expect(hostACalls).toEqual({ harnesses: 1, models: 1, commands: 1 });
+  });
+
+  it("useGuiHarnessesQueryForClient(null, …) disables the query outright - never falls back to the app-wide default host", async () => {
+    const queryClient = createAppQueryClient();
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    // A live default-host binding IS present (mirrors a real app where some
+    // OTHER host is the app-wide default) - if `client: null` ever fell back
+    // to it, this fixture would make that fallback observable as fetched
+    // data. `useGuiHarnessesQueryForClient` never reads `useHostBinding()`,
+    // so the fixture is a negative control: it must never be consulted.
+    const defaultHostCalls: HostCallCounts = {
+      harnesses: 0,
+      models: 0,
+      commands: 0,
+    };
+    hostBindingMock.current = {
+      hostClient: buildHostClient(
+        queryClient,
+        "default-host",
+        defaultHostCalls,
+      ),
+    };
+
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessesQueryForClient(null, {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isPending).toBe(true);
+    expect(defaultHostCalls).toEqual({ harnesses: 0, models: 0, commands: 0 });
+  });
+
+  it("useGuiHarnessCatalogForClient(null, …) reports an empty catalog that is NOT loading - a disabled query is not a fetch in flight", async () => {
+    const queryClient = createAppQueryClient();
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const defaultHostCalls: HostCallCounts = {
+      harnesses: 0,
+      models: 0,
+      commands: 0,
+    };
+    hostBindingMock.current = {
+      hostClient: buildHostClient(
+        queryClient,
+        "default-host",
+        defaultHostCalls,
+      ),
+    };
+
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(null, null, {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The underlying query is disabled (`isPending: true` forever, see the
+    // sibling test) - the composed catalog must not surface that as
+    // "loading", or every consumer (the picker rail, the palette) would spin
+    // for a fetch that never starts.
+    expect(result.current.harnesses).toEqual([]);
+    expect(result.current.harnessesLoading).toBe(false);
+    expect(result.current.modelsLoading).toBe(false);
+    expect(result.current.harnessesError).toBeNull();
+    expect(defaultHostCalls).toEqual({ harnesses: 0, models: 0, commands: 0 });
   });
 });
