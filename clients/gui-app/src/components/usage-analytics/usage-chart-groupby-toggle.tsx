@@ -5,6 +5,13 @@ import type { UsageChartGroupBy } from "@/lib/usage-analytics/usage-chart-data";
 export interface UsageChartGroupByToggleProps {
   readonly groupBy: UsageChartGroupBy;
   readonly onChange: (groupBy: UsageChartGroupBy) => void;
+  /**
+   * Extra classes merged onto each trigger - the styling seam the Tabs
+   * primitive doesn't otherwise expose (its list hardcodes `h-8`), used by
+   * the usage dialogs for coarse-pointer touch-target bumps. `undefined`
+   * keeps the primitive's sizing (Settings).
+   */
+  readonly triggerClassName: string | undefined;
 }
 
 /**
@@ -24,10 +31,18 @@ export function UsageChartGroupByToggle(
       }}
     >
       <TabsList aria-label="Group chart by">
-        <TabsTrigger value="harness" data-testid="usage-chart-groupby-harness">
+        <TabsTrigger
+          value="harness"
+          className={props.triggerClassName}
+          data-testid="usage-chart-groupby-harness"
+        >
           Harness
         </TabsTrigger>
-        <TabsTrigger value="model" data-testid="usage-chart-groupby-model">
+        <TabsTrigger
+          value="model"
+          className={props.triggerClassName}
+          data-testid="usage-chart-groupby-model"
+        >
           Model
         </TabsTrigger>
       </TabsList>
