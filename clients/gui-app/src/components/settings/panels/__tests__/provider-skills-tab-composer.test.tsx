@@ -11,6 +11,7 @@ const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
   createScopes: [] as string[],
   importScopes: [] as string[],
+  inspectScopes: [] as string[],
 }));
 
 // Entry-button suite never switches scope; stub shared hook so F5 workspace
@@ -37,6 +38,7 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: vi.fn<() => void>(),
+    mutateAsync: vi.fn(),
     isPending: false,
   }),
 }));
@@ -45,7 +47,12 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
 // imported by the tab through `ProviderSkillDetailDialog`, so it needs a
 // well-shaped mock the same way `provider-skills-tab-detail.test.tsx` does.
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
+  useWorkspaceReadFile: (
+    _client: unknown,
+    _workspacePath: string | null,
+    _filePath: string | null,
+    _cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
+  ) => ({
     data: undefined,
     isPending: false,
     isError: false,
@@ -75,6 +82,7 @@ function skillsState(): ProviderCliState {
           create: scopes(skillMocks.createScopes),
           import: scopes(skillMocks.importScopes),
           remove: [],
+          inspect: scopes(skillMocks.inspectScopes),
         },
       },
       modelProviders: null,
@@ -97,9 +105,8 @@ function renderTab(): void {
   render(<ProviderSkillsTab state={skillsState()} />);
 }
 
-// A non-empty list, so the header buttons are the only "New skill" / "Import
-// skill" text on the page - the empty state renders its own copies of the
-// same labels, which would make a bare name-based query ambiguous.
+// A non-empty list so the header Add skill is the only one on the page —
+// the empty state renders its own copy of the same label.
 const SOME_SKILL: ProviderSkill = {
   name: "find-skills",
   description: "Helps users discover and install agent skills.",
@@ -112,34 +119,35 @@ describe("<ProviderSkillsTab /> entry points", () => {
     skillMocks.skills = [];
     skillMocks.createScopes = [];
     skillMocks.importScopes = [];
+    skillMocks.inspectScopes = [];
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("renders two real buttons and no menu when both capabilities are open", () => {
+  it("renders one Add skill button and no menu when both capabilities are open", () => {
     skillMocks.skills = [SOME_SKILL];
     skillMocks.createScopes = ["global"];
     skillMocks.importScopes = ["global"];
     renderTab();
 
-    expect(screen.getByRole("button", { name: /New skill/ })).toBeDefined();
-    expect(screen.getByRole("button", { name: /Import skill/ })).toBeDefined();
-    // Killing the menu-of-one is the whole point of this change: there must
-    // be no dropdown standing in for either button.
+    expect(screen.getByRole("button", { name: /Add skill/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /New skill/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Import skill/ })).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.queryByRole("button", { name: /^New ▾$/ })).toBeNull();
   });
 
-  it("renders exactly one button, Import skill, for the import-only shape every provider ships today", () => {
+  it("still renders Add skill for the import-only shape", () => {
     skillMocks.skills = [SOME_SKILL];
     skillMocks.createScopes = [];
     skillMocks.importScopes = ["global"];
     renderTab();
 
-    expect(screen.getByRole("button", { name: /Import skill/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: /Add skill/ })).toBeDefined();
     expect(screen.queryByRole("button", { name: /New skill/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Import skill/ })).toBeNull();
   });
 
   it("renders no entry buttons and explains why when neither capability is open", () => {
@@ -147,53 +155,52 @@ describe("<ProviderSkillsTab /> entry points", () => {
     skillMocks.importScopes = [];
     renderTab();
 
+    expect(screen.queryByRole("button", { name: /Add skill/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /New skill/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Import skill/ })).toBeNull();
-    // A short, stable substring rather than the full sentence: the exact
-    // copy is free to be reworded without breaking this assertion.
     expect(screen.getByText(/can.t add them/)).toBeDefined();
   });
 
-  it("teaches the SKILL.md format and offers both entry points in the empty state", () => {
+  it("teaches the SKILL.md format and offers Add skill in the empty state", () => {
     skillMocks.createScopes = ["global"];
     skillMocks.importScopes = ["global"];
     renderTab();
 
-    // Short, stable substring per the empty-state copy's history of getting
-    // reworded, plus the annotated example (a `<pre>` block) rather than its
-    // exact wording.
     expect(screen.getByText("No skills yet")).toBeDefined();
     const example = document.querySelector("pre");
     expect(example).not.toBeNull();
     expect(example?.textContent).toContain("description:");
+    expect(screen.getAllByRole("button", { name: /Add skill/ }).length).toBe(2);
+  });
+
+  it("opens the composer import-first from the header Add skill button", () => {
+    skillMocks.skills = [SOME_SKILL];
+    skillMocks.createScopes = ["global"];
+    skillMocks.importScopes = ["global"];
+    skillMocks.inspectScopes = ["global"];
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add skill/ }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Paste a source");
+    expect(screen.getByLabelText("Skill source")).toBeDefined();
+    expect(screen.queryByLabelText("Name")).toBeNull();
     expect(
-      screen.getByRole("button", { name: /Import from a repo or folder/ }),
+      screen.getByRole("button", { name: "or write one from scratch" }),
     ).toBeDefined();
   });
 
-  it("opens the composer on the write tab from the header New skill button", () => {
+  it("opens the composer on the write form when only create is advertised", () => {
     skillMocks.skills = [SOME_SKILL];
     skillMocks.createScopes = ["global"];
-    skillMocks.importScopes = ["global"];
+    skillMocks.importScopes = [];
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: /^New skill/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Add skill/ }));
 
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Write a new one");
+    expect(screen.getByRole("dialog")).toBeDefined();
     expect(screen.getByLabelText("Name")).toBeDefined();
-  });
-
-  it("opens the composer on the import tab from the header Import skill button", () => {
-    skillMocks.skills = [SOME_SKILL];
-    skillMocks.createScopes = ["global"];
-    skillMocks.importScopes = ["global"];
-    renderTab();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Import skill/ }));
-
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Import an existing one");
-    expect(screen.getByLabelText("Git URL or folder path")).toBeDefined();
+    expect(screen.queryByLabelText("Skill source")).toBeNull();
   });
 });

@@ -9,14 +9,28 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "@uiw/react-codemirror";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { fileContentRevision } from "@/lib/workspace/file-content-revision";
+
+type SkillsListMutateResult = {
+  readonly kind: "skills";
+  readonly skills: readonly ProviderSkill[];
+};
 
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
   removeScopes: [] as string[],
+  editScopes: [] as string[],
+  updateScopes: [] as string[],
   mutate: vi.fn(),
   // Captured through the wrapper below rather than read off
   // `mutate.mock.calls`, which types as `any[]` and trips the repo's
@@ -28,9 +42,17 @@ const skillMocks = vi.hoisted(() => ({
   // already renders inline.
   mutateVariables: [] as Array<{ readonly suppressToast: boolean }>,
   mutateIsPending: false,
+  onMutateAsync: (
+    _mutation: ProvidersSkillsMutateAction,
+  ): Promise<SkillsListMutateResult> =>
+    Promise.resolve({
+      kind: "skills",
+      skills: [],
+    }),
   readFileCalls: [] as Array<{
     workspacePath: string | null;
     filePath: string | null;
+    cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   }>,
   readFile: {
     data: undefined as
@@ -67,6 +89,13 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
   }),
 }));
 
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: (
@@ -84,6 +113,16 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
         suppressToast: variables.suppressToast,
       });
       skillMocks.mutate(variables, opts);
+    },
+    mutateAsync: async (variables: {
+      mutation: ProvidersSkillsMutateAction;
+      suppressToast: boolean;
+    }) => {
+      skillMocks.mutations.push(variables.mutation);
+      skillMocks.mutateVariables.push({
+        suppressToast: variables.suppressToast,
+      });
+      return skillMocks.onMutateAsync(variables.mutation);
     },
     isPending: skillMocks.mutateIsPending,
   }),
@@ -103,16 +142,22 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
     _client: null,
     workspacePath: string | null,
     filePath: string | null,
+    cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
   ) => {
-    skillMocks.readFileCalls.push({ workspacePath, filePath });
+    skillMocks.readFileCalls.push({
+      workspacePath,
+      filePath,
+      cacheKeyIdentity,
+    });
     return skillMocks.readFile;
   },
 }));
 
-function removeScopes(): ProviderNativeScope[] {
+function advertisedScopes(names: readonly string[]): ProviderNativeScope[] {
   // Narrowed off the mock's loose `string[]` so a typo in a test reads as an
-  // empty scope list (no Remove button) instead of type-checking as one.
-  return skillMocks.removeScopes.flatMap((scope) =>
+  // empty scope list (no Remove/Edit/Update button) instead of type-checking
+  // as one.
+  return names.flatMap((scope) =>
     scope === "global" || scope === "project" ? [scope] : [],
   );
 }
@@ -120,6 +165,10 @@ function removeScopes(): ProviderNativeScope[] {
 function skillsState(): ProviderCliState {
   // `list` only by default: create/import are deliberately empty so the "New"
   // dropdown never mounts here - this suite is about opening an existing skill.
+  // `edit` / `update` keys stay omitted unless a test advertises them: absent
+  // is the old-host skew gate and is not the same as an empty array.
+  const edit = advertisedScopes(skillMocks.editScopes);
+  const update = advertisedScopes(skillMocks.updateScopes);
   return {
     providerId: "codex",
     enabled: true,
@@ -134,7 +183,9 @@ function skillsState(): ProviderCliState {
           add: [],
           create: [],
           import: [],
-          remove: removeScopes(),
+          remove: advertisedScopes(skillMocks.removeScopes),
+          ...(skillMocks.editScopes.length > 0 ? { edit } : {}),
+          ...(skillMocks.updateScopes.length > 0 ? { update } : {}),
         },
       },
       modelProviders: null,
@@ -175,6 +226,35 @@ function confirmAction(): HTMLElement {
   );
 }
 
+function confirmUpdateAction(): HTMLElement {
+  return within(screen.getByTestId("confirm-destructive-dialog")).getByRole(
+    "button",
+    { name: "Update" },
+  );
+}
+
+function replaceInstructions(markdown: string): void {
+  const editor = screen.getByTestId("skill-detail-instructions");
+  const view = EditorView.findFromDOM(editor);
+  if (view === null) throw new Error("Expected a CodeMirror editor element");
+  act(() => {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: markdown },
+    });
+  });
+}
+
+function nativeError(
+  code: "external_drift" | "no_change_detected",
+  detail: string,
+): ProviderNativeRpcError {
+  return new ProviderNativeRpcError({
+    code,
+    detail,
+    method: "providers.nativeMutate",
+  });
+}
+
 const FIND_SKILLS: ProviderSkill = {
   name: "find-skills",
   description: "Helps users discover and install agent skills.",
@@ -186,10 +266,16 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   beforeEach(() => {
     skillMocks.skills = [FIND_SKILLS];
     skillMocks.removeScopes = [];
+    skillMocks.editScopes = [];
+    skillMocks.updateScopes = [];
     skillMocks.mutate.mockReset();
     skillMocks.mutations = [];
     skillMocks.mutateVariables = [];
     skillMocks.mutateIsPending = false;
+    skillMocks.onMutateAsync = () =>
+      Promise.resolve({ kind: "skills", skills: [] });
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
     skillMocks.readFileCalls = [];
     skillMocks.readFile = {
       data: {
@@ -275,12 +361,16 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     ];
     renderTab();
 
-    expect(
-      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
-    ).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Open find-skills (Provider-only)" }),
-    ).toBeDefined();
+    const sharedRow = screen.getByRole("button", {
+      name: "Open find-skills (Shared)",
+    });
+    const providerRow = screen.getByRole("button", {
+      name: "Open find-skills (Provider-only)",
+    });
+    expect(sharedRow).toBeDefined();
+    expect(providerRow).toBeDefined();
+    expect(within(sharedRow).getByText("Shared")).toBeDefined();
+    expect(within(providerRow).getByText("Provider-only")).toBeDefined();
   });
 
   it("does not mount the file read until a row is opened", () => {
@@ -297,6 +387,40 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
     expect(skillMocks.readFileCalls.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the same dialog shell while the skill body loads", () => {
+    skillMocks.editScopes = ["global"];
+    skillMocks.readFile = {
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+    };
+    const view = render(<ProviderSkillsTab state={skillsState()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
+
+    const shell = screen.getByRole("dialog");
+    expect(shell.textContent).toContain("Loading skill");
+    expect(shell.className).toContain("h-[min(86dvh,calc(100dvh-2rem))]");
+
+    skillMocks.readFile = {
+      data: {
+        content:
+          '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n\nAsk for a skill.\n',
+        truncated: false,
+        error: null,
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+    };
+    view.rerender(<ProviderSkillsTab state={skillsState()} />);
+
+    expect(screen.getByRole("dialog")).toBe(shell);
+    expect(screen.queryByText("Loading skill")).toBeNull();
+    expect(screen.getByTestId("skill-detail-body-preview")).toBeDefined();
   });
 
   it("gives a skill no icon tile, in the row or the dialog", () => {
@@ -329,6 +453,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     // The header already shows name + description; re-printing the raw
     // frontmatter would show them twice, as a `---`-delimited paragraph.
     expect(dialog.textContent).not.toContain("description:");
+    expect(screen.getByTestId("skill-detail-body-preview")).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
 
     expect(
       skillMocks.readFileCalls.some(
@@ -521,5 +648,520 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
 
     expect(screen.getByRole("dialog").textContent).toContain("no instructions");
+  });
+
+  it("shows a Conflict badge and tooltip on a conflict row", async () => {
+    const user = userEvent.setup();
+    skillMocks.skills = [{ ...FIND_SKILLS, conflict: true }];
+    renderTab();
+
+    const row = screen.getByRole("button", {
+      name: /Open find-skills \(Shared, Conflict/,
+    });
+    expect(within(row).getByText("Shared")).toBeDefined();
+    const badge = within(row).getByText("Conflict");
+    expect(badge).toBeDefined();
+
+    await user.hover(badge);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toMatch(/occupies this provider's link/i);
+    expect(tooltip.textContent).toMatch(/did not adopt or overwrite/i);
+  });
+
+  it("shows Imported from origin in the detail dialog, and omits it when there is none", () => {
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    const withOrigin = screen.getByRole("dialog").textContent;
+    expect(withOrigin).toContain("Imported from owner/repo");
+    expect(withOrigin).not.toContain("Imported from Imported from");
+
+    cleanup();
+    skillMocks.skills = [FIND_SKILLS];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    expect(screen.getByRole("dialog").textContent).not.toContain(
+      "Imported from",
+    );
+  });
+
+  it("edits in the existing detail dialog and submits edit not create", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    skillMocks.removeScopes = ["global"];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    const detail = screen.getByRole("dialog");
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByRole("dialog")).toBe(detail);
+    expect(screen.queryByText("Add a skill")).toBeNull();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDefined();
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByText("Markdown")).toBeDefined();
+    expect(screen.queryByRole("tablist", { name: "Editor view" })).toBeNull();
+    expect(detail.textContent).toContain(
+      "/Users/dev/.agents/skills/find-skills",
+    );
+    expect(screen.queryByText("Available to")).toBeNull();
+    expect(screen.queryByLabelText(/Every provider/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "or import an existing one" }),
+    ).toBeNull();
+
+    const nameInput = screen.getByLabelText("Name");
+    expect(nameInput instanceof HTMLInputElement && nameInput.value).toBe(
+      "find-skills",
+    );
+    const descriptionInput = screen.getByRole("textbox", {
+      name: "When to use",
+    });
+    expect(
+      descriptionInput instanceof HTMLTextAreaElement && descriptionInput.value,
+    ).toBe("Helps");
+    expect(document.activeElement).toBe(nameInput);
+    const editor = screen.getByTestId("skill-detail-instructions");
+    const view = EditorView.findFromDOM(editor);
+    if (view === null) throw new Error("Expected a CodeMirror editor element");
+    expect(view.state.doc.toString()).toBe(
+      "# When to use\n\nAsk for a skill.\n",
+    );
+
+    fireEvent.change(nameInput, { target: { value: "find-skills-v2" } });
+    fireEvent.change(descriptionInput, {
+      target: { value: "Updated description" },
+    });
+    replaceInstructions("# New body\n");
+
+    await user.click(save);
+
+    const baseline = skillMocks.readFile.data?.content;
+    if (baseline === undefined || baseline === null) {
+      throw new Error("expected the open skill file content");
+    }
+    const expectedHash = await fileContentRevision(baseline);
+
+    await waitFor(() => {
+      expect(skillMocks.mutations).toEqual([
+        {
+          action: "edit",
+          path: FIND_SKILLS.path,
+          expectedHash,
+          name: "find-skills-v2",
+          description: "Updated description",
+          body: "# New body\n",
+        },
+      ]);
+    });
+    expect(screen.getByRole("dialog")).toBe(detail);
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(edit).toBeDefined();
+    expect(document.activeElement).toBe(edit);
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
+  it("preserves instruction scroll position when switching modes", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    const preview = screen.getByTestId("skill-detail-body-preview");
+    preview.scrollTop = 137;
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const editor = screen.getByTestId("skill-detail-instructions");
+    const view = EditorView.findFromDOM(editor);
+    if (view === null) throw new Error("Expected a CodeMirror editor element");
+    expect(view.scrollDOM.scrollTop).toBe(137);
+
+    view.scrollDOM.scrollTop = 83;
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(preview.scrollTop).toBe(83);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Edit" }),
+    );
+  });
+
+  it("keeps Save changes available and focuses the first invalid field", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "" } });
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(false);
+
+    await user.click(save);
+
+    expect(screen.getByText("Give the skill a name.")).toBeDefined();
+    expect(document.activeElement).toBe(name);
+    expect(skillMocks.mutations).toEqual([]);
+  });
+
+  it("discards a dirty draft or keeps editing without replacing the detail dialog", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    const detail = screen.getByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const warning = screen.getByTestId("skill-unsaved-changes-dialog");
+    await user.click(
+      within(warning).getByRole("button", { name: "Keep editing" }),
+    );
+    expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    expect(name instanceof HTMLInputElement && name.value).toBe("changed-name");
+    expect(screen.getByRole("dialog")).toBe(detail);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(screen.getByTestId("skill-unsaved-changes-dialog")).getByRole(
+        "button",
+        { name: "Discard changes" },
+      ),
+    );
+
+    expect(screen.getByRole("dialog")).toBe(detail);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDefined();
+    expect(name instanceof HTMLInputElement && name.value).toBe("find-skills");
+  });
+
+  it("treats a reverted draft as unchanged and cancels without a warning", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    fireEvent.change(name, { target: { value: "find-skills" } });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDefined();
+  });
+
+  it("guards Escape and closes the detail only after dirty changes are discarded", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+    name.focus();
+
+    await user.keyboard("{Escape}");
+    const warning = screen.getByTestId("skill-unsaved-changes-dialog");
+    await user.click(
+      within(warning).getByRole("button", { name: "Discard changes" }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the draft open when saving fails", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    skillMocks.onMutateAsync = () =>
+      Promise.reject(new Error("The skill changed on disk."));
+    renderTab();
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const name = screen.getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "changed-name" } });
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText("The skill changed on disk.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDefined();
+    expect(name instanceof HTMLInputElement && name.value).toBe("changed-name");
+  });
+
+  it("asks to overwrite local edits after a dirty-canon update, then resends with confirm", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.onMutateAsync = (mutation) => {
+      if (mutation.action === "update" && mutation.confirm !== true) {
+        return Promise.reject(
+          nativeError(
+            "external_drift",
+            "Inspected source changed (abc123 → def456); inspect again",
+          ),
+        );
+      }
+      return Promise.resolve({ kind: "skills", skills: [] });
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
+
+    const confirm = await screen.findByTestId("confirm-destructive-dialog");
+    expect(confirm.textContent).toMatch(
+      /local edits that will be overwritten/i,
+    );
+    expect(confirm.textContent).toMatch(/Overwrite local edits/i);
+    expect(skillMocks.mutations).toEqual([
+      {
+        action: "update",
+        name: FIND_SKILLS.name,
+        path: FIND_SKILLS.path,
+      },
+    ]);
+    expect(toast.success).not.toHaveBeenCalled();
+
+    await user.click(confirmUpdateAction());
+
+    await waitFor(() => {
+      expect(skillMocks.mutations).toEqual([
+        {
+          action: "update",
+          name: FIND_SKILLS.name,
+          path: FIND_SKILLS.path,
+        },
+        {
+          action: "update",
+          name: FIND_SKILLS.name,
+          path: FIND_SKILLS.path,
+          confirm: true,
+        },
+      ]);
+    });
+  });
+
+  it("toasts Already up to date when update is a no-op, without a confirm dialog", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, origin: "owner/repo" }];
+    skillMocks.onMutateAsync = () => {
+      return Promise.reject(
+        nativeError("no_change_detected", "Source matches the installed skill"),
+      );
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Already up to date");
+    });
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(skillMocks.mutations).toEqual([
+      {
+        action: "update",
+        name: FIND_SKILLS.name,
+        path: FIND_SKILLS.path,
+      },
+    ]);
+  });
+
+  it("hides Edit and Update from source when actionScopes omit those keys", () => {
+    // Old-host skew: absent keys, not empty arrays. The fixture must not
+    // default edit/update.
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    const caps = skillsState().nativeCapabilities.skills;
+    if (caps === null) throw new Error("expected skills capabilities");
+    expect("edit" in caps.actionScopes).toBe(false);
+    expect("update" in caps.actionScopes).toBe(false);
+
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    const dialogText = screen.getByRole("dialog").textContent;
+    expect(dialogText).toContain("Imported from owner/repo");
+    expect(dialogText).not.toContain("Imported from Imported from");
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Update from source" }),
+    ).toBeNull();
+  });
+
+  it("says removing a shared skill removes it for every provider", () => {
+    skillMocks.removeScopes = ["global"];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toMatch(/removing a shared skill removes it for every provider/i);
+  });
+
+  it("refreshes the open dialog in place after a successful Update from source", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    const updatedRow: ProviderSkill = {
+      ...FIND_SKILLS,
+      name: "find-skills-v2",
+      description: "Updated from source",
+      origin: "Imported from owner/repo#next",
+    };
+    skillMocks.onMutateAsync = () => {
+      skillMocks.readFile = {
+        data: {
+          content:
+            '---\nname: find-skills-v2\ndescription: "Updated from source"\n---\n\n# After update\n\nUpdated instructions from source.\n',
+          truncated: false,
+          error: null,
+        },
+        isPending: false,
+        isError: false,
+        error: null,
+      };
+      return Promise.resolve({ kind: "skills", skills: [updatedRow] });
+    };
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+
+    const before = screen.getByRole("dialog").textContent;
+    expect(before).toContain("find-skills");
+    expect(before).toContain("Helps users discover and install agent skills.");
+    expect(before).toContain("Imported from owner/repo");
+    expect(before).not.toContain("Imported from Imported from");
+    expect(before).toContain("Ask for a skill.");
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 0,
+      ),
+    ).toBe(true);
+
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
+
+    await waitFor(() => {
+      const after = screen.getByRole("dialog").textContent;
+      expect(after).toContain("find-skills-v2");
+      expect(after).toContain("Updated from source");
+      expect(after).toContain("Imported from owner/repo#next");
+      expect(after).toContain("Updated instructions from source.");
+    });
+    const after = screen.getByRole("dialog").textContent;
+    expect(after).not.toContain(
+      "Helps users discover and install agent skills.",
+    );
+    expect(after).not.toContain("Ask for a skill.");
+    expect(after).not.toContain("Imported from Imported from");
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 1,
+      ),
+    ).toBe(true);
+  });
+
+  it("closes the detail dialog when update succeeds without the open skill path", async () => {
+    const user = userEvent.setup();
+    skillMocks.updateScopes = ["global"];
+    skillMocks.skills = [
+      { ...FIND_SKILLS, origin: "Imported from owner/repo" },
+    ];
+    skillMocks.onMutateAsync = () =>
+      Promise.resolve({
+        kind: "skills",
+        skills: [
+          {
+            ...FIND_SKILLS,
+            name: "other-skill",
+            path: "/Users/dev/.agents/skills/other-skill",
+          },
+        ],
+      });
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    expect(screen.getByRole("dialog")).toBeDefined();
+
+    await user.click(
+      screen.getByRole("button", { name: "Update from source" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(
+      skillMocks.readFileCalls.some(
+        (call) =>
+          Array.isArray(call.cacheKeyIdentity) &&
+          call.cacheKeyIdentity[0] === 1,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not offer Remove on a conflict row, and says why", () => {
+    skillMocks.removeScopes = ["global"];
+    skillMocks.skills = [{ ...FIND_SKILLS, conflict: true }];
+    renderTab();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Open find-skills \(Shared, Conflict/,
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toMatch(
+      /occupies the provider link/i,
+    );
   });
 });

@@ -26,21 +26,32 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 
+const sidebarRenderCounts = vi.hoisted(() => ({
+  liveHost: 0,
+  loadingHost: 0,
+}));
+
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar", () => ({
-  EpicLeftPanelHost: (props: { epicId: string; tabId: string }) => (
-    <div
-      data-testid="epic-sidebar-host-stub"
-      data-epic-id={props.epicId}
-      data-tab-id={props.tabId}
-    />
-  ),
-  EpicLeftPanelLoadingHost: (props: { epicId: string; tabId: string }) => (
-    <div
-      data-testid="epic-sidebar-loading-stub"
-      data-epic-id={props.epicId}
-      data-tab-id={props.tabId}
-    />
-  ),
+  EpicLeftPanelHost: (props: { epicId: string; tabId: string }) => {
+    sidebarRenderCounts.liveHost += 1;
+    return (
+      <div
+        data-testid="epic-sidebar-host-stub"
+        data-epic-id={props.epicId}
+        data-tab-id={props.tabId}
+      />
+    );
+  },
+  EpicLeftPanelLoadingHost: (props: { epicId: string; tabId: string }) => {
+    sidebarRenderCounts.loadingHost += 1;
+    return (
+      <div
+        data-testid="epic-sidebar-loading-stub"
+        data-epic-id={props.epicId}
+        data-tab-id={props.tabId}
+      />
+    );
+  },
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-rail", () => ({
@@ -57,19 +68,6 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-rail", () => ({
     />
   ),
 }));
-
-// The column's own chrome, stubbed for the same reason as the two above: it
-// resolves the Epic session's host through `useHostClientForHostId`, which
-// THROWS outside a `<HostRuntimeProvider>` this layout-only suite has no
-// reason to mount. Nothing here asserts on backup health.
-vi.mock(
-  "@/components/epic-canvas/sidebar/epic-backup-status-indicator",
-  () => ({
-    EpicBackupStatusIndicator: (props: { readonly epicId: string }) => (
-      <div data-testid="epic-backup-status-stub" data-epic-id={props.epicId} />
-    ),
-  }),
-);
 
 // The snapshot scope reads session-bound selectors; stub them so the live
 // branch renders against the fake handle without a full projector store.
@@ -145,6 +143,8 @@ function renderColumnWithSession(handle: OpenEpicStoreHandle) {
 describe("<EpicSidebarColumn />", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    sidebarRenderCounts.liveHost = 0;
+    sidebarRenderCounts.loadingHost = 0;
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
@@ -182,6 +182,65 @@ describe("<EpicSidebarColumn />", () => {
       "horizontal",
     );
     expect(screen.queryByTestId("epic-sidebar-loading-stub")).toBeNull();
+  });
+
+  it("does not rerender its subtree when its parent rerenders with the same surface identity", () => {
+    const view = renderColumn();
+    expect(sidebarRenderCounts.loadingHost).toBe(1);
+
+    view.rerender(
+      <TooltipProvider>
+        <div className="flex">
+          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+        </div>
+      </TooltipProvider>,
+    );
+
+    expect(sidebarRenderCounts.loadingHost).toBe(1);
+  });
+
+  it("still rerenders for sidebar-owned store updates", () => {
+    renderColumn();
+    expect(sidebarRenderCounts.loadingHost).toBe(1);
+
+    act(() => {
+      useLeftPanelStore.getState().setSidebarWidthPx(480);
+    });
+
+    expect(screen.getByTestId("epic-sidebar-column").style.width).toBe("480px");
+    expect(sidebarRenderCounts.loadingHost).toBe(2);
+  });
+
+  it("still rerenders when its enclosing session context becomes ready", () => {
+    const handle = buildSessionHandle(EPIC_ID);
+    const view = render(
+      <TooltipProvider>
+        <EpicSessionContext.Provider value={null}>
+          <div className="flex">
+            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+          </div>
+        </EpicSessionContext.Provider>
+      </TooltipProvider>,
+    );
+    expect(sidebarRenderCounts.loadingHost).toBe(1);
+    expect(screen.getByTestId("epic-sidebar-column").dataset.sessionReady).toBe(
+      "false",
+    );
+
+    view.rerender(
+      <TooltipProvider>
+        <EpicSessionContext.Provider value={handle}>
+          <div className="flex">
+            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+          </div>
+        </EpicSessionContext.Provider>
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId("epic-sidebar-column").dataset.sessionReady).toBe(
+      "true",
+    );
+    expect(sidebarRenderCounts.liveHost).toBe(1);
   });
 
   it("collapses via CSS only: the panel column stays mounted and the rail goes vertical", () => {

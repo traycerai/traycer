@@ -209,6 +209,7 @@
     "electron"
   ],
   "dependencies": {
+    "@tanstack/react-form": "^1.33.5",
     "@tiptap/extension-image": "^3.30.1",
     "inversify": "^8.2.3",
     "jsdom": "^29.1.1",

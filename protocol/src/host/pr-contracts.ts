@@ -1,12 +1,13 @@
 /**
  * Versioned RPC contracts for the `pr.*` host surface: two streaming methods
- * and one unary.
+ * and three unaries (the whole-PR local diff, plus its split
+ * summary/per-file successor pair).
  *
  * The two streams are plain v1.0 - new top-level registry keys,
  * intersection-negotiated (no `degrade`, no floor/fixture change: `degrade`
  * and `RELEASED_FLOOR_METHOD_NAMES` are unary-only concepts; a peer lacking
- * these methods simply doesn't advertise them). `pr.getLocalDiff` IS unary, so
- * it must declare `degrade` and stay out of the floor - see its own note.
+ * these methods simply doesn't advertise them). The unaries must each
+ * declare `degrade` and stay out of the floor - see their notes.
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -18,6 +19,10 @@ import {
   prSubscribeClientFrameSchema,
   prGetLocalDiffRequestSchema,
   prGetLocalDiffResponseSchema,
+  prGetLocalDiffSummaryRequestSchema,
+  prGetLocalDiffSummaryResponseSchema,
+  prGetLocalFileDiffRequestSchema,
+  prGetLocalFileDiffResponseSchema,
 } from "./pr-schemas";
 
 /**
@@ -70,4 +75,52 @@ export const prGetLocalDiffV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: prGetLocalDiffRequestSchema,
   responseSchema: prGetLocalDiffResponseSchema,
+});
+
+/**
+ * `pr.getLocalDiffSummary@1.0` - the metadata half of `pr.getLocalDiff`: the
+ * resolved range (both endpoint OIDs) and every file's name/status/counts,
+ * with no patch text at all.
+ *
+ * Split from the monolith because one 2MiB response rendered in one commit is
+ * a multi-second main-thread hang on a large PR, while the metadata sweeps
+ * alone are a few KiB and instant. The per-file patches then arrive one
+ * visible row at a time over `pr.getLocalFileDiff` below - the Git Diff
+ * bundle tile's shipping architecture.
+ *
+ * New OPTIONAL method rather than a minor bump on `pr.getLocalDiff`: a minor
+ * is invisible to the client at render time (the negotiated-manifest registry
+ * records method NAMES only), and the client-side version projection would
+ * silently strip a request-side "no patches" flag against a v1.0 host -
+ * turning every summary ask into the full 2MiB monolith, undetectably. A new
+ * name rides the optional-capability channel (`degrade: unsupported`), stays
+ * out of the released floor/baseline, and fails loudly (`E_HOST_UNSUPPORTED`)
+ * so the client can fall back to the monolith on purpose.
+ */
+export const prGetLocalDiffSummaryV10 = defineRpcContract({
+  method: "pr.getLocalDiffSummary",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: prGetLocalDiffSummaryRequestSchema,
+  responseSchema: prGetLocalDiffSummaryResponseSchema,
+});
+
+/**
+ * `pr.getLocalFileDiff@1.0` - one file's patch from a range
+ * `pr.getLocalDiffSummary` resolved, addressed by the summary's OID pair.
+ * Mirrors `git.getFileDiff`'s per-file contract (256KiB default budget,
+ * `isTruncated`/`truncatedAfterBytes`, `byteBudget: null` = load-full);
+ * deliberately single-file rather than batched - the bundle tile fetches one
+ * visible row at a time over both transports, and a batch method can sit
+ * beside this later exactly as `git.getFileDiffs` sits beside
+ * `git.getFileDiff` if relay latency ever demands it.
+ *
+ * Same optional-method posture as `pr.getLocalDiffSummary` above, and always
+ * shipped together with it: a client only reaches for this after a summary
+ * succeeded.
+ */
+export const prGetLocalFileDiffV10 = defineRpcContract({
+  method: "pr.getLocalFileDiff",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: prGetLocalFileDiffRequestSchema,
+  responseSchema: prGetLocalFileDiffResponseSchema,
 });

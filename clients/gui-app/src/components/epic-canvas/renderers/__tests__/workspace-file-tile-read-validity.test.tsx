@@ -171,6 +171,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
     await waitFor(() => {
       expect(currentRuntimeState()?.ownerSurfaceId).not.toBeNull();
     });
+    await screen.findByRole("button", { name: "Type without blur" });
     state.rendererContent.mockClear();
 
     // TanStack retains the last successful payload on a failed background

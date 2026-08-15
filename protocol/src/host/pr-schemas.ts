@@ -738,3 +738,168 @@ export const prGetLocalDiffResponseSchema = z.discriminatedUnion("kind", [
 export type PrGetLocalDiffResponse = z.infer<
   typeof prGetLocalDiffResponseSchema
 >;
+
+// ---- `pr.getLocalDiffSummary` / `pr.getLocalFileDiff` --------------------- //
+//
+// The split form of `pr.getLocalDiff`: one cheap metadata frame, then one
+// small patch fetch per file the reader actually scrolls to - the shape the
+// Git Diff bundle tile already ships. The monolith stays registered for old
+// clients; a client that finds these methods missing
+// (`E_HOST_UNSUPPORTED`) falls back to the monolith itself.
+
+/**
+ * Default byte cap for ONE file's patch. Mirrors `git.getFileDiff`'s
+ * {@link DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET} deliberately: the per-file fetch
+ * cadence, truncation banner and "Load Full" affordance are the same surface,
+ * so the same budget keeps the two diff views truncating at the same size.
+ */
+export const DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET = 256 * 1024;
+
+/**
+ * A full commit OID as the summary response reports it - 40 hex for SHA-1
+ * repos, 64 for SHA-256. Enforced at the schema so an abbreviated OID, a ref
+ * name or a revision expression (`HEAD~2`, `a..b`) can never PARSE into a
+ * request whose host-side handler splices it into git argv; the host
+ * revalidates independently.
+ */
+export const prLocalDiffOidSchema = z
+  .string()
+  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u);
+
+/**
+ * `pr.getLocalDiffSummary` request - `pr.getLocalDiff`'s request minus
+ * `byteBudget`, because metadata is never byte-capped: `--name-status` and
+ * `--numstat` cover every file in the range at a few dozen bytes each.
+ */
+export const prGetLocalDiffSummaryRequestSchema =
+  prGetLocalDiffRequestSchema.omit({ byteBudget: true });
+export type PrGetLocalDiffSummaryRequest = z.infer<
+  typeof prGetLocalDiffSummaryRequestSchema
+>;
+
+/**
+ * One file in the range - {@link prLocalDiffFileSchema} minus its patch.
+ *
+ * `path` and `previousPath` additionally reject the empty string, matching
+ * {@link prGetLocalFileDiffRequestSchema}: the client forwards both values
+ * verbatim into per-file requests, so the schemas must state ONE emptiness
+ * rule or a parse-valid summary could produce request-invalid asks. The
+ * released monolith file schema stays untouched - its files never feed a
+ * request.
+ */
+export const prLocalDiffSummaryFileSchema = prLocalDiffFileSchema
+  .omit({
+    patch: true,
+  })
+  .extend({
+    path: z.string().min(1),
+    previousPath: z.string().min(1).nullable(),
+  });
+export type PrLocalDiffSummaryFile = z.infer<
+  typeof prLocalDiffSummaryFileSchema
+>;
+
+/**
+ * `pr.getLocalDiffSummary` response - the `diff` variant of
+ * `pr.getLocalDiff`'s response minus per-file `patch` and minus
+ * `isTruncated` (nothing here is byte-capped, so nothing can truncate).
+ * The OIDs are what the per-file calls address: both endpoints are commits,
+ * so a per-file answer fetched later can never disagree with the summary
+ * that named them, even if the checkout moves in between.
+ */
+export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: prLocalDiffUnavailableReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("summary"),
+      /** Canonical absolute repo root the diff was taken in. */
+      runningDir: z.string(),
+      /** The ref that actually resolved as base, e.g. `origin/development`. */
+      resolvedBaseRef: z.string(),
+      baseOid: prLocalDiffOidSchema,
+      mergeBaseOid: prLocalDiffOidSchema,
+      localHeadOid: prLocalDiffOidSchema,
+      /** Same contract as `pr.getLocalDiff`'s `isStale`. */
+      isStale: z.boolean(),
+      files: z.array(prLocalDiffSummaryFileSchema),
+    }),
+  ],
+);
+export type PrGetLocalDiffSummaryResponse = z.infer<
+  typeof prGetLocalDiffSummaryResponseSchema
+>;
+
+/**
+ * `pr.getLocalFileDiff` request - one file's patch from the range the summary
+ * resolved. Addressed by OID pair rather than ref names so the answer is
+ * immutable (and honestly cacheable) once the summary has named the range.
+ *
+ * The identity/authorization fields repeat `pr.getLocalDiffSummary`'s
+ * because the host re-runs the same two gates on EVERY call - epic role, then
+ * the `linkGroupKey` binding lookup - rather than trusting that some earlier
+ * summary call was gated.
+ *
+ * `previousPath` matters beyond labelling: `git diff -M <range> -- <path>`
+ * fails to pair a rename whose source is outside the pathspec and reports a
+ * pure add instead, so the host puts BOTH sides into the pathspec.
+ */
+export const prGetLocalFileDiffRequestSchema = z.object({
+  epicId: z.string().min(1),
+  // `.min(1)` for the same reason as `prGetLocalDiffRequestSchema`: an empty
+  // token would reach binding resolution and fail later as a wrong answer
+  // dressed as a real one.
+  linkGroupKey: prLinkGroupKeySchema.min(1),
+  repoIdentifier: prRepoIdentifierSchema.extend({
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+  }),
+  repoRole: prRepoRoleSchema,
+  mergeBaseOid: prLocalDiffOidSchema,
+  headOid: prLocalDiffOidSchema,
+  path: z.string().min(1),
+  previousPath: z.string().min(1).nullable(),
+  ignoreWhitespace: z.boolean(),
+  /** `null` requests the full patch - the "Load Full" ask. */
+  byteBudget: z
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .default(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET),
+});
+export type PrGetLocalFileDiffRequest = z.infer<
+  typeof prGetLocalFileDiffRequestSchema
+>;
+
+/**
+ * `pr.getLocalFileDiff` response. Unlike the monolith's per-file `patch:
+ * string | null`, `patch` here is ALWAYS a string: `""` is a genuinely
+ * output-free diff (a pure rename or mode change stated entirely in headers,
+ * or `-w` swallowing every changed line), and a budget-capped patch is
+ * signalled by `isTruncated`, never by omission.
+ *
+ * `unavailable` covers the per-file gates: the binding checks (same as the
+ * summary), and `ref-unavailable` for an OID this checkout no longer has - a
+ * range pruned by `git gc` after the summary named it. The client's recovery
+ * for that is ONE summary refetch (fresh OIDs), not a retry of this call.
+ */
+export const prGetLocalFileDiffResponseSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("unavailable"),
+    reason: prLocalDiffUnavailableReasonSchema,
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    patch: z.string(),
+    isBinary: z.boolean(),
+    isTruncated: z.boolean(),
+    truncatedAfterBytes: z.number().int().nonnegative().nullable(),
+  }),
+]);
+export type PrGetLocalFileDiffResponse = z.infer<
+  typeof prGetLocalFileDiffResponseSchema
+>;
