@@ -225,6 +225,28 @@ describe("<ChatUsageDialog />", () => {
     ).toContain("This machine's usage only");
   });
 
+  it("absorbs the sheet's bottom safe-area inset in the body, having no footer", async () => {
+    renderWithClient();
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+    await screen.findByTestId("usage-cost-figure");
+
+    // The epic dialog's footer takes this inset for it; this dialog has no
+    // footer, so the body is what reaches the sheet's `bottom-0` and an
+    // expanded drilldown would otherwise scroll under the home indicator.
+    expect(screen.getByTestId("chat-usage-dialog").className).toContain(
+      "max-[28rem]:bottom-0",
+    );
+    expect(screen.getByTestId("usage-dialog-body").className).toContain(
+      "max-[28rem]:pb-[env(safe-area-inset-bottom)]",
+    );
+  });
+
   it("opens on a store target and renders the chat's headline + title", async () => {
     renderWithClient();
     act(() => {

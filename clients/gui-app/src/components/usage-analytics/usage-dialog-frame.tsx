@@ -5,6 +5,7 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 /**
  * Phone tier (viewport < 28rem): the centered dialog becomes a bottom
@@ -68,7 +69,17 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
         )}
       </div>
       <div
-        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] @container"
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] @container",
+          // The footer normally absorbs the home-indicator inset for the
+          // whole sheet. Without one (the chat dialog) the body is what
+          // reaches `bottom-0`, so it has to absorb it instead - otherwise
+          // an expanded turn drilldown scrolls its last rows under the
+          // indicator. Additive on top of the content's own padding, and
+          // exactly `0` wherever the inset is.
+          props.footer === null &&
+            "max-[28rem]:pb-[env(safe-area-inset-bottom)]",
+        )}
         data-testid="usage-dialog-body"
       >
         {props.children}

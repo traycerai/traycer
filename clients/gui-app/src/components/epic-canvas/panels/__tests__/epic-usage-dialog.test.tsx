@@ -459,6 +459,11 @@ describe("<EpicUsageDialog />", () => {
     expect(screen.getByTestId("epic-usage-hero").className).toContain(
       "@min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]",
     );
+    // This dialog HAS a footer, and the footer is what absorbs the sheet's
+    // home-indicator inset - the body must not double it.
+    expect(screen.getByTestId("usage-dialog-body").className).not.toContain(
+      "safe-area-inset-bottom",
+    );
   });
 
   it("renders a retryable error card, never a silent fallback, when the RPC fails", async () => {
