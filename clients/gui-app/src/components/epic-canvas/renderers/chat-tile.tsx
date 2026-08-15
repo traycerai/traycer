@@ -136,7 +136,7 @@ import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-termi
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
-import { contentBlocksText } from "@/lib/chat/content-block-text";
+import { contentBlocksPreview } from "@/lib/chat/content-block-text";
 import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
@@ -1410,7 +1410,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
         resolveAgentReasoningLabel(sender, reasoningEffort, displayContext),
-      contentBlocksText,
+      contentBlocksPreview,
     }),
     [displayContext],
   );
