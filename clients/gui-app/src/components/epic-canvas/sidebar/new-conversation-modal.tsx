@@ -558,17 +558,19 @@ export function NewConversationModalBody(props: {
   );
   // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
   // (see `useNewConversationModalSeed`), neither of which is host-scoped or
-  // kept in sync with live profile removals - validated against the active
-  // host (this modal always creates there, per its workspace controls below)
-  // via the same machinery `useComposerToolbarStore` runs for every composer
+  // kept in sync with live profile removals - validated against the host this
+  // modal creates on (`hostClient`: the pinned host, else the active one) via
+  // the same machinery `useComposerToolbarStore` runs for every composer
   // surface. Never authoritative: this modal has no reauth gate of its own,
   // so a genuinely-removed profile must be corrected to ambient here rather
-  // than silently submitted as the new chat/agent's initial settings.
+  // than silently submitted as the new chat/agent's initial settings. The
+  // catalog reads through that same client, so a pinned modal offers the
+  // pinned host's harnesses/models, not the active host's.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(draftSettings, hostClient),
     handleToolbarSettingsChange,
-    draftComposerMode === "terminal",
+    { hostClient, tuiOnly: draftComposerMode === "terminal" },
   );
   const harnessId = useStore(
     toolbarStore,
@@ -989,6 +991,10 @@ export function NewConversationModalBody(props: {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       onEditorReady={null}
+      // The pinned host (or `null` = active), the same id `hostClient` above
+      // resolves - so the toolbar's and terminal launcher's pickers offer this
+      // host's harnesses/models/profiles and create profiles on it.
+      hostId={hostId}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}

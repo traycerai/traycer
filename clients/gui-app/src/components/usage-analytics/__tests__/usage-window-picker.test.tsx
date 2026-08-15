@@ -12,13 +12,25 @@ describe("UsageWindowPicker", () => {
     // pointer sequence (mousedown included), matching real interaction.
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<UsageWindowPicker windowDays={7} onChange={onChange} />);
+    render(
+      <UsageWindowPicker
+        windowDays={7}
+        onChange={onChange}
+        triggerClassName={undefined}
+      />,
+    );
     await user.click(screen.getByRole("tab", { name: "30 days" }));
     expect(onChange).toHaveBeenCalledWith(30);
   });
 
   it("marks the current window as the active tab", () => {
-    render(<UsageWindowPicker windowDays={90} onChange={() => undefined} />);
+    render(
+      <UsageWindowPicker
+        windowDays={90}
+        onChange={() => undefined}
+        triggerClassName={undefined}
+      />,
+    );
     expect(
       screen.getByRole("tab", { name: "90 days" }).getAttribute("data-state"),
     ).toBe("active");
@@ -28,7 +40,13 @@ describe("UsageWindowPicker", () => {
   });
 
   it("lets the window tabs wrap within a narrow container", () => {
-    render(<UsageWindowPicker windowDays={7} onChange={() => undefined} />);
+    render(
+      <UsageWindowPicker
+        windowDays={7}
+        onChange={() => undefined}
+        triggerClassName={undefined}
+      />,
+    );
     expect(screen.getByRole("tablist").className).toContain("max-w-full");
     expect(screen.getByRole("tablist").className).toContain("flex-wrap");
   });

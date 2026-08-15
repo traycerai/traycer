@@ -13,9 +13,9 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type {
   PrDetailCore,
   PrGetLocalDiffResponse,
-  PrGetLocalDiffSummaryResponse,
+  PrGetLocalDiffSummaryResponseV11,
   PrGetLocalFileDiffResponse,
-  PrLocalDiffSummaryFile,
+  PrLocalDiffSummaryFileV11,
 } from "@traycer/protocol/host/pr-schemas";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
@@ -172,21 +172,23 @@ function populatedSubscription(): PrDetailSubscriptionResult {
 }
 
 function summaryFile(
-  overrides: Partial<PrLocalDiffSummaryFile> & { readonly path: string },
-): PrLocalDiffSummaryFile {
+  overrides: Partial<PrLocalDiffSummaryFileV11> & { readonly path: string },
+): PrLocalDiffSummaryFileV11 {
   return {
     previousPath: null,
     status: "modified",
     insertions: 3,
     deletions: 1,
     isBinary: false,
+    pathBytes: null,
+    previousPathBytes: null,
     ...overrides,
   };
 }
 
 function summaryOkWithFiles(
-  files: readonly PrLocalDiffSummaryFile[],
-): PrGetLocalDiffSummaryResponse {
+  files: readonly PrLocalDiffSummaryFileV11[],
+): PrGetLocalDiffSummaryResponseV11 {
   return {
     kind: "summary",
     runningDir: "/tmp/worktrees/widgets",
@@ -291,7 +293,7 @@ function tileTree(args: {
 // test's own timeout kills it rather than `waitFor`'s much shorter one.
 async function renderTile(args: {
   readonly queryClient: QueryClient;
-  readonly collapsedFilePaths: readonly string[] | null;
+  readonly collapsedFileKeys: readonly string[] | null;
 }): Promise<{
   readonly view: RenderResult;
   readonly node: PrDiffTileRef;
@@ -305,11 +307,11 @@ async function renderTile(args: {
     prNumber: 7,
   });
   const node: PrDiffTileRef =
-    args.collapsedFilePaths === null
+    args.collapsedFileKeys === null
       ? base
       : {
           ...base,
-          view: { collapsedFilePaths: [...args.collapsedFilePaths] },
+          view: { collapsedFileKeys: [...args.collapsedFileKeys] },
         };
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   useEpicCanvasStore.getState().openTileInTab(tabId, node);
@@ -400,7 +402,7 @@ describe("<PrDiffTile /> bundle find", () => {
     virtuosoState.renderRows = false;
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
 
     search(node.instanceId, "beta");
@@ -427,7 +429,7 @@ describe("<PrDiffTile /> bundle find", () => {
     const queryClient = makeQueryClient();
     const rendered = await renderTile({
       queryClient,
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     const { node, tabId } = rendered;
     await screen.findByTestId("diff-content");
@@ -463,7 +465,7 @@ describe("<PrDiffTile /> bundle find", () => {
     virtuosoState.renderRows = false;
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: ["src/collapsed.ts"],
+      collapsedFileKeys: ["p:src/collapsed.ts"],
     });
 
     search(node.instanceId, "src");
@@ -492,7 +494,7 @@ describe("<PrDiffTile /> bundle find", () => {
     );
     const { node, tabId } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: ["src/collapse-target.ts"],
+      collapsedFileKeys: ["p:src/collapse-target.ts"],
     });
     await screen.findByTestId("diff-content");
 
@@ -503,8 +505,53 @@ describe("<PrDiffTile /> bundle find", () => {
       expect.objectContaining({ index: 1 }),
     );
     expect(
-      tileOnTab(tabId, node.instanceId).view.collapsedFilePaths,
-    ).not.toContain("src/collapse-target.ts");
+      tileOnTab(tabId, node.instanceId).view.collapsedFileKeys,
+    ).not.toContain("p:src/collapse-target.ts");
+  });
+
+  it("counts a byte-keyed collapsed file in coverage, and reveals it by removing exactly its tagged key", async () => {
+    const BYTE_TOKEN = "YmFkLf8udHh0";
+    const files = [
+      summaryFile({ path: "src/normal.ts" }),
+      summaryFile({ path: "src/byte-target.ts", pathBytes: BYTE_TOKEN }),
+    ];
+    tabHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "pr.getLocalDiffSummary")
+          return Promise.resolve(summaryOkWithFiles(files));
+        if (method === "pr.getLocalFileDiff")
+          return Promise.resolve(
+            fileDiffOk(patchWithNeedle(requestPath(params), "Needle")),
+          );
+        return Promise.reject(new Error(`unexpected method ${method}`));
+      },
+    );
+    const { node, tabId } = await renderTile({
+      queryClient: makeQueryClient(),
+      // Collapsed via its TAGGED `b:` key, not the lossy `p:<path>` form -
+      // the byte file has no bare-path entry at all.
+      collapsedFileKeys: [`b:${BYTE_TOKEN}`],
+    });
+    await screen.findByTestId("diff-content");
+
+    // A query that matches both files' metadata (both live under `src/`)
+    // still counts the byte-keyed file as "collapsed" - the reveal below,
+    // which targets it specifically, is what expands it.
+    search(node.instanceId, "src");
+    expect(tileSnapshot(node.instanceId).coverageMessage ?? "").toMatch(
+      /1 collapsed file/u,
+    );
+
+    // A match on its own path reveals it: scrolls to its row and expands it
+    // by removing EXACTLY the tagged `b:` key.
+    search(node.instanceId, "byte-target");
+    expect(tileSnapshot(node.instanceId).total).toBeGreaterThanOrEqual(1);
+    expect(virtuosoState.scrollIntoView).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 1 }),
+    );
+    expect(tileOnTab(tabId, node.instanceId).view.collapsedFileKeys).toEqual(
+      [],
+    );
   });
 
   it("registers 'failed' coverage when the split per-file fetch rejects", async () => {
@@ -518,7 +565,7 @@ describe("<PrDiffTile /> bundle find", () => {
     });
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     await screen.findByText("Diff Loading Error");
 
@@ -567,7 +614,7 @@ describe("<PrDiffTile /> bundle find", () => {
     });
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     await screen.findByTestId("diff-content");
 
@@ -593,7 +640,7 @@ describe("<PrDiffTile /> bundle find", () => {
     const queryClient = makeQueryClient();
     const rendered = await renderTile({
       queryClient,
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     const { node, tabId } = rendered;
 
@@ -612,7 +659,7 @@ describe("<PrDiffTile /> bundle find", () => {
     // the active match's file expanded (see `useBundleDiffFindNavigation`'s
     // `reveal` - `if (collapsedFileIds.has(fileId)) expandFile(fileId)`), and
     // that reveal replays whenever the renderer identity changes, which a
-    // `collapsedFilePaths` toggle causes. Leaving the session open would have
+    // `collapsedFileKeys` toggle causes. Leaving the session open would have
     // the tile silently re-expand the file out from under the toggle below.
     act(() => {
       useTileFindStore.getState().close(node.instanceId);
@@ -627,10 +674,10 @@ describe("<PrDiffTile /> bundle find", () => {
     act(() => {
       useEpicCanvasStore
         .getState()
-        .togglePrDiffFileCollapsedInTab(tabId, node.id, "src/huge.ts");
+        .togglePrDiffFileCollapsedInTab(tabId, node.id, "p:src/huge.ts");
     });
     const collapsedNode = tileOnTab(tabId, node.instanceId);
-    expect(collapsedNode.view.collapsedFilePaths).toContain("src/huge.ts");
+    expect(collapsedNode.view.collapsedFileKeys).toContain("p:src/huge.ts");
     rendered.view.rerender(
       tileTree({ queryClient, node: collapsedNode, tabId }),
     );
@@ -638,10 +685,10 @@ describe("<PrDiffTile /> bundle find", () => {
     act(() => {
       useEpicCanvasStore
         .getState()
-        .togglePrDiffFileCollapsedInTab(tabId, node.id, "src/huge.ts");
+        .togglePrDiffFileCollapsedInTab(tabId, node.id, "p:src/huge.ts");
     });
     const expandedNode = tileOnTab(tabId, node.instanceId);
-    expect(expandedNode.view.collapsedFilePaths).not.toContain("src/huge.ts");
+    expect(expandedNode.view.collapsedFileKeys).not.toContain("p:src/huge.ts");
     rendered.view.rerender(
       tileTree({ queryClient, node: expandedNode, tabId }),
     );
@@ -683,7 +730,7 @@ describe("<PrDiffTile /> bundle find", () => {
     );
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     await screen.findByTestId("diff-content");
 
@@ -733,7 +780,7 @@ describe("<PrDiffTile /> bundle find", () => {
     );
     const { node } = await renderTile({
       queryClient: makeQueryClient(),
-      collapsedFilePaths: null,
+      collapsedFileKeys: null,
     });
     await screen.findByTestId("diff-content");
 

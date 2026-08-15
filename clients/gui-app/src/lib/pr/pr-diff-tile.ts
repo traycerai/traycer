@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { createDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
+import { createPrDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
 import { TILE_KIND_PR_DIFF } from "@/stores/epics/canvas/tile-kinds";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
 
@@ -53,6 +53,6 @@ export function makePrDiffTile(args: {
     owner: args.owner,
     repo: args.repo,
     prNumber: args.prNumber,
-    view: createDiffTileViewState(),
+    view: createPrDiffTileViewState(),
   };
 }

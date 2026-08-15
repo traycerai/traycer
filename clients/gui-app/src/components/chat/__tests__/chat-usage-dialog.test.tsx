@@ -169,6 +169,84 @@ describe("<ChatUsageDialog />", () => {
     expect(usageSummaryCallCount.current).toBeGreaterThan(0);
   });
 
+  it("shows the layout skeleton, not a spinner, while the summary loads", async () => {
+    renderWithClient();
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+
+    // Synchronously after opening the query has not resolved yet.
+    expect(screen.getByTestId("usage-dialog-skeleton")).toBeTruthy();
+    // Skeleton visually, sr-only status audibly - the blocks themselves are
+    // `aria-hidden`, so without this the state has no accessible name.
+    expect(screen.getByRole("status").getAttribute("data-testid")).toBe(
+      "usage-dialog-skeleton",
+    );
+    expect(screen.getByText("Loading usage…").className).toContain("sr-only");
+
+    await screen.findByTestId("usage-cost-figure");
+    expect(screen.queryByTestId("usage-dialog-skeleton")).toBeNull();
+  });
+
+  it("qualifies an empty local-plane read rather than claiming no usage anywhere", async () => {
+    handlerHolder.current = () => {
+      const base = usageSummaryResponse();
+      return {
+        ...base,
+        servedBy: "local",
+        summary: {
+          ...base.summary,
+          totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+          buckets: [],
+          chatBuckets: [],
+          turnRows: [],
+        },
+      };
+    };
+    renderWithClient();
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+
+    await screen.findByTestId("usage-dialog-empty");
+    // Without this the dialog makes an account-wide claim out of a
+    // machine-local result - the qualification the cost figure carries on
+    // the loaded branch has to survive the route into empty.
+    expect(
+      screen.getByTestId("usage-served-by-local-note").textContent,
+    ).toContain("This machine's usage only");
+  });
+
+  it("absorbs the sheet's bottom safe-area inset in the body, having no footer", async () => {
+    renderWithClient();
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+    await screen.findByTestId("usage-cost-figure");
+
+    // The epic dialog's footer takes this inset for it; this dialog has no
+    // footer, so the body is what reaches the sheet's `bottom-0` and an
+    // expanded drilldown would otherwise scroll under the home indicator.
+    expect(screen.getByTestId("chat-usage-dialog").className).toContain(
+      "max-[28rem]:bottom-0",
+    );
+    expect(screen.getByTestId("usage-dialog-body").className).toContain(
+      "max-[28rem]:pb-[env(safe-area-inset-bottom)]",
+    );
+  });
+
   it("opens on a store target and renders the chat's headline + title", async () => {
     renderWithClient();
     act(() => {

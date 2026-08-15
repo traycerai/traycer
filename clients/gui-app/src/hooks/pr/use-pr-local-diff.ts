@@ -9,8 +9,8 @@ import type {
   PrGetLocalDiffRequest,
   PrGetLocalDiffResponse,
   PrGetLocalDiffSummaryRequest,
-  PrGetLocalDiffSummaryResponse,
-  PrGetLocalFileDiffRequest,
+  PrGetLocalDiffSummaryResponseV11,
+  PrGetLocalFileDiffRequestV11,
   PrGetLocalFileDiffResponse,
 } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-schemas";
@@ -224,7 +224,7 @@ export function usePrLocalDiffSummaryQuery(args: {
   readonly target: PrLocalDiffTarget | null;
   readonly ignoreWhitespace: boolean;
   readonly enabled: boolean;
-}): UseQueryResult<PrGetLocalDiffSummaryResponse, HostRpcError> {
+}): UseQueryResult<PrGetLocalDiffSummaryResponseV11, HostRpcError> {
   const hostId = useTabHostId();
   const client = useTabHostClient();
   // A non-null tab client is NOT yet a usable one: during startup, sign-in
@@ -242,7 +242,7 @@ export function usePrLocalDiffSummaryQuery(args: {
     // through `hostQueryKeys.scope`; adding it would refetch on client
     // identity drift alone.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
-    ...queryOptions<PrGetLocalDiffSummaryResponse, HostRpcError>({
+    ...queryOptions<PrGetLocalDiffSummaryResponseV11, HostRpcError>({
       queryKey: [
         ...prQueryKeys.localDiffSummary({
           hostId,
@@ -310,6 +310,14 @@ export function usePrLocalFileDiffQuery(args: {
   readonly headOid: string;
   readonly path: string;
   readonly previousPath: string | null;
+  /**
+   * The summary row's byte-path sidecars, forwarded VERBATIM per side (never
+   * derived client-side). They are request identity: part of the query key
+   * and the wire request both, so two lossy-name-colliding files can never
+   * share a cache slot or an answer.
+   */
+  readonly pathBytes: string | null;
+  readonly previousPathBytes: string | null;
   readonly ignoreWhitespace: boolean;
   readonly byteBudget: number | null;
   readonly enabled: boolean;
@@ -337,6 +345,8 @@ export function usePrLocalFileDiffQuery(args: {
           headOid: args.headOid,
           path: args.path,
           previousPath: args.previousPath,
+          pathBytes: args.pathBytes,
+          previousPathBytes: args.previousPathBytes,
           ignoreWhitespace: args.ignoreWhitespace,
           byteBudget: args.byteBudget,
         }),
@@ -346,7 +356,7 @@ export function usePrLocalFileDiffQuery(args: {
           if (client === null) {
             throw hostClientUnavailableError("pr.getLocalFileDiff");
           }
-          const request: PrGetLocalFileDiffRequest = {
+          const request: PrGetLocalFileDiffRequestV11 = {
             epicId: target.epicId,
             linkGroupKey: target.linkGroupKey,
             repoIdentifier: target.repoIdentifier,
@@ -355,6 +365,8 @@ export function usePrLocalFileDiffQuery(args: {
             headOid: args.headOid,
             path: args.path,
             previousPath: args.previousPath,
+            pathBytes: args.pathBytes,
+            previousPathBytes: args.previousPathBytes,
             ignoreWhitespace: args.ignoreWhitespace,
             byteBudget: args.byteBudget,
           };
