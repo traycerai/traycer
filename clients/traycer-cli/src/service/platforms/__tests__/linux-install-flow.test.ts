@@ -21,14 +21,40 @@ import { fileExists } from "../../install-binary";
 // behalf (a SIGKILLed/SIGTERMed-but-unconfirmed host cannot run its own
 // shutdown cleanup) - stub the removal the same way `macos.test.ts` /
 // `desktop-agent-shutdown.test.ts` stub the identical export, so this
-// suite never touches a real path.
+// suite never touches a real path. The purge is now gated on the PUBLISHED
+// process being provably gone too (a down unit proves nothing about a
+// manually started/orphaned host that owns pid.json outside the unit), so
+// `readHostPidMetadata`/`isProcessAlive`/`getPublishedProcessIdentityVerdict`
+// need the same stubbing `desktop-agent-shutdown.test.ts` already
+// establishes for the identical gate - reused here verbatim.
 const MOCKS = vi.hoisted(() => ({
   removeHostPidMetadata: vi.fn(),
+  readHostPidMetadata: vi.fn(),
+  isProcessAlive: vi.fn(),
+  getPublishedProcessIdentityVerdict: vi.fn(),
 }));
 vi.mock("../../../host/pid-metadata", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../host/pid-metadata")>();
-  return { ...actual, removeHostPidMetadata: MOCKS.removeHostPidMetadata };
+  return {
+    ...actual,
+    removeHostPidMetadata: MOCKS.removeHostPidMetadata,
+    readHostPidMetadata: MOCKS.readHostPidMetadata,
+  };
+});
+vi.mock("../../../store/cli-lock", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../store/cli-lock")>();
+  return { ...actual, isProcessAlive: MOCKS.isProcessAlive };
+});
+vi.mock("../../../store/process-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../store/process-identity")>();
+  return {
+    ...actual,
+    getPublishedProcessIdentityVerdict:
+      MOCKS.getPublishedProcessIdentityVerdict,
+  };
 });
 
 /**
@@ -70,6 +96,20 @@ const label: ServiceLabel = {
 };
 
 const unitFile = (): string => serviceManifestPath(label);
+
+// Round-3's fixture-hermeticity rule applies here too: `processStartIdentity`
+// is explicitly `null`, never omitted - an omitted field reads as
+// `undefined`, which is NOT `null`, and would silently route every test
+// through the wrong purge-gate branch (the identity-verdict path instead of
+// the legacy liveness fallback).
+const FORCE_STOP_PID_METADATA = {
+  pid: 4242,
+  hostId: "test-host",
+  version: "1.2.3",
+  websocketUrl: "ws://127.0.0.1:1234/rpc",
+  startedAt: "2026-07-12T00:00:00.000Z",
+  processStartIdentity: null,
+};
 
 interface RecordedCall {
   readonly command: string;
@@ -263,13 +303,24 @@ describe("linux service install flow", () => {
 describe("linux service stop --force", () => {
   beforeEach(() => {
     MOCKS.removeHostPidMetadata.mockReset();
+    MOCKS.readHostPidMetadata.mockReset();
+    MOCKS.isProcessAlive.mockReset();
+    MOCKS.getPublishedProcessIdentityVerdict.mockReset();
+    // Default fixture: a pre-identity pid.json (the legacy liveness-gate
+    // fallback) naming a process already confirmed dead - the shape every
+    // pre-existing purge-positive test in this file expects, so a test that
+    // does not override the fixture keeps exercising the same purge path it
+    // always has. Tests targeting the identity-verdict gate specifically
+    // override both mocks below.
+    MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - cancels any scheduled auto-restart, then purges pid.json", async () => {
+  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - cancels any scheduled auto-restart, RE-CONFIRMS, then purges pid.json", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -285,8 +336,15 @@ describe("linux service stop --force", () => {
     // kill, ever. A settled state alone is not proof nothing is scheduled
     // (the unit can settle at `failed` from a CRASH mid-grace, with
     // Restart=on-failure still queuing a relaunch) - the trailing `stop`
-    // cancels it before the purge.
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
+    // cancels it, and a FRESH is-active re-confirms before the purge (the
+    // cancel's own failures/timeouts are swallowed, so only a positive
+    // re-read vouches).
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
     expect(calls[2]?.args).toEqual([
       "--user",
       "stop",
@@ -510,11 +568,12 @@ describe("linux service stop --force", () => {
     expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 
-  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels any scheduled auto-restart before purging", async () => {
+  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
     // 'failed' is exactly the state a CRASH mid-grace settles at (as
     // opposed to a clean exit from our stop request) - Restart=on-failure
     // may have a relaunch scheduled, which is precisely why the cancel runs
-    // even on this "already settled" path.
+    // even on this "already settled" path, and why a fresh re-confirm runs
+    // after it rather than trusting the cancel itself.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -526,11 +585,16 @@ describe("linux service stop --force", () => {
 
     await createLinuxController(runner).stop(label, { force: true });
 
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
-  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels any scheduled auto-restart before purging", async () => {
+  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
     // Older systemctl's answer for a unit that is not loaded at all.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -543,7 +607,12 @@ describe("linux service stop --force", () => {
 
     await createLinuxController(runner).stop(label, { force: true });
 
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
@@ -555,5 +624,237 @@ describe("linux service stop --force", () => {
     expect(calls.map(verbOf)).toEqual(["stop"]);
     // Non-force never confirms the stop, so it never purges either.
     expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
+  // can itself be a crash - `failed` - whose Restart=on-failure replacement
+  // is already coming back up by the time the cancel runs. The cancel's own
+  // failures/timeouts are swallowed, so it proves nothing; only a FRESH
+  // positive re-read after it does. An unconfirmed re-read falls through to
+  // the ordinary SIGKILL escalation rather than reporting a stop that was
+  // never actually proven.
+  describe("post-cancel re-confirmation (branch-1 settle can be a crash whose replacement is already restarting)", () => {
+    it("first settle is 'failed' (a crash), the post-cancel re-confirm sees 'activating' (the replacement) through the whole confirm grace, falls through to SIGKILL, which then settles for a successful stop", async () => {
+      vi.useFakeTimers();
+      const calls: RecordedCall[] = [];
+      let stopCount = 0;
+      let killIssued = false;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (command === "systemctl" && args[1] === "stop") {
+          stopCount += 1;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "kill") {
+          killIssued = true;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "is-active") {
+          if (killIssued)
+            return { stdout: "inactive", stderr: "", exitCode: 3 };
+          // Before the cancel (stopCount is still 1, from the initial plain
+          // stop only): settle immediately at 'failed' - the crash. After
+          // the cancel (stopCount is 2): the replacement is coming back up.
+          return stopCount >= 2
+            ? { stdout: "activating", stderr: "", exitCode: 3 }
+            : { stdout: "failed", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      const pending = createLinuxController(runner).stop(label, {
+        force: true,
+      });
+      // The SIGTERM-grace settle and the post-kill SIGKILL-grace settle are
+      // both immediate (first poll) - only the 10s confirm grace needs
+      // advancing, plus slack.
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(pending).resolves.toBeUndefined();
+      const verbs = calls.map(verbOf);
+      // stop, is-active(failed, settled on the first probe), stop(cancel),
+      // is-active...(activating, never settles through the confirm grace),
+      // kill, stop(cancel again), is-active(inactive, settles).
+      expect(verbs[0]).toBe("stop");
+      expect(verbs[1]).toBe("is-active");
+      expect(verbs[2]).toBe("stop");
+      const killIndex = verbs.indexOf("kill");
+      expect(killIndex).toBeGreaterThan(2);
+      expect(verbs.slice(3, killIndex).every((v) => v === "is-active")).toBe(
+        true,
+      );
+      expect(verbs.slice(3, killIndex).length).toBeGreaterThan(0);
+      expect(verbs[killIndex + 1]).toBe("stop");
+      expect(verbs[killIndex + 2]).toBe("is-active");
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    });
+
+    it("if nothing ever settles after the kill either, SERVICE_CONTROL_FAILED - never a false success", async () => {
+      vi.useFakeTimers();
+      let stopCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "stop") {
+          stopCount += 1;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "is-active") {
+          // Settles once, right at the very first probe (the crash) - then
+          // never again, through both the post-cancel re-confirm AND the
+          // post-kill SIGKILL grace.
+          return stopCount === 1
+            ? { stdout: "failed", stderr: "", exitCode: 3 }
+            : { stdout: "activating", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      const stopping = createLinuxController(runner).stop(label, {
+        force: true,
+      });
+      const assertion = expect(stopping).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("still active after SIGKILL"),
+      });
+      // Confirm grace (10s) + SIGKILL grace (10s), plus slack.
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await assertion;
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+  });
+
+  // Purge gated on the PUBLISHED process being provably gone, not just on
+  // the unit being confirmed down: a down unit says nothing about a
+  // manually started or orphaned host that owns this environment's
+  // pid.json OUTSIDE the unit - unlinking would leave that live host
+  // serving but undiscoverable. Mirrors `desktop-agent-shutdown.test.ts`'s
+  // identical gate one to one.
+  describe("purge gated on published-process death, not unit state alone", () => {
+    it("keeps pid.json when the identity verdict says the occupant is still 'current' - the unit is confirmed down, but stop still succeeds without purging", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        ...FORCE_STOP_PID_METADATA,
+        processStartIdentity: "linux:1699999999.123456",
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledWith(
+        4242,
+        "linux:1699999999.123456",
+      );
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+      // The identity-carrying path bypasses the legacy liveness gate
+      // entirely - it must not run a second, contradictory check.
+      expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
+    });
+
+    it("keeps pid.json when the identity verdict is 'indeterminate' - an unverifiable occupant is not evidence of anything, so its record stays too", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        ...FORCE_STOP_PID_METADATA,
+        processStartIdentity: "linux:1699999999.123456",
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
+        "indeterminate",
+      );
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("purges when the identity verdict proves the published process is gone ('dead')", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        ...FORCE_STOP_PID_METADATA,
+        processStartIdentity: "linux:1699999999.123456",
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("dead");
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    });
+
+    it("purges when the identity verdict proves a recycled pid ('mismatch')", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        ...FORCE_STOP_PID_METADATA,
+        processStartIdentity: "linux:1699999999.123456",
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    });
+
+    it("null-identity fallback: purges when the legacy liveness check proves the pid dead", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
+      MOCKS.isProcessAlive.mockReturnValue(false);
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.isProcessAlive).toHaveBeenCalledWith(4242);
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+      // The null-identity fallback skips the verdict call entirely - a
+      // pre-identity pid.json never reaches it.
+      expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
+    });
+
+    it("null-identity fallback: keeps pid.json when the legacy liveness check finds the pid still alive - a manually started/orphaned host outside the unit keeps its record", async () => {
+      MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
+      MOCKS.isProcessAlive.mockReturnValue(true);
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
   });
 });

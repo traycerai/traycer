@@ -6,6 +6,7 @@ import {
 } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
+import { getPublishedProcessIdentityVerdict } from "../../store/process-identity";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -264,8 +265,17 @@ async function stopService(
   // unit's OWN cgroup.
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGTERM_GRACE_MS)) {
     await cancelScheduledAutoRestart(label, run);
-    await purgePidMetadataAfterConfirmedStop(label);
-    return;
+    // Re-confirm AFTER the cancel. The settle just observed can be a crash
+    // (`failed`) whose Restart=on-failure relaunch already fired - the
+    // cancel then races or tears down that replacement, and its runner
+    // failures and timeouts are deliberately swallowed, so the cancel
+    // itself vouches for nothing. Only a fresh positive read may. An
+    // unconfirmed cancel falls through to the SIGKILL escalation instead of
+    // reporting a stop it cannot prove.
+    if (await waitForUnitInactive(label, run, FORCE_STOP_CONFIRM_GRACE_MS)) {
+      await purgePidMetadataAfterConfirmedStop(label);
+      return;
+    }
   }
   await run(
     "systemctl",
@@ -325,14 +335,34 @@ async function cancelScheduledAutoRestart(
 // A SIGKILLed host cannot run its own shutdown cleanup, so the stale
 // pid.json record survives the process - and the Desktop health monitor
 // reads "metadata present + endpoint dead" as a crash and starts recovery,
-// undoing the stop the user just forced. Purge is gated on a CONFIRMED
-// inactive unit (never the unconfirmed non-force return: deleting a live
-// host's published endpoint would orphan it) and is best-effort - a failed
-// unlink must not turn a real, confirmed stop into a reported failure.
+// undoing the stop the user just forced. Two gates, both required:
+//
+// 1. The unit is CONFIRMED down (the callers' polls) - never the
+//    unconfirmed non-force return.
+// 2. The PUBLISHED process is provably gone. A down unit proves nothing
+//    about pid.json: a manually started or orphaned host running OUTSIDE
+//    the unit can own this environment's record while `is-active` reads
+//    inactive/unknown, and unlinking would leave that live host serving
+//    but undiscoverable. Same fail-closed direction as the kill gates: an
+//    occupant that cannot be verified keeps its record.
+//
+// Best-effort throughout - a failed read or unlink must not turn a real,
+// confirmed stop into a reported failure.
 async function purgePidMetadataAfterConfirmedStop(
   label: ServiceLabel,
 ): Promise<void> {
   try {
+    const metadata = await readHostPidMetadata(label.environment);
+    if (metadata === null) return;
+    if (metadata.processStartIdentity !== null) {
+      const verdict = await getPublishedProcessIdentityVerdict(
+        metadata.pid,
+        metadata.processStartIdentity,
+      );
+      if (verdict !== "dead" && verdict !== "mismatch") return;
+    } else if (isProcessAlive(metadata.pid)) {
+      return;
+    }
     await removeHostPidMetadata(label.environment);
   } catch {
     // Best-effort by design; the stop itself is already confirmed.
@@ -345,6 +375,11 @@ async function purgePidMetadataAfterConfirmedStop(
 const FORCE_STOP_SIGTERM_GRACE_MS =
   SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 const FORCE_STOP_SIGKILL_GRACE_MS = 10_000;
+// Post-cancel re-confirmation window. The cancel's own subprocess blocks up
+// to 15s tearing down any replacement it caught mid-start, so by the time
+// this poll begins a torn-down unit has usually settled; one that has not
+// falls through to the SIGKILL escalation.
+const FORCE_STOP_CONFIRM_GRACE_MS = 10_000;
 const FORCE_STOP_POLL_MS = 500;
 
 /**
