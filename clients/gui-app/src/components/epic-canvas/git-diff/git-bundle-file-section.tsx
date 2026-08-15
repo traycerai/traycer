@@ -262,6 +262,11 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
   });
   useEffect(() => {
     if (displayedDiffError === null) return;
+    // The error block is the only thing on screen now: drop the retained
+    // patch too, or a "Load Full" that fails after a truncated diff was shown
+    // leaves find matching text that is no longer in the DOM (see
+    // `unregisterLoadedPatch`).
+    bundleFindRegistration.unregisterLoadedPatch(props.bundleFindFileId);
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "failed",

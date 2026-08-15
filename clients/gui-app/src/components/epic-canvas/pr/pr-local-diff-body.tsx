@@ -767,10 +767,18 @@ function PrLocalFileDiffContent(props: {
   // but git calls binary joins the summary-declared binaries. A loaded patch
   // registers itself from `PrPatchContent`, and a later success supersedes a
   // registered failure in the session's coverage counts.
+  //
+  // A failure also UNREGISTERS whatever this section registered before: the
+  // session retains a loaded patch past its unmount on purpose, and a
+  // retained patch outranks any coverage state - so a "Load Full" that fails
+  // after a truncated patch was shown (a new query key, no data of its own)
+  // would otherwise leave find matching text that is not in the DOM and
+  // calling the file truncated rather than failed.
   const responseBinary = response?.kind === "diff" && response.isBinary;
   const responseFailed = query.error !== null || unavailableReason !== null;
   useEffect(() => {
     if (responseFailed) {
+      bundleFindRegistration.unregisterLoadedPatch(bundleFindFileId);
       bundleFindRegistration.registerCoverageState(bundleFindFileId, "failed");
       return;
     }

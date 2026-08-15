@@ -655,4 +655,62 @@ describe("<PrDiffTile /> bundle find", () => {
       total: 1,
     });
   });
+
+  it("drops a retained truncated patch from find when 'Load Full' fails", async () => {
+    // A retained loaded patch outranks any coverage state in the coverage
+    // counts, and the session keeps it past the section's unmount on purpose.
+    // So when the "Load Full" re-ask (a NEW query key: byteBudget null) fails,
+    // the section must unregister the truncated bytes it no longer renders -
+    // otherwise find keeps matching text that is not in the DOM and reports
+    // the file as truncated instead of failed.
+    const TRUNCATED_TOKEN = "TruncatedToken";
+    const files = [summaryFile({ path: "src/cut.ts" })];
+    tabHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "pr.getLocalDiffSummary")
+          return Promise.resolve(summaryOkWithFiles(files));
+        if (method === "pr.getLocalFileDiff") {
+          if (requestByteBudget(params) === null)
+            return Promise.reject(new Error("full fetch boom"));
+          return Promise.resolve({
+            ...fileDiffOk(patchWithNeedle("src/cut.ts", TRUNCATED_TOKEN)),
+            isTruncated: true,
+            truncatedAfterBytes: 64,
+          });
+        }
+        return Promise.reject(new Error(`unexpected method ${method}`));
+      },
+    );
+    const { node } = await renderTile({
+      queryClient: makeQueryClient(),
+      collapsedFilePaths: null,
+    });
+    await screen.findByTestId("diff-content");
+
+    // A truncated patch is searchable but flagged: the coverage message names
+    // it, so the snapshot is "partial" rather than "ready".
+    search(node.instanceId, TRUNCATED_TOKEN);
+    expect(tileSnapshot(node.instanceId).total).toBe(1);
+    expect(tileSnapshot(node.instanceId).coverageMessage).toMatch(/truncated/u);
+    act(() => {
+      useTileFindStore.getState().close(node.instanceId);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load Full" }));
+    await screen.findByText("Diff Loading Error");
+
+    search(node.instanceId, TRUNCATED_TOKEN);
+    expect(tileSnapshot(node.instanceId).total).toBe(0);
+    const message = tileSnapshot(node.instanceId).coverageMessage ?? "";
+    expect(message).toMatch(/failed/u);
+    expect(message).not.toMatch(/truncated/u);
+  });
 });
+
+function requestByteBudget(params: unknown): number | null | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  if (!("byteBudget" in params)) return undefined;
+  const budget = params.byteBudget;
+  if (budget === null) return null;
+  return typeof budget === "number" ? budget : undefined;
+}
