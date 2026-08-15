@@ -3,8 +3,9 @@
  *
  * Their own module so `published-chat-tile.tsx` exports only its component: a
  * file that exports both components and non-components breaks fast refresh for
- * everything importing it. Pure string builders, moved unchanged.
+ * everything importing it. Pure string builders.
  */
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
  * The locked composer's reason, in one sentence a reader can act on.
@@ -32,13 +33,62 @@ export function publishedChatLockReason(input: {
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
+  /** When the copy on screen was published. `null` when the row omits it. */
+  readonly publishedAt: number | null;
+  /**
+   * Whether the owner's log is PROVEN to run past this copy. See
+   * {@link publishedCopyFreshnessSentence} for what "proven" buys.
+   */
+  readonly copyIsBehind: boolean;
 }): string {
-  const base = publishedCopySentence(input);
+  const parts = [publishedCopySentence(input)];
+  const freshness = publishedCopyFreshnessSentence(input);
+  if (freshness !== null) parts.push(freshness);
+  // The pre-existing tail, unchanged: a fidelity gap is reported only when
+  // nothing unreadable already claimed the slot.
   if (input.unreadableCount > 0) {
-    return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
+    parts.push(unreadableItemsSentence(input.unreadableCount));
+  } else if (input.fidelityNotice !== null) {
+    parts.push(input.fidelityNotice);
   }
-  if (input.fidelityNotice !== null) return `${base} ${input.fidelityNotice}`;
-  return base;
+  return parts.join(" ");
+}
+
+/**
+ * How fresh the copy on screen is - the two facts a reader of a published copy
+ * can act on, and nothing else.
+ *
+ * AGE is passive and unconditional: it never alarms, and it is the only thing
+ * that stays honest in the case the sequence check cannot see. If the owning
+ * host stops syncing altogether, both sequences freeze together and the
+ * comparison reads "not behind" while the copy ages - so the timestamp, which
+ * cannot lie about itself, is what bounds that.
+ *
+ * BEHIND is shown ONLY on proof, and stays silent when healthy. There is no
+ * hedged middle state on purpose: a "may be behind" that fires on suspicion
+ * teaches readers to ignore the one that fires on evidence. The evidence is a
+ * sequence comparison in a single unit (see `ChatProjection.revision`), never a
+ * timestamp difference - `publishedAt` is stamped by the server and the record
+ * head by the owning host, so treating their difference as lag would be
+ * reading clock skew as staleness.
+ *
+ * Not quantified. The delta counts transcript RECORDS, which is not a unit a
+ * reader thinks in - a single turn moves it by many - so a number here would
+ * look precise while meaning little.
+ */
+function publishedCopyFreshnessSentence(input: {
+  readonly publishedAt: number | null;
+  readonly copyIsBehind: boolean;
+}): string | null {
+  if (input.publishedAt === null) {
+    return input.copyIsBehind
+      ? "The agent has continued since this copy was published."
+      : null;
+  }
+  const published = `Published ${formatAbsoluteDateTime(input.publishedAt)}`;
+  return input.copyIsBehind
+    ? `${published}; the agent has continued since.`
+    : `${published}.`;
 }
 
 /**

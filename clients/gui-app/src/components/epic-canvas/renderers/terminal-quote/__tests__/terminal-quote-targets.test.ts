@@ -26,6 +26,7 @@ function chat(fields: {
     hostId: TERMINAL_HOST,
     isTitleEditedByUser: false,
     archivedAt: fields.archivedAt,
+    revision: null,
     settings: null,
   };
 }

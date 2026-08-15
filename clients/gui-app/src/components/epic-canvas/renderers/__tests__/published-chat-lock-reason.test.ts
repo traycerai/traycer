@@ -4,6 +4,7 @@ import {
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
  * The locked composer's footer is the ONE sentence a reader of a read-only
@@ -25,6 +26,8 @@ describe("publishedChatLockReason", () => {
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
+      publishedAt: null,
+      copyIsBehind: false,
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
@@ -38,6 +41,8 @@ describe("publishedChatLockReason", () => {
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
+      publishedAt: null,
+      copyIsBehind: false,
     });
 
     expect(reason).toContain("last published copy");
@@ -60,6 +65,8 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
+        publishedAt: null,
+        copyIsBehind: false,
       });
       expect(reason).toContain("which is offline");
       expect(reason).toContain("Sending resumes when that host is back.");
@@ -76,6 +83,8 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
+        publishedAt: null,
+        copyIsBehind: false,
       }),
     ).toContain("2 items need a newer version of Traycer to render.");
     expect(
@@ -85,8 +94,120 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
+        publishedAt: null,
+        copyIsBehind: false,
       }),
     ).toContain("1 attachment is unavailable.");
+  });
+
+  describe("freshness sentence", () => {
+    it("says nothing about freshness when there is no evidence either way", () => {
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        copyIsBehind: false,
+      });
+
+      expect(reason).not.toContain("Published");
+      expect(reason).not.toContain("continued");
+    });
+
+    it("reports the agent has continued when behind is proven but there is no publish time", () => {
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        copyIsBehind: true,
+      });
+
+      expect(reason).toContain(
+        "The agent has continued since this copy was published.",
+      );
+    });
+
+    it("states when the copy was published when it is not behind", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt,
+        copyIsBehind: false,
+      });
+
+      expect(reason).toContain(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      expect(reason).not.toContain("continued");
+    });
+
+    it("states when the copy was published and that the agent has continued since when behind", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt,
+        copyIsBehind: true,
+      });
+
+      expect(reason).toContain(
+        `Published ${formatAbsoluteDateTime(publishedAt)}; the agent has continued since.`,
+      );
+    });
+
+    it("sits before the unreadable-items tail", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 2,
+        fidelityNotice: null,
+        publishedAt,
+        copyIsBehind: false,
+      });
+
+      const freshnessIndex = reason.indexOf(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      const unreadableIndex = reason.indexOf(
+        "2 items need a newer version of Traycer to render.",
+      );
+      expect(freshnessIndex).toBeGreaterThanOrEqual(0);
+      expect(unreadableIndex).toBeGreaterThan(freshnessIndex);
+    });
+
+    it("sits before the fidelity notice tail", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: "1 attachment is unavailable.",
+        publishedAt,
+        copyIsBehind: false,
+      });
+
+      const freshnessIndex = reason.indexOf(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      const fidelityIndex = reason.indexOf("1 attachment is unavailable.");
+      expect(freshnessIndex).toBeGreaterThanOrEqual(0);
+      expect(fidelityIndex).toBeGreaterThan(freshnessIndex);
+    });
   });
 });
 

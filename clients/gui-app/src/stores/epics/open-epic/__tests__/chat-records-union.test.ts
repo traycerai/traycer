@@ -198,11 +198,40 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       isTitleEditedByUser: true,
       settings: null,
       archivedAt: null,
+      revision: 1,
     });
     // Tree position, which is what a store-only chat lost entirely.
     expect(state.tree.nodeById.swept.parentId).toBe("parent");
     expect(state.tree.childrenByParent.parent).toEqual(["swept"]);
     expect(state.tree.rootIds).toEqual(["parent"]);
+    session.handle.dispose();
+  });
+
+  it("carries the record's revision through, and projects null for a doc-only chat", () => {
+    // `chatProjectionFromRecord` maps the row's durable head straight onto
+    // the projection; a legacy doc entry predates the record plane entirely
+    // and carries no sequence at all, so `projectChat` must answer `null`
+    // rather than inventing a `0`.
+    const session = newSession(
+      seedChats([
+        [
+          "legacy",
+          docChatEntry({
+            id: "legacy",
+            title: "Legacy chat",
+            parentId: null,
+            hostId: null,
+          }),
+        ],
+      ]),
+    );
+    session.handle.store
+      .getState()
+      .applyChatRecords([record({ chatId: "row", revision: 7 })]);
+
+    const state = session.handle.store.getState();
+    expect(state.chats.byId.legacy.revision).toBeNull();
+    expect(state.chats.byId.row.revision).toBe(7);
     session.handle.dispose();
   });
 

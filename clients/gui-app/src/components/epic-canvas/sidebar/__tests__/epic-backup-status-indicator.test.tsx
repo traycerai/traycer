@@ -359,6 +359,7 @@ function chatProjection(id: string, updatedAt: number): ChatProjection {
     isTitleEditedByUser: false,
     settings: null,
     archivedAt: null,
+    revision: null,
   };
 }
 

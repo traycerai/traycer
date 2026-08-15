@@ -290,6 +290,10 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     settings: coerceChatRunSettings(entry.get("settings")),
     archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
+    // A doc entry predates the record plane and carries no sequence at all.
+    // `null` (no evidence), never 0 - a zero would read as "the log is empty"
+    // and make every published copy of a doc-projected chat look behind.
+    revision: null,
   };
 }
 
@@ -651,6 +655,10 @@ export function chatProjectionFromRecord(
     archivedAt: record.archived
       ? (record.archivedAt ?? record.updatedAt)
       : null,
+    // Present on own AND foreign rows: the inbox maps the cloud row's
+    // `metadataRevision` onto this same field, so a replica of another host's
+    // chat carries that host's durable head just as its owner's row does.
+    revision: record.revision,
   };
 }
 

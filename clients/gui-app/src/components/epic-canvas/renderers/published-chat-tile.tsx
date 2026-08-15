@@ -8,7 +8,9 @@ import {
   useHostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
+import { useEpicStore } from "@/hooks/use-epic-store";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
+import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 import { isCloudChatsUnsupported } from "@/lib/chats/cloud-chat-read-port";
@@ -180,6 +182,33 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.name,
   ]);
 
+  // ── Point-of-read freshness ──────────────────────────────────────────────
+  const { publishedAt: copyPublishedAt, throughRecordSeq: copyThroughSeq } =
+    publishedCopyStamp(state);
+  // Does the owner's log run PAST this copy? The record row carries that
+  // host's durable head (own rows directly, foreign rows through the inbox),
+  // and it is the one number comparable with the head's `throughRecordSeq`.
+  //
+  // Selected down to a boolean rather than reading `revision` out: the owner
+  // advancing its log would otherwise re-render this transcript on every turn
+  // to change a value nothing renders. As a boolean the tile repaints once,
+  // when the answer actually flips.
+  //
+  // Absent record row (a copy opened from a cloud row this host holds no
+  // replica of) or absent sequence on either side = no evidence, so `false`.
+  // The sentence then states age alone and claims nothing, which is the honest
+  // reading: silence here means "unproven", never "current".
+  const copyIsBehind = useEpicStore((s) => {
+    if (copyThroughSeq === null) return false;
+    if (!Object.hasOwn(s.chats.byId, node.chatId)) return false;
+    const revision = s.chats.byId[node.chatId].revision;
+    if (revision === null) return false;
+    // STRICTLY greater. A head that lands before the metadata projection
+    // covering the same records leaves the copy transiently AHEAD; that is a
+    // race in the reporting, not staleness, and must not raise the notice.
+    return revision > copyThroughSeq;
+  });
+
   // The doc-replica fallback: enabled ONLY once the cloud read has settled
   // `unpublished` - every other refusal (needs-newer-app, ambiguous-identity,
   // corrupt) keeps its own notice, unmasked.
@@ -334,11 +363,34 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
+            publishedAt: copyPublishedAt,
+            copyIsBehind,
           })}
         />
       </PublishedChatSourceProvider>
     </div>
   );
+}
+
+/**
+ * What the copy on screen actually IS: the head it was rendered from, and when
+ * that head was published.
+ *
+ * Read off the row the transcript read returned rather than from any later
+ * cloud state, because the question a reader of a copy has is about the bytes
+ * in front of them. Both are `null` until the read is `ready` - and
+ * `throughRecordSeq` can be `null` even then, on a row published by a build
+ * that predates it.
+ */
+function publishedCopyStamp(state: CloudChatTranscriptState): {
+  readonly publishedAt: number | null;
+  readonly throughRecordSeq: number | null;
+} {
+  const row = state.kind === "ready" ? state.read.chat : null;
+  return {
+    publishedAt: row?.publishedAt ?? null,
+    throughRecordSeq: row?.throughRecordSeq ?? null,
+  };
 }
 
 /**
