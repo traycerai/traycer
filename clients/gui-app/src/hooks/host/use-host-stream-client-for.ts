@@ -422,9 +422,14 @@ export function useHostStreamClientBindingFor(
         client.close("transient-host-client-teardown");
       }
     };
-    rebuildBackoff.markBuilt(Date.now());
+    // The SAME identity the binding is filed under, so the streak follows the
+    // transport rather than this hook instance: a caller that retargets is
+    // dialing a different machine, and the previous one's failures are not
+    // evidence about it.
+    const builtTransportKey = remoteAwareOwnerIdentity(memoizedTarget, userId);
+    rebuildBackoff.markBuilt(Date.now(), builtTransportKey);
     setBinding({
-      transportKey: remoteAwareOwnerIdentity(memoizedTarget, userId),
+      transportKey: builtTransportKey,
       client,
       pin,
       unpin,

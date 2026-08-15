@@ -55,6 +55,7 @@ import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
@@ -829,6 +830,39 @@ function ResourceMonitorHostUnavailableNotice(props: {
       >
         <MutedAgentSpinner />
         Finding {scope.hostLabel}…
+      </div>
+    );
+  }
+  // A plan-gated host is not an offline one, and the copy below would send
+  // someone to debug a network that is working: the machine is up, this app
+  // just may not attach to it remotely on the current plan. The scope gate
+  // makes exactly this distinction for the Settings panels
+  // (`host-scope-gate.tsx`), and a picker that can land on the same host owes
+  // the same answer and the same remedy.
+  if (scope.host?.planRestricted === true) {
+    return (
+      <div
+        role="status"
+        className="flex flex-col items-center gap-2 px-6 py-8 text-center"
+        data-testid="resource-monitor-host-plan-restricted"
+      >
+        <p className="max-w-[40ch] text-ui-sm font-medium text-foreground">
+          Reading {scope.hostLabel} needs a paid plan
+        </p>
+        <p className="max-w-[40ch] text-ui-sm text-muted-foreground">
+          It keeps working on its own machine. This app just can&apos;t attach
+          to it remotely on the current plan, so its processes can&apos;t be
+          streamed here.
+        </p>
+        <PlanRestrictedUpgradeAction />
+        <button
+          type="button"
+          onClick={scope.returnToActive}
+          className="rounded-md px-1 py-0.5 text-ui-sm text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          data-testid="resource-monitor-host-return-to-active"
+        >
+          Show the active host
+        </button>
       </div>
     );
   }

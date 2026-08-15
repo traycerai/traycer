@@ -83,6 +83,43 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
   };
 });
 
+// The plan-restricted branch is the only thing in this popover that reaches the
+// runner bridge, and it needs both a provider (`useRunnerHost` throws without
+// one) and a QueryClient. Faking those two boundaries keeps the REAL upgrade
+// button under test — stubbing the component itself would assert its own test
+// id and nothing about what this surface actually offers.
+//
+// `importOriginal` rather than a fixed factory, deliberately: a fixed one goes
+// stale the moment either module gains an export some other component in this
+// tree already calls, and fails at the call site rather than here.
+const openExternalLinkMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+
+vi.mock("@/providers/use-runner-host", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/providers/use-runner-host")>();
+  return {
+    ...actual,
+    useRunnerHost: () => ({ authnBaseUrl: "https://authn.example" }),
+  };
+});
+
+vi.mock(
+  "@/hooks/runner/use-open-external-link-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/runner/use-open-external-link-mutation")
+      >();
+    return {
+      ...actual,
+      useRunnerOpenExternalLink: () => ({
+        isPending: false,
+        mutate: openExternalLinkMock.mutate,
+      }),
+    };
+  },
+);
+
 // The scope's own six hooks (both host lists, the runner host, the plan gate)
 // are not this suite's subject - it mocks at the scope boundary, exactly as the
 // Settings panel suites and the usage popover's do.
@@ -717,6 +754,7 @@ afterEach(() => {
   cleanup();
   resourcesKillMock.mutate.mockClear();
   managedCommandStopMock.mutate.mockClear();
+  openExternalLinkMock.mutate.mockClear();
   Reflect.deleteProperty(globalThis, "runnerHost");
   routerMock.navigate.mockReset();
   routerMock.pathname = "/epics/epic-1/tab-1";
@@ -3536,6 +3574,48 @@ describe("ResourceMonitorPopover · host picker", () => {
       screen.getByTestId("resource-monitor-host-picker-row"),
     ).not.toBeNull();
 
+    fireEvent.click(
+      screen.getByTestId("resource-monitor-host-return-to-active"),
+    );
+    expect(returnToActive).toHaveBeenCalled();
+  });
+
+  it("offers an upgrade, not a connectivity story, for a plan-restricted pick", () => {
+    const returnToActive = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({
+      // `unreachable` is how a plan-gated route surfaces - the server refuses
+      // the attach - so this is the SAME status as the test above and the
+      // reason is the only thing telling them apart.
+      status: "unreachable",
+      host: hostScopeOptionFixture({
+        hostId: "host-b",
+        name: "host-b",
+        isActive: false,
+        isLocalMachine: false,
+        planRestricted: true,
+      }),
+      returnToActive,
+    });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    // The offline copy would send someone to debug a network that is working.
+    expect(
+      screen.queryByTestId("resource-monitor-host-unavailable"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("resource-monitor-host-plan-restricted"),
+    ).not.toBeNull();
+    // The remedy is the same button the Settings gate offers, so the two
+    // surfaces cannot drift on what a person is supposed to do next — and it
+    // has to ACT, or it is decoration with the right test id.
+    fireEvent.click(screen.getByTestId("host-scope-plan-upgrade"));
+    expect(openExternalLinkMock.mutate).toHaveBeenCalled();
+
+    // Still a way back, for someone who would rather keep watching than pay.
     fireEvent.click(
       screen.getByTestId("resource-monitor-host-return-to-active"),
     );

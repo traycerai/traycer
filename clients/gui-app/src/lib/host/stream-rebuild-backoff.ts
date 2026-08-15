@@ -26,8 +26,19 @@ const REBUILD_BACKOFF_MAX_MS = 30_000;
  * policy the other was always going to need.
  */
 export interface StreamRebuildBackoff {
-  /** Start a served client's lifetime clock; call where the client is built. */
-  readonly markBuilt: (nowMs: number) => void;
+  /**
+   * Start a served client's lifetime clock; call where the client is built.
+   *
+   * `transportIdentity` names the endpoint this client dials, and a change in
+   * it clears the streak. A streak measures "dialing THIS thing keeps failing",
+   * which says nothing about the next machine: carried across a pick, an older
+   * host's terminal-class closes would pace the first stumble on a healthy one
+   * by up to the full ceiling, for no reason the person could see. Both owners
+   * retarget - the provider when the active host swaps, the transient hook
+   * whenever its caller names someone else - so the rule lives here, in the one
+   * policy they share, rather than in whichever of them remembered it.
+   */
+  readonly markBuilt: (nowMs: number, transportIdentity: string | null) => void;
   /**
    * How long to wait before the rebuild this close triggers, and the reason
    * this is a mutating read: it also advances (or resets) the quick-close
@@ -39,8 +50,18 @@ export interface StreamRebuildBackoff {
 export function createStreamRebuildBackoff(): StreamRebuildBackoff {
   let quickCloses = 0;
   let builtAt = 0;
+  let identity: string | null = null;
   return {
-    markBuilt: (nowMs: number): void => {
+    markBuilt: (nowMs: number, transportIdentity: string | null): void => {
+      // Only a move BETWEEN two known endpoints clears the streak. Adopting
+      // the first identity must not, or the guard's opening observation - a
+      // client already closed before anything was ever built, which is counted
+      // deliberately (see the test) - would be erased by the very rebuild it
+      // triggers.
+      if (identity !== null && transportIdentity !== identity) {
+        quickCloses = 0;
+      }
+      identity = transportIdentity;
       builtAt = nowMs;
     },
     nextRebuildDelayMs: (nowMs: number): number => {

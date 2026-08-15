@@ -152,7 +152,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       client: wsStreamClient.instanceId,
       hasTransport: true,
     });
-    rebuildBackoff.markBuilt(Date.now());
+    rebuildBackoff.markBuilt(Date.now(), target.hostId);
     // The client and the host it dials are published in ONE value, so no
     // consumer can observe the new host beside the old client.
     //
