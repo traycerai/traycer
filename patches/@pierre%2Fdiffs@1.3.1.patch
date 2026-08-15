@@ -11,7 +11,7 @@ diff --git a/dist/editor/editor.js b/dist/editor/editor.js
  		}
  		this.#markerRenderer?.removePopover();
  		this.#computeContentOffset(this.#contentElement);
-@@ -2691,8 +2691,7 @@ class Editor {
+@@ -2691,8 +2692,7 @@ class Editor {
  		if (cachedY !== void 0) return cachedY;
  		const lineElement = this.#getLineElement(line);
  		if (lineElement === void 0) return -1;
