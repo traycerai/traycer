@@ -139,13 +139,19 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
  * every call site below - and so callers outside this module can resolve the
  * same default-host scope without duplicating it inline.
  *
- * App-wide surfaces (the app-load prefetcher, Settings, the command palette)
- * read the catalog through the default-host wrappers below. A COMPOSER never
- * does: every composer surface has a target host - the tab's bound host, a
- * fork dialog's fixed host, the new-conversation modal's pinned host, or the
- * landing page's active host - and reads its catalog through the
+ * App-wide surfaces (the app-load prefetcher, Settings, and the command
+ * palette WHEN NO COMPOSER IS FOCUSED) read the catalog through the
+ * default-host wrappers below. A COMPOSER never does: every composer surface
+ * has a target host - the tab's bound host, a fork dialog's fixed host, or
+ * the app-wide default followed through `null` (the landing page, whose
+ * picker rebinds that default, and the new-conversation modal opened from the
+ * sidebar's app-wide trigger) - and reads its catalog through the
  * `...ForClient` variants with that host's client, so the harnesses, models
- * and commands it offers are the ones the run will actually see.
+ * and commands it offers are the ones the run will actually see. With a
+ * composer focused the palette follows it, reading through
+ * `FocusedComposerEntry.hostClient` - otherwise its Pick provider / Pick
+ * model subpages would list one host's catalog and dispatch into another
+ * host's composer store.
  */
 export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
   return useHostBinding()?.hostClient ?? null;

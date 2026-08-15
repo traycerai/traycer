@@ -79,8 +79,10 @@ Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
 surfaces use `useReactiveActiveHostId()` / `useHostClient()`. Don't mix.
 
 Composers have a **target host** (tab host, fork dialog's fixed host, the
-new-conversation modal's pinned host; `null` = app-wide default only on the
-landing page, whose picker rebinds that default). Every host RPC around a
+new-conversation modal's host). `null` means "follow the app-wide default":
+that is the landing page, whose picker rebinds that default, and the
+new-conversation modal opened from the app-wide sidebar trigger, which sits
+outside every `TabHostProvider`. Every host RPC around a
 composer — mentions, slash commands, harness/model catalog, providers/profiles,
 pack retry, catalog refresh — and every surface that dispatches into the
 focused composer (the palette's Pick provider/model, via
