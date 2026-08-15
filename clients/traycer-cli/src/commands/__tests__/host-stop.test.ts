@@ -49,7 +49,7 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   };
 });
 
-import { hostStopCommand } from "../host-stop";
+import { buildHostStopCommand } from "../host-stop";
 import type { CommandContext } from "../../runner/runner";
 
 function fakeCtx(): CommandContext {
@@ -79,12 +79,12 @@ function fakeCtx(): CommandContext {
   };
 }
 
-describe("hostStopCommand", () => {
+describe("buildHostStopCommand", () => {
   it("stops inside one cli-lock acquisition", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
 
-    const result = await hostStopCommand(fakeCtx());
+    const result = await buildHostStopCommand({ force: false })(fakeCtx());
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-stop" }]);
     expect(mocks.controllerCalls).toEqual(["stop"]);

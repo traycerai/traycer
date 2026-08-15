@@ -353,7 +353,7 @@ describe("resourcesRegistry", () => {
     const fake = makeFakeClient();
     const token = { id: "token" };
     const acquire = () =>
-      resourcesRegistry.acquire(token.id, token, () =>
+      resourcesRegistry.acquire(token.id, token, "host-a", () =>
         createResourcesStore({
           scope: { kind: "epic", epicId: token.id },
           streamClientFactory: fake.factory,
@@ -377,17 +377,25 @@ describe("resourcesRegistry", () => {
     const first = makeFakeClient();
     const second = makeFakeClient();
 
-    const handleA = resourcesRegistry.acquire("epic-1", "token-a", () =>
-      createResourcesStore({
-        scope: { kind: "epic", epicId: "epic-1" },
-        streamClientFactory: first.factory,
-      }),
+    const handleA = resourcesRegistry.acquire(
+      "epic-1",
+      "token-a",
+      "host-a",
+      () =>
+        createResourcesStore({
+          scope: { kind: "epic", epicId: "epic-1" },
+          streamClientFactory: first.factory,
+        }),
     );
-    const handleB = resourcesRegistry.acquire("epic-1", "token-b", () =>
-      createResourcesStore({
-        scope: { kind: "epic", epicId: "epic-1" },
-        streamClientFactory: second.factory,
-      }),
+    const handleB = resourcesRegistry.acquire(
+      "epic-1",
+      "token-b",
+      "host-a",
+      () =>
+        createResourcesStore({
+          scope: { kind: "epic", epicId: "epic-1" },
+          streamClientFactory: second.factory,
+        }),
     );
 
     expect(handleB).not.toBe(handleA);
@@ -395,16 +403,43 @@ describe("resourcesRegistry", () => {
     expect(resourcesRegistry.get("epic-1")).toBe(handleB);
   });
 
-  it("aggregates live entries globally and charges the app snapshot only once", () => {
+  // Summing entries opened against different machines produces totals no
+  // computer ever had. An aggregate that cannot name ONE host is not merely
+  // unattributed - it is not publishable, so the fallback yields nothing.
+  it("publishes nothing when per-epic entries disagree about their host", () => {
     const first = makeFakeClient();
     const second = makeFakeClient();
-    resourcesRegistry.acquire("epic-1", "token-a", () =>
+    resourcesRegistry.acquire("epic-1", "token-a", "host-a", () =>
       createResourcesStore({
         scope: { kind: "epic", epicId: "epic-1" },
         streamClientFactory: first.factory,
       }),
     );
-    resourcesRegistry.acquire("epic-2", "token-b", () =>
+    resourcesRegistry.acquire("epic-2", "token-b", "host-b", () =>
+      createResourcesStore({
+        scope: { kind: "epic", epicId: "epic-2" },
+        streamClientFactory: second.factory,
+      }),
+    );
+
+    const projection = resourcesRegistry.getGlobalProjection();
+
+    expect(projection.hostId).toBeNull();
+    expect(projection.owners).toEqual([]);
+    expect(projection.entries).toEqual([]);
+    expect(projection.app).toBeNull();
+  });
+
+  it("aggregates live entries globally and charges the app snapshot only once", () => {
+    const first = makeFakeClient();
+    const second = makeFakeClient();
+    resourcesRegistry.acquire("epic-1", "token-a", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        streamClientFactory: first.factory,
+      }),
+    );
+    resourcesRegistry.acquire("epic-2", "token-b", "host-a", () =>
       createResourcesStore({
         scope: { kind: "epic", epicId: "epic-2" },
         streamClientFactory: second.factory,

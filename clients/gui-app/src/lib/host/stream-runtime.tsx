@@ -11,7 +11,10 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding } from "@/lib/host/runtime";
-import { hostTransportKey } from "@/lib/host/transport-key";
+import {
+  hostTransportKey,
+  remoteAwareOwnerIdentity,
+} from "@/lib/host/transport-key";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
@@ -19,6 +22,7 @@ import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import { createStreamRebuildBackoff } from "@/lib/host/stream-rebuild-backoff";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   AVAILABILITY_RECOVERY_COOLDOWN_MS,
@@ -29,16 +33,6 @@ import { appLogger } from "@/lib/logger";
 export interface HostStreamProviderProps {
   readonly children: ReactNode;
 }
-
-/**
- * A client that survives at least this long before closing underneath the
- * provider is considered to have genuinely worked - its close resets the
- * rebuild backoff below. Anything shorter is a "quick close": the rebuild
- * likely dials straight into the same failure.
- */
-const REBUILD_HEALTHY_LIFETIME_MS = 30_000;
-const REBUILD_BACKOFF_BASE_MS = 1_000;
-const REBUILD_BACKOFF_MAX_MS = 30_000;
 
 /**
  * Mounts the app-wide `WsStreamClient` for the React-lifetime stream consumers
@@ -104,13 +98,12 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // teardown-close apart from a genuine underneath-close and skip a redundant
   // (and otherwise infinitely-looping) rebuild.
   const teardownInProgressRef = useRef(false);
-  // Backoff state for the liveness guard's rebuilds. Without it, a
-  // terminal-class close (incompatible protocol, plan restriction) loops hot:
-  // rebuild → fresh session → grant mint + relay dial + handshake → same
-  // fatal → onClosed → rebuild, one full mint/dial cycle per round trip,
-  // indefinitely. Quick successive closes back the next rebuild off
-  // exponentially; a client that lived a while resets the streak.
-  const rebuildBackoffRef = useRef({ quickCloses: 0, builtAt: 0 });
+  // Backoff for the liveness guard's rebuilds - the shared policy, because the
+  // transient per-host binding hook runs the identical guard against a host a
+  // person picked (`lib/host/stream-rebuild-backoff`). Held via `useState`'s
+  // one-shot initializer rather than `useRef(create())`, which would rebuild
+  // and discard the closure on every render.
+  const [rebuildBackoff] = useState(createStreamRebuildBackoff);
 
   // Builds AND owns the client's lifecycle inside this ONE effect, rather
   // than a `useMemo` (as this provider did before S1's session cache) - see
@@ -158,12 +151,42 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       return;
     }
     appLogger.debug("[stream] app stream client created", {
-      hostId: readiness.hostId,
+      hostId: target.hostId,
       client: wsStreamClient.instanceId,
       hasTransport: true,
     });
-    rebuildBackoffRef.current.builtAt = Date.now();
-    setValue({ wsStreamClient });
+    // Derived from `target` and the `userId` the client above was actually
+    // built with - NOT the render's `identityKey`, and for the same reason the
+    // published `hostId` below comes from `target`. A host swap landing between
+    // commit and this passive effect makes the render's answer name the
+    // PREVIOUS endpoint while the client dials the new one, and `markBuilt`
+    // reads that name to decide whether the streak carries: same name, so the
+    // old endpoint's quick-close streak survives onto a client dialed at a new
+    // one, and a terminal-class close there can be paced by up to the full
+    // ceiling before the identity-change render lands and clears it. That is
+    // exactly the cross-endpoint pacing the streak reset exists to prevent, so
+    // the identity has to come from the same read as the client it describes.
+    //
+    // Not `target.hostId` either: identity includes the authenticated user and
+    // a remote host's public key / relay coordinates, so a new user or a
+    // rotated remote identity on the SAME machine is a different endpoint.
+    // `remoteAwareOwnerIdentity` is the same helper `useReactiveOwnerIdentityKey`
+    // projects through, so successive builds compare like for like.
+    rebuildBackoff.markBuilt(
+      Date.now(),
+      remoteAwareOwnerIdentity(target, requestContextUserId),
+    );
+    // The client and the host it dials are published in ONE value, so no
+    // consumer can observe the new host beside the old client.
+    //
+    // `target.hostId`, NOT `readiness.hostId`: the latter is this render's
+    // answer, while `target` was read from the live `HostClient` inside this
+    // effect. A host swap landing between commit and this passive effect makes
+    // those two different machines, and the client below is built from
+    // `target` — so publishing the render-time name would ship
+    // `{ client for B, hostId: A }` until a later render corrected it. The name
+    // has to come from the same read as the thing it names.
+    setValue({ wsStreamClient, hostId: target.hostId });
 
     return () => {
       teardownInProgressRef.current = true;
@@ -177,6 +200,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     identityKey,
     requestContextUserId,
     readiness.hostId,
+    rebuildBackoff,
     rebuildNonce,
   ]);
   // Liveness guard: a CLOSED client must be replaced, not left unavailable
@@ -193,25 +217,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     let backoffTimer: number | null = null;
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      const backoff = rebuildBackoffRef.current;
-      const lifetimeMs = Date.now() - backoff.builtAt;
-      if (lifetimeMs >= REBUILD_HEALTHY_LIFETIME_MS) {
-        backoff.quickCloses = 0;
-      } else {
-        backoff.quickCloses += 1;
-      }
-      // The FIRST quick close still rebuilds immediately - the guard's whole
-      // point is instant recovery from the closed-client wedge. Backoff kicks
-      // in from the second consecutive quick close, which is what a
-      // terminal-class fatal (each fresh dial ending the same way) looks like
-      // and a one-off wedge does not.
-      const delayMs =
-        backoff.quickCloses <= 1
-          ? 0
-          : Math.min(
-              REBUILD_BACKOFF_MAX_MS,
-              REBUILD_BACKOFF_BASE_MS * 2 ** (backoff.quickCloses - 2),
-            );
+      const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] app stream client closed underneath the provider - rebuilding",
         {
@@ -245,7 +251,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         window.clearTimeout(backoffTimer);
       }
     };
-  }, [value]);
+  }, [value, rebuildBackoff]);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(
     value?.wsStreamClient ?? null,

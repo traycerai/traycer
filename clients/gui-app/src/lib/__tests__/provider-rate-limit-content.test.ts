@@ -224,7 +224,11 @@ describe("resolvePopoverProviderRateLimitState", () => {
       isError: false,
       envelope: envelopeOf(UNAVAILABLE),
     });
-    expect(state).toEqual({ kind: "unavailable", reason: "cli_not_found" });
+    expect(state).toEqual({
+      kind: "unavailable",
+      provider: "codex",
+      reason: "cli_not_found",
+    });
   });
 
   it("is ready and not degraded for a fresh available snapshot", () => {
@@ -292,7 +296,11 @@ describe("resolvePopoverProviderRateLimitState", () => {
         lastFailureAt: 1_000,
       },
     });
-    expect(state).toEqual({ kind: "unavailable", reason: "timeout" });
+    expect(state).toEqual({
+      kind: "unavailable",
+      provider: "codex",
+      reason: "timeout",
+    });
   });
 });
 
@@ -394,6 +402,34 @@ describe("resolveProviderPlanLabel", () => {
         prepaidBalance: null,
       }),
     ).toBe("SuperGrok");
+  });
+
+  it("returns Go for an available OpenCode snapshot", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "opencode",
+        available: true,
+        credentialGeneration: "gen-1",
+        fiveHour: {
+          status: "ok",
+          usedPercent: 10,
+          resetsAt: 1,
+          durationMinutes: 300,
+        },
+        weekly: {
+          status: "ok",
+          usedPercent: 20,
+          resetsAt: 1,
+          durationMinutes: 10_080,
+        },
+        monthly: {
+          status: "ok",
+          usedPercent: 30,
+          resetsAt: 1,
+          durationMinutes: null,
+        },
+      }),
+    ).toBe("Go");
   });
 
   it("is null when Grok did not report a subscriptionTier", () => {

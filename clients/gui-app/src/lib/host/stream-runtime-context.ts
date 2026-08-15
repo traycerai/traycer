@@ -14,6 +14,21 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  */
 export interface StreamRuntimeBinding {
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  /**
+   * The host `wsStreamClient` is dialing, carried HERE rather than looked up
+   * beside it so the transport and its name are one value that changes once.
+   *
+   * A reader that labels this stream's output with a host id fetched from
+   * anywhere else — the active-host hook, a scope model, a directory row — is
+   * reading a second answer to "which machine is this" that updates on its own
+   * schedule. Those two answers disagree for the commit between a host swap and
+   * the effect that rebuilds this binding, which is long enough to render one
+   * machine's processes under another's name and aim an action at the wrong
+   * one. Take the name from the binding you took the client from.
+   *
+   * `null` only when the owner genuinely cannot name one.
+   */
+  readonly hostId: string | null;
 }
 
 export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
@@ -44,6 +59,18 @@ export function useWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> | 
     return client;
   }, [client]);
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
+
+/**
+ * The host the LIVE stream client in context is bound to — `null` whenever
+ * `useWsStreamClient` is also `null`, so a caller can never name a host it has
+ * no working stream to. Both values come off the same binding object, which is
+ * what makes the pair atomic (see `StreamRuntimeBinding.hostId`).
+ */
+export function useStreamHostId(): string | null {
+  const value = use(StreamRuntimeContext);
+  const client = useWsStreamClient();
+  return client === null ? null : (value?.hostId ?? null);
 }
 
 // Both method-support readers ride the same `subscribeMethodSupport` store and

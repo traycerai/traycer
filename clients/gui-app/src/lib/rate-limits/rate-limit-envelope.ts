@@ -13,6 +13,10 @@ export type AvailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: true }
 >;
+type UnavailableProviderRateLimits = Extract<
+  ProviderRateLimits,
+  { available: false }
+>;
 
 /** The raw wire response for `host.getRateLimitUsage` at whatever version the GUI currently negotiates. */
 export type RateLimitUsageResponse = ResponseOfMethod<
@@ -38,6 +42,18 @@ export function isTransientUnavailableReason(
   reason: RateLimitUnavailableReason,
 ): boolean {
   return TRANSIENT_UNAVAILABLE_REASONS.has(reason);
+}
+
+function canRetainPreviousRateLimits(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: UnavailableProviderRateLimits,
+): boolean {
+  if (latest.provider !== "opencode") return true;
+  return (
+    latest.credentialGeneration !== undefined &&
+    previous?.lastGood?.provider === "opencode" &&
+    previous.lastGood.credentialGeneration === latest.credentialGeneration
+  );
 }
 
 /**
@@ -160,7 +176,8 @@ function invalidateProvidersListForConvergence(
  * - `available: true` -> becomes the new `lastGood` outright.
  * - `available: false` with a transient reason -> `latest` reflects the
  *   failure, but `lastGood`/`lastGoodAt` carry over unchanged from `previous`
- *   (retention). `lastFailureAt` advances to `now`.
+ *   (retention). OpenCode retains only a matching credential generation.
+ *   `lastFailureAt` advances to `now`.
  * - `available: false` with an authoritative reason (`rate_limits_not_available`
  *   and friends), or no provider snapshot at all (`providerRateLimits: null` -
  *   an aperture-only call; never expected for the provider-pull branch this
@@ -187,10 +204,11 @@ export function buildProviderRateLimitEnvelope(
   }
 
   if (latest !== null && isTransientUnavailableReason(latest.reason)) {
+    const canRetainPrevious = canRetainPreviousRateLimits(previous, latest);
     return {
       latest,
-      lastGood: previous?.lastGood ?? null,
-      lastGoodAt: previous?.lastGoodAt ?? null,
+      lastGood: canRetainPrevious ? (previous?.lastGood ?? null) : null,
+      lastGoodAt: canRetainPrevious ? (previous?.lastGoodAt ?? null) : null,
       lastFailureAt: now,
     };
   }

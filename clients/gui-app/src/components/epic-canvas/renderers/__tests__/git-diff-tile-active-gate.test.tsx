@@ -188,7 +188,7 @@ function tileElement(
 ): ReactNode {
   return (
     <QueryClientProvider client={queryClient}>
-      <StreamRuntimeContext.Provider value={{ wsStreamClient }}>
+      <StreamRuntimeContext.Provider value={{ wsStreamClient, hostId: null }}>
         <TabHostProvider hostId="host-A">
           <GitDiffTile
             node={NODE}

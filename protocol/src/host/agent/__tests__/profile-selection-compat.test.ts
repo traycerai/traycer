@@ -18,6 +18,10 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV40,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
@@ -570,16 +574,15 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // v4.0 is the advertised latest: the v1.1.9 tags froze v3.0 with the
-    // pre-Hugging-Face id sets, so `huggingface` opened a new major on all
-    // three methods (as omp did on v3.0 before it).
+    // list/configure stay on the Hugging-Face-inclusive v4.0 line. Rate-limit
+    // reads opened v5.0 for the OpenCode arm and credentialGeneration.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 4,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 4, minor: 0 });
+    ).toEqual({ major: 5, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 4,
       minor: 0,
@@ -649,6 +652,10 @@ describe("optional-method capability negotiation", () => {
     expect(
       hostRpcRegistry["agent.configure"][4].versions[0].contract.schemaVersion,
     ).toEqual({ major: 4, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][5].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 5, minor: 0 });
   });
 });
 
@@ -947,6 +954,91 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
         usageUpdatedAt: null,
       });
     expect(ompDowngraded.ok).toBe(false);
+  });
+});
+
+describe("agent.getProviderProfileRateLimits v5 OpenCode downgrade", () => {
+  const openCodeAvailable = {
+    rateLimits: {
+      provider: "opencode" as const,
+      available: true as const,
+      credentialGeneration: "gen-opencode-1",
+      fiveHour: {
+        status: "ok" as const,
+        usedPercent: 10,
+        resetsAt: 1_784_678_400_000,
+        durationMinutes: 300,
+      },
+      weekly: {
+        status: "ok" as const,
+        usedPercent: 20,
+        resetsAt: 1_785_283_200_000,
+        durationMinutes: 10_080,
+      },
+      monthly: {
+        status: "ok" as const,
+        usedPercent: 30,
+        resetsAt: 1_787_011_200_000,
+        durationMinutes: null,
+      },
+    },
+    usageUpdatedAt: 1_784_678_400_000,
+  };
+
+  const openCodeUnsupported = {
+    rateLimits: {
+      provider: "opencode" as const,
+      available: false as const,
+      reason: "unsupported_provider" as const,
+    },
+    usageUpdatedAt: 1_784_678_400_000,
+  };
+
+  it("degrades an available OpenCode snapshot to unsupported_provider on every v5 bridge", () => {
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV50ToV40.downgradeResponse(
+        openCodeAvailable,
+      ),
+    ).toEqual({ ok: true, value: openCodeUnsupported });
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV50ToV30.downgradeResponse(
+        openCodeAvailable,
+      ),
+    ).toEqual({ ok: true, value: openCodeUnsupported });
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV50ToV20.downgradeResponse(
+        openCodeAvailable,
+      ),
+    ).toEqual({ ok: true, value: openCodeUnsupported });
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV50ToV10.downgradeResponse(
+        openCodeAvailable,
+      ),
+    ).toEqual({ ok: true, value: openCodeUnsupported });
+  });
+
+  it("keeps an unavailable OpenCode reason and strips credentialGeneration on v4", () => {
+    const result =
+      agentGetProviderProfileRateLimitsDowngradeV50ToV40.downgradeResponse({
+        rateLimits: {
+          provider: "opencode",
+          available: false,
+          reason: "usage_fetch_failed",
+          credentialGeneration: "gen-opencode-1",
+        },
+        usageUpdatedAt: null,
+      });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        rateLimits: {
+          provider: "opencode",
+          available: false,
+          reason: "usage_fetch_failed",
+        },
+        usageUpdatedAt: null,
+      },
+    });
   });
 });
 

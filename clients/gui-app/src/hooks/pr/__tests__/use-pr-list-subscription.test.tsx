@@ -144,7 +144,7 @@ describe("usePrListSubscription", () => {
     return ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>
         <StreamRuntimeContext.Provider
-          value={{ wsStreamClient: mockWsStreamClient }}
+          value={{ wsStreamClient: mockWsStreamClient, hostId: null }}
         >
           {children}
         </StreamRuntimeContext.Provider>
