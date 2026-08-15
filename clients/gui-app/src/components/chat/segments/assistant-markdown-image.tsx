@@ -5,7 +5,7 @@ import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -436,7 +436,7 @@ function ResolvedImage(props: {
   readonly hash: string;
   readonly mediaType: string;
 }): ReactNode {
-  const image = useAttachmentBlobSrc(props.hash, props.mediaType, null);
+  const image = useChatAttachmentBlobSrc(props.hash, props.mediaType, null);
   if (image.status === "loading") {
     return (
       <AttachmentImageLoading
@@ -457,8 +457,13 @@ function ResolvedImage(props: {
     <AttachmentImage
       key={image.src}
       src={image.src}
+      // The resolved blob's OWN type, not `props.mediaType`: the latter is the
+      // claim stored on the message, and `AttachmentImage` gates SVG
+      // sanitization on what it is handed. A host-sniffed type overrides the
+      // claim (see `ImageBlobResolution`), so bytes that are really SVG cannot
+      // slip past the gate behind a stored `image/png`.
+      mediaType={image.mediaType}
       alt={props.alt}
-      mediaType={props.mediaType}
       suggestedName={null}
       fullWidth={false}
     />
