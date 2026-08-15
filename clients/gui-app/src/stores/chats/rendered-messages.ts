@@ -556,6 +556,8 @@ const NO_PENDING_INTERVIEWS: ReadonlyArray<ChatPendingInterviewState> = [];
 interface TurnPauseAccounting {
   readonly pausedDurationMs: number;
   readonly pausedSinceMs: number | null;
+  /** Merged, start-sorted user-wait intervals backing the totals above. */
+  readonly intervals: ReadonlyArray<PauseInterval>;
 }
 
 interface PauseInterval {
@@ -584,6 +586,7 @@ interface ActiveTurnProjection {
 const NO_TURN_PAUSE: TurnPauseAccounting = {
   pausedDurationMs: 0,
   pausedSinceMs: null,
+  intervals: [],
 };
 
 const NO_PENDING_TURN_META_INPUT: PendingTurnMetaInput = {
@@ -799,45 +802,66 @@ function mergePauseIntervals(
         interval.endedAt === null || interval.endedAt > interval.startedAt,
     )
     .sort((a, b) => a.startedAt - b.startedAt);
-  let pausedDurationMs = 0;
-  let openStart: number | null = null;
-  let current: PauseInterval | null = null;
-
-  const flushCurrent = (): void => {
-    if (current === null) return;
-    if (current.endedAt === null) {
-      openStart = current.startedAt;
-    } else {
-      pausedDurationMs += current.endedAt - current.startedAt;
-    }
-    current = null;
-  };
-
+  const merged: PauseInterval[] = [];
   for (const interval of sorted) {
-    if (current === null) {
-      current = interval;
+    const last = merged.at(-1);
+    if (last === undefined) {
+      merged.push(interval);
       continue;
     }
-    if (current.endedAt === null) continue;
-    if (interval.startedAt > current.endedAt) {
-      flushCurrent();
-      current = interval;
+    // An open interval absorbs everything after it.
+    if (last.endedAt === null) continue;
+    if (interval.startedAt > last.endedAt) {
+      merged.push(interval);
       continue;
     }
-    current = {
-      startedAt: current.startedAt,
+    merged[merged.length - 1] = {
+      startedAt: last.startedAt,
       endedAt:
         interval.endedAt === null
           ? null
-          : Math.max(current.endedAt, interval.endedAt),
+          : Math.max(last.endedAt, interval.endedAt),
     };
   }
-  flushCurrent();
+  return pauseAccountingFromMergedIntervals(merged);
+}
 
-  return {
-    pausedDurationMs,
-    pausedSinceMs: openStart,
-  };
+function pauseAccountingFromMergedIntervals(
+  merged: ReadonlyArray<PauseInterval>,
+): TurnPauseAccounting {
+  let pausedDurationMs = 0;
+  let pausedSinceMs: number | null = null;
+  for (const interval of merged) {
+    if (interval.endedAt === null) {
+      pausedSinceMs = interval.startedAt;
+    } else {
+      pausedDurationMs += interval.endedAt - interval.startedAt;
+    }
+  }
+  return { pausedDurationMs, pausedSinceMs, intervals: merged };
+}
+
+/**
+ * Clip whole-turn pause accounting to the displayed lifecycle window. Pause
+ * intervals accumulate per turnId across every attempt, but a row rendered
+ * from its latest attempt window (an adopted autonomous resume) measures only
+ * that window - subtracting an earlier attempt's user-wait would under-report
+ * the resumed attempt's duration. The persisted-timing path passes `null` and
+ * keeps whole-turn accounting.
+ */
+function pauseScopedToWindow(
+  pause: TurnPauseAccounting,
+  windowStartedAt: number | null,
+): TurnPauseAccounting {
+  if (windowStartedAt === null || pause.intervals.length === 0) return pause;
+  const clipped = pause.intervals.flatMap((interval) => {
+    if (interval.endedAt !== null && interval.endedAt <= windowStartedAt) {
+      return [];
+    }
+    if (interval.startedAt >= windowStartedAt) return [interval];
+    return [{ startedAt: windowStartedAt, endedAt: interval.endedAt }];
+  });
+  return pauseAccountingFromMergedIntervals(clipped);
 }
 
 function addPauseInterval(
@@ -1844,6 +1868,13 @@ interface AssistantTurnTiming {
   readonly elapsedStartedAt: number;
   readonly completedAt: number;
   readonly cacheToken: string;
+  /**
+   * Start of the lifecycle window the row displays, when timing selected one;
+   * `null` on the persisted-timing path. Pause accounting is clipped to this
+   * so an earlier attempt's user-wait never subtracts from the resumed
+   * attempt's duration.
+   */
+  readonly lifecycleWindowStartedAt: number | null;
 }
 
 function assistantTurnTiming(
@@ -1864,6 +1895,7 @@ function assistantTurnTiming(
       elapsedStartedAt: fallbackStartedAt,
       completedAt: fallbackCompletedAt,
       cacheToken: "lifecycle:none",
+      lifecycleWindowStartedAt: null,
     };
   }
   const elapsedStartedAt = input.lifecycle.startedAt;
@@ -1877,6 +1909,7 @@ function assistantTurnTiming(
       elapsedStartedAt,
       completedAt: fallbackCompletedAt,
       cacheToken: `lifecycle:${elapsedStartedAt}:pending`,
+      lifecycleWindowStartedAt: elapsedStartedAt,
     };
   }
   return {
@@ -1884,6 +1917,7 @@ function assistantTurnTiming(
     elapsedStartedAt,
     completedAt: Math.max(elapsedStartedAt, terminalAt),
     cacheToken: `lifecycle:${elapsedStartedAt}:${terminalAt}`,
+    lifecycleWindowStartedAt: elapsedStartedAt,
   };
 }
 
@@ -1914,7 +1948,6 @@ function renderPersistedAssistantMessageTurn(
   // group suppressed.
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
-  const pause = input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE;
   const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
   const lifecycleTiming =
     input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null;
@@ -1931,6 +1964,10 @@ function renderPersistedAssistantMessageTurn(
     persistedCompletedAt: acc.timestamp,
     stoppedAt: stopped?.stoppedAt ?? null,
   });
+  const pause = pauseScopedToWindow(
+    input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE,
+    timing.lifecycleWindowStartedAt,
+  );
   // Signature includes the persisted timing plus the lifecycle timing token,
   // so either a canonicalized snapshot timestamp or a later terminal event
   // invalidates the cached model. Without both, a stale `completedAt`/elapsed
@@ -2850,7 +2887,13 @@ function renderLiveAssistant(
     // Track the host's run state exactly: a live row lingering for one frame
     // after the turn completes (runStatus idle) must not show a spinner.
     runState: input.activeRunState,
-    pause: input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+    // Scoped to the live attempt's own start: a steer continuation reuses the
+    // turnId, and an earlier attempt's user-wait must not subtract from an
+    // elapsed measured from this attempt's start.
+    pause: pauseScopedToWindow(
+      input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+      liveAssistant.startedAt,
+    ),
     // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps
     // this - the persisted re-render (once the `turn.stopped` event lands)
     // owns the stopped marker.

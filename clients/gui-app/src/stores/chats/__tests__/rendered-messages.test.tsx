@@ -4659,6 +4659,85 @@ describe("useRenderedMessages turn.stopped", () => {
     });
   });
 
+  it("scopes pause accounting to the resumed attempt's window", () => {
+    const approvalEvent = (
+      type: "approval.requested" | "approval.resolved",
+      approvalId: string,
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId: `event:${type}:${approvalId}:${timestamp}`,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: "turn-resume",
+      messageId: "m1",
+      queueItemId: null,
+      approvalId,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // Attempt 1 pauses 8.5s → 9s; the resumed attempt (13s → 15s) pauses
+    // 13.5s → 14s. Only the in-window wait may subtract from the resumed
+    // attempt's duration.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-1", 8_500),
+        approvalEvent("approval.resolved", "appr-1", 9_000),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-2", 13_500),
+        approvalEvent("approval.resolved", "appr-2", 14_000),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      completedAt: 15_000,
+    });
+    expect(row?.pausedDurationMs).toBe(500);
+  });
+
   it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),

@@ -806,39 +806,88 @@ function resolvePendingMeasuredFreeRestore(
 interface AssistantCompletionObservation {
   readonly completedAt: number | null;
   readonly footerless: boolean;
+  /** Notification-content version; see `notificationSignatureOf`. */
+  readonly notificationSignature: string | null;
 }
 
 /** What the completion announcer remembers from its previous observation. */
 interface TranscriptObservation {
   readonly assistantById: ReadonlyMap<string, AssistantCompletionObservation>;
-  /** Every message id (any role) - the hydration gate's reference frame. */
+  /** Every message id (any role) - the positional fallback frame. */
   readonly messageIds: ReadonlySet<string>;
+  /** Newest completion timestamp observed - the recency frame. */
+  readonly maxCompletedAt: number | null;
 }
 
 /**
- * A turn-completion announcement fires for four arrivals, all judged against
- * the previous observation: a known row's `completedAt` transitioning null →
- * timestamp; an incomplete row replaced by a completed row under a new id
- * (live → persisted swap); an unknown terminal row that extends the
- * transcript past every previously observed message — a live arrival, whether
- * a footerless background-completion notification (the projector pre-sets
- * `completedAt`, so there is no null → timestamp transition to observe) or a
- * turn that completed whole between observations; and a known footerless row
- * adopted by its provider turn, where completion shows up as the footer
- * flipping on with `completedAt` moving between two non-null lifecycle
- * values. Two arrivals stay deliberately silent: hydration/backfill — this
- * component supports transcripts growing after mount, and an unknown row that
- * does NOT extend past every known message is history, not news — and a bare
- * `completedAt` shift with unchanged footer state (a canonicalized snapshot
- * timestamp).
+ * Content version of a row's autonomous-resume notification: the protocol
+ * appends additional triggers to the existing divider when more monitored
+ * tasks settle while the chat stays idle, so the same row can gain a new
+ * background completion without any footer or id change.
  */
+function notificationSignatureOf(message: ChatMessageModel): string | null {
+  const parts: string[] = [];
+  for (const segment of message.segments) {
+    if (segment.kind !== "autonomous_resume") continue;
+    parts.push(`${segment.id}:${segment.triggers.length}`);
+  }
+  return parts.length === 0 ? null : parts.join("|");
+}
+
+/**
+ * Whether an unknown terminal row is a live arrival rather than
+ * hydration/backfill (this component supports transcripts growing after
+ * mount). Sorted position cannot decide this: the projector deliberately
+ * anchors a notification at its turn's original transcript position, so a
+ * background task from an earlier turn that settles late inserts BEFORE
+ * later rows. Completion recency is therefore the primary frame - a live
+ * arrival's completion is newer than everything previously observed - with
+ * tail position as the fallback before any completion has been observed.
+ */
+function unknownRowIsLiveCompletion(input: {
+  readonly previous: TranscriptObservation;
+  readonly message: ChatMessageModel;
+  readonly index: number;
+  readonly lastKnownIndex: number;
+  readonly replacedIncompleteAssistant: boolean;
+}): boolean {
+  if (input.replacedIncompleteAssistant) return true;
+  if (input.previous.maxCompletedAt !== null) {
+    return (
+      input.message.completedAt !== null &&
+      input.message.completedAt > input.previous.maxCompletedAt
+    );
+  }
+  return input.index > input.lastKnownIndex;
+}
+
+/**
+ * Whether a known row's change is a fresh completion: `completedAt`
+ * transitioning null → timestamp; a footerless notification adopted by its
+ * provider turn (footer flips on, `completedAt` moves between two non-null
+ * lifecycle values); or a footerless notification gaining additional
+ * triggers while staying footerless. A bare `completedAt` shift with footer
+ * and notification content unchanged - a canonicalized snapshot timestamp -
+ * stays silent.
+ */
+function knownRowNewlyCompleted(
+  prior: AssistantCompletionObservation,
+  message: ChatMessageModel,
+): boolean {
+  if (prior.completedAt === null) return true;
+  if (!prior.footerless) return false;
+  if (message.showCompletionFooter !== false) return true;
+  return notificationSignatureOf(message) !== prior.notificationSignature;
+}
+
 function findNewlyCompletedAssistant(
   previous: TranscriptObservation,
-  current: ReadonlyMap<string, AssistantCompletionObservation>,
   messages: ReadonlyArray<ChatMessageModel>,
 ): ChatMessageModel | null {
+  const currentIds = new Set(messages.map((message) => message.id));
   const replacedIncompleteAssistant = [...previous.assistantById].some(
-    ([id, observation]) => observation.completedAt === null && !current.has(id),
+    ([id, observation]) =>
+      observation.completedAt === null && !currentIds.has(id),
   );
   let lastKnownIndex = -1;
   for (const [index, message] of messages.entries()) {
@@ -849,20 +898,17 @@ function findNewlyCompletedAssistant(
     if (message.role !== "assistant") continue;
     if (message.completedAt === null || message.stopped !== null) continue;
     const prior = previous.assistantById.get(message.id);
-    const isNewRow = prior === undefined;
-    const newlyCompleted = prior !== undefined && prior.completedAt === null;
-    const replacesIncompleteRow = replacedIncompleteAssistant && isNewRow;
-    const appendedCompletion = isNewRow && index > lastKnownIndex;
-    const adoptedBackgroundCompletion =
-      prior !== undefined &&
-      prior.footerless &&
-      message.showCompletionFooter !== false;
-    if (
-      newlyCompleted ||
-      replacesIncompleteRow ||
-      appendedCompletion ||
-      adoptedBackgroundCompletion
-    ) {
+    const isFreshCompletion =
+      prior === undefined
+        ? unknownRowIsLiveCompletion({
+            previous,
+            message,
+            index,
+            lastKnownIndex,
+            replacedIncompleteAssistant,
+          })
+        : knownRowNewlyCompleted(prior, message);
+    if (isFreshCompletion) {
       completedAssistant = message;
     }
   }
@@ -2398,24 +2444,32 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     const previous = transcriptObservationRef.current;
     const assistantById = new Map<string, AssistantCompletionObservation>();
     const messageIds = new Set<string>();
+    let maxCompletedAt: number | null = null;
     for (const message of messages) {
       messageIds.add(message.id);
       if (message.role !== "assistant") continue;
       assistantById.set(message.id, {
         completedAt: message.completedAt,
         footerless: message.showCompletionFooter === false,
+        notificationSignature: notificationSignatureOf(message),
       });
+      if (
+        message.completedAt !== null &&
+        (maxCompletedAt === null || message.completedAt > maxCompletedAt)
+      ) {
+        maxCompletedAt = message.completedAt;
+      }
     }
-    transcriptObservationRef.current = { assistantById, messageIds };
+    transcriptObservationRef.current = {
+      assistantById,
+      messageIds,
+      maxCompletedAt,
+    };
     // The first observation only records the baseline: transcript history
     // present at mount must never announce, including footerless rows that
     // are born terminal.
     if (previous === null) return;
-    const completedAssistant = findNewlyCompletedAssistant(
-      previous,
-      assistantById,
-      messages,
-    );
+    const completedAssistant = findNewlyCompletedAssistant(previous, messages);
     if (completedAssistant !== null) {
       const announcement = {
         key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
