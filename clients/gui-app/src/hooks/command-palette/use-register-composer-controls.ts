@@ -10,15 +10,26 @@
  * always reads the latest setter through the ref.
  */
 import { useEffect, useRef } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   registerFocusedComposerControls,
   type ComposerControls,
 } from "@/lib/commands/composer-controls-registry";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
+/**
+ * `hostClient` is the composer's target host (see
+ * `FocusedComposerEntry.hostClient`). Unlike the setters it is NOT parked in
+ * the ref: the palette reads it to decide WHICH host's catalog to list, so a
+ * change must re-register (and notify subscribers), not just be picked up on
+ * the next dispatch. Client identity only changes on real host events
+ * (directory resolution, auth), so the re-registration churn is negligible.
+ */
 export function useRegisterFocusedComposerControls(
   kind: FocusedComposerKind | null,
   controls: ComposerControls,
+  hostClient: HostClient<HostRpcRegistry> | null,
 ): void {
   const controlsRef = useRef<ComposerControls>(controls);
 
@@ -28,23 +39,27 @@ export function useRegisterFocusedComposerControls(
 
   useEffect(() => {
     if (kind === null) return;
-    const dispose = registerFocusedComposerControls(kind, {
-      setReasoning: (level) => {
-        controlsRef.current.setReasoning(level);
+    const dispose = registerFocusedComposerControls(
+      kind,
+      {
+        setReasoning: (level) => {
+          controlsRef.current.setReasoning(level);
+        },
+        setServiceTier: (tier) => {
+          controlsRef.current.setServiceTier(tier);
+        },
+        setPermission: (mode) => {
+          controlsRef.current.setPermission(mode);
+        },
+        switchHarness: (harnessId) => {
+          controlsRef.current.switchHarness(harnessId);
+        },
+        selectModel: (harnessId, modelSlug) => {
+          controlsRef.current.selectModel(harnessId, modelSlug);
+        },
       },
-      setServiceTier: (tier) => {
-        controlsRef.current.setServiceTier(tier);
-      },
-      setPermission: (mode) => {
-        controlsRef.current.setPermission(mode);
-      },
-      switchHarness: (harnessId) => {
-        controlsRef.current.switchHarness(harnessId);
-      },
-      selectModel: (harnessId, modelSlug) => {
-        controlsRef.current.selectModel(harnessId, modelSlug);
-      },
-    });
+      hostClient,
+    );
     return dispose;
-  }, [kind]);
+  }, [hostClient, kind]);
 }

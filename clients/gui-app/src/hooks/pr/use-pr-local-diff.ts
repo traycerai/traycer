@@ -3,16 +3,21 @@ import {
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   PrDetailCore,
   PrGetLocalDiffRequest,
   PrGetLocalDiffResponse,
+  PrGetLocalDiffSummaryRequest,
+  PrGetLocalDiffSummaryResponseV11,
+  PrGetLocalFileDiffRequestV11,
+  PrGetLocalFileDiffResponse,
 } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-schemas";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 
@@ -71,6 +76,7 @@ function localDiffKeyParts(target: PrLocalDiffTarget | null): {
   readonly linkGroupKey: string;
   readonly owner: string;
   readonly repo: string;
+  readonly repoRole: string;
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly headRefOid: string | null;
@@ -81,6 +87,7 @@ function localDiffKeyParts(target: PrLocalDiffTarget | null): {
       linkGroupKey: "",
       owner: "",
       repo: "",
+      repoRole: "",
       baseRefName: "",
       headRefName: "",
       headRefOid: null,
@@ -91,6 +98,7 @@ function localDiffKeyParts(target: PrLocalDiffTarget | null): {
     linkGroupKey: target.linkGroupKey,
     owner: target.repoIdentifier.owner,
     repo: target.repoIdentifier.repo,
+    repoRole: target.repoRole,
     baseRefName: target.baseRefName,
     headRefName: target.headRefName,
     headRefOid: target.headRefOid,
@@ -124,8 +132,15 @@ export function usePrLocalDiffQuery(args: {
 }): UseQueryResult<PrGetLocalDiffResponse, HostRpcError> {
   const hostId = useTabHostId();
   const client = useTabHostClient();
+  // A non-null tab client is NOT yet a usable one: during startup, sign-in
+  // changes and reconnects it exists before its active host and request
+  // context resolve. Issuing then caches a transport error under
+  // `staleTime: Infinity`, wedging the tile until a manual refresh - so gate
+  // on the same reactive readiness the bundle tile's file-diff hook uses.
+  const readiness = useReactiveHostReadiness(client);
   const { target } = args;
-  const isEnabled = args.enabled && client !== null && target !== null;
+  const isEnabled =
+    args.enabled && client !== null && readiness.isReady && target !== null;
 
   return useQuery({
     // `client` is correlated 1:1 with `hostId`, which the key already carries
@@ -172,6 +187,200 @@ export function usePrLocalDiffQuery(args: {
       // An older host has no such method and never will within this session;
       // retrying it just delays the fallback the tab is about to render.
       retry: false,
+    }),
+    enabled: isEnabled,
+  });
+}
+
+/**
+ * Whether a query failed because the bound host predates the method - the
+ * one error the split diff view treats as an INSTRUCTION (fall back to the
+ * monolith) rather than a failure to surface.
+ */
+export function isHostUnsupportedError(error: HostRpcError | null): boolean {
+  return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";
+}
+
+/**
+ * The metadata frame of the split PR diff view: the resolved range (both
+ * endpoint OIDs) and every file's name/status/counts, no patch text.
+ *
+ * This call doubles as the FEATURE DETECTION for the whole split surface -
+ * call-and-degrade, not registry-gated. The negotiated-manifest registry
+ * can't answer "does this host have the method?" from a fresh PR tile: it is
+ * fail-closed (`null` until some unary handshake records), and the tile's
+ * only guaranteed prior traffic is the `pr.subscribeDetail` STREAM, which
+ * never records on the local transport - so a registry gate could sit at
+ * "unknown" forever. Calling optimistically resolves it either way: success
+ * renders the split view, `E_HOST_UNSUPPORTED` (see
+ * {@link isHostUnsupportedError}) flips the tile to the monolith - and the
+ * failed call's own handshake populates the registry as a side effect.
+ *
+ * Caching mirrors {@link usePrLocalDiffQuery}, including `retry: false`: on
+ * an old host the first answer is definitive, and retrying only delays the
+ * fallback.
+ */
+export function usePrLocalDiffSummaryQuery(args: {
+  readonly target: PrLocalDiffTarget | null;
+  readonly ignoreWhitespace: boolean;
+  readonly enabled: boolean;
+}): UseQueryResult<PrGetLocalDiffSummaryResponseV11, HostRpcError> {
+  const hostId = useTabHostId();
+  const client = useTabHostClient();
+  // A non-null tab client is NOT yet a usable one: during startup, sign-in
+  // changes and reconnects it exists before its active host and request
+  // context resolve. Issuing then caches a transport error under
+  // `staleTime: Infinity`, wedging the tile until a manual refresh - so gate
+  // on the same reactive readiness the bundle tile's file-diff hook uses.
+  const readiness = useReactiveHostReadiness(client);
+  const { target } = args;
+  const isEnabled =
+    args.enabled && client !== null && readiness.isReady && target !== null;
+
+  return useQuery({
+    // `client` is correlated 1:1 with `hostId`, which the key already carries
+    // through `hostQueryKeys.scope`; adding it would refetch on client
+    // identity drift alone.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps
+    ...queryOptions<PrGetLocalDiffSummaryResponseV11, HostRpcError>({
+      queryKey: [
+        ...prQueryKeys.localDiffSummary({
+          hostId,
+          ...localDiffKeyParts(target),
+          ignoreWhitespace: args.ignoreWhitespace,
+        }),
+      ],
+      queryFn: () =>
+        withHostQueryErrorBoundary("pr.getLocalDiffSummary", async () => {
+          if (client === null) {
+            throw hostClientUnavailableError("pr.getLocalDiffSummary");
+          }
+          if (target === null) {
+            throw new Error(
+              "pr.getLocalDiffSummary: no local diff target on this PR frame",
+            );
+          }
+          const request: PrGetLocalDiffSummaryRequest = {
+            epicId: target.epicId,
+            linkGroupKey: target.linkGroupKey,
+            repoIdentifier: target.repoIdentifier,
+            repoRole: target.repoRole,
+            baseRefName: target.baseRefName,
+            headRefName: target.headRefName,
+            expectedHeadOid: target.headRefOid,
+            ignoreWhitespace: args.ignoreWhitespace,
+          };
+          return client.request("pr.getLocalDiffSummary", request);
+        }),
+      // `staleTime: Infinity` is a FRESHNESS CONTRACT, not an immutability
+      // claim - deliberately the monolith's exact posture. The key moves when
+      // GitHub's tip moves (`headRefOid` from the detail stream); everything
+      // that can drift underneath it - the local checkout rebasing, a base
+      // fetch landing - is surfaced by the drift banner and re-read by the
+      // toolbar refresh and the tile's bounded drift recovery, both of which
+      // call `refetch` and so ignore staleness anyway. A background cadence
+      // would re-run git sweeps for answers nothing on screen asked to move.
+      staleTime: Infinity,
+      gcTime: 10 * 60 * 1000,
+      retry: false,
+    }),
+    enabled: isEnabled,
+  });
+}
+
+/**
+ * One file's patch out of a summary-resolved range.
+ *
+ * Addressed by the summary's OID pair, never by ref names: a `kind: "diff"`
+ * answer is immutable for its key, so `staleTime: Infinity` is a fact rather
+ * than a heuristic, and a checkout that moves mid-scroll keeps serving the
+ * old range while the drift banner does its job. An `unavailable` answer is
+ * the one non-immutable case - it describes repo STATE, not the OID pair's
+ * content - and the tile clears those explicitly by invalidating
+ * `prQueryKeys.localFileDiffScope` on refresh and on drift recovery.
+ * Mounted per VISIBLE, expanded, non-placeholder section - row-mount gating
+ * is what keeps a 200-file PR at a handful of in-flight requests.
+ *
+ * `byteBudget: null` is the "Load Full" ask; it re-keys the query, exactly
+ * like the git bundle row's load-full.
+ */
+export function usePrLocalFileDiffQuery(args: {
+  readonly target: PrLocalDiffTarget;
+  readonly mergeBaseOid: string;
+  readonly headOid: string;
+  readonly path: string;
+  readonly previousPath: string | null;
+  /**
+   * The summary row's byte-path sidecars, forwarded VERBATIM per side (never
+   * derived client-side). They are request identity: part of the query key
+   * and the wire request both, so two lossy-name-colliding files can never
+   * share a cache slot or an answer.
+   */
+  readonly pathBytes: string | null;
+  readonly previousPathBytes: string | null;
+  readonly ignoreWhitespace: boolean;
+  readonly byteBudget: number | null;
+  readonly enabled: boolean;
+}): UseQueryResult<PrGetLocalFileDiffResponse, HostRpcError> {
+  const hostId = useTabHostId();
+  const client = useTabHostClient();
+  // Same not-ready gate as the two range-level hooks above.
+  const readiness = useReactiveHostReadiness(client);
+  const { target } = args;
+  const isEnabled = args.enabled && client !== null && readiness.isReady;
+
+  return useQuery({
+    // Same 1:1 `client`/`hostId` correlation note as the two hooks above.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps
+    ...queryOptions<PrGetLocalFileDiffResponse, HostRpcError>({
+      queryKey: [
+        ...prQueryKeys.localFileDiff({
+          hostId,
+          epicId: target.epicId,
+          linkGroupKey: target.linkGroupKey,
+          owner: target.repoIdentifier.owner,
+          repo: target.repoIdentifier.repo,
+          repoRole: target.repoRole,
+          mergeBaseOid: args.mergeBaseOid,
+          headOid: args.headOid,
+          path: args.path,
+          previousPath: args.previousPath,
+          pathBytes: args.pathBytes,
+          previousPathBytes: args.previousPathBytes,
+          ignoreWhitespace: args.ignoreWhitespace,
+          byteBudget: args.byteBudget,
+        }),
+      ],
+      queryFn: () =>
+        withHostQueryErrorBoundary("pr.getLocalFileDiff", async () => {
+          if (client === null) {
+            throw hostClientUnavailableError("pr.getLocalFileDiff");
+          }
+          const request: PrGetLocalFileDiffRequestV11 = {
+            epicId: target.epicId,
+            linkGroupKey: target.linkGroupKey,
+            repoIdentifier: target.repoIdentifier,
+            repoRole: target.repoRole,
+            mergeBaseOid: args.mergeBaseOid,
+            headOid: args.headOid,
+            path: args.path,
+            previousPath: args.previousPath,
+            pathBytes: args.pathBytes,
+            previousPathBytes: args.previousPathBytes,
+            ignoreWhitespace: args.ignoreWhitespace,
+            byteBudget: args.byteBudget,
+          };
+          return client.request("pr.getLocalFileDiff", request);
+        }),
+      staleTime: Infinity,
+      // Longer than the summary's: entries are OID-addressed and small, and a
+      // reader scrolling back up should not re-pay for patches already seen.
+      // Mirrors `useGitGetFileDiffQuery`.
+      gcTime: 30 * 60 * 1000,
+      // No `retry` override: the app default (one retry, with the transport-
+      // error carve-out) is fine for both transient failures and the rare
+      // `E_HOST_UNSUPPORTED` here - the latter answers in loopback time, so
+      // one extra attempt barely delays the section's fallback report.
     }),
     enabled: isEnabled,
   });

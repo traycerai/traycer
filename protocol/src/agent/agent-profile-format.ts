@@ -187,6 +187,13 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       .filter((line): line is string => line !== null)
       .join("\n");
   }
+  if (rateLimits.provider === "opencode") {
+    return [
+      `${formatWindowLine("5-hour", rateLimits.fiveHour)} [${rateLimits.fiveHour.status}]`,
+      `${formatWindowLine("weekly", rateLimits.weekly)} [${rateLimits.weekly.status}]`,
+      `${formatWindowLine("monthly", rateLimits.monthly)} [${rateLimits.monthly.status}]`,
+    ].join("\n");
+  }
   return [
     `credit balance: ${formatNumber(rateLimits.creditBalance)}`,
     `pass: ${rateLimits.passState ?? "unknown"}`,

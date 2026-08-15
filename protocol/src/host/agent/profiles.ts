@@ -27,10 +27,12 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   mapGrokAvailableToUnavailable,
+  mapOpenCodeAvailableToUnavailable,
   providerRateLimitsSchema,
   providerRateLimitsSchemaV40,
   providerRateLimitsSchemaV50,
   providerRateLimitsSchemaV60,
+  providerRateLimitsSchemaV70,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
@@ -497,9 +499,21 @@ export const agentGetProviderProfileRateLimitsV30 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV3,
 });
 
+export const agentGetProviderProfileRateLimitsResponseSchemaV4 = z.object({
+  rateLimits: providerRateLimitsSchemaV70,
+  usageUpdatedAt: z.number().nullable(),
+});
+
 export const agentGetProviderProfileRateLimitsV40 = defineRpcContract({
   method: "agent.getProviderProfileRateLimits",
   schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
+  responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV4,
+});
+
+export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
+  method: "agent.getProviderProfileRateLimits",
+  schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
   responseSchema: agentGetProviderProfileRateLimitsResponseSchema,
 });
@@ -722,6 +736,120 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV10 =
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
           ...response,
           rateLimits,
+        });
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading rate limits for this provider requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsUpgradeV40ToV50 =
+  defineUpgradePath<
+    typeof agentGetProviderProfileRateLimitsV40,
+    typeof agentGetProviderProfileRateLimitsV50
+  >({
+    from: { major: 4, minor: 0 },
+    to: { major: 5, minor: 0 },
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV50ToV40 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV50,
+    typeof agentGetProviderProfileRateLimitsV40
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => ({
+      ok: true,
+      value: agentGetProviderProfileRateLimitsResponseSchemaV4.parse({
+        ...response,
+        rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
+      }),
+    }),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV50ToV30 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV50,
+    typeof agentGetProviderProfileRateLimitsV30
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
+          ...response,
+          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
+        });
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading rate limits for this provider requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV50ToV20 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV50,
+    typeof agentGetProviderProfileRateLimitsV20
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
+          ...response,
+          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
+        });
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading rate limits for this provider requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV50,
+    typeof agentGetProviderProfileRateLimitsV10
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
+          ...response,
+          rateLimits: mapGrokAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
         });
       if (!parsed.success) {
         return {

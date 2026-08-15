@@ -89,6 +89,8 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import type { ChatAnnouncementKind } from "@/stores/chats/chat-announcements";
+import { useChatAnnouncements } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
@@ -114,6 +116,12 @@ interface ChatMessagesProps {
   hostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
+   * established these rows. The polite-announcement deriver needs it to tell
+   * a live arrival from (re)hydrated history without guessing from row shape.
+   */
+  baselineEpoch: number;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -802,10 +810,25 @@ function resolvePendingMeasuredFreeRestore(
   };
 }
 
+function announcementTextFor(
+  taskTitle: string,
+  kind: ChatAnnouncementKind,
+): string {
+  switch (kind) {
+    case "turn-completed":
+      return `${taskTitle} finished responding.`;
+    case "background-update":
+      return `${taskTitle} received a background update.`;
+    default:
+      return `${taskTitle} received a background completion.`;
+  }
+}
+
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
     backgroundItems,
+    baselineEpoch,
     composerOverlayHeight,
     identity,
     instanceId,
@@ -2322,52 +2345,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
-  const [turnCompletionAnnouncement, setTurnCompletionAnnouncement] = useState<{
-    readonly key: string;
+  // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
+  // transcript baseline (which connection hydrated these rows) and reports
+  // the semantic transition. This layer only renders it.
+  const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  // The rendered sentence is FROZEN when the announcement is made, not
+  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
+  // after its first turn, and can be renamed any time). Recomputing would
+  // rewrite the text inside the already-announced live-region node, and a
+  // screen reader re-announces on content change - a phantom completion for
+  // a rename. A later announcement re-freezes with the title current then.
+  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
+    readonly sequence: number;
     readonly text: string;
   } | null>(null);
-  const assistantCompletionByIdRef = useRef<ReadonlyMap<string, number | null>>(
-    new Map(),
-  );
+  if (
+    announcement !== null &&
+    renderedAnnouncement?.sequence !== announcement.sequence
+  ) {
+    setRenderedAnnouncement({
+      sequence: announcement.sequence,
+      text: announcementTextFor(taskTitle, announcement.kind),
+    });
+  }
   useLayoutEffect(() => {
-    const previous = assistantCompletionByIdRef.current;
-    const current = new Map<string, number | null>();
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      current.set(message.id, message.completedAt);
-    }
-    const replacedIncompleteAssistant = [...previous].some(
-      ([id, completedAt]) => completedAt === null && !current.has(id),
-    );
-    let completedAssistant: ChatMessageModel | null = null;
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      if (
-        (previous.get(message.id) === null ||
-          (replacedIncompleteAssistant && !previous.has(message.id))) &&
-        message.completedAt !== null &&
-        !message.stopped
-      ) {
-        completedAssistant = message;
-      }
-    }
-    assistantCompletionByIdRef.current = current;
-    if (completedAssistant !== null) {
-      const announcement = {
-        key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
-        text: `${taskTitle} finished responding.`,
-      };
-      // Decision #10/#16: turn completion below the fold stays anchored - no
-      // auto-reveal. The pill flips to "New reply" instead, unless the
-      // reader is already at the tail (nothing to signal).
-      const hasUnseenCompletion =
-        timelineScrollModeRef.current !== "following-end";
-      queueMicrotask(() => {
-        setTurnCompletionAnnouncement(announcement);
-        if (hasUnseenCompletion) setHasUnseenTurnCompletion(true);
-      });
-    }
-  }, [messages, taskTitle]);
+    if (announcement === null) return;
+    // Decision #10/#16: turn completion below the fold stays anchored - no
+    // auto-reveal. The pill flips to "New reply" instead, unless the reader
+    // is already at the tail (nothing to signal).
+    if (timelineScrollModeRef.current === "following-end") return;
+    setHasUnseenTurnCompletion(true);
+  }, [announcement]);
 
   // --- Stateful scroll-to-end pill (decision #16) ----------------------------
 
@@ -2457,9 +2465,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           ) : null}
         </div>
         <div aria-live="polite" className="sr-only">
-          {turnCompletionAnnouncement === null ? null : (
-            <span key={turnCompletionAnnouncement.key}>
-              {turnCompletionAnnouncement.text}
+          {renderedAnnouncement === null ? null : (
+            // Keyed by the deriver's monotonic sequence so consecutive
+            // identical announcements still mutate the live region.
+            <span key={renderedAnnouncement.sequence}>
+              {renderedAnnouncement.text}
             </span>
           )}
         </div>

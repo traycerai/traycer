@@ -183,6 +183,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
+              queueResumeRequested={false}
+              queueKeepPausedRequested={false}
               backgroundItems={[
                 {
                   taskId: "task-1",
@@ -246,6 +248,8 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
+              queueResumeRequested={false}
+              queueKeepPausedRequested={false}
               backgroundItems={[
                 {
                   taskId: "task-1",
@@ -504,6 +508,8 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     editingItem: null,
     editingItemId: null,
     value: { status: "idle", items: [] },
+    resumeRequested: false,
+    keepPausedRequested: false,
     onPause: () => null,
     onResume: () => null,
     onEdit: () => undefined,

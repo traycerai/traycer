@@ -232,12 +232,14 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   // host), so no separate resolution is needed at this call site. Never
   // authoritative: this dialog has no reauth gate of its own, so a
   // genuinely-tombstoned source profile must be corrected to ambient here
-  // rather than silently submitted to `createAgent.create`.
+  // rather than silently submitted to `createAgent.create`. The catalog reads
+  // through the same fixed client, so the fork offers this host's harnesses
+  // and models.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(settingsSeed, hostClient),
     null,
-    true,
+    { hostClient, tuiOnly: true },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);

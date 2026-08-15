@@ -7,26 +7,48 @@ import {
 import type {
   ProviderSkill,
   ProviderSkillsCapabilities,
+  ProviderSkillSourceBadge,
   ProvidersSkillsMutateAction,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { ChevronRight, Download, Plus, Sparkles } from "lucide-react";
+import { ChevronRight, ListFilter, Plus, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
+import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
+  isExternalDriftError,
+  isSkillUpdateNoOp,
   providerRootFromSkills,
+  skillActionAdvertised,
   skillAuthoring,
-  type SkillComposerTab,
+  skillIsEditable,
+  skillOriginDisplay,
+  skillProviderScopeVisible,
+  type SkillEditTarget,
 } from "./provider-skill-composer-model";
 import { ProviderSkillDetailDialog } from "./provider-skill-detail-dialog";
 import { skillRemovability } from "./provider-skill-removable";
 import {
+  SKILL_CONFLICT_LABEL,
+  SKILL_CONFLICT_TONE,
+  SKILL_CONFLICT_TOOLTIP,
   SKILL_SOURCE_LABEL,
+  SKILL_SOURCE_ORDER,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
 import {
@@ -108,27 +130,40 @@ function ProviderSkillsTabBody({
   });
   const mutate = useProvidersSkillsMutate();
 
-  // The composer's open state IS which tab it opened on. Null closes it and
-  // discards the draft with it - there is no half-filled form waiting behind
-  // the button.
-  const [composerTab, setComposerTab] = useState<SkillComposerTab | null>(null);
-  const [composerError, setComposerError] = useState<string | null>(null);
+  // Conditional mount: false unmounts the composer and discards the draft.
+  const [composerOpen, setComposerOpen] = useState(false);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   // Holds the whole skill, not an id: `ProviderSkill` has no stable key of its
   // own (the list is keyed by `source:path`), and the dialog wants the same
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
-  // Separate from `composerError`, which renders inside the composer - which
-  // is closed while a skill dialog is open, where a failed removal would
-  // otherwise be invisible.
-  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(
+    null,
+  );
+  // Bumped after a successful update so the open detail's file query
+  // refetches in place. The list row snapshot is replaced separately.
+  const [detailFileEpoch, setDetailFileEpoch] = useState(0);
+  // Skill mutation errors render inside the open detail dialog.
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // Which source badges are filtered OUT. Empty = everything shown, which is
+  // the default and the state the trigger's "active" dot keys off.
+  const [hiddenSources, setHiddenSources] = useState<
+    ReadonlySet<ProviderSkillSourceBadge>
+  >(() => new Set());
 
   const skills = listQuery.data?.skills ?? EMPTY_SKILLS;
+  const sourceFilterActive = hiddenSources.size > 0;
   const filteredSkills = useMemo(
-    () => filterProviderSkills(skills, searchQuery),
-    [skills, searchQuery],
+    () =>
+      filterProviderSkills(
+        sourceFilterActive
+          ? skills.filter((skill) => !hiddenSources.has(skill.source))
+          : skills,
+        searchQuery,
+      ),
+    [skills, hiddenSources, sourceFilterActive, searchQuery],
   );
   const skillSearchActive = isProviderListSearchActive(searchQuery);
   const isMutating = mutate.isPending;
@@ -143,11 +178,27 @@ function ProviderSkillsTabBody({
   const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
   const removePending = isRemovePending(isMutating, pendingKey);
   const composerPending = isComposerPending(isMutating, pendingKey);
+  const updatePending = isUpdatePending(isMutating, pendingKey);
+  const editPending = isEditPending(isMutating, pendingKey);
+  const canEditHere = skillActionAdvertised(
+    caps.actionScopes.edit,
+    effectiveScope,
+  );
+  const canUpdateHere = skillActionAdvertised(
+    caps.actionScopes.update,
+    effectiveScope,
+  );
+  // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`.
+  const openSkillEditable =
+    openSkill !== null && canEditHere && skillIsEditable(openSkill);
+  const openSkillUpdatable =
+    openSkill !== null &&
+    canUpdateHere &&
+    skillOriginDisplay(openSkill) !== null;
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
-  const canWriteHere = authoring.canWrite && !projectNeedsWorkspace;
-  const canImportHere = authoring.canImport && !projectNeedsWorkspace;
+  const canAuthorHere = authoring.canAuthor && !projectNeedsWorkspace;
 
   // Read off the listing rather than mirrored from host code, so the composer
   // can name the provider's own skills folder without a second copy of that
@@ -155,6 +206,11 @@ function ProviderSkillsTabBody({
   // render (`?? []` on an optional query result), so a `useMemo` keyed on it
   // would recompute every time anyway while implying it does not.
   const providerRoot = providerRootFromSkills(skills);
+  const canProviderScope = skillProviderScopeVisible({
+    effectiveScope,
+    createScopes: caps.actionScopes.create,
+    importScopes: caps.actionScopes.import,
+  });
 
   const handleBrowse = useCallback(() => {
     void browseForWorkspace()
@@ -173,49 +229,125 @@ function ProviderSkillsTabBody({
       });
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
 
-  function openComposer(tab: SkillComposerTab): void {
-    setComposerError(null);
-    setComposerTab(tab);
+  function openComposer(): void {
+    setComposerOpen(true);
   }
 
-  function onComposerSubmit(mutation: ProvidersSkillsMutateAction): void {
-    setComposerError(null);
+  function onEdit(
+    skill: ProviderSkill,
+    target: SkillEditTarget,
+  ): Promise<boolean> {
+    setDetailError(null);
+    setPendingKey(`edit:${skill.path}`);
+    return fileContentRevision(target.baseline)
+      .then((expectedHash) =>
+        mutate.mutateAsync({
+          providerId,
+          scope: effectiveScope,
+          workspaceRoot: listWorkspaceRoot,
+          mutation: {
+            action: "edit",
+            path: target.path,
+            expectedHash,
+            name: target.name,
+            description: target.description,
+            body: target.body,
+          },
+          suppressToast: true,
+        }),
+      )
+      .then((data) => {
+        const next = skillAfterEdit(data, skill, target.name);
+        if (next !== null) setOpenSkill(next);
+        return true;
+      })
+      .catch((err: unknown) => {
+        setDetailError(
+          err instanceof Error ? err.message : "Couldn't edit this skill.",
+        );
+        return false;
+      })
+      .finally(() => {
+        setPendingKey(null);
+      });
+  }
+
+  async function onComposerMutate(
+    mutation: ProvidersSkillsMutateAction,
+  ): Promise<SkillsMutateData> {
     setPendingKey(`composer:${mutation.action}`);
-    mutate.mutate(
-      {
+    try {
+      return await mutate.mutateAsync({
         providerId,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation,
-        // This surface renders the failure inside the composer via
-        // `setComposerError`, so the hook's global toast would double-report
-        // the same error.
+        // The composer renders failures inline, so the hook's global toast
+        // would double-report the same error.
         suppressToast: true,
-      },
-      {
-        onSuccess: () => {
-          setPendingKey(null);
-          setComposerTab(null);
-        },
-        onError: (err) => {
-          setPendingKey(null);
-          // The composer stays OPEN on failure: the draft is the only copy of
-          // what the user just wrote, and closing it to show an error would
-          // throw the work away along with it.
-          setComposerError(err.message);
-        },
-      },
-    );
+      });
+    } finally {
+      setPendingKey(null);
+    }
   }
 
   /**
-   * Removal gets its own path rather than reusing `onComposerSubmit`: its
+   * Removal gets its own path rather than reusing `onComposerMutate`: its
    * success and failure land in different places. Success must close BOTH
    * dialogs (the open skill no longer exists); failure has to surface inside
    * the skill dialog, not in a composer that is not even mounted.
    */
+  async function onUpdate(
+    skill: ProviderSkill,
+    confirm: boolean,
+  ): Promise<void> {
+    setDetailError(null);
+    setPendingKey(`update:${skill.path}`);
+    try {
+      const data = await mutate.mutateAsync({
+        providerId,
+        scope: effectiveScope,
+        workspaceRoot: listWorkspaceRoot,
+        mutation: confirm
+          ? {
+              action: "update",
+              name: skill.name,
+              path: skill.path,
+              confirm: true,
+            }
+          : { action: "update", name: skill.name, path: skill.path },
+        suppressToast: true,
+      });
+      setUpdateConfirm(null);
+      toast.success("Updated from source");
+      const next = skillAfterUpdate(data, skill);
+      if (next === null) {
+        setOpenSkill(null);
+      } else {
+        setOpenSkill(next);
+        setDetailFileEpoch((epoch) => epoch + 1);
+      }
+    } catch (err) {
+      if (!confirm && isExternalDriftError(err)) {
+        setUpdateConfirm(skill);
+        return;
+      }
+      if (isSkillUpdateNoOp(err)) {
+        setUpdateConfirm(null);
+        toast.success("Already up to date");
+        return;
+      }
+      setUpdateConfirm(null);
+      setDetailError(
+        err instanceof Error ? err.message : "Couldn't update this skill.",
+      );
+    } finally {
+      setPendingKey(null);
+    }
+  }
+
   function onRemove(skill: ProviderSkill): void {
-    setRemoveError(null);
+    setDetailError(null);
     setPendingKey(`remove:${skill.path}`);
     mutate.mutate(
       {
@@ -240,29 +372,90 @@ function ProviderSkillsTabBody({
           // where the error renders, and re-confirming an operation that just
           // failed is not the next step.
           setRemoveTarget(null);
-          setRemoveError(err.message);
+          setDetailError(err.message);
         },
       },
     );
   }
 
+  function renderDialogs(): ReactNode {
+    return (
+      <>
+        {composerOpen ? (
+          <ProviderSkillComposerDialog
+            providerLabel={providerLabel}
+            authoring={authoring}
+            listScope={effectiveScope}
+            providerRoot={providerRoot}
+            canProviderScope={canProviderScope}
+            pending={composerPending}
+            onMutate={onComposerMutate}
+            onClose={() => {
+              setComposerOpen(false);
+            }}
+          />
+        ) : null}
+
+        {openSkill === null ? null : (
+          <ProviderSkillDetailDialog
+            skill={openSkill}
+            removal={skillRemovability({
+              removeScopes: caps.actionScopes.remove,
+              source: openSkill.source,
+              effectiveScope,
+              conflict: openSkill.conflict === true,
+            })}
+            removePending={removePending}
+            removeDisabled={isMutating}
+            actionError={detailError}
+            canEdit={openSkillEditable}
+            canUpdate={openSkillUpdatable}
+            origin={skillOriginDisplay(openSkill)}
+            updatePending={updatePending}
+            editPending={editPending}
+            onStartEdit={() => {
+              setDetailError(null);
+            }}
+            onSave={(target) => onEdit(openSkill, target)}
+            onRequestUpdate={() => {
+              void onUpdate(openSkill, false);
+            }}
+            onRequestRemove={() => {
+              setRemoveTarget(openSkill);
+            }}
+            onClose={() => {
+              setOpenSkill(null);
+              setDetailError(null);
+            }}
+            fileEpoch={detailFileEpoch}
+          />
+        )}
+
+        <SkillRemoveConfirm
+          target={removeTarget}
+          pending={removePending}
+          onCancel={() => {
+            setRemoveTarget(null);
+          }}
+          onConfirm={onRemove}
+        />
+
+        <SkillUpdateConfirm
+          target={updateConfirm}
+          pending={updatePending}
+          onCancel={() => {
+            setUpdateConfirm(null);
+          }}
+          onConfirm={(skill) => {
+            void onUpdate(skill, true);
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="text-ui-sm font-medium text-foreground">Skills</div>
-          <p className="text-ui-xs text-muted-foreground">
-            Invoked by the agent when relevant, or manually with / in chat.
-          </p>
-        </div>
-        <SkillEntryButtons
-          canWrite={canWriteHere}
-          canImport={canImportHere}
-          disabled={isMutating}
-          onOpen={openComposer}
-        />
-      </div>
-
       {/*
         Global/project is WHERE the skill files live (host vs workspace). The
         composer's "Available to" control is a different axis — shared
@@ -293,15 +486,27 @@ function ProviderSkillsTabBody({
             }}
           />
         )}
+        <SkillEntryButton
+          canAuthor={canAuthorHere}
+          disabled={isMutating}
+          onOpen={openComposer}
+        />
       </div>
 
       {!projectNeedsWorkspace ? (
-        <ProviderListSearch
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          resultCount={filteredSkills.length}
-          resourceLabel="skills"
-        />
+        <div className="flex items-center gap-2">
+          <ProviderListSearch
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            resultCount={filteredSkills.length}
+            resourceLabel="skills"
+          />
+          <SkillSourceFilterMenu
+            skills={skills}
+            hiddenSources={hiddenSources}
+            onHiddenSourcesChange={setHiddenSources}
+          />
+        </div>
       ) : null}
 
       <SkillsListBody
@@ -314,60 +519,39 @@ function ProviderSkillsTabBody({
         unfilteredSkillCount={skills.length}
         searchQuery={searchQuery}
         searchActive={skillSearchActive}
-        canWrite={canWriteHere}
-        canImport={canImportHere}
+        sourceFilterActive={sourceFilterActive}
+        canAuthor={canAuthorHere}
         disabled={isMutating}
         onOpenComposer={openComposer}
         onOpenSkill={setOpenSkill}
       />
 
-      {composerTab === null ? null : (
-        <ProviderSkillComposerDialog
-          providerLabel={providerLabel}
-          authoring={authoring}
-          initialTab={composerTab}
-          providerRoot={providerRoot}
-          pending={composerPending}
-          error={composerError}
-          onSubmit={onComposerSubmit}
-          onClose={() => {
-            setComposerTab(null);
-            setComposerError(null);
-          }}
-        />
-      )}
-
-      {openSkill === null ? null : (
-        <ProviderSkillDetailDialog
-          skill={openSkill}
-          removal={skillRemovability({
-            removeScopes: caps.actionScopes.remove,
-            source: openSkill.source,
-            effectiveScope,
-          })}
-          removePending={removePending}
-          removeDisabled={isMutating}
-          removeError={removeError}
-          onRequestRemove={() => {
-            setRemoveTarget(openSkill);
-          }}
-          onClose={() => {
-            setOpenSkill(null);
-            setRemoveError(null);
-          }}
-        />
-      )}
-
-      <SkillRemoveConfirm
-        target={removeTarget}
-        pending={removePending}
-        onCancel={() => {
-          setRemoveTarget(null);
-        }}
-        onConfirm={onRemove}
-      />
+      {renderDialogs()}
     </div>
   );
+}
+
+function skillAfterUpdate(
+  data: SkillsMutateData,
+  previous: ProviderSkill,
+): ProviderSkill | null {
+  if (data.kind !== "skills") return null;
+  for (const row of data.skills) {
+    if (row.path === previous.path) return row;
+  }
+  return null;
+}
+
+function skillAfterEdit(
+  data: SkillsMutateData,
+  previous: ProviderSkill,
+  name: string,
+): ProviderSkill | null {
+  if (data.kind !== "skills") return null;
+  for (const row of data.skills) {
+    if (row.source === previous.source && row.name === name) return row;
+  }
+  return null;
 }
 
 /**
@@ -387,56 +571,118 @@ function isComposerPending(isMutating: boolean, pendingKey: string | null) {
   );
 }
 
+function isUpdatePending(isMutating: boolean, pendingKey: string | null) {
+  return isMutating && pendingKey !== null && pendingKey.startsWith("update:");
+}
+
+function isEditPending(isMutating: boolean, pendingKey: string | null) {
+  return isMutating && pendingKey !== null && pendingKey.startsWith("edit:");
+}
+
 /**
- * The header affordance.
- *
- * Two real buttons rather than a `New ▾` menu. The menu it replaces derived its
- * items from the capability table, and every shipped provider contract had
- * `create: []` — so it was always a chevron hiding exactly one item. When only
- * one path is open this still renders one button, but a button that names what
- * it does instead of a menu that has to be opened to find out.
+ * One Add skill button opens the composer import-first
+ * (or write-only when import is not advertised). No menu, no Import/New pair.
  */
-function SkillEntryButtons({
-  canWrite,
-  canImport,
+function SkillEntryButton({
+  canAuthor,
   disabled,
   onOpen,
 }: {
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpen: (tab: SkillComposerTab) => void;
+  readonly onOpen: () => void;
 }): ReactNode {
-  if (!canWrite && !canImport) return null;
+  if (!canAuthor) return null;
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
-      {canImport ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-ui-xs"
-          disabled={disabled}
-          onClick={() => onOpen("import")}
-        >
-          <Download className="size-3.5" />
-          Import skill
-        </Button>
-      ) : null}
-      {canWrite ? (
-        <Button
-          type="button"
-          variant={canImport ? "default" : "outline"}
-          size="sm"
-          className="text-ui-xs"
-          disabled={disabled}
-          onClick={() => onOpen("write")}
-        >
-          <Plus className="size-3.5" />
-          New skill
-        </Button>
-      ) : null}
-    </div>
+    <Button
+      type="button"
+      size="sm"
+      className="text-ui-xs"
+      disabled={disabled}
+      onClick={onOpen}
+    >
+      <Plus className="size-3.5" />
+      Add skill
+    </Button>
+  );
+}
+
+/**
+ * Multi-select filter over the source badges, sitting beside search. Options
+ * are the source types actually present in the list (a provider with no plugin
+ * skills gets no dead "Plugin" row); everything starts selected, and
+ * deselecting a type hides its rows.
+ */
+function SkillSourceFilterMenu({
+  skills,
+  hiddenSources,
+  onHiddenSourcesChange,
+}: {
+  readonly skills: readonly ProviderSkill[];
+  readonly hiddenSources: ReadonlySet<ProviderSkillSourceBadge>;
+  readonly onHiddenSourcesChange: (
+    next: ReadonlySet<ProviderSkillSourceBadge>,
+  ) => void;
+}): ReactNode {
+  const present = SKILL_SOURCE_ORDER.filter((source) =>
+    skills.some((skill) => skill.source === source),
+  );
+  if (present.length === 0) return null;
+  const active = hiddenSources.size > 0;
+  const label = active
+    ? "Filter skills by type, some types hidden"
+    : "Filter skills by type";
+  return (
+    <DropdownMenu>
+      <TooltipWrapper label={label} side="top" sideOffset={4} align="center">
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            className="relative shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <ListFilter className="size-3.5" aria-hidden />
+            {/* A dot, not a count: it only has to say "the list is narrowed". */}
+            {active ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
+              />
+            ) : null}
+          </Button>
+        </DropdownMenuTrigger>
+      </TooltipWrapper>
+      <DropdownMenuContent
+        align="end"
+        className="w-[min(10rem,calc(100vw-2rem))]"
+      >
+        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
+          Show
+        </DropdownMenuLabel>
+        {present.map((source) => (
+          <DropdownMenuCheckboxItem
+            key={source}
+            checked={!hiddenSources.has(source)}
+            // Keep the menu open across toggles - narrowing to one type means
+            // unchecking two, and a menu that closes per click makes that three
+            // openings.
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+            onCheckedChange={(checked) => {
+              const next = new Set(hiddenSources);
+              if (checked) next.delete(source);
+              else next.add(source);
+              onHiddenSourcesChange(next);
+            }}
+          >
+            {SKILL_SOURCE_LABEL[source]}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -461,13 +707,51 @@ function SkillRemoveConfirm({
       // Names the PATH, not just the skill: removal deletes a directory, and
       // which of the four skill roots it sits in is the part the name alone
       // cannot tell you.
+      description={removeDescription(target)}
+      cascadeSummary={null}
+      actionLabel="Remove"
+      isPending={pending}
+      onConfirm={() => {
+        if (target === null) return;
+        onConfirm(target);
+      }}
+    />
+  );
+}
+
+function removeDescription(target: ProviderSkill | null): string {
+  if (target === null) return "";
+  if (target.source === "shared") {
+    return `Delete “${target.name}” from disk? Removing a shared skill removes it for every provider. Its folder and SKILL.md are removed from ${target.path}.`;
+  }
+  return `Delete “${target.name}” from disk? Its folder and SKILL.md are removed from ${target.path}.`;
+}
+
+function SkillUpdateConfirm({
+  target,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  readonly target: ProviderSkill | null;
+  readonly pending: boolean;
+  readonly onCancel: () => void;
+  readonly onConfirm: (skill: ProviderSkill) => void;
+}): ReactNode {
+  return (
+    <ConfirmDestructiveDialog
+      open={target !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title="Overwrite local edits?"
       description={
         target === null
           ? ""
-          : `Delete “${target.name}” from disk? Its folder and SKILL.md are removed from ${target.path}.`
+          : `“${target.name}” has local edits that will be overwritten by the source.`
       }
       cascadeSummary={null}
-      actionLabel="Remove"
+      actionLabel="Update"
       isPending={pending}
       onConfirm={() => {
         if (target === null) return;
@@ -487,8 +771,8 @@ function SkillsListBody({
   unfilteredSkillCount,
   searchQuery,
   searchActive,
-  canWrite,
-  canImport,
+  sourceFilterActive,
+  canAuthor,
   disabled,
   onOpenComposer,
   onOpenSkill,
@@ -502,10 +786,10 @@ function SkillsListBody({
   readonly unfilteredSkillCount: number;
   readonly searchQuery: string;
   readonly searchActive: boolean;
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly sourceFilterActive: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpenComposer: (tab: SkillComposerTab) => void;
+  readonly onOpenComposer: () => void;
   readonly onOpenSkill: (skill: ProviderSkill) => void;
 }): ReactNode {
   if (projectNeedsWorkspace) {
@@ -544,8 +828,7 @@ function SkillsListBody({
   if (unfilteredSkillCount === 0) {
     return (
       <SkillsEmptyState
-        canWrite={canWrite}
-        canImport={canImport}
+        canAuthor={canAuthor}
         disabled={disabled}
         onOpenComposer={onOpenComposer}
       />
@@ -557,6 +840,16 @@ function SkillsListBody({
         query={searchQuery}
         resourceLabel="skills"
       />
+    );
+  }
+  if (sourceFilterActive && skills.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
+        <ListFilter className="size-5 text-muted-foreground" aria-hidden />
+        <p className="text-ui-xs text-muted-foreground">
+          No skills match the current filter.
+        </p>
+      </div>
     );
   }
   return (
@@ -584,15 +877,13 @@ function SkillsListBody({
  * broken tab.
  */
 function SkillsEmptyState({
-  canWrite,
-  canImport,
+  canAuthor,
   disabled,
   onOpenComposer,
 }: {
-  readonly canWrite: boolean;
-  readonly canImport: boolean;
+  readonly canAuthor: boolean;
   readonly disabled: boolean;
-  readonly onOpenComposer: (tab: SkillComposerTab) => void;
+  readonly onOpenComposer: () => void;
 }): ReactNode {
   return (
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
@@ -608,34 +899,17 @@ function SkillsEmptyState({
       <pre className="w-full max-w-prose overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-ui-xs text-muted-foreground">
         {EXAMPLE_SKILL_MD}
       </pre>
-      {canWrite || canImport ? (
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {canWrite ? (
-            <Button
-              type="button"
-              size="sm"
-              className="text-ui-xs"
-              disabled={disabled}
-              onClick={() => onOpenComposer("write")}
-            >
-              <Plus className="size-3.5" />
-              New skill
-            </Button>
-          ) : null}
-          {canImport ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="text-ui-xs"
-              disabled={disabled}
-              onClick={() => onOpenComposer("import")}
-            >
-              <Download className="size-3.5" />
-              Import from a repo or folder
-            </Button>
-          ) : null}
-        </div>
+      {canAuthor ? (
+        <Button
+          type="button"
+          size="sm"
+          className="text-ui-xs"
+          disabled={disabled}
+          onClick={onOpenComposer}
+        >
+          <Plus className="size-3.5" />
+          Add skill
+        </Button>
       ) : (
         <p className="max-w-prose text-ui-xs text-muted-foreground">
           This provider reads skills but can&apos;t add them from Traycer. Put a
@@ -662,6 +936,14 @@ description: Reviews a   # what the agent matches on
 ## When to use this
 ...instructions the agent follows...`;
 
+function skillOpenLabel(skill: ProviderSkill): string {
+  const badge = SKILL_SOURCE_LABEL[skill.source];
+  if (skill.conflict === true) {
+    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
+  }
+  return `Open ${skill.name} (${badge})`;
+}
+
 function SkillRow({
   skill,
   onOpen,
@@ -669,7 +951,6 @@ function SkillRow({
   readonly skill: ProviderSkill;
   readonly onOpen: () => void;
 }): ReactNode {
-  const badge = SKILL_SOURCE_LABEL[skill.source];
   return (
     <li>
       <button
@@ -681,33 +962,52 @@ function SkillRow({
         // skill name under `shared`, `provider`, `plugin` and `managed` roots
         // (rows are keyed `source:path`), which would leave a screen reader
         // with several buttons all reading "Open deploy".
-        aria-label={`Open ${skill.name} (${badge})`}
+        aria-label={skillOpenLabel(skill)}
         className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
             format carries artwork for one, so anything here would be a glyph
-            we invented rather than the skill's own identity. The source badge
-            beside the name is the real differentiator. Plugin rows keep their
-            tile because plugins DO ship icons. */}
+            we invented rather than the skill's own identity. Plugin rows keep
+            their tile because plugins DO ship icons. */}
         <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-ui-sm font-medium text-foreground">
-              {skill.name}
-            </span>
-            <span
-              className={cn(
-                "rounded border px-1.5 py-0.5 text-ui-xs",
-                SKILL_SOURCE_TONE[skill.source],
-              )}
-            >
-              {badge}
-            </span>
+          <span className="block truncate text-ui-sm font-medium text-foreground">
+            {skill.name}
           </span>
           {skill.description !== null && skill.description.length > 0 ? (
             <span className="mt-0.5 block truncate text-ui-xs text-muted-foreground">
               {skill.description}
             </span>
           ) : null}
+        </span>
+        {/* Badges hold one trailing edge across every row - names vary in
+            length, so anchoring status here is what keeps it scannable as a
+            column instead of drifting with each name. */}
+        <span className="flex shrink-0 items-center gap-1.5">
+          {skill.conflict === true ? (
+            <TooltipWrapper
+              label={SKILL_CONFLICT_TOOLTIP}
+              side="top"
+              sideOffset={4}
+              align="center"
+            >
+              <span
+                className={cn(
+                  "whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-ui-xs",
+                  SKILL_CONFLICT_TONE,
+                )}
+              >
+                {SKILL_CONFLICT_LABEL}
+              </span>
+            </TooltipWrapper>
+          ) : null}
+          <span
+            className={cn(
+              "whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-ui-xs",
+              SKILL_SOURCE_TONE[skill.source],
+            )}
+          >
+            {SKILL_SOURCE_LABEL[skill.source]}
+          </span>
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>

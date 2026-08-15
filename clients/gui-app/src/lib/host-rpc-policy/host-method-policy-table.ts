@@ -993,6 +993,12 @@ export const HOST_METHOD_POLL_TABLE = {
   // No poll: the PR detail stream is what notices a new push, and a re-render
   // off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The split form of the same read: one metadata frame when the tile opens,
+  // then one small patch per visible row. Same no-poll reasoning - the detail
+  // stream notices pushes, and the per-file queries are keyed by immutable
+  // OIDs, so there is nothing a cadence could learn.
+  "pr.getLocalDiffSummary": { ...LATEST_SCHEDULING, poll: null },
+  "pr.getLocalFileDiff": { ...LATEST_SCHEDULING, poll: null },
   // The composer's PR/issue mention sections. Both are latest-wins with no
   // poll: the menu is open for seconds at a time and drives every fetch
   // explicitly (open, refresh click, filter change), so there is no cadence

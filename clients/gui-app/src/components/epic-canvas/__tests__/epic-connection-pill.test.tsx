@@ -9,13 +9,18 @@ import {
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
+import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
 
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
+  chatBackupStatus: null as EpicChatBackupStatus | null,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicSyncPillState: mocks.useEpicSyncPillState,
+}));
+vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
+  useEpicChatBackupStatus: () => mocks.chatBackupStatus,
 }));
 
 const OFFLINE_COPY =
@@ -26,7 +31,7 @@ const OFFLINE_UNSAVED_TOOLTIP =
 function pillTree() {
   return (
     <TooltipProvider>
-      <EpicConnectionPill />
+      <EpicConnectionPill epicId="epic-a" />
     </TooltipProvider>
   );
 }
@@ -59,6 +64,7 @@ describe("<EpicConnectionPill />", () => {
     cleanup();
     vi.clearAllMocks();
     vi.useRealTimers();
+    mocks.chatBackupStatus = null;
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -192,6 +198,70 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("hostPending");
+  });
+
+  it("moves active chat backup into the top-right dot tooltip", async () => {
+    mocks.chatBackupStatus = {
+      severity: "activity",
+      tooltip: "Backing up chats",
+      ariaLabel: "Backing up chats",
+    };
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe("Backing up chats");
+    await expectTooltip("Backing up chats");
+  });
+
+  it("turns the dot amber when chat backup is failing", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("syncing");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("chat-backup");
+    expect(pill.textContent).toBe("");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Chat backup failing · 1 chat not backed up",
+    );
+    await expectTooltip("Chat backup failing · 1 chat not backed up");
+  });
+
+  it("shows the highest severity across artifact sync and chat backup", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("offline");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-red-500",
+    );
+    await expectTooltip(OFFLINE_COPY);
+  });
+
+  it("keeps artifact status when warning severities tie", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("connecting");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).toContain("Connecting…");
+    await expectTooltip("Connecting to server");
   });
 
   it("shows the unsafe overlap warning immediately without a durability claim", async () => {

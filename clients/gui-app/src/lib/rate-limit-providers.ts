@@ -11,13 +11,9 @@ import {
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 
 /**
- * The two providers `host.getRateLimitUsage @1.2`'s `providerRateLimits`
- * union reports full native detail for. Every other `ProviderId` (including
- * `traycer`, which uses the flat aperture fields on the same RPC) resolves
- * to the `available: false` arm if ever queried - the GUI simply never asks
- * for it. Re-exported from the protocol's own enum (rather than hand-listed
- * here again) so the host's dispatch, the wire schema's two available arms,
- * and this GUI type can't silently drift apart.
+ * Providers whose `host.getRateLimitUsage` arm carries native account detail.
+ * Re-exported from the protocol enum so host dispatch and GUI eligibility
+ * cannot silently drift apart.
  */
 export type RateLimitProviderId = RateLimitCapableProviderId;
 
@@ -26,8 +22,8 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  * the polling scheduler branches on:
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
- *   plain GET (openrouter, kilocode, huggingface). Cheap and safe to run
- *   concurrently, so
+ *   plain GET (openrouter, kilocode, huggingface, opencode). Cheap and safe to
+ *   run concurrently, so
  *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
@@ -83,6 +79,7 @@ export function rateLimitFetchLane(
     case "openrouter":
     case "kilocode":
     case "huggingface":
+    case "opencode":
       return "httpFetch";
     case "codex":
     case "claude-code":

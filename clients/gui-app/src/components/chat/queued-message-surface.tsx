@@ -31,6 +31,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -115,6 +116,10 @@ export interface QueuedMessagePanelProps {
   readonly queue: ChatSessionState["queue"];
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canAct: boolean;
+  /** The resume frame was dispatched but has not reached authoritative queue state yet. */
+  readonly resumeRequested: boolean;
+  /** A pause frame was dispatched to supersede the pending resume. */
+  readonly keepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
   readonly scrollRegionMaxHeightClass: string;
@@ -208,6 +213,8 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
         canPauseQueue={hasPausableHumanItems}
         canResumeQueue={hasPausedItems}
         canAct={props.canAct}
+        resumeRequested={props.resumeRequested}
+        keepPausedRequested={props.keepPausedRequested}
         readOnly={props.readOnly}
         onPause={props.onPause}
         onResume={props.onResume}
@@ -274,7 +281,15 @@ function queueHeaderTooltip(input: {
   readonly queueStatus: ChatSessionState["queue"]["status"];
   readonly showPauseQueueButton: boolean;
   readonly showResumeQueueButton: boolean;
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
 }): string | null {
+  if (input.keepPausedRequested) {
+    return "The queue will remain paused";
+  }
+  if (input.resumeRequested) {
+    return "Keep queued messages paused";
+  }
   if (input.showResumeQueueButton) {
     return "Resume held queued messages";
   }
@@ -290,6 +305,62 @@ function queueHeaderTooltip(input: {
   return null;
 }
 
+function queueHeaderAnnouncement(input: {
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
+}): string {
+  if (input.keepPausedRequested) {
+    return "Queue will stay paused.";
+  }
+  if (input.resumeRequested) {
+    return "Queued messages will send when ready.";
+  }
+  return "";
+}
+
+function queueHeaderSummary(input: {
+  readonly count: number;
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
+}): string {
+  if (input.keepPausedRequested) {
+    return "Staying paused";
+  }
+  if (input.resumeRequested) {
+    return "Will send when ready";
+  }
+  if (input.count === 1) {
+    return "1 message";
+  }
+  return `${input.count} messages`;
+}
+
+function QueueResumeIcon(props: { readonly pending: boolean }) {
+  if (props.pending) {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="queue-resume-spinner"
+        variant={undefined}
+      />
+    );
+  }
+  return <Play className="size-3.5" />;
+}
+
+function KeepPausedIcon(props: { readonly pending: boolean }) {
+  if (props.pending) {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="queue-keep-paused-spinner"
+        variant={undefined}
+      />
+    );
+  }
+  return <Pause className="size-3.5" />;
+}
+
 function QueuedMessageHeader(props: {
   readonly open: boolean;
   readonly count: number;
@@ -297,6 +368,8 @@ function QueuedMessageHeader(props: {
   readonly canPauseQueue: boolean;
   readonly canResumeQueue: boolean;
   readonly canAct: boolean;
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
@@ -307,6 +380,8 @@ function QueuedMessageHeader(props: {
     canPauseQueue,
     canResumeQueue,
     canAct,
+    resumeRequested,
+    keepPausedRequested,
     readOnly,
     onPause,
     onResume,
@@ -321,14 +396,30 @@ function QueuedMessageHeader(props: {
   const showResumeQueueButton = canResumeQueue && !readOnly;
   const showPauseQueueButton =
     !showResumeQueueButton && canPauseQueue && !readOnly;
+  const showKeepPausedButton = resumeRequested || keepPausedRequested;
+  const resumePending = resumeRequested && !keepPausedRequested;
+  const announcement = queueHeaderAnnouncement({
+    resumeRequested,
+    keepPausedRequested,
+  });
+  const summary = queueHeaderSummary({
+    count,
+    resumeRequested,
+    keepPausedRequested,
+  });
   const tooltip = queueHeaderTooltip({
     queueStatus,
     showPauseQueueButton,
     showResumeQueueButton,
+    resumeRequested,
+    keepPausedRequested,
   });
 
   const header = (
     <div className="flex items-stretch" data-testid="queued-message-header">
+      <span className="sr-only" aria-live="polite">
+        {announcement}
+      </span>
       {/* On the collapse trigger, not the header strip: the strip also holds
           Resume/Pause, and a strip-wide trigger surfaced this queue-state text
           while hovering either of those buttons. */}
@@ -373,7 +464,7 @@ function QueuedMessageHeader(props: {
             aria-hidden
           />
           <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-            {count === 1 ? "1 message" : `${count} messages`}
+            {summary}
           </span>
         </CollapsibleTrigger>
       </TooltipWrapper>
@@ -383,19 +474,33 @@ function QueuedMessageHeader(props: {
         </span>
       ) : null}
       {showResumeQueueButton ? (
-        <div className="flex shrink-0 items-center pr-1.5">
+        <div className="flex shrink-0 items-center gap-1 pr-1.5">
           <Button
             type="button"
             size="sm"
             variant="outline"
             className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
-            disabled={!canAct}
+            disabled={!canAct || showKeepPausedButton}
             onClick={handleResume}
             data-testid="resume-queue-button"
           >
-            <Play className="size-3.5" />
+            <QueueResumeIcon pending={resumePending} />
             Resume
           </Button>
+          {showKeepPausedButton ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+              disabled={!canAct || keepPausedRequested}
+              onClick={handlePause}
+              data-testid="keep-paused-queue-button"
+            >
+              <KeepPausedIcon pending={keepPausedRequested} />
+              Keep paused
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {showPauseQueueButton ? (

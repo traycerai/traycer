@@ -46,7 +46,10 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  IHostManagement,
+  IRunnerHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -54,6 +57,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
+  buildOverviewManagement,
   openHostOverviewAdvanced,
   openHostOverviewMenu,
   updateCheckManifest,
@@ -110,6 +114,49 @@ function makeRunnerHost(): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
+}
+
+/**
+ * Same in-memory shell as `makeRunnerHost`, but with a CLI bridge attached —
+ * `MockRunnerHost` otherwise defaults `hostManagement` to `null`, which is
+ * exactly "no bridge" and cannot exercise the Force-restart offer at all.
+ */
+function makeRunnerHostWithManagement(
+  management: IHostManagement | null,
+): IRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+    hostManagement: management,
+  });
+}
+
+/**
+ * Same shape as `scopeFrom`, but with `isLocalMachine` a caller-supplied axis
+ * rather than pinned `true` — the Force-restart offer forks on exactly that
+ * flag (bridge respawns THIS machine's process only), so these tests need
+ * both a local and a remote host from the same fixture.
+ */
+function scopeFromWithLocality(
+  hostId: string,
+  fixture: OverviewHostFixture,
+  isLocalMachine: boolean,
+): Record<string, unknown> {
+  return {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine,
+      connectable: true,
+    }),
+    hostId,
+    status: "ready",
+    client: fixture.client,
+  };
 }
 
 async function waitForButton(name: string | RegExp): Promise<HTMLElement> {
@@ -432,6 +479,538 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     expect(transitionIds[0].length).toBeGreaterThan(0);
     expect(transitionIds[1].length).toBeGreaterThan(0);
     expect(transitionIds[0]).not.toBe(transitionIds[1]);
+  });
+});
+
+describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", () => {
+  it("a busy restart on a REMOTE host offers no Force restart, even with a management bridge present", async () => {
+    // The forking rule is `isLocalMachine`, not "is a bridge available" — a
+    // remote host's process cannot be respawned by THIS machine's bridge, so
+    // the offer must stay withheld even when `hostManagement` answers.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-remote",
+      isLocalMachine: false,
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 2 },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-remote", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality(
+      "host-remote",
+      fixture,
+      false,
+    );
+    const management = buildOverviewManagement({});
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+
+    expect(
+      await screen.findByTestId("host-overview-restart-busy"),
+    ).toBeTruthy();
+    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
+    // future markup change that drops the testid but leaves a real "Force
+    // restart" button behind must still fail this.
+    expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
+  });
+
+  it("a busy restart on a LOCAL host with no CLI bridge offers no Force restart either", async () => {
+    // The parity half of the case above: local alone is not enough. Pins that
+    // the no-bridge fixture (`makeRunnerHost`, `hostManagement: null`) stays
+    // equivalent for local and remote — neither offers Force.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 3 },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHostWithManagement(null)}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+
+    expect(
+      await screen.findByTestId("host-overview-restart-busy"),
+    ).toBeTruthy();
+    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
+    // future markup change that drops the testid but leaves a real "Force
+    // restart" button behind must still fail this.
+    expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
+  });
+
+  it("a LOCAL host with a CLI bridge offers Force restart, and a successful force clears the busy notice", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 2 },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const management = buildOverviewManagement({ restartHost });
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-restart-busy")).toBeNull();
+    });
+    expect(toast.success).toHaveBeenCalledWith("Restarting host-local");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a declined force restart clears the busy notice and shows an informational toast, not an error", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 4 },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    const restartHost = vi.fn(() =>
+      Promise.resolve({
+        kind: "declined" as const,
+        message: "Another Traycer process holds the management lock.",
+      }),
+    );
+    const management = buildOverviewManagement({ restartHost });
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.objectContaining({
+          description: "Another Traycer process holds the management lock.",
+        }),
+      );
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-restart-busy")).toBeNull();
+    });
+  });
+
+  it("a scope move mid-flight toasts under the INITIATING host's name, not the one the page moved to", async () => {
+    // Mirrors the `host.restart` arm-time-capture test above, for the
+    // page-remount half of the force-restart scoping fix: `HostSettingsPanel`
+    // keys `HostSettingsPanelInner` by `scopeId`, so a host swap unmounts the
+    // whole subtree the armed `forceRestart` mutation lives in. Its `onSuccess`
+    // closure — and the `variables.hostName` it toasts with — is frozen at the
+    // OLD render, so this proves the toast survives that remount naming the
+    // host that was actually being restarted, not whichever host the page
+    // shows once it resolves.
+    let releaseForceRestart: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseForceRestart = resolve;
+    });
+    const restartHost = vi.fn(async () => {
+      await gate;
+      return { kind: "restarted" as const };
+    });
+    const management = buildOverviewManagement({ restartHost });
+    const runnerHost = makeRunnerHostWithManagement(management);
+
+    const fixtureA = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Host A Display",
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 1 },
+          }),
+      },
+    });
+    const fixtureB = buildOverviewHostFixture({
+      hostId: "host-b",
+      isLocalMachine: true,
+      effectiveName: "Host B Display",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixtureA.client };
+    scopeOverrides.current = scopeFromWithLocality("host-a", fixtureA, true);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    // Wait for the identity read so the captured `hostName` is deterministic
+    // rather than a transient scope-row fallback.
+    await screen.findByText("Host A Display");
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+
+    // Move the scope to another host WHILE the force restart is still
+    // killing and relaunching the local bridge process.
+    hostBindingMock.current = { hostClient: fixtureB.client };
+    scopeOverrides.current = scopeFromWithLocality("host-b", fixtureB, true);
+    view.rerender(makeUi());
+    await screen.findByText("Host B Display");
+
+    await act(async () => {
+      releaseForceRestart?.();
+      await gate;
+    });
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Restarting Host A Display");
+    });
+    expect(toast.success).not.toHaveBeenCalledWith(
+      expect.stringContaining("Host B Display"),
+    );
+    expect(restartHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("Force restart armed on host A stays counted after a remount to host B, locking B's lifecycle writes until it settles", async () => {
+    // The regression Codex proved: `forceRestart.isPending` is the LOCAL
+    // `useMutation` observer's flag, and that observer dies with the
+    // scope-keyed remount (`HostSettingsPanel` keys `HostSettingsPanelInner`
+    // by `scopeId`). A swap away mid-flight used to mount a FRESH observer
+    // that starts idle, so the page-wide gate read `false` and reopened every
+    // lifecycle write it exists to hold shut — on host B's brand-new page,
+    // not even the host the bridge respawn is running against.
+    // `forceRestartInFlight` (`useIsMutating` against the shared
+    // `runnerMutationKeys.hostRestart()` key) is CACHE-derived, so it must
+    // stay `true` on host B's fresh mount for as long as the mutation the
+    // stale host-A instance armed is still settling, and drop back to
+    // `false` once it does.
+    let releaseForceRestart: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseForceRestart = resolve;
+    });
+    const restartHost = vi.fn(async () => {
+      await gate;
+      return { kind: "restarted" as const };
+    });
+    const management = buildOverviewManagement({ restartHost });
+    const runnerHost = makeRunnerHostWithManagement(management);
+
+    const fixtureA = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Host A Display",
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 1 },
+          }),
+      },
+    });
+    const fixtureB = buildOverviewHostFixture({
+      hostId: "host-b",
+      isLocalMachine: true,
+      effectiveName: "Host B Display",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixtureA.client };
+    scopeOverrides.current = scopeFromWithLocality("host-a", fixtureA, true);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    await screen.findByText("Host A Display");
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Force restart" }),
+    );
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+
+    // Move the scope to host B WHILE the force restart is still killing and
+    // relaunching the local bridge process.
+    hostBindingMock.current = { hostClient: fixtureB.client };
+    scopeOverrides.current = scopeFromWithLocality("host-b", fixtureB, true);
+    view.rerender(makeUi());
+
+    // Wait for host B's identity to load so the lock asserted below is
+    // attributable to `locked` (the page-wide gate) rather than to
+    // `!loaded`, which disables the pencil regardless of the gate.
+    await screen.findByText("Host B Display");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      releaseForceRestart?.();
+      await gate;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-edit-name").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+  });
+
+  it("a pending PAGE-WIDE write (rename in flight) disables both busy-notice buttons; releasing it re-enables them", async () => {
+    // Codex P1: the notice's own buttons only gated each OTHER
+    // (`retryPending || forcePending`) - nothing gated them on the REST of
+    // the page. Every other lifecycle write already refuses to dispatch
+    // while a restart is in flight (`corePending` includes `restart.isPending`
+    // and `forceRestartInFlight`), but the exclusion did not hold in the
+    // other direction: Try again and Force restart stayed clickable while a
+    // rename, an update install, or a service write was running - any of
+    // which a forced bridge respawn would then race. `pageGatePending`
+    // (`anyPending`, the page's fullest write gate) closes that gap.
+    let releaseRename: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      effectiveName: "Host Local Display",
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 2 },
+          }),
+        "host.identity.set": async (req) => {
+          await gate;
+          return {
+            systemName: "host-local",
+            customName: req.customName,
+            effectiveName: req.customName ?? "host-local",
+          };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    const management = buildOverviewManagement({});
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("Host Local Display");
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    // Enabled BEFORE the unrelated write - so the lock below is caused by
+    // the rename, not by a fixture that never let the buttons load.
+    expect(
+      screen
+        .getByRole("button", { name: "Force restart" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit name" }));
+    const input = await screen.findByTestId("host-overview-name-input");
+    fireEvent.change(input, { target: { value: "New Name" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Force restart" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    await act(async () => {
+      releaseRename?.();
+      await gate;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Force restart" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 });
 

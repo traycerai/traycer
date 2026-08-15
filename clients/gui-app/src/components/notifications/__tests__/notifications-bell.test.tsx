@@ -204,7 +204,7 @@ function mountBell(
 
   render(
     <StreamRuntimeContext.Provider
-      value={{ wsStreamClient: options.wsStreamClient }}
+      value={{ wsStreamClient: options.wsStreamClient, hostId: null }}
     >
       {bell}
     </StreamRuntimeContext.Provider>,

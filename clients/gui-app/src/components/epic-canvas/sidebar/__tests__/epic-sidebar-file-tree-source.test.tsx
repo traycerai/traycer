@@ -392,7 +392,9 @@ function renderPanel(client: MockWsStreamClient): void {
   });
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={queryClient}>
-      <StreamRuntimeContext.Provider value={{ wsStreamClient: client }}>
+      <StreamRuntimeContext.Provider
+        value={{ wsStreamClient: client, hostId: null }}
+      >
         {children}
       </StreamRuntimeContext.Provider>
     </QueryClientProvider>

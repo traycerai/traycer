@@ -32,7 +32,7 @@ vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
     workspaces: [],
     isPending: false,
     error: null,
-    checkedAt: null,
+    checkedAt: 1_700_000_000_000,
     isRefreshing: false,
     refresh: refreshSpy,
   }),
@@ -108,6 +108,17 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
     expect(
       screen.getByTestId("chat-navigator-hover-title-owner-1").textContent,
     ).toBe("A complete chat title that should remain visible");
+  });
+
+  it("labels the row age as a workspace snapshot, not a fresh GitHub check", () => {
+    const trigger = renderTooltip(undefined);
+
+    hoverIn(trigger);
+    settleOpenDelay();
+
+    const label = screen.getByTestId("owner-workspace-checked-at").textContent;
+    expect(label).toMatch(/^Workspace snapshot · /u);
+    expect(label).not.toContain("Checked");
   });
 
   it("swallows an open that lands after the press (the reported race)", () => {

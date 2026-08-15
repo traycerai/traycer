@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -57,7 +58,11 @@ import {
 } from "@/components/settings/panels/host-service-write-latch-store";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
@@ -202,6 +207,74 @@ export function HostOverviewPanel(props: {
   });
   const { identity, displayName } = view;
 
+  // The pre-rework recovery console offered Force restart when the host
+  // denied the shutdown claim (OSS #1156 dropped the offer); this is that
+  // offer's home on the one-page Overview. LOCAL machine with a bridge only,
+  // by the nature of the transport rather than a scope rule: the bridge
+  // respawn recycles THIS machine's host process, so surfacing it for a
+  // remote host would kill the wrong process. The claim-gated `host.restart`
+  // stays the default path for every host; force is the explicit consent to
+  // end the sessions the claim protects.
+  const management = useRunnerHostOrNull()?.hostManagement ?? null;
+  // Variables carry the INITIATING host's id and name (host-swap rule:
+  // capture the host with the mutation, never read it back from whichever
+  // render is live when it settles). The user can scope this page to another
+  // host while the bridge is still killing and relaunching; the settle
+  // callbacks below must neither clear that other host's busy notice nor
+  // toast under its name.
+  const forceRestart = useMutation<
+    HostRestartRequestResult,
+    Error,
+    { readonly hostId: string; readonly hostName: string }
+  >({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: () => {
+      if (management === null) {
+        return Promise.reject(new Error("No local host bridge is available."));
+      }
+      return management.restartHost();
+    },
+    onSuccess: (result, variables) => {
+      if (variables.hostId === scope.hostId) {
+        setRestartBusyCount(null);
+      }
+      // `declined` survives even a forced respawn (removed-by-user, another
+      // process holds the management lock) - informational, not an error.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
+      toast.success(`Restarting ${variables.hostName}`);
+    },
+    onError: (error) => {
+      toastFromRunnerError(error, "Couldn't restart host");
+    },
+  });
+  // Pending for THIS page's busy notice only when this host initiated it;
+  // the page-wide write gate (`corePending`) includes the unscoped pending
+  // instead, since a bridge respawn recycles the local host process and no
+  // lifecycle write should dispatch beside that regardless of scope.
+  const forceRestartPendingHere =
+    forceRestart.isPending && forceRestart.variables.hostId === scope.hostId;
+  // CACHE-derived, not observer-derived, for the page-wide gate. The panel's
+  // inner tree is keyed per scope, so switching hosts unmounts this
+  // component and a remounted `useMutation` observer starts idle even while
+  // the bridge respawn it armed is still in flight - `forceRestart.isPending`
+  // would read false and reopen every lifecycle write the gate exists to
+  // exclude. `useIsMutating` counts pending mutations in the shared cache
+  // under this key, which survives any number of remounts.
+  const forceRestartInFlight =
+    useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
+  // The id the force offer would act on, or null when no offer can be made.
+  // Carrying the id (not a boolean) is what lets the mutate call below pass
+  // a `string` without re-narrowing `scope.hostId`'s `string | null`.
+  const forceRestartHostId =
+    (host?.isLocalMachine ?? false) &&
+    props.hasLocalBridge &&
+    management !== null
+      ? scope.hostId
+      : null;
+
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
   // handler is what keeps their success and failure behaviour identical; two
@@ -263,6 +336,10 @@ export function HostOverviewPanel(props: {
   const updateInFlight = view.updateProgress?.state === "updating";
   const corePending =
     restart.isPending ||
+    // Unscoped on purpose: the forced bridge respawn replaces the LOCAL host
+    // process, and no lifecycle write on this page should dispatch beside
+    // that regardless of which host the page is currently scoped to.
+    forceRestartInFlight ||
     identitySet.isPending ||
     updateInFlight ||
     policyMutation.isPending;
@@ -536,6 +613,22 @@ export function HostOverviewPanel(props: {
               setRestartConfirmOpen(true);
             }}
             onDismiss={() => setRestartBusyCount(null)}
+            onForceRestart={
+              forceRestartHostId === null
+                ? null
+                : () =>
+                    forceRestart.mutate({
+                      hostId: forceRestartHostId,
+                      hostName: displayName,
+                    })
+            }
+            forcePending={forceRestartPendingHere}
+            // `anyPending` is the page's FULL write gate (core lifecycle
+            // writes, service register/deregister, an accepted-but-unsettled
+            // update install) - the same one the restart confirm and rename
+            // already honor. Passing anything narrower would let Force
+            // restart recycle the host beside one of those writes.
+            pageGatePending={anyPending}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a

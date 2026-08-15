@@ -222,7 +222,10 @@ describe.skipIf(process.platform === "win32")(
         await waitForFile(join(holdBarrierDir, "held"));
 
         const { buildHostRestartCommand } = await import("../host-restart");
-        const command = buildHostRestartCommand({ ifIdle: false });
+        const command = buildHostRestartCommand({
+          ifIdle: false,
+          force: false,
+        });
         const pending = command(fakeCtx());
 
         // Give the command every chance to (wrongly) proceed while the
@@ -267,7 +270,7 @@ describe.skipIf(process.platform === "win32")(
         await waitForFile(join(holdBarrierDir, "held"));
 
         const { buildHostRestartCommand } = await import("../host-restart");
-        const command = buildHostRestartCommand({ ifIdle: true });
+        const command = buildHostRestartCommand({ ifIdle: true, force: false });
         const pending = command(fakeCtx());
 
         // The host was idle when this restart was requested, but an
@@ -306,9 +309,10 @@ describe.skipIf(process.platform === "win32")(
       };
 
       const { buildHostRestartCommand } = await import("../host-restart");
-      const pendingRestart = buildHostRestartCommand({ ifIdle: false })(
-        fakeCtx(),
-      );
+      const pendingRestart = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+      })(fakeCtx());
       await attestationStarted.promise;
       const { exited } = spawnLockWorker(WORKER_SCRIPT, {
         WORKER_LOCK_PATH: lockPath,

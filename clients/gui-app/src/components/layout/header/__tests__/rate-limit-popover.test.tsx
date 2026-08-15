@@ -37,6 +37,7 @@ import {
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -793,6 +794,8 @@ beforeEach(() => {
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   useRateLimitPopoverStore.setState({ activeTab: "overview", size: null });
   useRateLimitPopoverStore.persist.clearStorage();
+  useProvidersFocusStore.getState().clearFocusHarnessId();
+  useProvidersFocusStore.getState().clearFocusTab();
   onClose = vi.fn();
 });
 
@@ -810,7 +813,7 @@ describe("<RateLimitPopover /> zero-provider state", () => {
     mocks.configured = [];
     renderPopover();
     expect(
-      screen.getByText("Connect Claude Code or Codex to see usage here."),
+      screen.getByText("Connect a supported provider to see usage here."),
     ).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
   });
@@ -1703,6 +1706,43 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("closes before opening Model Providers for an OpenCode permission failure", () => {
+    const events: string[] = [];
+    onClose = vi.fn(() => {
+      events.push("close");
+    });
+    mocks.openSettings = vi.fn(() => {
+      events.push("settings");
+    });
+    mocks.configured = [
+      { providerId: "opencode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = {
+      opencode: readyResult({
+        provider: "opencode",
+        available: false,
+        reason: "insufficient_permissions",
+        credentialGeneration: "gen-1",
+      }),
+    };
+    useRateLimitPopoverStore.setState({ activeTab: "opencode" });
+
+    renderPopover();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Model Providers" }),
+    );
+
+    expect(events).toEqual(["close", "settings"]);
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "opencode",
+      focusTab: "modelProviders",
+    });
+  });
+
   it("offers a confirmed Codex reset on the detail panel but keeps Overview read-only", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
@@ -2546,7 +2586,7 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     renderPopover();
     // Eligible Traycer alone keeps the rail (not the zero-provider CTA).
     expect(
-      screen.queryByText("Connect Claude Code or Codex to see usage here."),
+      screen.queryByText("Connect a supported provider to see usage here."),
     ).toBeNull();
     const tabs = screen.getAllByRole("tab");
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([

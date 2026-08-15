@@ -233,6 +233,8 @@ function renderDock(input: DockInput) {
           todo={input.todo}
           restore={baseRestore(input.changes)}
           queue={input.queue}
+          queueResumeRequested={false}
+          queueKeepPausedRequested={false}
           backgroundItems={input.backgroundItems}
           runningManagedCommandCount={0}
           backgroundStopPendingTaskIds={new Set()}

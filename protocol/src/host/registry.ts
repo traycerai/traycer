@@ -87,13 +87,19 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV40ToV10,
   agentGetProviderProfileRateLimitsDowngradeV40ToV20,
   agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV40,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
   agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsV40,
+  agentGetProviderProfileRateLimitsV50,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
+  agentGetProviderProfileRateLimitsUpgradeV40ToV50,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
@@ -256,18 +262,24 @@ import {
   hostGetRateLimitUsageV21,
   hostGetRateLimitUsageV30,
   hostGetRateLimitUsageV40,
+  hostGetRateLimitUsageV50,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
   hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
+  hostGetRateLimitUsageUpgradeV40ToV50,
   hostGetRateLimitUsageDowngradeV2ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageDowngradeV3ToV1,
   hostGetRateLimitUsageDowngradeV4ToV1,
   hostGetRateLimitUsageDowngradeV4ToV2,
   hostGetRateLimitUsageDowngradeV4ToV3,
+  hostGetRateLimitUsageDowngradeV5ToV1,
+  hostGetRateLimitUsageDowngradeV5ToV2,
+  hostGetRateLimitUsageDowngradeV5ToV3,
+  hostGetRateLimitUsageDowngradeV5ToV4,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
@@ -458,6 +470,12 @@ import {
   prSubscribeListForEpicV10,
   prSubscribeDetailV10,
   prGetLocalDiffV10,
+  prGetLocalDiffSummaryV10,
+  prGetLocalDiffSummaryV11,
+  prGetLocalDiffSummaryUpgradeV10ToV11,
+  prGetLocalFileDiffV10,
+  prGetLocalFileDiffV11,
+  prGetLocalFileDiffUpgradeV10ToV11,
 } from "@traycer/protocol/host/pr-contracts";
 import {
   mentionGithubCatalogV10,
@@ -4174,6 +4192,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: hostGetRateLimitUsageDowngradeV4ToV3,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV50,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostGetRateLimitUsageDowngradeV5ToV1,
+        2: hostGetRateLimitUsageDowngradeV5ToV2,
+        3: hostGetRateLimitUsageDowngradeV5ToV3,
+        4: hostGetRateLimitUsageDowngradeV5ToV4,
+      },
+    },
   },
   "providers.consumeRateLimitResetCredit": {
     degrade: { kind: "unsupported" },
@@ -6691,6 +6724,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV50,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -6756,6 +6805,51 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         0: {
           contract: prGetLocalDiffV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The split form of `pr.getLocalDiff` - a cheap metadata frame plus one
+  // patch per file, fetched per visible row. Same optional-capability posture
+  // as the monolith above (and always registered together with it): a client
+  // that finds these missing calls `pr.getLocalDiff` instead, so neither
+  // touches the released floor / baseline surface.
+  "pr.getLocalDiffSummary": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: prGetLocalDiffSummaryV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // 1.1: byte-path sidecars (`pathBytes`/`previousPathBytes`) on every
+        // file row, so non-UTF-8 paths survive the summary -> per-file round
+        // trip. The 1.0-caller response fold (rows, not fields) lives host-
+        // side at emission; the bridge here only fills request-side nulls.
+        1: {
+          contract: prGetLocalDiffSummaryV11,
+          upgradeFromPreviousVersion: prGetLocalDiffSummaryUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "pr.getLocalFileDiff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: prGetLocalFileDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // 1.1: the request echoes the summary row's byte-path sidecars per
+        // side; bridge-filled `null` = "legacy peer", identical to clean.
+        1: {
+          contract: prGetLocalFileDiffV11,
+          upgradeFromPreviousVersion: prGetLocalFileDiffUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
