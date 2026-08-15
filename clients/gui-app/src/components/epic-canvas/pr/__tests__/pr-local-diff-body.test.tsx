@@ -14,9 +14,9 @@ import { VirtuosoMockContext } from "react-virtuoso";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   PrGetLocalDiffResponse,
-  PrGetLocalDiffSummaryResponse,
+  PrGetLocalDiffSummaryResponseV11,
   PrGetLocalFileDiffResponse,
-  PrLocalDiffSummaryFile,
+  PrLocalDiffSummaryFileV11,
 } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
@@ -136,8 +136,8 @@ function diffResponse(
 }
 
 function summaryFile(
-  overrides: Partial<PrLocalDiffSummaryFile>,
-): PrLocalDiffSummaryFile {
+  overrides: Partial<PrLocalDiffSummaryFileV11>,
+): PrLocalDiffSummaryFileV11 {
   return {
     path: "src/a.ts",
     previousPath: null,
@@ -145,15 +145,17 @@ function summaryFile(
     insertions: 3,
     deletions: 1,
     isBinary: false,
+    pathBytes: null,
+    previousPathBytes: null,
     ...overrides,
   };
 }
 
 function summaryResponse(
   overrides: Partial<
-    Extract<PrGetLocalDiffSummaryResponse, { kind: "summary" }>
+    Extract<PrGetLocalDiffSummaryResponseV11, { kind: "summary" }>
   >,
-): PrGetLocalDiffSummaryResponse {
+): PrGetLocalDiffSummaryResponseV11 {
   return {
     kind: "summary",
     runningDir: "/tmp/worktrees/widgets",
@@ -180,11 +182,19 @@ function fileDiffOk(
   };
 }
 
+/** The `pathBytes` a `pr.getLocalFileDiff` request carried, or `null`. */
+function requestPathBytes(params: unknown): string | null {
+  if (typeof params !== "object" || params === null) return null;
+  if (!("pathBytes" in params)) return null;
+  const pathBytes = params.pathBytes;
+  return typeof pathBytes === "string" ? pathBytes : null;
+}
+
 function bodyTree(args: {
   readonly node: PrDiffTileRef;
   readonly viewTabId: string;
   readonly target: PrLocalDiffTarget | null;
-  readonly summary: PrGetLocalDiffSummaryResponse | null;
+  readonly summary: PrGetLocalDiffSummaryResponseV11 | null;
   readonly monolith: PrGetLocalDiffResponse | null;
   readonly onRangeDrift: (() => void) | undefined;
   readonly preferences: DiffViewerPreferences | undefined;
@@ -224,7 +234,7 @@ function renderBody(args: {
   readonly node: PrDiffTileRef;
   readonly viewTabId: string;
   readonly target: PrLocalDiffTarget | null;
-  readonly summary: PrGetLocalDiffSummaryResponse | null;
+  readonly summary: PrGetLocalDiffSummaryResponseV11 | null;
   readonly monolith: PrGetLocalDiffResponse | null;
   readonly onRangeDrift: (() => void) | undefined;
   readonly preferences: DiffViewerPreferences | undefined;
@@ -321,7 +331,7 @@ describe("PrLocalDiffBody (monolith fallback)", () => {
     // patch the moment the tile opens.
     const node: PrDiffTileRef = {
       ...tile(),
-      view: { collapsedFilePaths: ["src/a.ts"] },
+      view: { collapsedFileKeys: ["p:src/a.ts"] },
     };
     const tabId = openRealTabWithTile(node);
     renderMonolith({
@@ -352,8 +362,8 @@ describe("PrLocalDiffBody (monolith fallback)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(toggle);
 
-    expect(tileOnTab(tabId, node.instanceId).view.collapsedFilePaths).toEqual([
-      "src/a.ts",
+    expect(tileOnTab(tabId, node.instanceId).view.collapsedFileKeys).toEqual([
+      "p:src/a.ts",
     ]);
   });
 
@@ -514,6 +524,64 @@ describe("PrLocalDiffBody (split)", () => {
     expect(files).toHaveLength(2);
     expect(files[0]?.textContent).toContain("src/a.ts");
     expect(files[1]?.textContent).toContain("src/b.ts");
+  });
+
+  it("keeps two lossy-name-colliding files as distinct rows, each fetching with its own pathBytes token", async () => {
+    // Both files decode to the SAME lossy display path ("bad-�.txt") but
+    // carry different raw-byte tokens (bytes of "bad-\xff.txt" and
+    // "bad-\xfe.txt" respectively) - the exact collision the tagged key space
+    // exists to keep apart.
+    const TOKEN_A = "YmFkLf8udHh0";
+    const TOKEN_B = "YmFkLf4udHh0";
+    const node = tile();
+    const tabId = openRealTabWithTile(node);
+    tabHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method !== "pr.getLocalFileDiff") {
+          return Promise.reject(new Error(`unexpected method ${method}`));
+        }
+        const token = requestPathBytes(params) ?? "MISSING";
+        return Promise.resolve(
+          fileDiffOk({
+            patch: `diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+${token}`,
+          }),
+        );
+      },
+    );
+    renderBody({
+      node,
+      viewTabId: tabId,
+      target: localDiffTarget(),
+      summary: summaryResponse({
+        files: [
+          summaryFile({ path: "bad-�.txt", pathBytes: TOKEN_A }),
+          summaryFile({ path: "bad-�.txt", pathBytes: TOKEN_B }),
+        ],
+      }),
+      monolith: null,
+      onRangeDrift: undefined,
+      preferences: undefined,
+    });
+
+    const rows = await screen.findAllByTestId("pr-diff-file");
+    expect(rows).toHaveLength(2);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("diff-content")).toHaveLength(2);
+    });
+    const contents = screen.getAllByTestId("diff-content");
+    const texts = contents.map((el) => el.textContent);
+    expect(texts.filter((text) => text.includes(TOKEN_A))).toHaveLength(1);
+    expect(texts.filter((text) => text.includes(TOKEN_B))).toHaveLength(1);
+
+    const fileDiffCalls = tabHostClient.request.mock.calls.filter(
+      (call) => call[0] === "pr.getLocalFileDiff",
+    );
+    expect(fileDiffCalls).toHaveLength(2);
+    const tokensSent = fileDiffCalls
+      .map((call) => requestPathBytes(call[1]))
+      .sort();
+    expect(tokensSent).toEqual([TOKEN_A, TOKEN_B].sort());
   });
 
   it("fetches a mounted expanded section and renders the patch", async () => {
@@ -782,7 +850,7 @@ describe("PrLocalDiffBody (split)", () => {
   it("does not fetch a collapsed split-mode file, and collapse still writes the store", () => {
     const node: PrDiffTileRef = {
       ...tile(),
-      view: { collapsedFilePaths: ["src/a.ts"] },
+      view: { collapsedFileKeys: ["p:src/a.ts"] },
     };
     const tabId = openRealTabWithTile(node);
     tabHostClient.request.mockResolvedValue(fileDiffOk({}));
@@ -804,7 +872,7 @@ describe("PrLocalDiffBody (split)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
 
-    expect(tileOnTab(tabId, node.instanceId).view.collapsedFilePaths).toEqual(
+    expect(tileOnTab(tabId, node.instanceId).view.collapsedFileKeys).toEqual(
       [],
     );
   });
