@@ -230,6 +230,31 @@ export function formatResetDateTime(resetsAt: number): string {
 }
 
 /**
+ * A PAST instant as an absolute date and time (e.g. "Aug 14, 3:42 PM"), for
+ * prose that states when something happened.
+ *
+ * Pure, and deliberately not a hook. A relative label inside a sentence has to
+ * choose between subscribing its whole component to the shared tick - which,
+ * for a sentence that lives on a chat tile, would repaint the transcript once a
+ * minute - and silently freezing at whatever it read on the last render, which
+ * is worse than coarse: it is wrong. An absolute stamp never goes stale, so it
+ * needs neither. Same reasoning as {@link formatResetDateTime}, in the other
+ * time direction.
+ *
+ * The year is omitted: these read alongside content the reader already places
+ * in time, and the compact form is what fits in a sentence.
+ */
+export function formatAbsoluteDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/**
  * Full calendar form for roomy surfaces such as Settings, where the explicit
  * date is more useful than the popover's compact weekday-only label.
  */
