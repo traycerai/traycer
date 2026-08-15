@@ -28,16 +28,19 @@ export function ManagedCommandTranscriptDoor(props: {
         align={undefined}
       >
         {/* `aria-disabled` rather than `disabled`: a disabled button takes no
-            pointer events, which would swallow the very tooltip that explains
-            why it cannot be pressed. */}
-        <span
-          role="button"
+            pointer events and leaves the tab order, which would swallow the
+            very tooltip that explains why it cannot be pressed - so it stays
+            focusable and carries the reason in its own name, for anyone who
+            cannot hover. */}
+        <button
+          type="button"
           aria-disabled
+          aria-label="Open in tab - this shell was deleted"
           data-testid={props.testId}
           className="inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-md text-muted-foreground/40"
         >
           <ExternalLink aria-hidden className="size-3.5" />
-        </span>
+        </button>
       </TooltipWrapper>
     );
   }

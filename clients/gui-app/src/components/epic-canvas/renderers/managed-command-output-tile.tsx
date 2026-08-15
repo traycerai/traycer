@@ -654,9 +654,9 @@ function ManagedCommandOutputDetails(props: {
                 className="min-w-0 font-mono wrap-anywhere"
                 data-testid="managed-command-output-details-command"
               >
-                {command.command.length === 0 ? "—" : command.command}
+                {command.command ?? "—"}
               </span>
-              {command.command.length === 0 ? null : (
+              {command.command === null ? null : (
                 <SegmentCopyButton
                   value={command.command}
                   ariaLabel="Copy command"
@@ -667,7 +667,7 @@ function ManagedCommandOutputDetails(props: {
           </DetailRow>
           <DetailRow label="Directory">
             <span className="font-mono wrap-anywhere">
-              {command.cwd.length === 0 ? "—" : command.cwd}
+              {command.cwd ?? "—"}
             </span>
           </DetailRow>
           {/* Only while it runs: a pid outlives nothing, and a stale one points

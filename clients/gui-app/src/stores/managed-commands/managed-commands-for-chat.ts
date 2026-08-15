@@ -31,7 +31,7 @@ import type {
 
 type ManagedCommandsChatSlice = Pick<
   ChatSessionState,
-  "managedCommands" | "connectionStatus"
+  "managedCommands" | "connectionStatus" | "snapshotLoaded"
 >;
 
 // Stable stand-in for a chat with no live session (its tile is not mounted, or
@@ -39,6 +39,7 @@ type ManagedCommandsChatSlice = Pick<
 const emptyChatSlice = create<ManagedCommandsChatSlice>()(() => ({
   managedCommands: [],
   connectionStatus: "connecting",
+  snapshotLoaded: false,
 }));
 
 function useChatSliceStore(epicId: string, chatId: string, hostId: string) {
@@ -140,21 +141,23 @@ export function useManagedCommandInEpic(
 }
 
 /**
- * Whether a shell still exists, as far as this window can honestly tell.
+ * Whether a shell still exists, as far as this card can honestly tell.
  *
- * `useManagedCommandInEpic` answers null both for "the owning chat's set
- * arrived and does not hold it" and for "no set has arrived yet" - a chat's
- * session opens with an empty set until its snapshot lands, and holds an
- * empty stand-in while it has no live session at all. A card that read null as
- * "deleted" told every reader, on every chat open, that every shell was gone
- * for the first few frames - and kept saying so across a dropped connection.
+ * Read from the OWNER's session alone - the chat the transcript belongs to, on
+ * the host that transcript is bound to - never from the epic-wide scan
+ * `useManagedCommandInEpic` does. A clone carries the source transcript's
+ * blocks, so an epic-wide scan would find the SOURCE host's shell and let a
+ * clone's card pulse it as live while its door opened a tile on a host that
+ * cannot own it. Presence is a per-host fact, like every other tab-bound one.
  *
- * So absence is only a verdict when the OWNING chat's stream is open: that is
- * the moment its command set is the host's word rather than a placeholder.
- * `owner` is the chat the transcript belongs to, which is the chat that
- * created the shells its cards point at. Anything less is `unknown`, and a
- * surface treats unknown as "still there" - the door stays open, and the
- * output window it opens has its own honest account of what it finds.
+ * Absence is only a verdict once the owner's snapshot has landed: that is the
+ * moment its command set is the host's word rather than a placeholder. An open
+ * stream is not enough - a session opens with an empty set and stays that way
+ * until the snapshot arrives, and a card that read that as "deleted" told every
+ * reader, on every chat open, that every shell was gone for the first few
+ * frames. Anything less is `unknown`, and a surface treats unknown as "still
+ * there" - the door stays open, and the output window it opens has its own
+ * honest account of what it finds.
  */
 export type ManagedCommandPresence =
   | { readonly kind: "present"; readonly command: ManagedCommand }
@@ -167,17 +170,25 @@ export function useManagedCommandPresence(args: {
   readonly owner: { readonly chatId: string; readonly hostId: string } | null;
 }): ManagedCommandPresence {
   const { epicId, commandId, owner } = args;
-  const live = useManagedCommandInEpic(epicId ?? "", commandId);
-  const ownerStreamStatus = useManagedCommandsConnectionStatus(
+  const ownerStore = useChatSliceStore(
     epicId ?? "",
     owner?.chatId ?? "",
     owner?.hostId ?? "",
   );
-  if (live !== null) return { kind: "present", command: live };
+  // The record keeps its identity until the host sends a new set, so selecting
+  // it out of the array is stable enough to subscribe on.
+  const live = useStore(
+    ownerStore,
+    (state) =>
+      state.managedCommands.find((command) => command.id === commandId) ?? null,
+  );
+  const ownerAnswered = useStore(
+    ownerStore,
+    (state) => state.connectionStatus === "open" && state.snapshotLoaded,
+  );
   if (epicId === null || owner === null) return { kind: "unknown" };
-  return ownerStreamStatus === "open"
-    ? { kind: "absent" }
-    : { kind: "unknown" };
+  if (live !== null) return { kind: "present", command: live };
+  return ownerAnswered ? { kind: "absent" } : { kind: "unknown" };
 }
 
 /**

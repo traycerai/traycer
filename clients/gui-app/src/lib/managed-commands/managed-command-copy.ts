@@ -38,17 +38,19 @@ export function managedCommandNoun(monitoring: boolean): string {
  * The list row / tab title: "Monitor · deploy watcher", "Shell · db migration".
  *
  * A shell with no description is the noun alone rather than a dangling
- * "Shell · ": the separator promises a name after it. The guard lives here so
- * every surface inherits it - it used to be a resource-monitor-only rule, which
- * is exactly how a second spelling of the same title gets written.
+ * "Shell · ": the separator promises a name after it. Whitespace counts as no
+ * description - an agent that passed " " meant nothing by it, and a title
+ * ending in a separator and a space is the same broken promise. The guard
+ * lives here so every surface inherits it - it used to be a
+ * resource-monitor-only rule, which is exactly how a second spelling of the
+ * same title gets written.
  */
 export function managedCommandTitle(
   command: Pick<ManagedCommand, "description" | "monitoring">,
 ): string {
   const noun = managedCommandNoun(command.monitoring);
-  return command.description.length === 0
-    ? noun
-    : `${noun} · ${command.description}`;
+  const description = command.description.trim();
+  return description.length === 0 ? noun : `${noun} · ${description}`;
 }
 
 /**

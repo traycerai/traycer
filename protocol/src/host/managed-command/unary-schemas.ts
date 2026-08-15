@@ -85,10 +85,14 @@ export const managedCommandSchema = z.object({
   monitoring: z.boolean(),
   /** The command's human label, shown as the row title. */
   description: z.string(),
-  /** The command line as the agent wrote it, verbatim. */
-  command: z.string().default(""),
-  /** Absolute working directory the command runs in. */
-  cwd: z.string().default(""),
+  /**
+   * The command line as the agent wrote it, verbatim. Null - never `""` - when
+   * the host is too old to send it, so a surface can say "this host does not
+   * report it" instead of rendering an empty command line as fact.
+   */
+  command: z.string().nullable().default(null),
+  /** Absolute working directory the command runs in; null on an old host. */
+  cwd: z.string().nullable().default(null),
   /** How digests are paced; null unless `monitoring`. */
   cadence: managedCommandCadenceSchema.nullable().default(null),
   status: managedCommandStatusSchema,

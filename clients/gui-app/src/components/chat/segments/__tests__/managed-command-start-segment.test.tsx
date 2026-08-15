@@ -23,6 +23,7 @@ import {
   type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { ToolSegment } from "../tool-segment";
 
 /**
@@ -168,6 +169,9 @@ afterEach(() => {
   epicHandle.dispose();
   disposeManagedCommandChatSessions();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  // Module-level and keyed by block id, which every case here reuses: without
+  // this a test that expands the body leaves the next one already open.
+  useToolOpenStore.setState(useToolOpenStore.getInitialState(), true);
 });
 
 describe("the run_shell start card", () => {
@@ -294,6 +298,76 @@ describe("the run_shell start card", () => {
     expect(screen.getByText("Running")).toBeTruthy();
     const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
     expect(door.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("claims no deletion while the stream is open but the snapshot has not landed", () => {
+    // The narrow window the connection status alone cannot see: subscribe is
+    // acknowledged (status "open") and change frames can already arrive, while
+    // the authoritative set is still in flight. An empty set here is the
+    // session's initial value, not the host's answer.
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommandsWithoutSnapshot([]);
+    });
+
+    expect(
+      screen
+        .getByTestId(`managed-command-start-door-${COMMAND_ID}`)
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+
+    // ...and the moment the snapshot does land without it, the verdict flips.
+    act(() => {
+      session.setCommands([]);
+    });
+    expect(
+      screen
+        .getByTestId(`managed-command-start-door-${COMMAND_ID}`)
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  it("keeps the deleted door focusable and says why in its own name", () => {
+    // The tooltip is the explanation, and hover is not a way everyone can ask
+    // for it: the control stays in the tab order and names its own state.
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setConnectionStatus("open");
+      session.setCommands([]);
+    });
+
+    const door = screen.getByRole("button", {
+      name: "Open in tab - this shell was deleted",
+    });
+    expect(door).toBe(
+      screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`),
+    );
+    door.focus();
+    expect(document.activeElement).toBe(door);
+  });
+
+  it("reads presence from the owning host's session, never another host's", () => {
+    // A clone carries the source transcript's blocks. The source chat may be
+    // warm in the same epic with the shell very much alive - but it belongs to
+    // the source host, and this card is bound to the clone's. An epic-wide
+    // scan would let the clone claim a shell whose output it cannot open.
+    const sourceSession = installManagedCommandChatSession({
+      epicId: EPIC_ID,
+      chatId: "chat-source",
+      hostId: "host-source",
+    });
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      sourceSession.setConnectionStatus("open");
+      sourceSession.setCommands([shell({ chatId: "chat-source" })]);
+      session.setConnectionStatus("open");
+      session.setCommands([]);
+    });
+
+    expect(screen.queryByText("Running")).toBeNull();
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("claims no deletion when there is no chat transcript identity to attribute absence to", () => {

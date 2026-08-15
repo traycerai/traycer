@@ -28,6 +28,18 @@ describe("managed command naming", () => {
     expect(managedCommandTitle({ description: "", monitoring: false })).toBe(
       MANAGED_COMMAND_NOUN,
     );
+    // Whitespace is no description either - and it is the shape that would
+    // otherwise slip past the guard into a title ending in a separator.
+    expect(managedCommandTitle({ description: "   ", monitoring: true })).toBe(
+      "Monitor",
+    );
+    // A description with edges keeps its middle, trimmed.
+    expect(
+      managedCommandTitle({
+        description: "  deploy watcher ",
+        monitoring: true,
+      }),
+    ).toBe("Monitor · deploy watcher");
   });
 
   it("keeps the umbrella noun for copy that names no particular shell", () => {
