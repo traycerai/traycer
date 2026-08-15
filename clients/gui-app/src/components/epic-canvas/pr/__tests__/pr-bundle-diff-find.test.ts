@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PrLocalDiffSummaryFile } from "@traycer/protocol/host/pr-schemas";
+import type { PrLocalDiffSummaryFileV11 } from "@traycer/protocol/host/pr-schemas";
 import { isPrLocalDiffLargeFile } from "@/lib/pr/pr-local-diff-large-file";
 import {
   prBundleDiffFindFileId,
@@ -7,8 +7,8 @@ import {
 } from "@/components/epic-canvas/pr/pr-bundle-diff-find";
 
 function file(
-  overrides: Partial<PrLocalDiffSummaryFile>,
-): PrLocalDiffSummaryFile {
+  overrides: Partial<PrLocalDiffSummaryFileV11>,
+): PrLocalDiffSummaryFileV11 {
   return {
     path: "src/a.ts",
     previousPath: null,
@@ -16,6 +16,8 @@ function file(
     insertions: 3,
     deletions: 1,
     isBinary: false,
+    pathBytes: null,
+    previousPathBytes: null,
     ...overrides,
   };
 }
@@ -43,9 +45,11 @@ describe("isPrLocalDiffLargeFile", () => {
 });
 
 describe("prBundleDiffFindFileId", () => {
-  it("prefixes the path with pr:", () => {
+  it("prefixes the tagged canonical file key with pr:", () => {
+    // A clean (non-byte-addressed) path tags as `p:` before the `pr:` prefix
+    // is added - see `prLocalDiffFileKey`.
     expect(prBundleDiffFindFileId(file({ path: "src/a.ts" }))).toBe(
-      "pr:src/a.ts",
+      "pr:p:src/a.ts",
     );
   });
 });
@@ -53,7 +57,7 @@ describe("prBundleDiffFindFileId", () => {
 describe("prBundleLoadedPatchCacheKey", () => {
   function key(overrides: {
     readonly comparisonKey?: string;
-    readonly file?: PrLocalDiffSummaryFile;
+    readonly file?: PrLocalDiffSummaryFileV11;
     readonly ignoreWhitespace?: boolean;
     readonly isTruncated?: boolean;
   }): string {

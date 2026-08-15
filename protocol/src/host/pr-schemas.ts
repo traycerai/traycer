@@ -800,6 +800,27 @@ export type PrLocalDiffSummaryFile = z.infer<
 >;
 
 /**
+ * v1.1 of one summary file: the byte-path sidecars.
+ *
+ * `pathBytes` / `previousPathBytes` are CANONICAL base64 of the raw path
+ * bytes exactly as git reported them, non-null IFF those bytes are not valid
+ * UTF-8. `path` stays what it always was - the (possibly lossy,
+ * U+FFFD-bearing) UTF-8 decode, display-only - so a v1.0 reader sees exactly
+ * the strings it saw before. Each rename side is derived independently: a
+ * clean source beside a byte destination legitimately carries
+ * `previousPathBytes: null`. Clients treat tokens as opaque: never decoded,
+ * only echoed into `pr.getLocalFileDiff` and used as identity keys.
+ */
+export const prLocalDiffSummaryFileV11Schema =
+  prLocalDiffSummaryFileSchema.extend({
+    pathBytes: z.string().min(1).nullable(),
+    previousPathBytes: z.string().min(1).nullable(),
+  });
+export type PrLocalDiffSummaryFileV11 = z.infer<
+  typeof prLocalDiffSummaryFileV11Schema
+>;
+
+/**
  * `pr.getLocalDiffSummary` response - the `diff` variant of
  * `pr.getLocalDiff`'s response minus per-file `patch` and minus
  * `isTruncated` (nothing here is byte-capped, so nothing can truncate).
@@ -831,6 +852,37 @@ export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
 );
 export type PrGetLocalDiffSummaryResponse = z.infer<
   typeof prGetLocalDiffSummaryResponseSchema
+>;
+
+/**
+ * v1.1 `pr.getLocalDiffSummary` response: the v1.0 shape with
+ * {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the v1.0
+ * schema). Only a 1.1-negotiated peer may receive two rows whose lossy
+ * `path` strings collide (distinct `pathBytes`); the host folds such rows
+ * back into the legacy lossy merge for a 1.0 caller, which keys rows and its
+ * client-side patch map by `path` alone.
+ */
+export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: prLocalDiffUnavailableReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("summary"),
+      runningDir: z.string(),
+      resolvedBaseRef: z.string(),
+      baseOid: prLocalDiffOidSchema,
+      mergeBaseOid: prLocalDiffOidSchema,
+      localHeadOid: prLocalDiffOidSchema,
+      isStale: z.boolean(),
+      files: z.array(prLocalDiffSummaryFileV11Schema),
+    }),
+  ],
+);
+export type PrGetLocalDiffSummaryResponseV11 = z.infer<
+  typeof prGetLocalDiffSummaryResponseV11Schema
 >;
 
 /**
@@ -873,6 +925,25 @@ export const prGetLocalFileDiffRequestSchema = z.object({
 });
 export type PrGetLocalFileDiffRequest = z.infer<
   typeof prGetLocalFileDiffRequestSchema
+>;
+
+/**
+ * v1.1 `pr.getLocalFileDiff` request: the summary row's byte-path sidecars,
+ * echoed verbatim per side (never derived client-side).
+ *
+ * `null` from a 1.1 peer means "this side's `path` IS the byte-exact UTF-8
+ * path". A request that arrived through the 1.0->1.1 bridge carries
+ * bridge-filled `null`s that mean only "legacy peer - token unavailable";
+ * the host treats both identically as the plain string pathspec (today's
+ * behavior) and must never infer byte-validity from them.
+ */
+export const prGetLocalFileDiffRequestV11Schema =
+  prGetLocalFileDiffRequestSchema.extend({
+    pathBytes: z.string().min(1).nullable(),
+    previousPathBytes: z.string().min(1).nullable(),
+  });
+export type PrGetLocalFileDiffRequestV11 = z.infer<
+  typeof prGetLocalFileDiffRequestV11Schema
 >;
 
 /**

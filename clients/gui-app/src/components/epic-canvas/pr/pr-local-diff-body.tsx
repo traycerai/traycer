@@ -12,8 +12,7 @@ import { FileWarning } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 import type {
   PrGetLocalDiffResponse,
-  PrGetLocalDiffSummaryResponse,
-  PrLocalDiffSummaryFile,
+  PrGetLocalDiffSummaryResponseV11,
   PrLocalDiffUnavailableReason,
 } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-schemas";
@@ -36,6 +35,12 @@ import {
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { isPrLocalDiffLargeFile } from "@/lib/pr/pr-local-diff-large-file";
 import {
+  isPrLocalDiffFileCollapsed,
+  prLocalDiffFileKey,
+  prLocalDiffPreviousSideKey,
+  type PrLocalDiffViewFile,
+} from "@/lib/pr/pr-local-diff-file-key";
+import {
   isHostUnsupportedError,
   usePrLocalFileDiffQuery,
   type PrLocalDiffTarget,
@@ -45,7 +50,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
 
 type PrLocalDiffSummarySuccess = Extract<
-  PrGetLocalDiffSummaryResponse,
+  PrGetLocalDiffSummaryResponseV11,
   { kind: "summary" }
 >;
 
@@ -102,16 +107,20 @@ type PrDiffPatchMode =
  */
 function sectionStateKey(
   mode: PrDiffPatchMode,
-  file: PrLocalDiffSummaryFile,
+  file: PrLocalDiffViewFile,
   ignoreWhitespace: boolean,
 ): string {
   return [
     mode.comparisonKey,
     String(ignoreWhitespace),
-    file.previousPath ?? "",
-    file.path,
-    // NUL-joined: it is the one byte a git path can never contain, so two
-    // fields can never collide into another identity’s key.
+    // Tagged per-side identities, not the lossy display strings: two files
+    // whose replaced names collide must not share an approval, and a rename
+    // side is byte-addressed independently of its partner.
+    prLocalDiffPreviousSideKey(file),
+    prLocalDiffFileKey(file),
+    // NUL-joined: it is the one byte neither a git path nor a base64 token
+    // can contain, so two fields can never collide into another identity's
+    // key.
   ].join("\0");
 }
 
@@ -209,7 +218,7 @@ export function PrLocalDiffBody(props: {
   readonly viewTabId: string;
   readonly target: PrLocalDiffTarget | null;
   /** The summary response, when the host supports the split methods. */
-  readonly summary: PrGetLocalDiffSummaryResponse | null;
+  readonly summary: PrGetLocalDiffSummaryResponseV11 | null;
   /** The monolith response, only in `E_HOST_UNSUPPORTED` fallback mode. */
   readonly monolith: PrGetLocalDiffResponse | null;
   /** Bounded range-drift recovery - see the tile's `handleRangeDrift`. */
@@ -223,6 +232,26 @@ export function PrLocalDiffBody(props: {
       monolithDiff === null
         ? null
         : new Map(monolithDiff.files.map((file) => [file.path, file.patch])),
+    [monolithDiff],
+  );
+  // The mode seam's normalization: monolith files become view files with
+  // `null` sidecars (legacy-unknown - a 1.0 host never reported byte paths),
+  // so every consumer below the seam keys files one way and the tagged keys
+  // all degrade to `p:` in fallback mode, by construction.
+  const monolithViewFiles = useMemo(
+    () =>
+      monolithDiff === null
+        ? null
+        : monolithDiff.files.map((file): PrLocalDiffViewFile => ({
+            path: file.path,
+            previousPath: file.previousPath,
+            status: file.status,
+            insertions: file.insertions,
+            deletions: file.deletions,
+            isBinary: file.isBinary,
+            pathBytes: null,
+            previousPathBytes: null,
+          })),
     [monolithDiff],
   );
 
@@ -250,14 +279,18 @@ export function PrLocalDiffBody(props: {
     );
   }
 
-  if (monolithDiff !== null && monolithPatches !== null) {
+  if (
+    monolithDiff !== null &&
+    monolithPatches !== null &&
+    monolithViewFiles !== null
+  ) {
     return (
       <PrLocalDiffFilesView
         node={props.node}
         viewTabId={props.viewTabId}
         isStale={monolithDiff.isStale}
         localHeadOid={monolithDiff.localHeadOid}
-        files={monolithDiff.files}
+        files={monolithViewFiles}
         monolithTruncation={
           monolithDiff.isTruncated
             ? {
@@ -295,7 +328,7 @@ export function PrLocalDiffBody(props: {
  * "no checkout" line rather than a guess.
  */
 function unavailableReason(
-  summary: PrGetLocalDiffSummaryResponse | null,
+  summary: PrGetLocalDiffSummaryResponseV11 | null,
   monolith: PrGetLocalDiffResponse | null,
 ): PrLocalDiffUnavailableReason | null {
   if (summary?.kind === "unavailable") return summary.reason;
@@ -309,7 +342,7 @@ function unavailableReason(
 // misses have never been told apart on this surface, and the per-file error
 // blocks (split mode) are where a transient failure actually surfaces now.
 function PrLocalDiffUnavailable(props: {
-  readonly summary: PrGetLocalDiffSummaryResponse | null;
+  readonly summary: PrGetLocalDiffSummaryResponseV11 | null;
   readonly monolith: PrGetLocalDiffResponse | null;
   readonly hasTarget: boolean;
   readonly prUrl: string | null;
@@ -348,7 +381,7 @@ function PrLocalDiffFilesView(props: {
   readonly viewTabId: string;
   readonly isStale: boolean;
   readonly localHeadOid: string;
-  readonly files: readonly PrLocalDiffSummaryFile[];
+  readonly files: readonly PrLocalDiffViewFile[];
   /** Monolith mode only: the whole-PR byte budget cut the patch sweep off. */
   readonly monolithTruncation: { readonly shownPatches: number } | null;
   readonly mode: PrDiffPatchMode;
@@ -425,7 +458,7 @@ function PrLocalDiffFilesView(props: {
             data={props.files}
             className="min-h-0 flex-1"
             overscan={6}
-            computeItemKey={(_index, file) => file.path}
+            computeItemKey={(_index, file) => prLocalDiffFileKey(file)}
             // eslint-disable-next-line react/no-unstable-nested-components -- Virtuoso row renderer, not a component definition.
             itemContent={(_index, file) => (
               <PrLocalDiffFileSection
@@ -472,7 +505,7 @@ function PrLocalDiffFilesView(props: {
 function PrLocalDiffFileSection(props: {
   readonly node: PrDiffTileRef;
   readonly viewTabId: string;
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly mode: PrDiffPatchMode;
   readonly prUrl: string | null;
   readonly preferences: DiffViewerPreferences;
@@ -483,11 +516,15 @@ function PrLocalDiffFileSection(props: {
   const toggleCollapsed = useEpicCanvasStore(
     (state) => state.togglePrDiffFileCollapsedInTab,
   );
-  const collapsed = node.view.collapsedFilePaths.includes(file.path);
+  const fileKey = prLocalDiffFileKey(file);
+  const collapsed = isPrLocalDiffFileCollapsed(
+    node.view.collapsedFileKeys,
+    file,
+  );
   const { viewTabId } = props;
   const toggle = useCallback((): void => {
-    toggleCollapsed(viewTabId, node.id, file.path);
-  }, [file.path, node.id, toggleCollapsed, viewTabId]);
+    toggleCollapsed(viewTabId, node.id, fileKey);
+  }, [fileKey, node.id, toggleCollapsed, viewTabId]);
   // Re-notify when a collapsed section expands (find-driven or manual): the
   // diff body only mounts while expanded, so a mount-only notification would
   // leave a freshly-revealed match painted nowhere. The find session repaints
@@ -545,7 +582,7 @@ function PrLocalDiffFileSection(props: {
 }
 
 function PrLocalDiffFileBody(props: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly bundleFindFileId: string;
   readonly mode: PrDiffPatchMode;
   readonly prUrl: string | null;
@@ -596,7 +633,7 @@ function PrLocalDiffFileBody(props: {
  * diff" button swaps in the fetching body on demand.
  */
 function PrSplitFileBody(props: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly stateKey: string;
   readonly bundleFindFileId: string;
   readonly mode: Extract<PrDiffPatchMode, { kind: "split" }>;
@@ -637,7 +674,7 @@ function PrSplitFileBody(props: {
  * GitHub, because a host in this mode has no per-file method to ask.
  */
 function PrMonolithFileBody(props: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly stateKey: string;
   readonly bundleFindFileId: string;
   readonly comparisonKey: string;
@@ -682,7 +719,7 @@ function PrMonolithFileBody(props: {
   return (
     <PrPatchContent
       patch={props.patch}
-      cacheScope={`pr-local-diff:${props.file.path}`}
+      cacheScope={`pr-local-diff:${prLocalDiffFileKey(props.file)}`}
       find={{
         fileId: props.bundleFindFileId,
         cacheKey: prBundleLoadedPatchCacheKey({
@@ -705,7 +742,7 @@ function PrMonolithFileBody(props: {
  * the tile's.
  */
 function PrLocalFileDiffContent(props: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly stateKey: string;
   readonly bundleFindFileId: string;
   readonly mode: Extract<PrDiffPatchMode, { kind: "split" }>;
@@ -724,6 +761,8 @@ function PrLocalFileDiffContent(props: {
     headOid: mode.headOid,
     path: file.path,
     previousPath: file.previousPath,
+    pathBytes: file.pathBytes,
+    previousPathBytes: file.previousPathBytes,
     ignoreWhitespace: props.preferences.ignoreWhitespace,
     byteBudget: loadFull ? null : DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
     enabled: true,
@@ -844,7 +883,7 @@ function PrLocalFileDiffContent(props: {
       ) : null}
       <PrPatchContent
         patch={response.patch}
-        cacheScope={`pr-local-diff:${mode.mergeBaseOid}:${mode.headOid}:${file.path}`}
+        cacheScope={`pr-local-diff:${mode.mergeBaseOid}:${mode.headOid}:${prLocalDiffFileKey(file)}`}
         find={{
           fileId: bundleFindFileId,
           cacheKey: prBundleLoadedPatchCacheKey({
