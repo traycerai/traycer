@@ -1,6 +1,5 @@
 import type { ToolCallManagedCommandStarted } from "@traycer/protocol/persistence/epic/content-blocks";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
@@ -92,27 +91,13 @@ export function ManagedCommandStartSegment(
         decorative
         className="size-3.5"
       />
-      {/* The directory this call started the shell in, frozen with the block
-          the way the command is - the provider command card carries its cwd
-          on the title exactly like this. Never the live record's `cwd`, which
-          a later restart can move out from under a card that is the record of
-          one call. Silent on blocks stamped before the payload carried it. */}
-      <TooltipWrapper
-        label={
-          managedCommand.cwd === null ? null : (
-            <span className="font-mono text-code-sm">
-              cwd: {managedCommand.cwd}
-            </span>
-          )
-        }
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
-          {managedCommandTitle({ description, monitoring })}
-        </span>
-      </TooltipWrapper>
+      {/* No cwd here by design: it is a host-disk detail that reads as noise
+          on a card about what the agent ran, and the output window's details
+          popover carries the effective cwd for anyone who needs it. The block
+          still stamps it, so a later restart card can say "cwd changed". */}
+      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
+        {managedCommandTitle({ description, monitoring })}
+      </span>
       {/* A deleted shell keeps its name and drops its state: there is no status
           left to report, and "Exited" frozen from before the delete would be
           the card claiming to know something it does not. */}

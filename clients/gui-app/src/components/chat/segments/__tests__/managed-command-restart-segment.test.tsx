@@ -387,12 +387,8 @@ describe("the restart shell card", () => {
     }
     fireEvent.click(trigger);
 
-    // The effective spec is persisted with the block, deleted shell or not.
+    // The effective command is persisted with the block, deleted shell or not.
     expect(screen.getByText(restart.effectiveCommand)).toBeTruthy();
-    expect(
-      screen.getByTestId(`managed-command-restart-cwd-${COMMAND_ID}`)
-        .textContent,
-    ).toBe(`in ${restart.effectiveCwd}`);
   });
 
   it("stays a generic tool row when the call carries no correlation payload", () => {
@@ -599,10 +595,11 @@ describe("the restart shell card", () => {
     expect(screen.getByText("Command")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
     expect(screen.getByText(restart.effectiveCommand)).toBeTruthy();
-    expect(
-      screen.getByTestId(`managed-command-restart-cwd-${COMMAND_ID}`)
-        .textContent,
-    ).toBe(`in ${restart.effectiveCwd}`);
+    // The directory is deliberately NOT on the card: the delta phrase says
+    // "cwd changed" when that is what happened, and the output window's
+    // details popover carries the effective cwd.
+    expect(screen.queryByText(restart.effectiveCwd)).toBeNull();
+    expect(screen.queryByText(/^in /)).toBeNull();
   });
 
   it("renders the header and door in the row variant too", () => {

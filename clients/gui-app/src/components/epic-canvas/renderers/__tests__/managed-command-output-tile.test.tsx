@@ -411,10 +411,10 @@ describe("managed-command output window", () => {
     expect(screen.getByText("/work/repo")).toBeTruthy();
     // Only while running: a stale pid points at whatever the OS handed out next.
     expect(screen.getByText("4410")).toBeTruthy();
-    // Cadence reads as what it DOES, not as three numbers to go look up.
+    // Cadence is one short tagged line, not a sentence.
     expect(
       screen.getByTestId("managed-command-output-details-cadence").textContent,
-    ).toContain("500ms quiet");
+    ).toBe("On output · 500ms quiet · 15s max wait · 5s min gap");
     // Withheld by decision: which shell binary resolved describes the machine.
     expect(screen.queryByText("/bin/sh")).toBeNull();
   });

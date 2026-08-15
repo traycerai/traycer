@@ -713,13 +713,14 @@ function DetailRow(props: {
 }
 
 /**
- * The pacing, as a sentence rather than three numbers nobody can order from
- * memory. Says what each one DOES, because "500 / 15000 / 5000" is data the
- * reader then has to go look up.
+ * The pacing in one short line. Whoever opened this popover already knows what
+ * a monitor is; each number gets a one-word tag and no more, so the row reads
+ * at a glance instead of as a paragraph.
  */
 function managedCommandCadenceSentence(cadence: ManagedCommandCadence): string {
-  const seconds = (ms: number): string => `${(ms / 1000).toString()}s`;
-  return `On output · batched after ${cadence.debounceMs}ms quiet, forced every ${seconds(cadence.maxWaitMs)}, at most once per ${seconds(cadence.throttleMs)}`;
+  const duration = (ms: number): string =>
+    ms % 1000 === 0 ? `${(ms / 1000).toString()}s` : `${ms.toString()}ms`;
+  return `On output · ${duration(cadence.debounceMs)} quiet · ${duration(cadence.maxWaitMs)} max wait · ${duration(cadence.throttleMs)} min gap`;
 }
 
 const CHANNEL_CLASS = {

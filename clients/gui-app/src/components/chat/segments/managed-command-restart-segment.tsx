@@ -1,6 +1,5 @@
 import { RotateCw } from "lucide-react";
 import type { ToolCallManagedCommandRestarted } from "@traycer/protocol/persistence/epic/content-blocks";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
 import {
@@ -32,9 +31,10 @@ import { SegmentRow } from "./segment-row";
  * followed the present would turn every restart into the same claim about now.
  *
  * Everything shown comes off the payload the host stamped from the successful
- * tool RESULT: the effective command and directory the shell relaunched under,
- * the host's own verdict on what changed, and the status the result reported,
- * frozen. Only the door is live - it asks whether the shell still exists, and
+ * tool RESULT: the effective command the shell relaunched under, the host's own
+ * verdict on what changed (command, cwd, both, neither), and the status the
+ * result reported, frozen. The directory itself is not shown - a host-disk
+ * detail the output window's popover carries; the phrase is what matters here. Only the door is live - it asks whether the shell still exists, and
  * says so instead of opening a tab onto nothing.
  */
 export interface ManagedCommandRestartSegmentProps {
@@ -74,23 +74,12 @@ export function ManagedCommandRestartSegment(
         aria-hidden
         className="size-3.5 shrink-0 text-muted-foreground/80"
       />
-      {/* The directory rides the title as a tooltip, the way the provider
-          command card carries its cwd - and it is spelled out in the body,
-          because for a cwd-only restart it is the whole change. */}
-      <TooltipWrapper
-        label={
-          <span className="font-mono text-code-sm">
-            cwd: {restart.effectiveCwd}
-          </span>
-        }
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
-          {managedCommandRestartTitle(restart)}
-        </span>
-      </TooltipWrapper>
+      {/* No cwd on the card, same as the start card: the delta phrase says
+          "cwd changed" when that is what this restart did, and the output
+          window's details popover has the effective directory. */}
+      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
+        {managedCommandRestartTitle(restart)}
+      </span>
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
@@ -129,32 +118,21 @@ export function ManagedCommandRestartSegment(
     />
   );
 
-  // The effective spec, expandable forever: it is persisted with the block, and
-  // it is what this relaunch actually ran, whatever the shell runs now.
+  // The effective command, expandable forever: it is persisted with the block,
+  // and it is what this relaunch actually ran, whatever the shell runs now.
   const body = open ? (
-    <div className="flex flex-col gap-2">
-      <SegmentPanel
-        label="Command"
-        copyValue={restart.effectiveCommand}
-        tone="default"
-        bodyChrome="framed"
-        className={undefined}
-      >
-        <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-foreground/90">
-          <span className="text-muted-foreground">$ </span>
-          {restart.effectiveCommand}
-        </pre>
-      </SegmentPanel>
-      <p
-        className="px-1 text-ui-xs text-muted-foreground"
-        data-testid={`managed-command-restart-cwd-${restart.commandId}`}
-      >
-        in{" "}
-        <span className="font-mono text-code-sm text-foreground/85 wrap-anywhere">
-          {restart.effectiveCwd}
-        </span>
-      </p>
-    </div>
+    <SegmentPanel
+      label="Command"
+      copyValue={restart.effectiveCommand}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-foreground/90">
+        <span className="text-muted-foreground">$ </span>
+        {restart.effectiveCommand}
+      </pre>
+    </SegmentPanel>
   ) : null;
 
   const setOpen = (next: boolean): void =>
