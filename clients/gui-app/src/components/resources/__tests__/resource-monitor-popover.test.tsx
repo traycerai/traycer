@@ -283,9 +283,16 @@ vi.mock(
       >();
     return {
       ...actual,
-      useGlobalResourcesUnsupported: () =>
-        globalResourcesUnsupportedMock.unsupported ??
-        actual.useGlobalResourcesUnsupported(),
+      // Call first, THEN let the mock win — never `mock ?? real()`. `??`
+      // short-circuits, so the real hook (three inner hooks now) would go
+      // uncalled whenever an override is set; a test that flips `unsupported`
+      // on a mounted tree then changes the hook count and React throws
+      // "Rendered fewer hooks than expected". Same shape as the projection
+      // override above.
+      useGlobalResourcesUnsupported: (claimedHostId: string | null) => {
+        const real = actual.useGlobalResourcesUnsupported(claimedHostId);
+        return globalResourcesUnsupportedMock.unsupported ?? real;
+      },
     };
   },
 );

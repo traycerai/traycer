@@ -641,18 +641,21 @@ function ResourceMonitorContent(props: {
   const scopeUnusable =
     props.hasExplicitPick && !isHostScopeUsable(scope.status);
   // A reachable host whose stream cannot serve this subscription is a THIRD
-  // outcome, and it is terminal: the mount declines to acquire, so nothing will
-  // ever attribute a projection to this machine. Only checked while watching
-  // another one — following the active host, an old host still has the
-  // per-epic fallback, which is genuinely its own data.
+  // outcome, and it is terminal: nothing will ever attribute a usable global
+  // projection to this machine, whether because the mount declined to acquire
+  // or because the stream it did open negotiated a version too old to carry
+  // one. Only checked while watching another host — following the active one,
+  // an old host still has the per-epic fallback, which is genuinely its data.
   //
-  // Gated on the stream actually being BOUND to the pick, because this verdict
-  // is read from whichever client the context is serving. While a pick's own
-  // binding is unresolved (still dialling, or backing off after a close) that
-  // is the AMBIENT one, and an old ambient host would have us report the picked
-  // machine as outdated on evidence collected from a different computer
-  // entirely. Unbound, we have not asked this host anything yet.
-  const resourcesUnsupported = useGlobalResourcesUnsupported();
+  // Gated on the stream actually being BOUND to the pick, because the pre-check
+  // half of this verdict is read from whichever client the context is serving.
+  // While a pick's own binding is unresolved (still dialling, or backing off
+  // after a close) that is the AMBIENT one, and an old ambient host would have
+  // us report the picked machine as outdated on evidence collected from a
+  // different computer entirely. Unbound, we have not asked this host anything
+  // yet. The stream half carries its own, stricter attribution check, since the
+  // registry entry it reads is a singleton that can outlive a swap.
+  const resourcesUnsupported = useGlobalResourcesUnsupported(scope.hostId);
   const streamIncompatible =
     props.streamBoundToScope &&
     watchesNamedHost(scope, props.hasExplicitPick) &&
