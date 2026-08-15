@@ -837,12 +837,18 @@ function notificationSignatureOf(message: ChatMessageModel): string | null {
 /**
  * Whether an unknown terminal row is a live arrival rather than
  * hydration/backfill (this component supports transcripts growing after
- * mount). Sorted position cannot decide this: the projector deliberately
- * anchors a notification at its turn's original transcript position, so a
- * background task from an earlier turn that settles late inserts BEFORE
- * later rows. Completion recency is therefore the primary frame - a live
- * arrival's completion is newer than everything previously observed - with
- * tail position as the fallback before any completion has been observed.
+ * mount). Sorted position cannot decide this alone: the projector
+ * deliberately anchors a notification at its turn's original transcript
+ * position, so a background task from an earlier turn that settles late
+ * inserts BEFORE later rows. Completion recency is therefore the primary
+ * frame - a live arrival's completion is newer than everything previously
+ * observed. Position decides only when recency cannot: before any completion
+ * has been observed, or on an exact timestamp tie (wall-clock stamps are not
+ * unique, so a simultaneous background completion must not lose to whichever
+ * row established the max). The positional frame itself needs a baseline - a
+ * previously observed row still present in the transcript. Without one
+ * (first non-empty frame after mounting on a still-hydrating chat) every row
+ * is history, not a live tail.
  */
 function unknownRowIsLiveCompletion(input: {
   readonly previous: TranscriptObservation;
@@ -852,13 +858,13 @@ function unknownRowIsLiveCompletion(input: {
   readonly replacedIncompleteAssistant: boolean;
 }): boolean {
   if (input.replacedIncompleteAssistant) return true;
-  if (input.previous.maxCompletedAt !== null) {
-    return (
-      input.message.completedAt !== null &&
-      input.message.completedAt > input.previous.maxCompletedAt
-    );
+  const { maxCompletedAt } = input.previous;
+  const { completedAt } = input.message;
+  if (maxCompletedAt !== null && completedAt !== null) {
+    if (completedAt > maxCompletedAt) return true;
+    if (completedAt < maxCompletedAt) return false;
   }
-  return input.index > input.lastKnownIndex;
+  return input.lastKnownIndex >= 0 && input.index > input.lastKnownIndex;
 }
 
 /**

@@ -1329,6 +1329,76 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces a tied-timestamp completion appended past known rows", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-tied-completion-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Wall-clock completion stamps are not unique: a background task can
+      // settle in the same millisecond as the previously newest completion.
+      // Recency cannot rank the tie, so extending the tail past every known
+      // row must still make it news.
+      rerenderMessages([
+        knownUser,
+        knownAssistant,
+        {
+          ...makeMessage(2, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("does not announce history hydrated after an empty first observation", async () => {
+      const { rerenderMessages } = renderChatMessages({
+        messages: [],
+        scrollStateKey: "aria-empty-baseline-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Mounting raced hydration: the first observation saw an empty
+      // transcript, so no known row anchors the positional frame and no
+      // completion anchors the recency frame. The hydrated snapshot is
+      // history, not a live tail.
+      rerenderMessages([
+        makeMessage(0, "user"),
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
     it("announces additional triggers gained by an existing notification", async () => {
       const monitorTrigger = {
         kind: "monitor" as const,

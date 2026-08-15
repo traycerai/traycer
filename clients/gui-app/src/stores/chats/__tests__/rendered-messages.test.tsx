@@ -4738,6 +4738,147 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(row?.pausedDurationMs).toBe(500);
   });
 
+  it("ignores a completed attempt window that predates the resume divider", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The reused turnId completed an attempt BEFORE the notification was
+    // persisted, and the provider never started again. That window predates
+    // the divider it would prove adopted - the row must stay a footerless
+    // notification instead of rendering "Resumed · no response" with the
+    // stale window's timing.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 9_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("adopts a window whose start ties the resume divider timestamp", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The host stamps the divider before launching the adopting provider
+    // turn, so a same-millisecond `turn.started` is the resumed attempt, not
+    // pre-resume history.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 12_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 12_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("does not seed the live timer from a pre-resume start without a terminal", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A stale open window from before the notification (a connection close
+    // never delivered the terminal event) must not adopt the live timer -
+    // unlike a start AFTER the divider, which legitimately seeds it.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
   it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),

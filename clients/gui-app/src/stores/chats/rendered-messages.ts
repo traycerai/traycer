@@ -1835,11 +1835,41 @@ function hasOnlyAutonomousResumeAssistantBlocks(
 function turnInitiatedByAutonomousResume(
   blocks: ReadonlyArray<ContentBlock>,
 ): boolean {
+  return autonomousResumeNotifiedAt(blocks) !== null;
+}
+
+/**
+ * Timestamp of the resume divider (the first non-steer block, when it is an
+ * `autonomous_resume`), or `null` for a turn not initiated by one.
+ */
+function autonomousResumeNotifiedAt(
+  blocks: ReadonlyArray<ContentBlock>,
+): number | null {
   for (const block of blocks) {
     if (block.type === "steer") continue;
-    return block.type === "autonomous_resume";
+    return block.type === "autonomous_resume" ? block.timestamp : null;
   }
-  return false;
+  return null;
+}
+
+/**
+ * The lifecycle window as evidence for the row's resume state. A reused
+ * `turnId` can carry a completed attempt from BEFORE the resume divider was
+ * persisted (an interrupted pre-steer run whose notification landed later);
+ * that window predates the thing it would prove, so it can neither adopt the
+ * notification nor lend it timing — discard it. A same-timestamp start stays:
+ * the host stamps the divider before launching the adopting provider turn.
+ * Non-resume turns and windows without a start pass through unchanged (a
+ * bare terminal event is already rejected by `hasCompletedProviderTurn`).
+ */
+function lifecycleWindowSinceResume(
+  timing: TurnLifecycleTiming | null,
+  blocks: ReadonlyArray<ContentBlock>,
+): TurnLifecycleTiming | null {
+  if (timing === null || timing.startedAt === null) return timing;
+  const notifiedAt = autonomousResumeNotifiedAt(blocks);
+  if (notifiedAt === null || timing.startedAt >= notifiedAt) return timing;
+  return null;
 }
 
 function isNotificationOnlyAutonomousResume(
@@ -1949,8 +1979,10 @@ function renderPersistedAssistantMessageTurn(
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
   const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
-  const lifecycleTiming =
-    input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null;
+  const lifecycleTiming = lifecycleWindowSinceResume(
+    input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null,
+    acc.blocks,
+  );
   const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
     turnComplete,
     hasCompletedProviderTurn(lifecycleTiming),
