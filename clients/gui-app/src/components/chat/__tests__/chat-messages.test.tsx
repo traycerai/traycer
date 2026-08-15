@@ -1348,8 +1348,7 @@ describe("ChatMessages scroll policy", () => {
       expect(live?.textContent ?? "").toBe("");
       // Wall-clock completion stamps are not unique: a background task can
       // settle in the same millisecond as the previously newest completion.
-      // Recency cannot rank the tie, so extending the tail past every known
-      // row must still make it news.
+      // A tie counts as live regardless of where the row sorts.
       rerenderMessages([
         knownUser,
         knownAssistant,
@@ -1360,6 +1359,50 @@ describe("ChatMessages scroll policy", () => {
           runState: null,
           showCompletionFooter: false,
         },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("announces a tied-timestamp completion inserted before known rows", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(5, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const laterUser = makeMessage(6, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant, laterUser],
+        scrollStateKey: "aria-tied-mid-insert-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The intersection of the two hard cases: an earlier turn's task
+      // settles in the same millisecond as the newest observed completion,
+      // and its preserved anchor inserts the notification BEFORE known
+      // rows. Neither recency nor position can rank it - the tie itself is
+      // the live-arrival evidence.
+      rerenderMessages([
+        knownUser,
+        {
+          ...makeMessage(2, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+        knownAssistant,
+        laterUser,
       ]);
       await settleLegendList();
 

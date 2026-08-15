@@ -894,14 +894,18 @@ function turnCompletionAnnouncementText(input: {
  * deliberately anchors a notification at its turn's original transcript
  * position, so a background task from an earlier turn that settles late
  * inserts BEFORE later rows. Completion recency is therefore the primary
- * frame - a live arrival's completion is newer than everything previously
- * observed. Position decides only when recency cannot: before any completion
- * has been observed, or on an exact timestamp tie (wall-clock stamps are not
- * unique, so a simultaneous background completion must not lose to whichever
- * row established the max). The positional frame itself needs a baseline - a
- * previously observed row still present in the transcript. Without one
- * (first non-empty frame after mounting on a still-hydrating chat) every row
- * is history, not a live tail.
+ * frame - a live arrival's completion is at least as new as everything
+ * previously observed. An exact timestamp tie counts as live BY CHOICE:
+ * wall-clock stamps are not unique, the row snapshot carries no further
+ * evidence (position provably cannot rank a tie - a tied live insertion
+ * lands before known rows), and the failure costs are asymmetric - a
+ * spurious polite announcement on the astronomically rare tied backfill is
+ * noise, while a swallowed real completion strands a screen-reader user
+ * waiting on a background task. Position decides only before any completion
+ * has been observed, and needs a baseline - a previously observed row still
+ * present in the transcript. Without one (first non-empty frame after
+ * mounting on a still-hydrating chat) every row is history, not a live
+ * tail.
  */
 function unknownRowIsLiveCompletion(input: {
   readonly previous: TranscriptObservation;
@@ -914,8 +918,7 @@ function unknownRowIsLiveCompletion(input: {
   const { maxCompletedAt } = input.previous;
   const { completedAt } = input.message;
   if (maxCompletedAt !== null && completedAt !== null) {
-    if (completedAt > maxCompletedAt) return true;
-    if (completedAt < maxCompletedAt) return false;
+    return completedAt >= maxCompletedAt;
   }
   return input.lastKnownIndex >= 0 && input.index > input.lastKnownIndex;
 }
