@@ -27,6 +27,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import type { PrDetailSubscriptionResult } from "@/hooks/pr/use-pr-detail-subscription";
 import { PrDiffTile } from "@/components/epic-canvas/renderers/pr-diff-tile";
 
@@ -57,10 +58,6 @@ const detailSubscription: { current: PrDetailSubscriptionResult } = vi.hoisted(
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => tabHostClient,
-}));
-
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-1",
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -264,18 +261,20 @@ function tileTree(args: {
 }): ReactElement {
   return (
     <QueryClientProvider client={args.queryClient}>
-      <TooltipProvider>
-        <VirtuosoMockContext.Provider
-          value={{ viewportHeight: 800, itemHeight: 48 }}
-        >
-          <PrDiffTile
-            node={args.node}
-            epicId="epic-1"
-            viewTabId={args.tabId}
-            isActive
-          />
-        </VirtuosoMockContext.Provider>
-      </TooltipProvider>
+      <TabHostProvider hostId="host-1">
+        <TooltipProvider>
+          <VirtuosoMockContext.Provider
+            value={{ viewportHeight: 800, itemHeight: 48 }}
+          >
+            <PrDiffTile
+              node={args.node}
+              epicId="epic-1"
+              viewTabId={args.tabId}
+              isActive
+            />
+          </VirtuosoMockContext.Provider>
+        </TooltipProvider>
+      </TabHostProvider>
     </QueryClientProvider>
   );
 }

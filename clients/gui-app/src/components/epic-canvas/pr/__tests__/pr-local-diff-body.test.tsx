@@ -182,7 +182,7 @@ function bodyTree(args: {
   readonly summary: PrGetLocalDiffSummaryResponse | null;
   readonly monolith: PrGetLocalDiffResponse | null;
   readonly onRangeDrift: (() => void) | undefined;
-  readonly preferences?: DiffViewerPreferences;
+  readonly preferences: DiffViewerPreferences | undefined;
   readonly queryClient: QueryClient;
 }): ReactElement {
   return (
@@ -222,7 +222,7 @@ function renderBody(args: {
   readonly summary: PrGetLocalDiffSummaryResponse | null;
   readonly monolith: PrGetLocalDiffResponse | null;
   readonly onRangeDrift: (() => void) | undefined;
-  readonly preferences?: DiffViewerPreferences;
+  readonly preferences: DiffViewerPreferences | undefined;
 }): RenderResult {
   // The GitHub links here go through `useRunnerOpenExternalLink`, which is a
   // TanStack mutation - so the body needs a client even though nothing in
@@ -233,6 +233,7 @@ function renderBody(args: {
       queryClient: new QueryClient({
         defaultOptions: { queries: { retry: false } },
       }),
+      preferences: undefined,
     }),
   );
 }
@@ -250,6 +251,7 @@ function renderMonolith(args: {
     summary: null,
     monolith: args.monolith,
     onRangeDrift: undefined,
+    preferences: undefined,
   });
 }
 
@@ -500,6 +502,7 @@ describe("PrLocalDiffBody (split)", () => {
       }),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     const files = screen.getAllByTestId("pr-diff-file");
@@ -520,6 +523,7 @@ describe("PrLocalDiffBody (split)", () => {
       summary: summaryResponse({}),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(await screen.findByTestId("diff-content")).toBeTruthy();
@@ -557,6 +561,7 @@ describe("PrLocalDiffBody (split)", () => {
       summary: summaryResponse({}),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(await screen.findByText("Diff Loading Error")).toBeTruthy();
@@ -579,6 +584,7 @@ describe("PrLocalDiffBody (split)", () => {
       summary: summaryResponse({}),
       monolith: null,
       onRangeDrift,
+      preferences: undefined,
     });
 
     expect(
@@ -614,6 +620,7 @@ describe("PrLocalDiffBody (split)", () => {
         monolith: null,
         onRangeDrift,
         queryClient,
+        preferences: undefined,
       }),
     );
 
@@ -639,6 +646,7 @@ describe("PrLocalDiffBody (split)", () => {
         monolith: null,
         onRangeDrift: onRangeDriftNext,
         queryClient,
+        preferences: undefined,
       }),
     );
     expect(await screen.findByText("Diff Loading Error")).toBeTruthy();
@@ -675,6 +683,7 @@ describe("PrLocalDiffBody (split)", () => {
       summary: summaryResponse({}),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(await screen.findByText(/Diff truncated after/u)).toBeTruthy();
@@ -704,6 +713,7 @@ describe("PrLocalDiffBody (split)", () => {
       }),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(screen.getByText("Large diff")).toBeTruthy();
@@ -729,6 +739,7 @@ describe("PrLocalDiffBody (split)", () => {
       }),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(screen.getByText("Large diff")).toBeTruthy();
@@ -755,6 +766,7 @@ describe("PrLocalDiffBody (split)", () => {
       }),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(screen.getByText(/Binary file/u)).toBeTruthy();
@@ -776,6 +788,7 @@ describe("PrLocalDiffBody (split)", () => {
       summary: summaryResponse({}),
       monolith: null,
       onRangeDrift: undefined,
+      preferences: undefined,
     });
 
     expect(screen.getByTestId("pr-diff-file")).toBeTruthy();

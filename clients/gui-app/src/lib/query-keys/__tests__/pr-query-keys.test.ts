@@ -91,6 +91,14 @@ describe("prQueryKeys.localDiffSummary", () => {
       );
     }
   });
+
+  it("never shares a slot with the monolith key for the same arguments", () => {
+    // The summary and monolith responses have different shapes; a copy-pasted
+    // key segment would serve one to consumers of the other from the cache.
+    expect(prQueryKeys.localDiffSummary(BASE)).not.toEqual(
+      prQueryKeys.localDiff(BASE),
+    );
+  });
 });
 
 describe("prQueryKeys.localFileDiff", () => {

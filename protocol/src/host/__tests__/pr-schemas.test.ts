@@ -34,6 +34,7 @@ import {
   prGetLocalFileDiffRequestSchema,
   prGetLocalFileDiffResponseSchema,
   prLocalDiffFileSchema,
+  prLocalDiffSummaryFileSchema,
   prLocalDiffOidSchema,
   prLinkGroupKeySchema,
   prRepoIdentifierSchema,
@@ -1428,6 +1429,36 @@ describe("prGetLocalDiffSummaryResponseSchema", () => {
     const parsed1 = prGetLocalDiffSummaryResponseSchema.parse(fixture);
     const parsed2 = prGetLocalDiffSummaryResponseSchema.parse(parsed1);
     expect(parsed2).toEqual(parsed1);
+  });
+
+  it("rejects an empty previousPath in a summary file", () => {
+    // The client forwards a summary file's previousPath verbatim into
+    // pr.getLocalFileDiff requests, whose schema requires min(1) | null. The
+    // summary states the SAME rule so a parse-valid summary can never build a
+    // request-invalid ask. (The released monolith file schema stays looser -
+    // its files never feed a request.)
+    const renamed = prLocalDiffSummaryFileSchema.parse({
+      path: "new/path.ts",
+      previousPath: "old/path.ts",
+      status: "renamed",
+      insertions: 1,
+      deletions: 1,
+      isBinary: false,
+    });
+    expect(renamed.previousPath).toBe("old/path.ts");
+    expect(
+      prLocalDiffSummaryFileSchema.safeParse({
+        ...renamed,
+        previousPath: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      prLocalDiffFileSchema.safeParse({
+        ...renamed,
+        previousPath: "",
+        patch: null,
+      }).success,
+    ).toBe(true);
   });
 
   it("parses and reparses every unavailable reason unchanged", () => {

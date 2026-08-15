@@ -777,10 +777,23 @@ export type PrGetLocalDiffSummaryRequest = z.infer<
   typeof prGetLocalDiffSummaryRequestSchema
 >;
 
-/** One file in the range - {@link prLocalDiffFileSchema} minus its patch. */
-export const prLocalDiffSummaryFileSchema = prLocalDiffFileSchema.omit({
-  patch: true,
-});
+/**
+ * One file in the range - {@link prLocalDiffFileSchema} minus its patch.
+ *
+ * `previousPath` additionally rejects the empty string, matching
+ * {@link prGetLocalFileDiffRequestSchema}: the client forwards this value
+ * verbatim into per-file requests, so the two schemas must state ONE
+ * emptiness rule or a parse-valid summary could produce request-invalid
+ * asks. The released monolith file schema stays untouched - its files never
+ * feed a request.
+ */
+export const prLocalDiffSummaryFileSchema = prLocalDiffFileSchema
+  .omit({
+    patch: true,
+  })
+  .extend({
+    previousPath: z.string().min(1).nullable(),
+  });
 export type PrLocalDiffSummaryFile = z.infer<
   typeof prLocalDiffSummaryFileSchema
 >;

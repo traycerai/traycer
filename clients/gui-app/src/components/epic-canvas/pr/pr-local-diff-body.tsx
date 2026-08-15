@@ -664,8 +664,12 @@ function PrPatchContent(props: {
 }): ReactNode {
   // A patch with no `@@` hunk is a change git states entirely in headers — a
   // pure rename, or a mode change. Real, but there are no lines to render, and
-  // the diff viewer would draw an empty frame for it.
-  if (props.patch.length === 0 || !props.patch.includes("\n@@ ")) {
+  // the diff viewer would draw an empty frame for it. The wire contract does
+  // not promise a `diff --git` preamble, so a hunk header is a hunk header at
+  // the very first byte too. (An empty patch has neither form.)
+  const hasHunk =
+    props.patch.startsWith("@@ ") || props.patch.includes("\n@@ ");
+  if (!hasHunk) {
     return <PrLocalDiffNote>No content changes.</PrLocalDiffNote>;
   }
   return (

@@ -104,6 +104,12 @@ interface PrLocalDiffTileData {
    * is fetched but never read.
    */
   readonly summaryData: PrGetLocalDiffSummaryResponse | null;
+  /**
+   * The monolith response the tile may ACT on - `null` outside fallback
+   * mode. Gated HERE beside `summaryData`'s suppression so the two halves
+   * of the one mode rule cannot diverge.
+   */
+  readonly monolithData: PrGetLocalDiffResponse | null;
   readonly range: PrDiffRangeMeta | null;
   readonly isPending: boolean;
 }
@@ -129,7 +135,7 @@ function usePrLocalDiffTileData(args: {
   });
 
   const summaryData = summaryUnsupported ? null : (summaryQuery.data ?? null);
-  const monolithData = monolithQuery.data ?? null;
+  const monolithData = summaryUnsupported ? (monolithQuery.data ?? null) : null;
   const range = useMemo(
     () => resolvedRangeMeta(summaryData, monolithData, summaryUnsupported),
     [summaryData, monolithData, summaryUnsupported],
@@ -142,6 +148,7 @@ function usePrLocalDiffTileData(args: {
     monolithQuery,
     summaryUnsupported,
     summaryData,
+    monolithData,
     range,
     isPending,
   };
@@ -246,6 +253,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     monolithQuery,
     summaryUnsupported,
     summaryData,
+    monolithData,
     range,
     isPending,
   } = usePrLocalDiffTileData({
@@ -375,7 +383,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
           viewTabId={props.viewTabId}
           target={target}
           summary={summaryData}
-          monolith={summaryUnsupported ? (monolithQuery.data ?? null) : null}
+          monolith={monolithData}
           onRangeDrift={handleRangeDrift}
           prUrl={core?.prUrl ?? null}
           preferences={preferences}
