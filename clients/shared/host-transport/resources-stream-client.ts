@@ -15,11 +15,13 @@ import {
   resourcesSubscribeServerFrameSchemaV14,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type {
-  IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
-  StreamFrameEnvelope,
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  isMethodIncompatibleClose,
+  type IStreamSession,
+  type StreamCloseReason,
+  type StreamConnectionStatus,
+  type StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
 
@@ -54,6 +56,30 @@ export type ResourcesStreamScope =
   | {
       readonly kind: "global";
     };
+
+/**
+ * Whether a NEGOTIATED `resources.subscribe` version can serve a global-scope
+ * subscribe. The global scope arrived in `@1.1`; `@1.0` predates the `scope`
+ * field entirely.
+ *
+ * Exported because two places have to agree on the threshold and must not
+ * drift: this client, which reads the version its own session negotiated, and
+ * the renderer's pre-check, which reads the client-wide one before any session
+ * exists. Takes a non-null version on purpose - "not negotiated yet" is not a
+ * verdict, and each caller has its own reason for that state.
+ */
+export function supportsGlobalResourcesScope(version: SchemaVersion): boolean {
+  return version.major === 1 && version.minor >= 1;
+}
+
+/**
+ * Whether the host on the other end of THIS session can serve the scope it was
+ * opened for. `"unknown"` until a negotiation settles, and again from the
+ * moment one is dropped by a reconnect - a reconnect may reach a new host
+ * incarnation, so capability has to be re-probed rather than remembered (the
+ * same discipline `WsStreamClient.resetMethodSupport` follows).
+ */
+export type ResourcesScopeSupport = "unknown" | "supported" | "unsupported";
 
 const GLOBAL_RESOURCES_EPIC_ID = "__global__";
 
@@ -91,6 +117,12 @@ export interface ResourcesStreamCallbacks {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ) => void;
+  /**
+   * Fires when the verdict on this session's scope changes - see
+   * {@link ResourcesScopeSupport}. Never fires with the value the consumer
+   * already holds, so it is safe to drive a store write directly.
+   */
+  readonly onScopeSupport: (support: ResourcesScopeSupport) => void;
 }
 
 export interface ResourcesStreamClientOptions {
@@ -110,11 +142,14 @@ export interface ResourcesStreamClientOptions {
  */
 export class ResourcesStreamClient {
   private readonly session: IStreamSession;
+  private readonly scope: ResourcesStreamScope;
   private readonly callbacks: ResourcesStreamCallbacks;
   private closed: boolean;
+  private scopeSupport: ResourcesScopeSupport = "unknown";
 
   constructor(options: ResourcesStreamClientOptions) {
     this.callbacks = options.callbacks;
+    this.scope = options.scope;
     this.closed = false;
 
     this.session = options.wsStreamClient.subscribe(
@@ -125,8 +160,90 @@ export class ResourcesStreamClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
+      // Before the status itself, so a consumer reacting to the `closed`
+      // transition already sees why rather than reading last round's verdict.
+      this.updateScopeSupport(status, reason);
       this.callbacks.onConnectionStatus(status, reason);
     });
+  }
+
+  /**
+   * Publishes the scope verdict when - and only when - this transition carried
+   * evidence that changes it.
+   *
+   * This exists because the pre-check it backs up cannot answer on a remote
+   * host: `RemoteStreamClient` reports `"unknown"` support and a `null`
+   * client-wide schema version for every method by design. What a remote
+   * session DOES produce is this session's own negotiated version and, for a
+   * method the host never advertises, a terminal incompatible close - and both
+   * are equally available on the local transport, so one rule covers both.
+   *
+   * Not folded into the version test: an `@1.0` host does NOT fail a global
+   * subscribe. The `@1.1` request keeps `epicId` on the wire precisely so the
+   * probe downgrades cleanly, so an old host accepts it, reads only `epicId`,
+   * and answers with one empty projection for an epic named `__global__` that
+   * does not exist. It looks exactly like a healthy stream on a quiet machine,
+   * which is why the negotiated VERSION - not the close - is what catches it.
+   */
+  private updateScopeSupport(
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+  ): void {
+    const next = this.deriveScopeSupport(status, reason);
+    if (next === null || next === this.scopeSupport) {
+      return;
+    }
+    this.scopeSupport = next;
+    this.callbacks.onScopeSupport(next);
+  }
+
+  /** `null` = this transition carried no evidence; hold the current verdict. */
+  private deriveScopeSupport(
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+  ): ResourcesScopeSupport | null {
+    if (status === "closed") {
+      // Every other close - caller teardown, an auth rejection, a plan gate -
+      // is about this attempt, not about what the host can serve. Holding the
+      // previous verdict is what keeps a terminal incompatible close STANDING:
+      // it is disposed, so nothing follows it that could clear the notice.
+      //
+      // This verdict cannot expire on its own, and that asymmetry is the point.
+      // A version verdict SELF-HEALS: that stream stays open, so a drop takes
+      // its negotiated version with it (see below), the verdict falls back to
+      // "unknown", and the resume re-negotiates - an upgraded host clears
+      // itself. A terminal close has no such path: an incompatible METHOD fails
+      // only the stream (`RemoteSession.openSubscription` calls `goFatal` and
+      // deletes the subscription) while the shared session stays healthy, so
+      // the transport identity never changes and nothing here re-probes.
+      //
+      // Clearing it is therefore an OWNER's job, not this rule's: the verdict
+      // is what this session observed, and this session will observe nothing
+      // further. `GlobalResourcesStreamMount` re-probes by rebuilding the
+      // stream when the transport reports the endpoint recovered - the only
+      // evidence that the host on the other end may not be the one we judged.
+      return isMethodIncompatibleClose(reason) ? "unsupported" : null;
+    }
+    // Otherwise the verdict is worth exactly what this session's negotiated
+    // version is worth - and `connecting` / `reconnecting` have none, BY
+    // CONTRACT: `getNegotiatedSchemaVersion` is null before a handshake settles
+    // and null again the moment a drop takes it. That is what re-probes a
+    // reconnect instead of carrying a verdict across it, which matters because
+    // a reconnect may reach a NEW host incarnation - an upgrade is exactly how
+    // a host stops being too old. One rule rather than a separate reset, so
+    // there is no second place for the two to disagree.
+    const negotiated = this.session.getNegotiatedSchemaVersion();
+    if (negotiated === null) {
+      return "unknown";
+    }
+    if (this.scope.kind === "epic") {
+      // Every version of this method serves an epic scope; opening at all is
+      // the proof.
+      return "supported";
+    }
+    return supportsGlobalResourcesScope(negotiated)
+      ? "supported"
+      : "unsupported";
   }
 
   /**

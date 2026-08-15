@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
-  useStreamMethodSchemaVersion,
+  useStreamHostId,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
+import { useGlobalResourcesPreCheckUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
@@ -15,12 +16,6 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface ResourcesStreamMountProps {
   readonly epicId: string;
-}
-
-function resourcesGlobalSupported(
-  version: { readonly major: number; readonly minor: number } | null,
-): boolean {
-  return version === null || (version.major === 1 && version.minor >= 1);
 }
 
 /**
@@ -43,6 +38,11 @@ export function ResourcesStreamMount(
 ): ReactNode {
   const { epicId } = props;
   const wsStreamClient = useWsStreamClient();
+  // Named for the same reason the global mount is: these entries are what the
+  // registry aggregates when no global stream exists (a pre-v1.1 host), so a
+  // reader checking "did this come from the machine I name" must be able to
+  // answer it for the fallback too, not just the global entry.
+  const hostId = useStreamHostId();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
   const showGlobalResourceMonitor = useSettingsStore(
@@ -75,7 +75,7 @@ export function ResourcesStreamMount(
               callbacks,
             });
           };
-    resourcesRegistry.acquire(epicId, clientToken, () =>
+    resourcesRegistry.acquire(epicId, clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "epic", epicId },
         streamClientFactory,
@@ -84,24 +84,78 @@ export function ResourcesStreamMount(
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, resourcesUnsupported, streamWanted, wsStreamClient]);
+  }, [epicId, hostId, resourcesUnsupported, streamWanted, wsStreamClient]);
 
   return null;
 }
 
 export function GlobalResourcesStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
-  const resourcesSupport = useStreamMethodSupport("resources.subscribe");
-  const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
-  const resourcesUnsupported =
-    resourcesSupport === "unsupported" ||
-    (resourcesVersion !== null && !resourcesGlobalSupported(resourcesVersion));
+  // Taken from the SAME binding as the client above, never from a prop or a
+  // scope model: the host id republished on the projection is what a scoped
+  // reader checks its data against, so it has to be the host this transport is
+  // actually dialing rather than the one the caller believes it asked for.
+  const hostId = useStreamHostId();
+  // The PRE-STREAM verdict only, never the full one the panel reads. The full
+  // one includes this stream's own negotiation, so gating the acquire on it
+  // would be a loop: acquire → learn `unsupported` → release → the verdict dies
+  // with the store → acquire again. The pre-check cannot move as a result of
+  // anything this effect does, which is what makes it safe to gate on.
+  //
+  // So a host convicted only by its own stream keeps that stream open. It costs
+  // one idle subscription: an `@1.0` host answers a global probe with a single
+  // empty projection and then, having nothing to say about an epic that does
+  // not exist, stays silent.
+  const resourcesUnsupported = useGlobalResourcesPreCheckUnsupported();
+  // Bumped ONLY by the recovery listener below — never during a render.
+  const [reprobeGeneration, setReprobeGeneration] = useState(0);
+  // "Which stream should be open": the transport, plus the re-probe generation.
+  // The generation belongs in the identity rather than in the effect alone, so
+  // a bump rebuilds the entry even when a second lease holder would otherwise
+  // keep the existing one alive.
+  const reacquireToken = useMemo(
+    () => ({ transport: wsStreamClient, reprobeGeneration }),
+    [wsStreamClient, reprobeGeneration],
+  );
+
+  /**
+   * Re-probes a verdict that cannot clear itself.
+   *
+   * A version verdict self-heals: that stream stays open, a drop takes its
+   * negotiated version with it, and the resume re-negotiates. A TERMINAL
+   * incompatible close has no such path — it fails only the stream, while the
+   * shared session stays healthy, so the transport identity never changes and
+   * nothing above would ever rebuild. A host that advertises no bridgeable
+   * `resources.subscribe` and is then upgraded in place would keep being called
+   * incapable for as long as this surface stayed mounted.
+   *
+   * Driven off transport recovery, which is the only positive evidence that the
+   * host on the other end may not be the one we judged.
+   */
+  useEffect(() => {
+    if (wsStreamClient === null) return;
+    return wsStreamClient.subscribeAvailabilityRecovered(() => {
+      // Read IMPERATIVELY. As an effect dependency this verdict is a loop:
+      // it changes → the effect re-runs → release/acquire → the fresh store
+      // reports `unknown` → it changes again. Edge-triggered off recovery it
+      // cannot self-perpetuate, because a re-probe that lands on the same
+      // terminal verdict emits no further recovery event.
+      //
+      // Gated on `unsupported` so an ordinary reconnect — including the clean
+      // first open, which `RemoteStreamClient` also reports — does not tear
+      // down and rebuild a working stream, losing its projection each time.
+      if (resourcesRegistry.getGlobalScopeSupport(hostId) !== "unsupported") {
+        return;
+      }
+      setReprobeGeneration((generation) => generation + 1);
+    });
+  }, [hostId, wsStreamClient]);
 
   useEffect(() => {
     if (resourcesUnsupported) return;
     const override = getResourcesStreamClientFactoryOverride();
     if (override === null && wsStreamClient === null) return;
-    const clientToken: unknown = override !== null ? override : wsStreamClient;
+    const clientToken: unknown = reacquireToken;
     const streamClientFactory: ResourcesStreamClientFactory =
       override !== null
         ? override
@@ -117,7 +171,7 @@ export function GlobalResourcesStreamMount(): ReactNode {
               callbacks,
             });
           };
-    resourcesRegistry.acquireGlobal(clientToken, () =>
+    resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "global" },
         streamClientFactory,
@@ -126,7 +180,12 @@ export function GlobalResourcesStreamMount(): ReactNode {
     return () => {
       resourcesRegistry.releaseGlobal();
     };
-  }, [resourcesUnsupported, wsStreamClient]);
+    // `hostId` belongs in the deps, not just in the closure: the name is fixed
+    // at acquire time, so a host id that resolves after its transport did must
+    // rebuild the entry rather than leave the projection speaking for the wrong
+    // machine. In practice it now moves WITH `wsStreamClient` (one binding, one
+    // change), so this rarely fires on its own.
+  }, [hostId, reacquireToken, resourcesUnsupported, wsStreamClient]);
 
   return null;
 }

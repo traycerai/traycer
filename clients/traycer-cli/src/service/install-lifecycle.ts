@@ -137,7 +137,7 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
-        await controller.stop(label);
+        await controller.stop(label, { force: false });
         state.stoppedBeforeSwap = true;
         return;
       }
@@ -157,7 +157,7 @@ export function createServiceInstallLifecycle(
         process.platform === "darwin"
       ) {
         try {
-          await controller.stop(label);
+          await controller.stop(label, { force: false });
           state.stoppedBeforeSwap = true;
           cooperativeStopBeforeSwap = true;
         } catch (cause) {
@@ -346,7 +346,9 @@ export function createBytesOnlyInstallLifecycle(
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
     beforeSwap: (): Promise<void> =>
-      process.platform === "win32" ? controller.stop(label) : Promise.resolve(),
+      process.platform === "win32"
+        ? controller.stop(label, { force: false })
+        : Promise.resolve(),
     afterSwap: (): Promise<void> => Promise.resolve(),
   };
 }

@@ -37,12 +37,27 @@ import type {
   ResourcesProjectionPayload,
   ResourcesStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
-import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import {
+  resourcesRegistry,
+  type GlobalResourceProjection,
+} from "@/stores/resources/resources-registry";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import type {
+  DesktopProcessMetric,
+  DesktopProcessMetricsSnapshot,
+} from "@/lib/resources/desktop-app-resource-usage";
 
 const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
@@ -54,11 +69,103 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostMock.hostId,
 }));
 
-vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => null,
-  useStreamMethodSupport: () => null,
-  useStreamMethodSchemaVersion: () => streamVersionMock.version,
+// Partial, not wholesale: the popover re-provides the real
+// `StreamRuntimeContext` to re-target its stream at the picked host, so a
+// factory that dropped that export would leave `.Provider` undefined at render.
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/stream-runtime-context")>();
+  return {
+    ...actual,
+    useWsStreamClient: () => null,
+    useStreamMethodSupport: () => null,
+    useStreamMethodSchemaVersion: () => streamVersionMock.version,
+  };
+});
+
+// The plan-restricted branch is the only thing in this popover that reaches the
+// runner bridge, and it needs both a provider (`useRunnerHost` throws without
+// one) and a QueryClient. Faking those two boundaries keeps the REAL upgrade
+// button under test — stubbing the component itself would assert its own test
+// id and nothing about what this surface actually offers.
+//
+// `importOriginal` rather than a fixed factory, deliberately: a fixed one goes
+// stale the moment either module gains an export some other component in this
+// tree already calls, and fails at the call site rather than here.
+const openExternalLinkMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+
+vi.mock("@/providers/use-runner-host", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/providers/use-runner-host")>();
+  return {
+    ...actual,
+    useRunnerHost: () => ({ authnBaseUrl: "https://authn.example" }),
+  };
+});
+
+vi.mock(
+  "@/hooks/runner/use-open-external-link-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/runner/use-open-external-link-mutation")
+      >();
+    return {
+      ...actual,
+      useRunnerOpenExternalLink: () => ({
+        isPending: false,
+        mutate: openExternalLinkMock.mutate,
+      }),
+    };
+  },
+);
+
+// The scope's own six hooks (both host lists, the runner host, the plan gate)
+// are not this suite's subject - it mocks at the scope boundary, exactly as the
+// Settings panel suites and the usage popover's do.
+const hostScopeMock = vi.hoisted(() => ({
+  scope: null as HostScope | null,
+  hasExplicitPick: false,
+  streamBinding: null as StreamRuntimeBinding | null,
 }));
+
+vi.mock("@/hooks/resources/use-resource-monitor-host-scope", () => ({
+  useResourceMonitorHostScope: () => ({
+    scope: hostScopeMock.scope ?? SINGLE_HOST_SCOPE,
+    hasExplicitPick: hostScopeMock.hasExplicitPick,
+  }),
+}));
+
+// Dialing a transient stream transport needs the auth service and the host
+// directory, neither of which this pure-render harness mounts. The binding's
+// only job HERE is whether a pick resolved to its own client.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => hostScopeMock.streamBinding,
+}));
+
+// The picker's two collaborators outside this suite's subject: the Settings
+// jump (a router the harness has no route tree for) and the registry liveness
+// poll (a TanStack query with no QueryClientProvider mounted).
+const systemTabModalMock = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  openHistory: vi.fn(),
+  close: vi.fn(),
+  setSection: vi.fn(),
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/tabs/use-system-tab-modal")>();
+  return { ...actual, useSystemTabModalActions: () => systemTabModalMock };
+});
+
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/auth/use-registered-hosts-query")
+    >();
+  return { ...actual, useRegisteredHostsPollLiveness: () => undefined };
+});
 
 type MockEpicIntentInput = Readonly<Record<string, unknown>>;
 type MockEpicIntent = MockEpicIntentInput & { readonly kind: "epic" };
@@ -135,6 +242,59 @@ vi.mock(
       isPending: false,
     }),
   }),
+);
+
+// Overrides the projection a host-picker test needs to name a host the real
+// registry flow cannot produce on demand (a stale/in-flight attribution).
+// `null` (the default) falls through to the REAL hook, so every suite that
+// does not touch this mock keeps exercising the real registry exactly as
+// before - only a test that sets `globalResourceProjectionMock.projection`
+// substitutes it.
+const globalResourceProjectionMock = vi.hoisted(() => ({
+  projection: null as GlobalResourceProjection | null,
+}));
+vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/resources/resources-registry")
+    >();
+  return {
+    ...actual,
+    useGlobalResourceProjection: () => {
+      const real = actual.useGlobalResourceProjection();
+      return globalResourceProjectionMock.projection ?? real;
+    },
+  };
+});
+
+// Same fall-through pattern as the projection override above: `null` defers
+// to the real hook (driven by the mocked `streamVersionMock` /
+// `useStreamMethodSupport`), a test only overrides it to force the
+// too-old-host notice on demand.
+const globalResourcesUnsupportedMock = vi.hoisted(() => ({
+  unsupported: null as boolean | null,
+}));
+vi.mock(
+  "@/hooks/resources/use-global-resources-unsupported",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/resources/use-global-resources-unsupported")
+      >();
+    return {
+      ...actual,
+      // Call first, THEN let the mock win — never `mock ?? real()`. `??`
+      // short-circuits, so the real hook (three inner hooks now) would go
+      // uncalled whenever an override is set; a test that flips `unsupported`
+      // on a mounted tree then changes the hook count and React throws
+      // "Rendered fewer hooks than expected". Same shape as the projection
+      // override above.
+      useGlobalResourcesUnsupported: (claimedHostId: string | null) => {
+        const real = actual.useGlobalResourcesUnsupported(claimedHostId);
+        return globalResourcesUnsupportedMock.unsupported ?? real;
+      },
+    };
+  },
 );
 
 const tabNavigationMock = vi.hoisted(() => ({
@@ -438,6 +598,142 @@ function projection(
   };
 }
 
+const SINGLE_HOST_SCOPE: HostScope = hostScopeFixture({});
+
+/**
+ * The window every launch passes through: an ambient stream already connected
+ * and naming its host, before the host LISTS have answered. `isFollowing`
+ * requires a resolved host, so `isViewingActive` is false here even though
+ * nobody picked anything - the exact pairing that makes it useless as a
+ * "is this an explicit pick" test.
+ */
+const COLD_START_SCOPE: HostScope = hostScopeFixture({
+  host: null,
+  hostId: null,
+  hostLabel: "No host",
+  isViewingActive: false,
+  activeHostId: null,
+  activeHost: null,
+  status: "connecting",
+});
+
+/** Two hosts, watching the one that is NOT active - the picker's whole point. */
+function watchingSecondHostScope(overrides: Partial<HostScope>): HostScope {
+  const active = hostScopeOptionFixture({ hostId: "host-a" });
+  const watched = hostScopeOptionFixture({
+    hostId: "host-b",
+    name: "host-b",
+    isActive: false,
+    isLocalMachine: false,
+  });
+  return hostScopeFixture({
+    hosts: [active, watched],
+    host: watched,
+    hostId: "host-b",
+    hostLabel: "host-b",
+    activeHostId: "host-a",
+    activeHost: active,
+    isViewingActive: false,
+    status: "ready",
+    ...overrides,
+  });
+}
+
+/**
+ * Non-null is the whole assertion this stands in for: "the pick resolved to a
+ * transport of its own". Nothing below ever calls through it - the resources
+ * stream itself is driven by `__setResourcesStreamClientFactoryForTests`.
+ */
+function fakeScopedStreamBinding(): StreamRuntimeBinding {
+  const client: IHostStreamClient<HostStreamRpcRegistry> = {
+    subscribe: () => {
+      throw new Error("not exercised by this test");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-scoped-stream-client",
+  };
+  return { wsStreamClient: client, hostId: "host-b" };
+}
+
+/**
+ * A `GlobalResourceProjection` fixture for the host-attribution suites below —
+ * mirrors the shape `resources-registry` itself produces (one owner surfaced
+ * both at the top level and inside its epic's `entries` row), naming
+ * whichever host the test wants the reading to claim.
+ */
+function ownerRowsProjection(hostId: string | null): GlobalResourceProjection {
+  const ownerSnapshot = owner({});
+  return {
+    hostId,
+    sampledAt: 1_000,
+    app: app(),
+    hostTree: null,
+    other: null,
+    owners: [ownerSnapshot],
+    entries: [
+      {
+        epicId: "epic-1",
+        sampledAt: 1_000,
+        app: app(),
+        hostTree: null,
+        other: null,
+        owners: [ownerSnapshot],
+        epic: null,
+      },
+    ],
+  };
+}
+
+// Same pattern as `diagnostics-test-support.ts`'s `GlobalWithRunnerHost`: a
+// narrow, fully-typed view of the one slot `getDesktopDiagnosticsBridge`
+// reads, so installing it needs no `as any` / `as unknown`.
+interface TestDesktopDiagnosticsBridge {
+  readonly getMetrics: () => Promise<DesktopProcessMetricsSnapshot>;
+}
+interface GlobalWithDesktopRunnerHost {
+  runnerHost:
+    | {
+        readonly platform: {
+          readonly diagnostics: TestDesktopDiagnosticsBridge;
+        };
+      }
+    | undefined;
+}
+const globalWithDesktopRunnerHost = globalThis as typeof globalThis &
+  GlobalWithDesktopRunnerHost;
+
+function installDesktopMetricsBridge(
+  getMetrics: () => Promise<DesktopProcessMetricsSnapshot>,
+): void {
+  globalWithDesktopRunnerHost.runnerHost = {
+    platform: { diagnostics: { getMetrics } },
+  };
+}
+
+function desktopMetric(
+  over: Partial<DesktopProcessMetric>,
+): DesktopProcessMetric {
+  return {
+    pid: 1,
+    type: "Browser",
+    cpu: { percentCPUUsage: 2 },
+    memory: { workingSetSize: 1024 },
+    ...over,
+  };
+}
+
 function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
   __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
@@ -465,6 +761,7 @@ afterEach(() => {
   cleanup();
   resourcesKillMock.mutate.mockClear();
   managedCommandStopMock.mutate.mockClear();
+  openExternalLinkMock.mutate.mockClear();
   Reflect.deleteProperty(globalThis, "runnerHost");
   routerMock.navigate.mockReset();
   routerMock.pathname = "/epics/epic-1/tab-1";
@@ -496,6 +793,11 @@ afterEach(() => {
   __setResourcesStreamClientFactoryForTests(null);
   streamVersionMock.version = null;
   activeHostMock.hostId = null;
+  hostScopeMock.scope = null;
+  hostScopeMock.hasExplicitPick = false;
+  hostScopeMock.streamBinding = null;
+  globalResourceProjectionMock.projection = null;
+  globalResourcesUnsupportedMock.unsupported = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
 });
@@ -1412,7 +1714,6 @@ describe("ResourceMonitorPopover", () => {
 
   it("keeps a rendered Other root selectable when only its child matches", () => {
     const stub = installStubFactory();
-    activeHostMock.hostId = "host-1";
     renderPopover();
 
     act(() => {
@@ -1434,8 +1735,10 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select worker" }));
     fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
 
+    // The scope's own host - the panel derives its default kill target from
+    // the host it is scoped to, not from a second reader of "the active host".
     expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
-      hostId: "host-1",
+      hostId: "host-a",
       pids: [500],
     });
   });
@@ -3172,5 +3475,426 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
       commandId: "cmd-1",
     });
     expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("ResourceMonitorPopover · host picker", () => {
+  it("hides the picker when there is only one host to pick", () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByTestId("resource-monitor-host-picker-row")).toBeNull();
+  });
+
+  it("heads the panel with the picker once a second host exists", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(
+      screen.getByTestId("resource-monitor-host-picker-row"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Settings host: host-b" }),
+    ).not.toBeNull();
+  });
+
+  it("keeps the panel open while the picker's portalled list is used", () => {
+    const setHostId = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({ setHostId });
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-a"));
+
+    expect(setHostId).toHaveBeenCalledWith("host-a");
+    // The list portals outside this popover, so without the host-switcher
+    // exemption in `onInteractOutside` the click that picks a host would also
+    // dismiss the surface the pick was meant to re-scope.
+    expect(
+      screen.getByTestId("resource-monitor-host-picker-row"),
+    ).not.toBeNull();
+  });
+
+  it("routes an Other-root kill to the watched host, not the active one", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    streamVersionMock.version = { major: 1, minor: 2 };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ app: app(), hostTree: hostTree({}), other: other({}) }),
+        );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand other processes" }),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: /^Kill / })[0]);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^Confirm kill / })[0],
+    );
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "host-b" }),
+    );
+  });
+
+  it("replaces the panel with a way back when the pick cannot be reached", () => {
+    const returnToActive = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({
+      status: "unreachable",
+      returnToActive,
+    });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(
+      screen.getByTestId("resource-monitor-host-unavailable"),
+    ).not.toBeNull();
+    // The rows are GONE, not merely hidden: an unreachable pick has no stream
+    // of its own, so anything rendered here would be the active host's.
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+    // The picker survives, or the only control that could clear the pick would
+    // be behind the notice the pick caused.
+    expect(
+      screen.getByTestId("resource-monitor-host-picker-row"),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByTestId("resource-monitor-host-return-to-active"),
+    );
+    expect(returnToActive).toHaveBeenCalled();
+  });
+
+  it("offers an upgrade, not a connectivity story, for a plan-restricted pick", () => {
+    const returnToActive = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({
+      // `unreachable` is how a plan-gated route surfaces - the server refuses
+      // the attach - so this is the SAME status as the test above and the
+      // reason is the only thing telling them apart.
+      status: "unreachable",
+      host: hostScopeOptionFixture({
+        hostId: "host-b",
+        name: "host-b",
+        isActive: false,
+        isLocalMachine: false,
+        planRestricted: true,
+      }),
+      returnToActive,
+    });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    // The offline copy would send someone to debug a network that is working.
+    expect(
+      screen.queryByTestId("resource-monitor-host-unavailable"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("resource-monitor-host-plan-restricted"),
+    ).not.toBeNull();
+    // The remedy is the same button the Settings gate offers, so the two
+    // surfaces cannot drift on what a person is supposed to do next — and it
+    // has to ACT, or it is decoration with the right test id.
+    fireEvent.click(screen.getByTestId("host-scope-plan-upgrade"));
+    expect(openExternalLinkMock.mutate).toHaveBeenCalled();
+
+    // Still a way back, for someone who would rather keep watching than pay.
+    fireEvent.click(
+      screen.getByTestId("resource-monitor-host-return-to-active"),
+    );
+    expect(returnToActive).toHaveBeenCalled();
+  });
+
+  it("refuses a stream whose snapshot is not attributed to the watched host", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    // No scoped binding: the pick has not resolved to a transport of its own,
+    // so the global mount is held out of the tree entirely and whatever the
+    // registry still holds belongs to another machine.
+    hostScopeMock.streamBinding = null;
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Waiting for host-b…")).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  it("refuses a stream whose projection names a different host than the one being watched", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    // Named "host-a" - the ACTIVE host, not the one being watched. A stale
+    // attribution left over from before the pick, not an unattributed one.
+    globalResourceProjectionMock.projection = ownerRowsProjection("host-a");
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Waiting for host-b…")).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  it("renders the watched host's rows once the projection names it", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    globalResourceProjectionMock.projection = ownerRowsProjection("host-b");
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByText("Waiting for host-b…")).toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  it("does not render a picked host's rows while following the active host", () => {
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    // A projection still naming the host someone just stopped watching - the
+    // exact shape of the regression this scope used to be exempt from.
+    globalResourceProjectionMock.projection = ownerRowsProjection("host-b");
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Waiting for resource data.")).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  it("renders the active host's own rows once the projection stops naming another host", () => {
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    globalResourceProjectionMock.projection = ownerRowsProjection(null);
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByText("Waiting for resource data.")).toBeNull();
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+  });
+
+  // No pick involved: swapping the ambient host moves every render-path reader
+  // to the new machine a commit before the stream transport follows, so the
+  // registry still holds the OLD host's samples. Reachable with one host in the
+  // list and the picker never opened.
+  it("refuses the previous host's rows through an ambient host swap", () => {
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    globalResourceProjectionMock.projection =
+      ownerRowsProjection("host-previous");
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Waiting for resource data.")).not.toBeNull();
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+  });
+
+  // The cold-start window: the ambient stream is up and naming its host before
+  // the host LISTS answer, so the scope cannot name one yet. That proves no
+  // mismatch, and there is no kill target during it either - demanding proof
+  // here would blank a working monitor on every launch.
+  //
+  // `isViewingActive: false` is the load-bearing part of this fixture, and the
+  // reason the previous version of this test proved nothing: `isFollowing`
+  // requires a resolved host, so production ALWAYS pairs `host: null` with
+  // `isViewingActive: false`. A cold start is therefore indistinguishable from
+  // a pick by that flag alone, which is why attribution branches on
+  // `hasExplicitPick` instead.
+  it("still renders while the scope has not resolved its own host id yet", () => {
+    hostScopeMock.scope = COLD_START_SCOPE;
+    hostScopeMock.hasExplicitPick = false;
+    globalResourceProjectionMock.projection = ownerRowsProjection("host-a");
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.queryByText("Waiting for No host…")).toBeNull();
+  });
+
+  // Same unresolved scope, but the ambient host cannot serve a global stream.
+  // Nothing has been picked, so there is no machine to accuse of being too old.
+  it("does not call an unresolved scope's host outdated during cold start", () => {
+    hostScopeMock.scope = COLD_START_SCOPE;
+    hostScopeMock.hasExplicitPick = false;
+    globalResourcesUnsupportedMock.unsupported = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(
+      screen.queryByTestId("resource-monitor-host-incompatible"),
+    ).toBeNull();
+  });
+
+  it("shows the Desktop section for an explicit pick of the local machine while a different host is active", async () => {
+    installDesktopMetricsBridge(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    const activeHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      isLocalMachine: false,
+    });
+    hostScopeMock.scope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
+      hosts: [
+        activeHost,
+        hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
+      ],
+      hostId: "host-a",
+      hostLabel: "host-a",
+      isViewingActive: false,
+      activeHostId: "host-b",
+      activeHost,
+      status: "ready",
+    });
+    hostScopeMock.hasExplicitPick = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(await screen.findByText("Traycer Desktop")).not.toBeNull();
+  });
+
+  it("hides the Desktop section while following an active host that is remote", () => {
+    installDesktopMetricsBridge(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    const remoteActive = hostScopeOptionFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    hostScopeMock.scope = hostScopeFixture({
+      host: remoteActive,
+      hostId: "host-a",
+      hostLabel: "host-a",
+      isViewingActive: true,
+      activeHostId: "host-a",
+      activeHost: remoteActive,
+      status: "following",
+    });
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    // Gated on machine identity, not fetch timing - `readingShowsLocalDesktop`
+    // forces `desktopApp: null` for this scope regardless of whether the
+    // metrics promise above has settled yet, so this holds without an await.
+    expect(screen.queryByText("Traycer Desktop")).toBeNull();
+  });
+
+  // `isViewingActive` is `isFollowing`, which REQUIRES a resolved host, so
+  // `host === null` always travels with `isViewingActive: false`. A fixture
+  // pairing a null host with `isViewingActive: true` describes a state the
+  // scope model cannot produce, and a test built on one proves nothing about
+  // production - this asserts the reachable half instead.
+  it("hides the Desktop section until a host resolves", () => {
+    installDesktopMetricsBridge(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    hostScopeMock.scope = hostScopeFixture({
+      host: null,
+      hostId: null,
+      hostLabel: "No host",
+      isViewingActive: false,
+      activeHostId: null,
+      activeHost: null,
+      status: "unreachable",
+    });
+    hostScopeMock.hasExplicitPick = false;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByText("Traycer Desktop")).toBeNull();
+  });
+
+  it("shows a terminal notice, not a spinner, for a pick too old to stream resources", () => {
+    const returnToActive = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({ returnToActive });
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    globalResourcesUnsupportedMock.unsupported = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const notice = screen.getByTestId("resource-monitor-host-incompatible");
+    expect(notice.textContent).toContain("host-b");
+    expect(screen.queryByText("Waiting for host-b…")).toBeNull();
+    // The picker survives - it is the only control that could clear the pick,
+    // same reasoning as the unreachable-host notice above.
+    expect(
+      screen.getByTestId("resource-monitor-host-picker-row"),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByTestId("resource-monitor-host-return-to-active"),
+    );
+    expect(returnToActive).toHaveBeenCalled();
+  });
+
+  it("does not show the incompatible notice for the active host, even when unsupported", () => {
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    globalResourcesUnsupportedMock.unsupported = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(
+      screen.queryByTestId("resource-monitor-host-incompatible"),
+    ).toBeNull();
+  });
+
+  // The capability verdict is read from whichever client the context serves.
+  // With the pick's own binding unresolved that is the AMBIENT one, so an old
+  // ambient host must not be able to convict the picked machine of being
+  // outdated on evidence gathered from a different computer.
+  it("does not call a picked host outdated on the ambient host's capabilities", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    // No scoped binding yet - still dialling, or backing off after a close.
+    hostScopeMock.streamBinding = null;
+    globalResourcesUnsupportedMock.unsupported = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(
+      screen.queryByTestId("resource-monitor-host-incompatible"),
+    ).toBeNull();
+    expect(screen.getByText("Waiting for host-b…")).not.toBeNull();
   });
 });

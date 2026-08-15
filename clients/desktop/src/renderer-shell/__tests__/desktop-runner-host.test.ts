@@ -49,6 +49,8 @@ interface FakeBridgeHandle {
     readonly bytes: ArrayBuffer;
   }>;
   emit(snapshot: LocalHostSnapshot | null): void;
+  emitSystemResumed(): void;
+  systemResumedBridgeSubscriptionCount(): number;
 }
 
 function buildFakeBridge(
@@ -57,6 +59,7 @@ function buildFakeBridge(
   let lastEmitted: LocalHostSnapshot | null = initialSnapshot;
   let firstSubscriberServed = false;
   const handlers = new Set<(snapshot: LocalHostSnapshot | null) => void>();
+  const systemResumedHandlers = new Set<() => void>();
 
   const tokenSlot = { value: null as string | null };
   const respawnCounter = { count: 0 };
@@ -142,9 +145,14 @@ function buildFakeBridge(
         },
       };
     },
-    onSystemResumed: (_handler: () => void) => ({
-      dispose: () => undefined,
-    }),
+    onSystemResumed: (handler: () => void) => {
+      systemResumedHandlers.add(handler);
+      return {
+        dispose: () => {
+          systemResumedHandlers.delete(handler);
+        },
+      };
+    },
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
@@ -561,6 +569,14 @@ function buildFakeBridge(
       for (const handler of handlers) {
         handler(snapshot);
       }
+    },
+    emitSystemResumed(): void {
+      for (const handler of systemResumedHandlers) {
+        handler();
+      }
+    },
+    systemResumedBridgeSubscriptionCount(): number {
+      return systemResumedHandlers.size;
     },
   };
 }
@@ -997,5 +1013,35 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       late.push(snapshot);
     });
     expect(late).toEqual([validSnapshot]);
+  });
+});
+
+describe("DesktopRunnerHost.onSystemResumed", () => {
+  it("fans out through one bridge subscription and releases it on dispose", () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const calls = Array.from({ length: 12 }, () => vi.fn());
+    const subscriptions = calls.map((handler) => host.onSystemResumed(handler));
+
+    expect(fake.systemResumedBridgeSubscriptionCount()).toBe(1);
+    fake.emitSystemResumed();
+    for (const handler of calls) expect(handler).toHaveBeenCalledTimes(1);
+
+    subscriptions[0]?.dispose();
+    fake.emitSystemResumed();
+    expect(calls[0]).toHaveBeenCalledTimes(1);
+    for (const handler of calls.slice(1)) {
+      expect(handler).toHaveBeenCalledTimes(2);
+    }
+
+    host.dispose();
+    expect(fake.systemResumedBridgeSubscriptionCount()).toBe(0);
+    fake.emitSystemResumed();
+    for (const handler of calls.slice(1)) {
+      expect(handler).toHaveBeenCalledTimes(2);
+    }
   });
 });

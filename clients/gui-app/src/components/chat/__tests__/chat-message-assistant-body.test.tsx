@@ -66,6 +66,24 @@ const TEXT_SEGMENT: MessageSegment = {
   isStreaming: false,
 };
 
+const AUTONOMOUS_RESUME_SEGMENT: MessageSegment = {
+  id: "seg-resume",
+  kind: "autonomous_resume",
+  triggers: [
+    {
+      kind: "monitor",
+      title: "build watch",
+      status: "completed",
+      live: false,
+      summary: "Build completed.",
+      blockId: "monitor-1",
+      outputFile: null,
+      mcp: null,
+      managedCommand: null,
+    },
+  ],
+};
+
 const ERROR_SEGMENT: MessageSegment = {
   id: "seg-2",
   kind: "error",
@@ -110,7 +128,9 @@ const META: AssistantTurnMeta = {
 interface BodyPropsOverrides {
   readonly segments?: ReadonlyArray<MessageSegment>;
   readonly runState?: ChatMessageRunState | null;
-  readonly createdAt?: number;
+  readonly elapsedStartedAt?: number;
+  readonly turnHasOnlyAutonomousResumeSegments?: boolean;
+  readonly showCompletionFooter?: boolean;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
@@ -122,7 +142,10 @@ function bodyProps(overrides: BodyPropsOverrides) {
     backgroundToolBlockIds: new Set<string>(),
     runState: overrides.runState ?? null,
     messageId: "assistant:turn-1",
-    createdAt: overrides.createdAt ?? 0,
+    elapsedStartedAt: overrides.elapsedStartedAt ?? 0,
+    turnHasOnlyAutonomousResumeSegments:
+      overrides.turnHasOnlyAutonomousResumeSegments ?? false,
+    showCompletionFooter: overrides.showCompletionFooter ?? true,
     pausedDurationMs: 0,
     pausedSinceMs: null,
     completedAt: overrides.completedAt ?? null,
@@ -133,13 +156,64 @@ function bodyProps(overrides: BodyPropsOverrides) {
   };
 }
 
+describe("AssistantMessageBody autonomous resume rendering", () => {
+  it("does not render an elapsed footer for an autonomous-resume notification without completion", () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          showCompletionFooter: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it('renders "Resumed · no response · {elapsed}" for a completed silent autonomous resume', () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: true,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
+      "Resumed · no response · 5s",
+    );
+  });
+
+  it("does not infer a silent resume from one autonomous-resume-only slice", () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: false,
+          completedAt: 8_000,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    expect(footer.textContent).toMatch(/ for 5s$/);
+    expect(footer.textContent).not.toContain("Resumed · no response");
+  });
+});
+
 describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders "Stopped · {elapsed}" with the stop glyph, not the natural-completion verb', () => {
     render(
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -162,7 +236,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: null,
         })}
@@ -183,7 +257,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -213,13 +287,33 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(note.classList.contains("text-destructive")).toBe(true);
   });
 
+  it("retains the resume notification alongside an unstarted stop boundary", () => {
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          turnHasOnlyAutonomousResumeSegments: true,
+          completedAt: 5_000,
+          stopped: STOPPED_NO_OUTPUT,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("assistant-stopped-before-responding").textContent,
+    ).toBe("Stopped before responding");
+    expect(screen.getByText("Monitor completed")).not.toBeNull();
+    expect(screen.getByText("Build completed.")).not.toBeNull();
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
   it('renders the full "Stopped · {elapsed}" footer, not "Stopped before responding", on a content-less boundary row whose turn DID produce output elsewhere', () => {
     render(
       <AssistantMessageBody
         {...bodyProps({
           segments: [],
           runState: null,
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -240,7 +334,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
         {...bodyProps({
           segments: [],
           runState: null,
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -271,7 +365,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT, ERROR_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -287,7 +381,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT, ERROR_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: null,
         })}
@@ -303,7 +397,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           stopped: STOPPED,
         })}
@@ -331,7 +425,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       <AssistantMessageBody
         {...bodyProps({
           segments: [TEXT_SEGMENT],
-          createdAt: 0,
+          elapsedStartedAt: 0,
           completedAt: 5_000,
           meta: META,
         })}

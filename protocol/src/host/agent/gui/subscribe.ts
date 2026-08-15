@@ -27,6 +27,7 @@ import {
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
+  userMessageSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   type ChatEvent,
@@ -893,6 +894,18 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     message: userMessageSchemaPreInReplyTo,
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
+  });
+
+// Frozen common frames bound to `chat.subscribe@1.6`: live queue/event trees,
+// but the message swapped for its pre-`turnTailUuid` freeze - 1.6 shipped
+// before the Claude anchor gained `turnTailUuid`, and its surface is frozen
+// EXACTLY (`chat-subscribe-v16-surface-compat.test.ts`), so a `messageAccepted`
+// frame on that line must never declare the field.
+const chatSubscribeCommonServerFrameSchemasPreTurnTail =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaPreTurnTail,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
@@ -1892,11 +1905,13 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // directly (a bug: it let every later change to `chatSchema`/`messageSchema`/
 // `contentBlockSchema` mutate this released line) - pinned here to its
 // pre-image shape so this line can never observe `imageResults`/the image
-// resolution record added on `1.7`. Only `chat` (→ `chatSchemaPreImage`) and
-// `blockDelta`'s event (→ `runtimeEventSchemaPreImage`) actually differ from
-// the live shapes; queue/message/managedCommands/turnStateChanged are
-// untouched by images, so this bundle reuses those live sub-schemas exactly
-// like `chatSubscribeServerFrameSchemaV14`/`V15` do.
+// resolution record added on `1.7`. `chat` (→ `chatSchemaPreImage`),
+// `blockDelta`'s event (→ `runtimeEventSchemaPreImage`), and the common
+// frames' message (→ `userMessageSchemaPreTurnTail`, via the pre-turn-tail
+// bundle: the Claude anchor gained `turnTailUuid` after 1.6 shipped) differ
+// from the live shapes; queue/managedCommands/turnStateChanged are untouched
+// by either freeze point, so those reuse the live sub-schemas exactly like
+// `chatSubscribeServerFrameSchemaV14`/`V15` do.
 const chatSnapshotSchemaV16 = z.object({
   chat: chatSchemaPreImage,
   access: chatAccessSchema,
@@ -1925,7 +1940,7 @@ const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV16,
   chatSubscribeTurnStateChangedServerFrameSchema,
   chatSubscribeManagedCommandsChangedServerFrameSchema,
-  ...chatSubscribeCommonServerFrameSchemas,
+  ...chatSubscribeCommonServerFrameSchemasPreTurnTail,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
 

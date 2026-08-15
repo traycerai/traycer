@@ -309,7 +309,7 @@ describe("service install lifecycle re-registration", () => {
         new CliError({
           code: CLI_ERROR_CODES.HOST_BUSY,
           message:
-            "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+            "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).",
           details: null,
           exitCode: 1,
         }),

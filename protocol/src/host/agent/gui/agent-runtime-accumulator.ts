@@ -599,6 +599,7 @@ export function accumulateEvent(
     case "session.resumed":
     case "turn.started":
     case "user_message.anchor_resolved":
+    case "user_message.anchor_tail_updated":
     case "usage.updated":
       return blocks;
 

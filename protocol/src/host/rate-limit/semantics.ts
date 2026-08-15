@@ -8,6 +8,11 @@ export type LiveProviderRateLimitSeverity = Exclude<
   "unknown"
 >;
 
+export type OpenCodeGoRateLimitWindow = Extract<
+  ProviderRateLimits,
+  { provider: "opencode"; available: true }
+>["fiveHour"];
+
 const SHORT_WINDOW_RUNNING_LOW_USED_PERCENT = 80;
 const LONG_WINDOW_RUNNING_LOW_USED_PERCENT = 95;
 const LIMITED_USED_PERCENT = 100;
@@ -65,6 +70,8 @@ export function providerRateLimitWindows(
       // severity/rollup path. A period-less snapshot (tier + dates only, no
       // usage percentage) carries no window.
       return rateLimits.period !== null ? [rateLimits.period] : [];
+    case "opencode":
+      return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
     case "openrouter":
     case "kilocode":
     case "huggingface":
@@ -80,6 +87,17 @@ export function isProviderRateLimitWindowLive(
   now: number,
 ): boolean {
   return window.resetsAt === null || window.resetsAt > now;
+}
+
+/** OpenCode's status is authoritative only while that captured window is live. */
+export function isOpenCodeGoRateLimitWindowLimited(
+  window: OpenCodeGoRateLimitWindow,
+  now: number,
+): boolean {
+  return (
+    window.status === "rate-limited" &&
+    isProviderRateLimitWindowLive(window, now)
+  );
 }
 
 /** Detailed percentage windows that still describe the current limit period. */
@@ -110,6 +128,14 @@ export function classifyProviderRateLimits(
   if (
     rateLimits.provider === "codex" &&
     rateLimits.rateLimitReachedType !== null
+  ) {
+    return "limited";
+  }
+  if (
+    rateLimits.provider === "opencode" &&
+    [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly].some(
+      (window) => isOpenCodeGoRateLimitWindowLimited(window, now),
+    )
   ) {
     return "limited";
   }

@@ -95,6 +95,35 @@ function claude(
   };
 }
 
+function openCode(args: {
+  readonly fiveHourStatus: "ok" | "rate-limited";
+  readonly fiveHourPercent: number;
+}): Extract<ProviderRateLimits, { provider: "opencode"; available: true }> {
+  return {
+    provider: "opencode",
+    available: true,
+    credentialGeneration: "gen-1",
+    fiveHour: {
+      status: args.fiveHourStatus,
+      usedPercent: args.fiveHourPercent,
+      durationMinutes: 300,
+      resetsAt: NOW + 1,
+    },
+    weekly: {
+      status: "ok",
+      usedPercent: 8,
+      durationMinutes: 10_080,
+      resetsAt: NOW + 1,
+    },
+    monthly: {
+      status: "ok",
+      usedPercent: 4,
+      durationMinutes: null,
+      resetsAt: NOW + 1,
+    },
+  };
+}
+
 function grok(
   period: ProviderRateLimitWindow | null,
 ): Extract<ProviderRateLimits, { provider: "grok"; available: true }> {
@@ -224,6 +253,32 @@ describe("projectProfileUsage", () => {
       reason: "missing_windows",
       compactWindow: null,
       windows: [],
+    });
+  });
+
+  it("treats an OpenCode rate-limited window as limited even at a low percent", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        openCode({ fiveHourStatus: "rate-limited", fiveHourPercent: 12 }),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "five-hour",
+        name: "5-hour",
+        severity: "limited",
+        window: {
+          usedPercent: 12,
+          durationMinutes: 300,
+          resetsAt: NOW + 1,
+        },
+      },
     });
   });
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useLayoutEffect, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -50,7 +50,9 @@ const runnerHostRef = vi.hoisted(() => {
 });
 
 const streamFactorySpy = vi.hoisted(() => ({
-  build: vi.fn(),
+  // Typed so the recorded build target reads back as a `string`, not `any` -
+  // the assertion that compares it against the published name depends on it.
+  build: vi.fn<(hostId: string) => void>(),
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
@@ -97,14 +99,44 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
     buildHostStreamClient: (
       params: Parameters<typeof actual.buildHostStreamClient>[0],
     ) => {
-      streamFactorySpy.build();
+      streamFactorySpy.build(params.target.hostId);
       return actual.buildHostStreamClient(params);
     },
   };
 });
 
+// Records the transport identity the provider hands the shared backoff, while
+// the REAL pacing runs underneath - the streak semantics themselves (what a
+// changed identity does to a running streak) are owned by
+// `stream-rebuild-backoff.test.ts`. What is only observable here is the input:
+// which endpoint the provider claims it just built for.
+const backoffSpy = vi.hoisted(() => ({
+  markBuilt: vi.fn<(transportIdentity: string | null) => void>(),
+}));
+
+vi.mock("@/lib/host/stream-rebuild-backoff", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/stream-rebuild-backoff")>();
+  return {
+    ...actual,
+    createStreamRebuildBackoff: () => {
+      const real = actual.createStreamRebuildBackoff();
+      return {
+        ...real,
+        markBuilt: (nowMs: number, transportIdentity: string | null): void => {
+          backoffSpy.markBuilt(transportIdentity);
+          real.markBuilt(nowMs, transportIdentity);
+        },
+      };
+    },
+  };
+});
+
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamHostId,
+  useWsStreamClient,
+} from "@/lib/host/stream-runtime-context";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -265,6 +297,7 @@ describe("HostStreamProvider", () => {
     runnerHostRef.handlers.clear();
     mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();
+    backoffSpy.markBuilt.mockReset();
     vi.restoreAllMocks();
     // Tests that drive the session cache's keep-warm linger enable fake
     // timers; restore unconditionally so a mid-test failure cannot leak them.
@@ -349,6 +382,152 @@ describe("HostStreamProvider", () => {
     expect(result.current).not.toBe(first);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(closeSpy.mock.contexts[0]).toBe(first);
+  });
+
+  // Steady state only: `act()` flushes render and effects together, so this
+  // cannot observe the commit-to-effect window (the test below does that).
+  // Read TOGETHER on purpose - the interesting failure is not "the name is
+  // wrong" but "the name and the client disagree".
+  it("serves a client and a host name that agree once a swap settles", () => {
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    const { result } = renderHook(
+      () => ({
+        client: useWsStreamClient(),
+        hostId: useStreamHostId(),
+      }),
+      { wrapper },
+    );
+    const first = result.current.client;
+    expect(first).toBeInstanceOf(WsStreamClient);
+    expect(result.current.hostId).toBe(mockLocalHostEntry.hostId);
+
+    act(() => {
+      hostClient.bind({
+        ...mockLocalHostEntry,
+        hostId: "host-other",
+        websocketUrl: "ws://127.0.0.1:4918/rpc",
+      });
+    });
+
+    expect(result.current.client).not.toBe(first);
+    expect(result.current.hostId).toBe("host-other");
+  });
+
+  // The commit-to-effect window itself. A child's LAYOUT effect runs before the
+  // provider's passive effect, so this rebind lands after the render that fixed
+  // `readiness.hostId` but before the effect that builds the client - the exact
+  // gap where the provider's closure and the live `HostClient` name different
+  // machines. The client is built from the LIVE read, so the name must come
+  // from there too.
+  it("publishes the host its client was built for, not the render's", () => {
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    function SwapDuringCommit(props: { readonly children: ReactNode }) {
+      useLayoutEffect(() => {
+        hostClient.bind({
+          ...mockLocalHostEntry,
+          hostId: "host-other",
+          websocketUrl: "ws://127.0.0.1:4918/rpc",
+        });
+      }, []);
+      return props.children;
+    }
+
+    const published: (string | null)[] = [];
+    renderHook(
+      () => {
+        published.push(useStreamHostId());
+      },
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <HostStreamProvider>
+            <SwapDuringCommit>{props.children}</SwapDuringCommit>
+          </HostStreamProvider>
+        ),
+      },
+    );
+
+    const firstBuiltFor = streamFactorySpy.build.mock.calls[0]?.[0];
+    const firstPublished = published.find((hostId) => hostId !== null);
+    expect(firstBuiltFor).toBe("host-other");
+    expect(firstPublished).toBe(firstBuiltFor);
+  });
+
+  // The same commit-to-effect window, now for the rebuild streak. The backoff
+  // decides whether a streak CARRIES by comparing the identity it is handed
+  // against the previous build's, so a render-time value here names the
+  // previous endpoint for a client dialed at the new one: the two look equal,
+  // the streak survives the move, and a terminal-class close on the new host
+  // gets paced by the old host's failures instead of rebuilding at once.
+  it("keys the rebuild streak on the host its client was built for", () => {
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    function SwapDuringCommit(props: { readonly children: ReactNode }) {
+      useLayoutEffect(() => {
+        hostClient.bind({
+          ...mockLocalHostEntry,
+          hostId: "host-other",
+          websocketUrl: "ws://127.0.0.1:4918/rpc",
+        });
+      }, []);
+      return props.children;
+    }
+
+    renderHook(() => useStreamHostId(), {
+      wrapper: (props: { readonly children: ReactNode }) => (
+        <HostStreamProvider>
+          <SwapDuringCommit>{props.children}</SwapDuringCommit>
+        </HostStreamProvider>
+      ),
+    });
+
+    // Read together: the point is not that the identity mentions some host,
+    // but that it names the SAME one the client was actually built for.
+    const firstBuiltFor = streamFactorySpy.build.mock.calls[0]?.[0];
+    const firstIdentity = backoffSpy.markBuilt.mock.calls[0]?.[0];
+    expect(firstBuiltFor).toBe("host-other");
+    expect(firstIdentity).toContain("host-other");
+    expect(firstIdentity).not.toContain(mockLocalHostEntry.hostId);
+  });
+
+  // A live client always names a host; a dead one names nothing, so a consumer
+  // cannot label output with a machine it has no working stream to.
+  it("reports no host once the served client is closed", () => {
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    const { result } = renderHook(
+      () => ({
+        client: useWsStreamClient(),
+        hostId: useStreamHostId(),
+      }),
+      { wrapper },
+    );
+    expect(result.current.hostId).toBe(mockLocalHostEntry.hostId);
+
+    const served = result.current.client;
+    expect(served).not.toBeNull();
+    act(() => {
+      served?.close("test-close");
+    });
+
+    expect(result.current.client === null).toBe(result.current.hostId === null);
   });
 
   it("rebuilds the client when it is closed underneath the provider", () => {
