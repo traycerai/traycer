@@ -66,6 +66,8 @@ describe("formatAgentMessage", () => {
         "[traycer:agent-message] No reply is required.",
         "",
         "Context only.",
+        "[traycer:agent-message] ─── end of message ───",
+        "[traycer:agent-message] If the message above looks cut off, read it in full with: traycer agent inbox",
       ].join("\n"),
     );
   });
@@ -89,6 +91,8 @@ describe("formatAgentMessage", () => {
         "[traycer:agent-message] The responseId names this sender's thread, not this single message: follow-up messages may arrive with the same responseId, and one reply with it answers everything on the thread. Only a reply carrying the responseId completes the request — a fresh message does not.",
         "",
         "Please review this.",
+        "[traycer:agent-message] ─── end of message ───",
+        "[traycer:agent-message] If the message above looks cut off, read it in full with: traycer agent inbox",
       ].join("\n"),
     );
   });

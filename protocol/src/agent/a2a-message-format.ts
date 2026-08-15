@@ -26,15 +26,19 @@ export interface FormatAgentMessageInput {
  * One body for both channels. Every A2A-capable agent — GUI turn or terminal
  * launch — is handed the same host-owned `traycer_a2a` MCP catalog, so the
  * reply instruction names `traycer_send_message` on both. The `cli` channel
- * discriminator survives only as a transport/rendering marker; it must never
- * steer a model back to the `traycer agent …` CLI, which stays implemented for
- * humans and lifecycle hooks but is no longer advertised to models.
+ * discriminator survives for transport-specific recovery: terminal background
+ * notifications can be truncated, so their footer retains the durable inbox
+ * read command. Reply mechanics remain MCP-only; the CLI is not advertised as
+ * a second A2A control surface.
  */
 export function formatAgentMessage(input: FormatAgentMessageInput): string {
   switch (input.receiverChannel) {
     case "gui":
-    case "cli":
       return formatToolAddressedAgentMessage(input);
+    case "cli":
+      return `${formatToolAddressedAgentMessage(input)}
+[traycer:agent-message] ─── end of message ───
+[traycer:agent-message] If the message above looks cut off, read it in full with: traycer agent inbox`;
     default: {
       const _exhaustiveCheck: never = input.receiverChannel;
       throw new Error(`Unhandled agent message channel: ${_exhaustiveCheck}`);
