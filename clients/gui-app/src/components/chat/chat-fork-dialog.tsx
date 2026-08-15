@@ -168,12 +168,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // resolution is needed at this call site. Never authoritative (`fallback`/
   // `none`): this dialog has no reauth gate of its own, so a genuinely-
   // tombstoned source profile must be corrected to ambient here rather than
-  // silently submitted to `createChat`.
+  // silently submitted to `createChat`. The catalog reads through the same
+  // tab client, so the fork offers the tab host's harnesses/models.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
-    false,
+    { hostClient: tabHostClient, tuiOnly: false },
   );
   const modelResolved = useStore(
     toolbarStore,

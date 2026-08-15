@@ -230,7 +230,11 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     <div className="flex w-full max-w-4xl flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
+          <UsageWindowPicker
+            windowDays={windowDays}
+            onChange={setWindowDays}
+            triggerClassName={undefined}
+          />
           <UsageHostFilter
             options={hostOptions}
             hostId={hostId}
@@ -436,7 +440,7 @@ function UsageSummaryPanelBody(props: {
           hostScopeName={hostScopeName}
           size="default"
         />
-        <UsageHarnessSplit rows={harnessRows} scale={scale} />
+        <UsageHarnessSplit rows={harnessRows} scale={scale} showTokens />
       </div>
       {/* Only worth a section once there is more than one host to compare:
           a single-row "By host" list under an All-hosts filter says nothing
@@ -449,7 +453,7 @@ function UsageSummaryPanelBody(props: {
         </div>
       ) : null}
       <div className="flex flex-col gap-1.5">
-        <UsageStatTiles tiles={statTiles} />
+        <UsageStatTiles tiles={statTiles} variant="full" />
         {absentNote === null ? null : (
           <p
             className="text-ui-xs text-muted-foreground/80"
@@ -464,6 +468,7 @@ function UsageSummaryPanelBody(props: {
           <UsageChartGroupByToggle
             groupBy={chartGroupBy}
             onChange={onChartGroupByChange}
+            triggerClassName={undefined}
           />
         </div>
         {/* `key` per the prop's contract: the legend's hidden-series state

@@ -89,6 +89,8 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import type { ChatAnnouncementKind } from "@/stores/chats/chat-announcements";
+import { useChatAnnouncements } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
@@ -114,6 +116,12 @@ interface ChatMessagesProps {
   hostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
+   * established these rows. The polite-announcement deriver needs it to tell
+   * a live arrival from (re)hydrated history without guessing from row shape.
+   */
+  baselineEpoch: number;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -802,185 +810,25 @@ function resolvePendingMeasuredFreeRestore(
   };
 }
 
-/** Per-row snapshot the completion announcer diffs between observations. */
-interface AssistantCompletionObservation {
-  readonly completedAt: number | null;
-  readonly footerless: boolean;
-  /** Notification-content version; see `notificationSignatureOf`. */
-  readonly notificationSignature: string | null;
-  /** Settled (non-`live`) trigger count; decides completion vs update copy. */
-  readonly terminalTriggerCount: number;
-}
-
-/** What the completion announcer remembers from its previous observation. */
-interface TranscriptObservation {
-  readonly assistantById: ReadonlyMap<string, AssistantCompletionObservation>;
-  /** Every message id (any role) - the positional fallback frame. */
-  readonly messageIds: ReadonlySet<string>;
-  /** Newest completion timestamp observed - the recency frame. */
-  readonly maxCompletedAt: number | null;
-}
-
-/**
- * Content version of a row's autonomous-resume notification: the protocol
- * appends additional triggers to the existing divider when more monitored
- * tasks settle while the chat stays idle, so the same row can gain a new
- * background completion without any footer or id change. Each trigger is
- * encoded by its `live` state, not just counted - a still-running producer
- * that settles flips in place (`l` → `t`) with no length change, and that
- * transition is exactly the completion the reader is waiting to hear.
- */
-function notificationSignatureOf(message: ChatMessageModel): string | null {
-  const parts: string[] = [];
-  for (const segment of message.segments) {
-    if (segment.kind !== "autonomous_resume") continue;
-    const states = segment.triggers
-      .map((trigger) => (trigger.live ? "l" : "t"))
-      .join("");
-    parts.push(`${segment.id}:${states}`);
+function announcementTextFor(
+  taskTitle: string,
+  kind: ChatAnnouncementKind,
+): string {
+  switch (kind) {
+    case "turn-completed":
+      return `${taskTitle} finished responding.`;
+    case "background-update":
+      return `${taskTitle} received a background update.`;
+    default:
+      return `${taskTitle} received a background completion.`;
   }
-  return parts.length === 0 ? null : parts.join("|");
-}
-
-function terminalTriggerCountOf(message: ChatMessageModel): number {
-  let count = 0;
-  for (const segment of message.segments) {
-    if (segment.kind !== "autonomous_resume") continue;
-    for (const trigger of segment.triggers) {
-      if (!trigger.live) count += 1;
-    }
-  }
-  return count;
-}
-
-function hasLiveTrigger(message: ChatMessageModel): boolean {
-  return message.segments.some(
-    (segment) =>
-      segment.kind === "autonomous_resume" &&
-      segment.triggers.some((trigger) => trigger.live),
-  );
-}
-
-/**
- * A footerless row's announcement mirrors what actually settled. A `live`
- * trigger is a producer that was STILL RUNNING when the digest rendered -
- * the visible card says so - and announcing it as a "completion" would
- * contradict the screen. Completion copy therefore requires a settled
- * trigger the reader has not heard yet; news that is only still-running
- * producers is an update. A footerless row with no trigger digest at all
- * keeps completion copy - its only announceable change is its own terminal
- * transition.
- */
-function turnCompletionAnnouncementText(input: {
-  readonly taskTitle: string;
-  readonly message: ChatMessageModel;
-  readonly priorTerminalTriggerCount: number;
-}): string {
-  if (input.message.showCompletionFooter !== false) {
-    return `${input.taskTitle} finished responding.`;
-  }
-  const terminalAdded =
-    terminalTriggerCountOf(input.message) > input.priorTerminalTriggerCount;
-  if (!terminalAdded && hasLiveTrigger(input.message)) {
-    return `${input.taskTitle} received a background update.`;
-  }
-  return `${input.taskTitle} received a background completion.`;
-}
-
-/**
- * Whether an unknown terminal row is a live arrival rather than
- * hydration/backfill (this component supports transcripts growing after
- * mount). Sorted position cannot decide this alone: the projector
- * deliberately anchors a notification at its turn's original transcript
- * position, so a background task from an earlier turn that settles late
- * inserts BEFORE later rows. Completion recency is therefore the primary
- * frame - a live arrival's completion is at least as new as everything
- * previously observed. An exact timestamp tie counts as live BY CHOICE:
- * wall-clock stamps are not unique, the row snapshot carries no further
- * evidence (position provably cannot rank a tie - a tied live insertion
- * lands before known rows), and the failure costs are asymmetric - a
- * spurious polite announcement on the astronomically rare tied backfill is
- * noise, while a swallowed real completion strands a screen-reader user
- * waiting on a background task. Position decides only before any completion
- * has been observed, and needs a baseline - a previously observed row still
- * present in the transcript. Without one (first non-empty frame after
- * mounting on a still-hydrating chat) every row is history, not a live
- * tail.
- */
-function unknownRowIsLiveCompletion(input: {
-  readonly previous: TranscriptObservation;
-  readonly message: ChatMessageModel;
-  readonly index: number;
-  readonly lastKnownIndex: number;
-  readonly replacedIncompleteAssistant: boolean;
-}): boolean {
-  if (input.replacedIncompleteAssistant) return true;
-  const { maxCompletedAt } = input.previous;
-  const { completedAt } = input.message;
-  if (maxCompletedAt !== null && completedAt !== null) {
-    return completedAt >= maxCompletedAt;
-  }
-  return input.lastKnownIndex >= 0 && input.index > input.lastKnownIndex;
-}
-
-/**
- * Whether a known row's change is a fresh completion: `completedAt`
- * transitioning null → timestamp; a footerless notification adopted by its
- * provider turn (footer flips on, `completedAt` moves between two non-null
- * lifecycle values); or a footerless notification's content changing - an
- * added trigger, or a still-running trigger settling in place. A bare
- * `completedAt` shift with footer and notification content unchanged - a
- * canonicalized snapshot timestamp - stays silent.
- */
-function knownRowNewlyCompleted(
-  prior: AssistantCompletionObservation,
-  message: ChatMessageModel,
-): boolean {
-  if (prior.completedAt === null) return true;
-  if (!prior.footerless) return false;
-  if (message.showCompletionFooter !== false) return true;
-  return notificationSignatureOf(message) !== prior.notificationSignature;
-}
-
-function findNewlyCompletedAssistant(
-  previous: TranscriptObservation,
-  messages: ReadonlyArray<ChatMessageModel>,
-): ChatMessageModel | null {
-  const currentIds = new Set(messages.map((message) => message.id));
-  const replacedIncompleteAssistant = [...previous.assistantById].some(
-    ([id, observation]) =>
-      observation.completedAt === null && !currentIds.has(id),
-  );
-  let lastKnownIndex = -1;
-  for (const [index, message] of messages.entries()) {
-    if (previous.messageIds.has(message.id)) lastKnownIndex = index;
-  }
-  let completedAssistant: ChatMessageModel | null = null;
-  for (const [index, message] of messages.entries()) {
-    if (message.role !== "assistant") continue;
-    if (message.completedAt === null || message.stopped !== null) continue;
-    const prior = previous.assistantById.get(message.id);
-    const isFreshCompletion =
-      prior === undefined
-        ? unknownRowIsLiveCompletion({
-            previous,
-            message,
-            index,
-            lastKnownIndex,
-            replacedIncompleteAssistant,
-          })
-        : knownRowNewlyCompleted(prior, message);
-    if (isFreshCompletion) {
-      completedAssistant = message;
-    }
-  }
-  return completedAssistant;
 }
 
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
     backgroundItems,
+    baselineEpoch,
     composerOverlayHeight,
     identity,
     instanceId,
@@ -2497,71 +2345,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
-  const [turnCompletionAnnouncement, setTurnCompletionAnnouncement] = useState<{
-    readonly key: string;
+  // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
+  // transcript baseline (which connection hydrated these rows) and reports
+  // the semantic transition. This layer only renders it.
+  const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  // The rendered sentence is FROZEN when the announcement is made, not
+  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
+  // after its first turn, and can be renamed any time). Recomputing would
+  // rewrite the text inside the already-announced live-region node, and a
+  // screen reader re-announces on content change - a phantom completion for
+  // a rename. A later announcement re-freezes with the title current then.
+  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
+    readonly sequence: number;
     readonly text: string;
   } | null>(null);
-  const transcriptObservationRef = useRef<TranscriptObservation | null>(null);
-  const announcementSeqRef = useRef(0);
+  if (
+    announcement !== null &&
+    renderedAnnouncement?.sequence !== announcement.sequence
+  ) {
+    setRenderedAnnouncement({
+      sequence: announcement.sequence,
+      text: announcementTextFor(taskTitle, announcement.kind),
+    });
+  }
   useLayoutEffect(() => {
-    const previous = transcriptObservationRef.current;
-    const assistantById = new Map<string, AssistantCompletionObservation>();
-    const messageIds = new Set<string>();
-    let maxCompletedAt: number | null = null;
-    for (const message of messages) {
-      messageIds.add(message.id);
-      if (message.role !== "assistant") continue;
-      assistantById.set(message.id, {
-        completedAt: message.completedAt,
-        footerless: message.showCompletionFooter === false,
-        notificationSignature: notificationSignatureOf(message),
-        terminalTriggerCount: terminalTriggerCountOf(message),
-      });
-      if (
-        message.completedAt !== null &&
-        (maxCompletedAt === null || message.completedAt > maxCompletedAt)
-      ) {
-        maxCompletedAt = message.completedAt;
-      }
-    }
-    transcriptObservationRef.current = {
-      assistantById,
-      messageIds,
-      maxCompletedAt,
-    };
-    // The first observation only records the baseline: transcript history
-    // present at mount must never announce, including footerless rows that
-    // are born terminal.
-    if (previous === null) return;
-    const completedAssistant = findNewlyCompletedAssistant(previous, messages);
-    if (completedAssistant !== null) {
-      // The key is a monotonic sequence, NOT row identity: two consecutive
-      // announcements can share id, completion timestamp AND text (a second
-      // trigger settling in the same millisecond), and an unchanged key
-      // would leave the live-region DOM unmutated - silent to screen
-      // readers.
-      announcementSeqRef.current += 1;
-      const announcement = {
-        key: String(announcementSeqRef.current),
-        text: turnCompletionAnnouncementText({
-          taskTitle,
-          message: completedAssistant,
-          priorTerminalTriggerCount:
-            previous.assistantById.get(completedAssistant.id)
-              ?.terminalTriggerCount ?? 0,
-        }),
-      };
-      // Decision #10/#16: turn completion below the fold stays anchored - no
-      // auto-reveal. The pill flips to "New reply" instead, unless the
-      // reader is already at the tail (nothing to signal).
-      const hasUnseenCompletion =
-        timelineScrollModeRef.current !== "following-end";
-      queueMicrotask(() => {
-        setTurnCompletionAnnouncement(announcement);
-        if (hasUnseenCompletion) setHasUnseenTurnCompletion(true);
-      });
-    }
-  }, [messages, taskTitle]);
+    if (announcement === null) return;
+    // Decision #10/#16: turn completion below the fold stays anchored - no
+    // auto-reveal. The pill flips to "New reply" instead, unless the reader
+    // is already at the tail (nothing to signal).
+    if (timelineScrollModeRef.current === "following-end") return;
+    setHasUnseenTurnCompletion(true);
+  }, [announcement]);
 
   // --- Stateful scroll-to-end pill (decision #16) ----------------------------
 
@@ -2651,9 +2465,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           ) : null}
         </div>
         <div aria-live="polite" className="sr-only">
-          {turnCompletionAnnouncement === null ? null : (
-            <span key={turnCompletionAnnouncement.key}>
-              {turnCompletionAnnouncement.text}
+          {renderedAnnouncement === null ? null : (
+            // Keyed by the deriver's monotonic sequence so consecutive
+            // identical announcements still mutate the live region.
+            <span key={renderedAnnouncement.sequence}>
+              {renderedAnnouncement.text}
             </span>
           )}
         </div>

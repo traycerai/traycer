@@ -74,3 +74,15 @@ paths = [
 regexes = [
   '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9[.]eyJzdWIiOiIxMjM0NTY3ODkwIn0[.]dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U$''',
 ]
+
+[[allowlists]]
+description = "Base64 non-UTF-8 path fixtures in the split PR-diff find/body suites. Both values decode to literal filename BYTES - `YmFkLf8udHh0` is `bad-\\xff.txt` and `YmFkLf4udHh0` is `bad-\\xfe.txt` - fed to the `pathBytes` wire field to prove byte-exact round-tripping of paths that are not valid UTF-8. The generic-api-key rule matches them only on base64 shape and entropy; neither is a credential. Same situation as the chat-messages scrollStateKey entry above: `fetch-depth: 0` makes the PR scan see these on the in-flight branch that introduces them (`traycer/non-utf8-path-bytes`), so every unrelated PR fails until this lands - it cannot wait for that branch to merge. Scoped to both exact values and both source paths so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/epic-canvas/renderers/__tests__/pr-diff-tile-find\.test\.tsx$''',
+  '''^clients/gui-app/src/components/epic-canvas/pr/__tests__/pr-local-diff-body\.test\.tsx$''',
+]
+regexes = [
+  '''^YmFkLf(?:8|4)udHh0$''',
+]

@@ -184,6 +184,21 @@ export interface GitDiffTileViewState {
   readonly collapsedFilePaths: ReadonlyArray<string>;
 }
 
+/**
+ * The PR diff tile's OWN persisted view state, structurally separate from
+ * {@link GitDiffTileViewState} on purpose. Entries are tagged canonical file
+ * keys (`prLocalDiffFileKey`: `b:<token>` / `p:<path>`), not bare paths - and
+ * the field is a DIFFERENT field, not a reinterpretation of
+ * `collapsedFilePaths`, because no value-level rule can tell a legacy bare
+ * entry for a file literally named `p:foo` apart from the tagged key of
+ * `foo`. The PR tile's codec reads only this field and ignores any legacy
+ * `collapsedFilePaths` in a stored record: a one-time collapse-state reset
+ * for PR diff tiles, in exchange for keys that cannot alias.
+ */
+export interface PrDiffTileViewState {
+  readonly collapsedFileKeys: ReadonlyArray<string>;
+}
+
 export interface GitDiffFileTilePayload {
   readonly kind: "file";
   readonly runningDir: string;
@@ -432,7 +447,7 @@ export interface PrDiffTileRef {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
-  readonly view: GitDiffTileViewState;
+  readonly view: PrDiffTileViewState;
 }
 
 export type EpicCanvasTileRef =

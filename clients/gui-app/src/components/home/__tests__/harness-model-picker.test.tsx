@@ -142,6 +142,15 @@ const queryMock = vi.hoisted(() => ({
   // `providerStates` for every target host, matching the pre-fix behavior
   // where the gate always read the default host's list.
   providerStatesByClient: new Map<string, ProviderCliState[]>(),
+  // Per-target-host overrides for the harness-catalog `…ForClient` hooks,
+  // keyed by the same `useHostClientForHostId` sentinel as
+  // `providerStatesByClient` above. Unpopulated (the common case): every
+  // `…ForClient` call falls back to the single `harnesses` /
+  // `selectedModelsByHarness` / `catalogHarnesses` fixture below, matching
+  // pre-fix behavior where every call read the same data regardless of host.
+  harnessesByClient: new Map<string, HarnessOption[]>(),
+  modelsByClient: new Map<string, Map<string, ReadonlyArray<ModelOption>>>(),
+  catalogHarnessesByClient: new Map<string, CatalogHarness[]>(),
   unresolvedHostIds: new Set<string>(),
   cloneCatalogOnRead: false,
   calls: {
@@ -149,17 +158,24 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    // The `client` each `…ForClient` call was invoked with (recorded
+    // separately from `calls.harnesses` / `calls.models` / `calls.catalog`
+    // above so their pre-existing `toEqual({ enabled, subscribed })`
+    // assertions keep matching exactly, with no extra field to account for).
+    harnessClients: [] as Array<string | null>,
     catalog: [] as Array<{
       readonly workingDirectory: string | null;
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    catalogClients: [] as Array<string | null>,
     models: [] as Array<{
       readonly harnessId: string;
       readonly workingDirectory: string | null;
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    modelClients: [] as Array<string | null>,
     providers: [] as Array<{
       readonly enabled: boolean;
       readonly subscribed: boolean;
@@ -171,6 +187,10 @@ const queryMock = vi.hoisted(() => ({
       readonly subscribed: boolean;
     }>,
     ensurePack: [] as string[],
+    // `useRefreshHarnessCatalogForClient`'s own `client` argument (not the
+    // client the returned refresh function later resolves internally - this
+    // suite mocks the hook itself, so this is the one signal available).
+    refresh: [] as Array<string | null>,
   },
 }));
 
@@ -210,15 +230,40 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     client: string | null,
     activity: QueryActivity,
   ) => {
+    // The picker now issues TWO `useProvidersListForClient` calls (the rail,
+    // and the create-profile capability gate) where it used to issue ONE
+    // `useProvidersList` call for the rail - recording both here keeps
+    // `calls.providers` a faithful "every providers-list observer this
+    // render created" log. Both calls share the same `activityEnabled` in
+    // every fixture in this file, so existing `.at(-1)` assertions on
+    // enabled/subscribed are unaffected by which call lands last.
+    queryMock.calls.providers.push({
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+    });
+    // A `null` client models an UNRESOLVED run-target host - `useHostQuery`
+    // disables the query outright (`enabled: (query) => client === null ? ...
+    // false`), so a real disabled query with no cached data reports
+    // `isPending: true`/`data: undefined` forever, never the DEFAULT host's
+    // cached providers. Falling back to `providerStates` here (the pre-fix
+    // behavior) would leak the default host's profiles into a picker bound to
+    // a host that never resolved.
+    if (client === null) {
+      return {
+        data: undefined,
+        isPending: true,
+        isError: false,
+        error: null,
+        isFetching: false,
+      };
+    }
     const providers =
-      client === null
-        ? queryMock.providerStates
-        : (queryMock.providerStatesByClient.get(client) ??
-          queryMock.providerStates);
+      queryMock.providerStatesByClient.get(client) ?? queryMock.providerStates;
     return {
       data: activity.enabled ? { providers } : undefined,
       isPending: false,
       isError: false,
+      error: null,
       isFetching: false,
     };
   },
@@ -389,18 +434,41 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // freshness policy, and the RPCs it gates, are covered against a mocked host
   // transport in `harness-model-picker-intent-rpc.test.tsx`.
   harnessCatalogEntryNeedsRefresh: () => true,
-  useGuiHarnessesQuery: (activity: QueryActivity) => {
+  // The picker resolves its own client (`useHostClientForHostId`, mocked
+  // above to a sentinel keyed by `runTargetHostId`) and threads it into every
+  // `…ForClient` call below. This suite's fixtures are not per-host (see
+  // `queryMock`), so every `…ForClient` variant delegates to the SAME data -
+  // the `client` argument is only ever recorded, never used to branch, unless
+  // a test specifically layers `queryMock.harnessesByClient` (see below).
+  useGuiHarnessesQueryForClient: (
+    client: string | null,
+    activity: QueryActivity,
+  ) => {
     queryMock.calls.harnesses.push({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
+    queryMock.calls.harnessClients.push(client);
+    // A `null` client models an unresolved run-target host: `useHostQuery`
+    // disables the underlying query, so a real disabled query with no cached
+    // data reports `isPending: true`/`data: undefined` forever - never the
+    // default host's cached harness list. See the matching comment on
+    // `useProvidersListForClient` above for why this must not fall back.
+    if (client === null) {
+      return { data: undefined, isPending: true, isError: false, error: null };
+    }
+    const harnesses = queryMock.harnessesByClient.has(client)
+      ? (queryMock.harnessesByClient.get(client) ?? [])
+      : queryMock.harnesses;
     return {
-      data: activity.enabled ? { harnesses: queryMock.harnesses } : undefined,
+      data: activity.enabled ? { harnesses } : undefined,
       isPending: activity.enabled && queryMock.harnessesLoading,
+      isError: queryMock.harnessesError !== null,
       error: queryMock.harnessesError,
     };
   },
-  useGuiHarnessModelsQuery: (
+  useGuiHarnessModelsQueryForClient: (
+    client: string | null,
     harnessId: string,
     workingDirectory: string | null,
     activity: QueryActivity,
@@ -411,14 +479,31 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
+    queryMock.calls.modelClients.push(client);
+    // See `useGuiHarnessesQueryForClient` above: a `null` client is a
+    // permanently-disabled query, never a default-host fallback.
+    if (client === null) {
+      return {
+        data: undefined,
+        isPending: true,
+        isError: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined }),
+      };
+    }
+    const modelsByHarness = queryMock.modelsByClient.has(client)
+      ? (queryMock.modelsByClient.get(client) ??
+        queryMock.selectedModelsByHarness)
+      : queryMock.selectedModelsByHarness;
     return {
       data: activity.enabled
         ? {
             harnessId,
-            models: queryMock.selectedModelsByHarness.get(harnessId) ?? [],
+            models: modelsByHarness.get(harnessId) ?? [],
           }
         : undefined,
       isPending: false,
+      isError: false,
       error: null,
       // The picker's intent-edge effects call `.refetch()` on both queries
       // whenever the popover opens or the selection changes (real RPC
@@ -448,7 +533,8 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       refetch: () => Promise.resolve({ data: undefined }),
     };
   },
-  useGuiHarnessCatalog: (
+  useGuiHarnessCatalogForClient: (
+    client: string | null,
     workingDirectory: string | null,
     activity: QueryActivity,
   ) => {
@@ -457,14 +543,36 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
+    queryMock.calls.catalogClients.push(client);
+    // See `useGuiHarnessesQueryForClient` above: with a `null` client the
+    // underlying harnesses query is permanently disabled, so the REAL
+    // composed hook reports an empty catalog (never the default host's cached
+    // one) that is NOT loading - it gates `harnessesLoading` on the client,
+    // since a disabled query's `isPending` would otherwise read as loading
+    // forever - and no model queries ever fire since there are no available
+    // harness ids to fan out over.
+    if (client === null) {
+      return {
+        harnesses: [],
+        harnessesLoading: false,
+        harnessesError: null,
+        modelsLoading: false,
+      };
+    }
+    const harnesses = queryMock.catalogHarnessesByClient.has(client)
+      ? (queryMock.catalogHarnessesByClient.get(client) ?? [])
+      : catalogHarnessesForRender();
     return {
-      harnesses: activity.enabled ? catalogHarnessesForRender() : [],
+      harnesses: activity.enabled ? harnesses : [],
       harnessesLoading: activity.enabled && queryMock.catalogHarnessesLoading,
       harnessesError: null,
       modelsLoading: activity.enabled && queryMock.modelsLoading,
     };
   },
-  useRefreshHarnessCatalog: () => async () => {},
+  useRefreshHarnessCatalogForClient: (client: string | null) => () => {
+    queryMock.calls.refresh.push(client);
+    return Promise.resolve();
+  },
 }));
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
@@ -919,14 +1027,21 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsLoading = false;
     queryMock.providerStates = [];
     queryMock.providerStatesByClient = new Map();
+    queryMock.harnessesByClient = new Map();
+    queryMock.modelsByClient = new Map();
+    queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
+    queryMock.calls.harnessClients = [];
     queryMock.calls.catalog = [];
+    queryMock.calls.catalogClients = [];
     queryMock.calls.models = [];
+    queryMock.calls.modelClients = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
     queryMock.calls.ensurePack = [];
+    queryMock.calls.refresh = [];
     profileUsageHookMock.runTargetHostIds = [];
     profileUsageHookMock.calls = [];
     openSettingsMock.mockClear();
@@ -1466,6 +1581,61 @@ describe("<HarnessModelPicker />", () => {
       enabled: true,
       subscribed: true,
     });
+  });
+
+  // S11 coverage: the picker's harness rail, model rows, and refresh button
+  // all resolve through the composer's run-target host, never the app-wide
+  // default - a regression back to the old default-host resolution would
+  // render THIS test's `installCatalog()` fixture (GPT-5.5 etc.) instead of
+  // host-b's, and would invalidate "default" instead of "host-b" on refresh.
+  it("resolves the rail, model rows, and refresh target from the run-target host (host-b), not the app-wide default", async () => {
+    const hostBModels = [
+      model({ slug: "host-b-model", label: "Host B Model" }),
+    ];
+    queryMock.harnessesByClient.set("host-b", [CODEX_HARNESS]);
+    queryMock.catalogHarnessesByClient.set("host-b", [
+      catalogHarness(CODEX_HARNESS, hostBModels),
+    ]);
+    queryMock.modelsByClient.set("host-b", new Map([["codex", hostBModels]]));
+    queryMock.providerStatesByClient.set("host-b", [
+      providerCliStateWithProfiles({ providerId: "codex", profiles: [] }),
+    ]);
+
+    renderPicker({
+      createProfileHostId: "host-b",
+      selection: {
+        harnessId: "codex",
+        modelSlug: "host-b-model",
+        profileId: null,
+      },
+    });
+
+    // The trigger and the rows reflect host-b's catalog - never the default
+    // host's `installCatalog()` fixture, which has no "Host B Model" and no
+    // "host-b-model" slug.
+    await openPickerByTriggerName(/^Host B Model/);
+    expect(screen.getByRole("option", { name: /Host B Model/ })).not.toBeNull();
+    expect(screen.queryByRole("option", { name: /GPT-5\.5/ })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh providers & models" }),
+    );
+
+    await waitFor(() => expect(queryMock.calls.refresh.at(-1)).toBe("host-b"));
+    expect(queryMock.calls.refresh).not.toContain("default");
+  });
+
+  it("resolves the rail, model rows, and refresh target from the app-wide default host when runTargetHostId is null (unchanged behavior)", async () => {
+    renderPicker(undefined);
+
+    await openPicker();
+    expect(screen.getByRole("option", { name: /GPT-5\.5/ })).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh providers & models" }),
+    );
+
+    await waitFor(() => expect(queryMock.calls.refresh.at(-1)).toBe("default"));
   });
 
   it("hides unavailable providers that are not recoverable from the rail", async () => {
@@ -2412,22 +2582,31 @@ describe("<HarnessModelPicker />", () => {
     expect(useProviderProfileAddFlowStore.getState().hostId).toBe("tab-host-1");
   });
 
-  it("keeps usage identity-only when the run target's profile identities differ from the visible default-host rows", async () => {
-    const visibleProfiles = claudeProfilesForDropdown();
+  // Before the rail was host-scoped this asserted `profiles: []`: the rail's
+  // visible rows came from the default host ("Work") while the dropdown's
+  // comparison query read the tab host ("Remote Work"), and
+  // `resolveHostConsistentUsageProfiles` collapsed the disagreement to
+  // identity-only. Both now read `tab-host-1`, so the default host's
+  // divergent snapshot is simply never consulted - and with the identities
+  // still unresolved (`identity: null`, the fixture default) the join no
+  // longer demands a resolved account to recognize the same host's rows.
+  it("feeds usage comparison the run target's own unresolved-identity rows and ignores a divergent default-host snapshot", async () => {
+    const defaultHostProfiles = claudeProfilesForDropdown();
+    const targetProfiles = defaultHostProfiles.map((profile) =>
+      profile.kind === "managed"
+        ? { ...profile, label: "Remote Work" }
+        : { ...profile },
+    );
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles,
+        profiles: defaultHostProfiles,
       }),
     ];
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles.map((profile) =>
-          profile.kind === "managed"
-            ? { ...profile, label: "Remote Work" }
-            : profile,
-        ),
+        profiles: targetProfiles,
       }),
     ]);
 
@@ -2439,39 +2618,59 @@ describe("<HarnessModelPicker />", () => {
       (call) => call.providerId === "claude-code",
     );
     expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
-    expect(comparisonCall?.profiles).toEqual([]);
+    expect(targetProfiles.every((profile) => profile.identity === null)).toBe(
+      true,
+    );
+    // The target host's rows verbatim - "Remote Work", not the default
+    // host's "Work", and not `[]`.
+    expect(comparisonCall?.profiles).toEqual(targetProfiles);
+    expect(comparisonCall?.profiles).not.toEqual(defaultHostProfiles);
   });
 
-  it("keeps usage identity-only for matching labels backed by different target accounts", async () => {
-    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+  // Historically this modeled "same label, different underlying account":
+  // the rail's OWN visible profiles came from the app-wide DEFAULT host
+  // while `PickerProfileDropdown`'s usage-comparison query already scoped to
+  // an explicit `runTargetHostId`, so the two could genuinely disagree and
+  // `resolveHostConsistentUsageProfiles` existed to collapse that to
+  // identity-only. This migration makes the rail ALSO resolve through
+  // `runTargetHostId` (`useProvidersListForClient(runTargetClient, …)`
+  // replacing the old unscoped `useProvidersList()`), and every current
+  // caller passes the identical id for `createProfileHostId` /
+  // `runTargetHostId` - so the rail and the dropdown's own comparison query
+  // now always read the SAME host-scoped `providers.list` response. The
+  // divergence this test modeled is therefore no longer reachable through
+  // this component; rewritten to guard the new invariant it implies instead
+  // - a DIFFERENT default-host snapshot must never leak into the comparison
+  // once a run target is set, and the dropdown must resolve real usage data
+  // (not identity-only) once the two consistently-scoped reads agree.
+  it("shows real usage data, not identity-only, once the rail and the profile dropdown both resolve through the same run-target host", async () => {
+    const targetProfiles = claudeProfilesForDropdown().map((profile) => ({
       ...profile,
       identity: {
-        email: `${profile.profileId}@example.com`,
+        email: `${profile.profileId}@target.example.com`,
         tier: "pro",
-        accountUuid: `${profile.profileId}-local-account`,
+        accountUuid: `${profile.profileId}-target-account`,
       },
     }));
+    // A DIFFERENT default-host identity, proof it is never consulted once
+    // `createProfileHostId`/`runTargetHostId` name an explicit target.
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles,
+        profiles: claudeProfilesForDropdown().map((profile) => ({
+          ...profile,
+          identity: {
+            email: `${profile.profileId}@default.example.com`,
+            tier: "pro",
+            accountUuid: `${profile.profileId}-default-account`,
+          },
+        })),
       }),
     ];
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles.map((profile) =>
-          profile.kind === "managed"
-            ? {
-                ...profile,
-                identity: {
-                  email: "remote@example.com",
-                  tier: "pro",
-                  accountUuid: "remote-account",
-                },
-              }
-            : profile,
-        ),
+        profiles: targetProfiles,
       }),
     ]);
 
@@ -2483,21 +2682,37 @@ describe("<HarnessModelPicker />", () => {
       (call) => call.providerId === "claude-code",
     );
     expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
-    expect(comparisonCall?.profiles).toEqual([]);
+    // The real target-host identities, not the default host's (proving no
+    // cross-host leakage) and not emptied to identity-only (proving the
+    // rail/dropdown agreement is recognized as consistent).
+    expect(comparisonCall?.profiles).toEqual(targetProfiles);
   });
 
-  it("keeps cross-host usage identity-only while both account identities are unresolved", async () => {
-    const visibleProfiles = claudeProfilesForDropdown();
+  // The second arm of the retired resolved-identity requirement: a RESOLVED
+  // identity object that carries no account key (`accountUuid` and `email`
+  // both null) used to be "unproven" on an explicit run target and emptied
+  // the whole dropdown to identity-only. Same host on both sides now, so the
+  // structural compare accepts it and the target's summaries flow through.
+  it("feeds usage comparison the run target's summaries for profiles whose resolved identity carries no account key", async () => {
+    const targetProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: { email: null, tier: "max", accountUuid: null },
+      rateLimitStatus:
+        profile.kind === "managed" ? ("near_limit" as const) : ("ok" as const),
+      usageUpdatedAt: 42,
+    }));
+    // Default host: same profiles, unresolved and never-checked - proof the
+    // summaries below are the target's, not this snapshot's.
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles,
+        profiles: claudeProfilesForDropdown(),
       }),
     ];
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        profiles: visibleProfiles.map((profile) => ({ ...profile })),
+        profiles: targetProfiles,
       }),
     ]);
 
@@ -2509,7 +2724,46 @@ describe("<HarnessModelPicker />", () => {
       (call) => call.providerId === "claude-code",
     );
     expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
-    expect(comparisonCall?.profiles).toEqual([]);
+    expect(comparisonCall?.profiles).toEqual(targetProfiles);
+  });
+
+  // The default (`null`) target never required a resolved identity; an
+  // explicit target now behaves the same. Both arms of the old asymmetry,
+  // side by side, so a future "tighten it back for tabs only" shows up here.
+  it("gives an explicit run target and the default target the same unresolved-identity usage rows", async () => {
+    const unresolvedProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: unresolvedProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: unresolvedProfiles.map((profile) => ({ ...profile })),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const tabCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(tabCall?.runTargetHostId).toBe("tab-host-1");
+    expect(tabCall?.profiles).toEqual(unresolvedProfiles);
+    cleanup();
+    profileUsageHookMock.calls = [];
+
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const defaultCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(defaultCall?.runTargetHostId).toBeNull();
+    expect(defaultCall?.profiles).toEqual(unresolvedProfiles);
   });
 
   it("keeps unresolved usage available when the picker and run target share the default host", async () => {
@@ -2550,14 +2804,59 @@ describe("<HarnessModelPicker />", () => {
     queryMock.unresolvedHostIds.add("unreachable-host");
 
     renderPicker({ createProfileHostId: "unreachable-host" });
-    await openPicker();
-    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    // The run-target client never resolves, so every `…ForClient` read
+    // (harnesses, catalog, providers) is disabled - there is no cached
+    // catalog to browse at all, not even the default host's, so the trigger
+    // itself reflects "nothing resolved" rather than a real model label.
+    await openPickerByTriggerName("Select model");
 
-    const comparisonCall = profileUsageHookMock.calls.find(
-      (call) => call.providerId === "claude-code",
-    );
-    expect(comparisonCall?.runTargetHostId).toBe("unreachable-host");
-    expect(comparisonCall?.profiles).toEqual([]);
+    // The rail's provider list comes through the SAME unresolved run-target
+    // client, so `profilesByHarnessId` is empty for every provider - never
+    // the default host's cached list. Under the 2-profile progressive-
+    // disclosure gate the profile dropdown never mounts at all, so the
+    // usage-comparison hook it owns is never invoked for "claude-code" - not
+    // invoked with an empty profile list, simply never invoked.
+    expect(screen.queryByTestId("profile-dropdown-content")).toBeNull();
+    expect(
+      profileUsageHookMock.calls.find(
+        (call) => call.providerId === "claude-code",
+      ),
+    ).toBeUndefined();
+  });
+
+  // The trigger's `isLoading` swaps `HarnessIcon` for `MutedAgentSpinner`
+  // (`harness-model-trigger.tsx`), which carries neither a `data-testid`
+  // (`MutedAgentSpinner` always passes `testId: undefined`) nor a
+  // distinguishing `aria-*` attribute (both the icon and the spinner render
+  // `aria-hidden="true"`). Its dots-preset span is the only element in the
+  // trigger with `tabular-nums` in its class list, so that is the marker used
+  // below rather than relying on `HarnessIcon`'s SVG (present precisely when
+  // the spinner is NOT).
+  function triggerShowsLoadingSpinner(trigger: HTMLElement): boolean {
+    return trigger.querySelector(".tabular-nums") !== null;
+  }
+
+  it("never shows the trigger's loading spinner when the run-target client is unresolved (finding #2), but does when it's resolved and genuinely pending", () => {
+    // Unresolved run-target client: `harnessesQueryPending`'s `runTargetClient
+    // !== null` guard must suppress the spinner even though the mocked
+    // harnesses query is flagged loading - a null client can never actually
+    // be "pending" a fetch that will never start.
+    queryMock.harnessesLoading = true;
+    queryMock.unresolvedHostIds.add("unreachable-host");
+    renderPicker({ createProfileHostId: "unreachable-host" });
+    const unresolvedTrigger = screen.getByRole("button", {
+      name: "Select model",
+    });
+    expect(triggerShowsLoadingSpinner(unresolvedTrigger)).toBe(false);
+    cleanup();
+
+    // Guard against over-correcting the fix into "never show the spinner":
+    // a RESOLVED run-target client with genuinely pending harnesses must
+    // still show it.
+    queryMock.harnessesLoading = true;
+    renderPicker(undefined);
+    const resolvedTrigger = screen.getByRole("button", { name: /^GPT-5\.5/ });
+    expect(triggerShowsLoadingSpinner(resolvedTrigger)).toBe(true);
   });
 
   it("feeds usage comparison the run target's summaries when profile identities match", async () => {
@@ -2784,7 +3083,13 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    // Target host: DOES advertise OAuth login capability.
+    // Target host: DOES advertise OAuth login capability. The rail's own
+    // visible profiles now ALSO resolve through `runTargetHostId` (this
+    // migration; it used to read the app-wide default's `providers.list`
+    // unconditionally), so this fixture needs 2+ profiles of its own for the
+    // dropdown - and thus the "Create new profile" row - to render at all;
+    // otherwise the picker falls back to the single-profile ambient-auth
+    // line and the row this test targets never exists to click.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -2794,7 +3099,7 @@ describe("<HarnessModelPicker />", () => {
           codePaste: null,
           terminalLogin: null,
         },
-        profiles: [],
+        profiles: claudeProfilesForDropdown(),
       }),
     ]);
     renderPicker({ createProfileHostId: "tab-host-1" });
@@ -2824,12 +3129,14 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    // Target host: no OAuth login capability.
+    // Target host: no OAuth login capability. See the sibling "enables…"
+    // test above for why this needs 2+ profiles of its own now that the
+    // rail's visible profiles also resolve through `runTargetHostId`.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
         loginCapability: null,
-        profiles: [],
+        profiles: claudeProfilesForDropdown(),
       }),
     ]);
     renderPicker({ createProfileHostId: "tab-host-1" });
