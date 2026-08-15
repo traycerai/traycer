@@ -260,12 +260,18 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
     queryEnabled: true,
     resumeDetachedDraft: true,
   });
+  // A mounted section showing NO content - pending for a key with no data
+  // yet (a "Load Full" re-ask), or an error - drops the patch it registered
+  // before: past "Load Full" the truncated bytes will never render again, so
+  // leaving them indexed would have find match text that is not in the DOM
+  // and park navigation on a skeleton or the error block. Retention is for
+  // UNMOUNTED rows only (see `unregisterLoadedPatch`).
+  useEffect(() => {
+    if (!displayedDiffPending) return;
+    bundleFindRegistration.unregisterLoadedPatch(props.bundleFindFileId);
+  }, [bundleFindRegistration, displayedDiffPending, props.bundleFindFileId]);
   useEffect(() => {
     if (displayedDiffError === null) return;
-    // The error block is the only thing on screen now: drop the retained
-    // patch too, or a "Load Full" that fails after a truncated diff was shown
-    // leaves find matching text that is no longer in the DOM (see
-    // `unregisterLoadedPatch`).
     bundleFindRegistration.unregisterLoadedPatch(props.bundleFindFileId);
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,

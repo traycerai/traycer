@@ -705,7 +705,91 @@ describe("<PrDiffTile /> bundle find", () => {
     expect(message).toMatch(/failed/u);
     expect(message).not.toMatch(/truncated/u);
   });
+
+  it("drops a retained truncated patch from find while 'Load Full' is still pending", async () => {
+    // Past "Load Full" the section will never render the truncated bytes
+    // again (the approval only moves forward), so they are dead for find
+    // from the moment the new query key is pending - not only once it fails.
+    // The tail token appears ONLY in the full patch, so the counts tell the
+    // three phases apart: 1 (truncated shown) → 0 (skeleton) → 2 (full).
+    const TRUNCATED_TOKEN = "SharedToken";
+    const TAIL_TOKEN = "TailOnlyToken";
+    const files = [summaryFile({ path: "src/slow.ts" })];
+    const fullFetch = deferred<PrGetLocalFileDiffResponse>();
+    tabHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "pr.getLocalDiffSummary")
+          return Promise.resolve(summaryOkWithFiles(files));
+        if (method === "pr.getLocalFileDiff") {
+          if (requestByteBudget(params) === null) return fullFetch.promise;
+          return Promise.resolve({
+            ...fileDiffOk(patchWithNeedle("src/slow.ts", TRUNCATED_TOKEN)),
+            isTruncated: true,
+            truncatedAfterBytes: 64,
+          });
+        }
+        return Promise.reject(new Error(`unexpected method ${method}`));
+      },
+    );
+    const { node } = await renderTile({
+      queryClient: makeQueryClient(),
+      collapsedFilePaths: null,
+    });
+    await screen.findByTestId("diff-content");
+
+    search(node.instanceId, TRUNCATED_TOKEN);
+    expect(tileSnapshot(node.instanceId).total).toBe(1);
+    act(() => {
+      useTileFindStore.getState().close(node.instanceId);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load Full" }));
+    await screen.findByTestId("diff-content-loading-skeleton");
+
+    search(node.instanceId, TRUNCATED_TOKEN);
+    expect(tileSnapshot(node.instanceId).total).toBe(0);
+    expect(tileSnapshot(node.instanceId).coverageMessage ?? "").not.toMatch(
+      /truncated/u,
+    );
+    act(() => {
+      useTileFindStore.getState().close(node.instanceId);
+    });
+
+    const fullPatch = [
+      `diff --git a/src/slow.ts b/src/slow.ts`,
+      `--- a/src/slow.ts`,
+      `+++ b/src/slow.ts`,
+      "@@ -1,2 +1,2 @@",
+      "-const label = 'Old';",
+      `+const label = '${TRUNCATED_TOKEN}';`,
+      "-const tail = 'OldTail';",
+      `+const tail = '${TAIL_TOKEN} ${TRUNCATED_TOKEN}';`,
+      "",
+    ].join("\n");
+    await act(async () => {
+      fullFetch.resolve(fileDiffOk(fullPatch));
+      await fullFetch.promise;
+    });
+    await screen.findByTestId("diff-content");
+
+    search(node.instanceId, TRUNCATED_TOKEN);
+    expect(tileSnapshot(node.instanceId).total).toBe(2);
+    expect(tileSnapshot(node.instanceId).coverageMessage).toBeNull();
+  });
 });
+
+// A promise the test settles by hand, so a request can be held in its
+// pending state while the tile is inspected.
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve: (value: T) => resolve(value) };
+}
 
 function requestByteBudget(params: unknown): number | null | undefined {
   if (typeof params !== "object" || params === null) return undefined;

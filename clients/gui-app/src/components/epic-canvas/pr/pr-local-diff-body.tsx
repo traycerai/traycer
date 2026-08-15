@@ -768,17 +768,26 @@ function PrLocalFileDiffContent(props: {
   // registers itself from `PrPatchContent`, and a later success supersedes a
   // registered failure in the session's coverage counts.
   //
-  // A failure also UNREGISTERS whatever this section registered before: the
-  // session retains a loaded patch past its unmount on purpose, and a
-  // retained patch outranks any coverage state - so a "Load Full" that fails
-  // after a truncated patch was shown (a new query key, no data of its own)
-  // would otherwise leave find matching text that is not in the DOM and
-  // calling the file truncated rather than failed.
+  // A section that is mounted but shows NO content - a query pending for a
+  // key that has no data yet, an error, an `unavailable` answer - also
+  // UNREGISTERS whatever it registered before. The session retains a loaded
+  // patch past its section's UNMOUNT on purpose (the row can remount and
+  // show those bytes again), and a retained patch outranks any coverage
+  // state; but a mounted section past "Load Full" will never render the
+  // truncated bytes again - the approval only moves forward - so from the
+  // moment the new key is pending they are dead for this comparison, and
+  // leaving them indexed would have find match text that is not in the DOM,
+  // report the file as truncated rather than loading/failed, and park
+  // navigation on a skeleton. Registered ⇔ renderable by this section, or
+  // retained after its unmount.
   const responseBinary = response?.kind === "diff" && response.isBinary;
   const responseFailed = query.error !== null || unavailableReason !== null;
+  const contentAbsent = query.isPending || responseFailed;
   useEffect(() => {
-    if (responseFailed) {
+    if (contentAbsent) {
       bundleFindRegistration.unregisterLoadedPatch(bundleFindFileId);
+    }
+    if (responseFailed) {
       bundleFindRegistration.registerCoverageState(bundleFindFileId, "failed");
       return;
     }
@@ -788,6 +797,7 @@ function PrLocalFileDiffContent(props: {
   }, [
     bundleFindFileId,
     bundleFindRegistration,
+    contentAbsent,
     responseBinary,
     responseFailed,
   ]);
