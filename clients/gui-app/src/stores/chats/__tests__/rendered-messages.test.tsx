@@ -123,6 +123,7 @@ function claudeSessionAnchor(
       secondaryWorkspaces: [],
     },
     claudeMessageUuid: "claude-message-1",
+    turnTailUuid: null,
     createdAt: 1000,
     coveredUntilMessageId: null,
   };

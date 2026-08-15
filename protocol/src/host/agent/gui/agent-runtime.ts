@@ -1039,6 +1039,36 @@ export type UserMessageAnchorResolvedEvent = z.infer<
   typeof userMessageAnchorResolvedEventSchema
 >;
 
+/**
+ * Advances the durable turn-tail on a user message's session anchor while the
+ * turn is still streaming (see `turnTailUuid` on the persisted Claude anchor).
+ * Emitted per provider transcript row, so a crash mid-turn leaves the tail at
+ * the last row the host actually observed. Host-internal: the chat session
+ * consumes it before the blockDelta broadcast, so it never reaches the wire
+ * and needs no subscribe-version freeze entry.
+ */
+export const userMessageAnchorTailUpdatedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("user_message.anchor_tail_updated"),
+  messageId: z.string(),
+  harnessId: z.literal("claude"),
+  // Session the tail row belongs to. A tail is only meaningful on the anchor
+  // that names the same session; the consumer drops a mismatch instead of
+  // stitching a row from one transcript onto an anchor for another.
+  sessionId: z.string(),
+  // Null CLEARS the recorded tail. Emitted when tail ownership moves to a
+  // just-accepted steer: acceptance is stdin-enqueue, but the CLI only
+  // consumes the queued message at its next boundary, so rows emitted in
+  // that window still belong to the PREVIOUS message. Freezing the previous
+  // tail at hand-off would cut its slice early; clearing it hands the slice
+  // back to the boundary scan, which stops exactly at the steer's
+  // queued_command attachment row.
+  tailUuid: z.string().nullable(),
+});
+export type UserMessageAnchorTailUpdatedEvent = z.infer<
+  typeof userMessageAnchorTailUpdatedEventSchema
+>;
+
 export const turnCompletedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("turn.completed"),
@@ -1200,6 +1230,7 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   workflowCompletedEventSchema,
   providerNoticeUpsertEventSchema,
   imageResolutionUpdatedEventSchema,
+  userMessageAnchorTailUpdatedEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 

@@ -160,6 +160,24 @@ export const claudeChatSessionAnchorSchema = z.object({
   sessionId: z.string(),
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   claudeMessageUuid: z.string(),
+  // Last transcript row uuid of this message's turn slice, recorded live from
+  // the stream (monotone last-write-wins) rather than re-derived later from
+  // the transcript. `claudeMessageUuid` marks where the turn STARTS; this
+  // marks where it ENDS, which is what a rewind fork must slice at. It is a
+  // recorded fact where the fallback boundary scan is a best-effort
+  // classification of raw rows - the host prefers the FURTHEST endpoint the
+  // two can prove, so a tail that went stale (e.g. a crash after later rows
+  // were written) extends rather than truncates. The scan itself is
+  // compact-proof: it runs over raw transcript rows, which a `/compact`
+  // re-root orphans from the parent chain but never removes from the file
+  // (only the pre-fix chain-walk view lost them). For a message closed out
+  // by a mid-turn steer this is CLEARED, not frozen - steer acceptance is
+  // stdin-enqueue, so rows in the enqueue window still belong to the
+  // previous message and only the scan (which stops at the steer's
+  // queued_command attachment row) knows the true boundary. `null`: cleared
+  // by hand-off, anchors persisted before this field existed, or a turn that
+  // died before any row streamed - all resolve via the scan alone.
+  turnTailUuid: z.string().nullable().default(null),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
   ...profileSnapshotFields,
@@ -451,3 +469,49 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   huggingFaceChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
+
+// ── Wire-freeze variant (pre-turnTailUuid) ──────────────────────────────────
+// Hand-frozen copy of the claude anchor from before `turnTailUuid` existed.
+// Bound (via `userMessageSchemaPreTurnTail`) to the released
+// `chat.subscribe@1.6` serverFrames, whose surface is frozen EXACTLY by
+// `chat-subscribe-v16-surface-compat.test.ts` - the tolerance-based
+// compat-exception that covers 1.0-1.5 does not apply to that exact freeze.
+// Field-for-field hand copy, NOT `.omit()`, so a future anchor field cannot
+// silently leak onto the frozen line.
+export const claudeChatSessionAnchorSchemaPreTurnTail = z.object({
+  harnessId: z.literal("claude"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  claudeMessageUuid: z.string(),
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+
+// Non-claude variants reuse their live shapes: the pre-turn-tail freeze point
+// only concerns the claude anchor.
+export const chatSessionAnchorSchemaPreTurnTail = z.discriminatedUnion(
+  "harnessId",
+  [
+    claudeChatSessionAnchorSchemaPreTurnTail,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+  ],
+);
