@@ -1181,6 +1181,71 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces when a terminal notification row is adopted by its provider turn", async () => {
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-adopted-resume-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Reconnect/batched snapshot: the matching turn.started and terminal
+      // events arrive together, so the row keeps its id, stays terminal, and
+      // completion surfaces as the footer flipping on while `completedAt`
+      // moves between two non-null values.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          completedAt: 1_700_000_005_000,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
+    it("does not announce a completedAt shift when the footer state is unchanged", async () => {
+      const userMsg = makeMessage(0, "user");
+      const completedRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, completedRow],
+        scrollStateKey: "aria-canonicalized-timestamp-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // A canonicalized snapshot timestamp re-stamps `completedAt` on an
+      // already-completed row; nothing newly finished, so nothing announces.
+      rerenderMessages([
+        userMsg,
+        { ...completedRow, completedAt: 1_700_000_000_500 },
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
     it("does not announce a footerless history row present at mount", async () => {
       const notificationRow: ChatMessageModel = {
         ...makeMessage(1, "assistant"),
