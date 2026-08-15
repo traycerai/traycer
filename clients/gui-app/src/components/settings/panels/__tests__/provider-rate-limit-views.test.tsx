@@ -6,9 +6,11 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
@@ -21,10 +23,15 @@ import {
   ProviderRateLimitDetail,
 } from "../provider-rate-limit-views";
 
+const openExternalLinkMock = vi.hoisted(() => ({
+  isPending: false,
+  mutate: vi.fn(),
+}));
+
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({
-    mutate: vi.fn(),
-    isPending: false,
+    mutate: openExternalLinkMock.mutate,
+    isPending: openExternalLinkMock.isPending,
   }),
 }));
 
@@ -61,6 +68,7 @@ function formatGrokPeriodDate(epochMs: number): string {
 
 afterEach(() => {
   cleanup();
+  openExternalLinkMock.isPending = false;
 });
 
 describe("CodexRateLimitView (extended fields)", () => {
@@ -959,6 +967,36 @@ describe("OpenCodeRateLimitView", () => {
     render(<OpenCodeRateLimitView data={openCode} />);
     const link = screen.getByRole("link", { name: "Manage Go" });
     expect(link.getAttribute("href")).toBe("https://opencode.ai/auth");
+  });
+
+  it("renders Manage Go as a disabled native button while the runner open is pending", () => {
+    // Regression: with a bound runner the pending state used to stay an
+    // `aria-disabled` href. It must be a real disabled button so the
+    // accessible name stays "Manage Go" and the click target is not an
+    // active anchor.
+    openExternalLinkMock.isPending = true;
+    render(
+      <RunnerHostContext.Provider
+        value={
+          new MockRunnerHost({
+            signInUrl: "https://auth.traycer.test/sign-in",
+            authnBaseUrl: "https://auth.traycer.test",
+            localHost: null,
+            hosts: [],
+            workspaceFolderPickerPaths: undefined,
+            hasLocalHost: undefined,
+            traycerCli: undefined,
+          })
+        }
+      >
+        <OpenCodeRateLimitView data={openCode} />
+      </RunnerHostContext.Provider>,
+    );
+
+    const action = screen.getByRole("button", { name: "Manage Go" });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action instanceof HTMLButtonElement && action.disabled).toBe(true);
+    expect(screen.queryByRole("link", { name: "Manage Go" })).toBeNull();
   });
 });
 
