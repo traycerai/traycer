@@ -93,7 +93,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey("alice@example.com"),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(ALICE_SETTINGS);
     });
   });
@@ -114,7 +114,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(ALICE_SETTINGS);
     });
 
@@ -127,7 +127,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey("bob@example.com"),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(BOB_SETTINGS);
     });
   });
@@ -172,7 +172,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey(null),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toBeNull();
     });
 

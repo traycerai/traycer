@@ -1232,7 +1232,7 @@ describe("<ChatTile />", () => {
 
   it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { "host-test": QUEUED_SETTINGS },
     });
     renderChatTile();
 
@@ -1318,7 +1318,7 @@ describe("<ChatTile />", () => {
 
   it("seeds composer settings from last-used local settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: SESSION_SETTINGS,
+      globalLastRunSettingsByHostId: { "host-test": SESSION_SETTINGS },
     });
     chatHarness.teardown();
     chatHarness.install("owner", []);
@@ -1712,7 +1712,7 @@ describe("<ChatTile />", () => {
 
   it("falls back to client-local last-used settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: UPDATED_QUEUE_SETTINGS,
+      globalLastRunSettingsByHostId: { "host-test": UPDATED_QUEUE_SETTINGS },
     });
 
     renderChatTile();
@@ -1729,10 +1729,10 @@ describe("<ChatTile />", () => {
   it("uses per-epic settings before global settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings("host-test", UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, "host-test", QUEUED_SETTINGS, 2);
 
     renderChatTile();
 
@@ -1748,7 +1748,7 @@ describe("<ChatTile />", () => {
   it("keeps an existing null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, "host-test", QUEUED_SETTINGS, 1);
 
     renderChatTile();
 
@@ -1757,7 +1757,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, "host-test", UPDATED_QUEUE_SETTINGS, 2);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -1770,7 +1770,7 @@ describe("<ChatTile />", () => {
   it("keeps a remounted null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, "host-test", QUEUED_SETTINGS, 1);
 
     const rendered = renderChatTile();
 
@@ -1781,7 +1781,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, "host-test", UPDATED_QUEUE_SETTINGS, 2);
     });
 
     renderChatTile();
@@ -1798,10 +1798,10 @@ describe("<ChatTile />", () => {
   it("seeds composer settings from persisted chat settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings("host-test", UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, "host-test", QUEUED_SETTINGS, 2);
     chatHarness.teardown();
     chatHarness.installWithSettings("owner", [], SESSION_SETTINGS);
 
@@ -1926,16 +1926,18 @@ describe("<ChatTile />", () => {
     });
 
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings(EPIC_ID),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings(EPIC_ID, "host-test"),
     ).toEqual(UPDATED_QUEUE_SETTINGS);
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings("host-test"),
     ).toBeNull();
   });
 
   it("sends next-step clicks as current-setting slash commands during active turns", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { "host-test": QUEUED_SETTINGS },
     });
 
     renderChatTile();
@@ -2191,7 +2193,7 @@ describe("<ChatTile />", () => {
 
   it("sends active permission updates when the toolbar permission changes during a turn", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { "host-test": QUEUED_SETTINGS },
     });
 
     renderChatTile();

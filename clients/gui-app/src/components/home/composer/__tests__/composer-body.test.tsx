@@ -137,6 +137,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     },
     onSettingsChange: null,
     tuiOnly: composerMode === "terminal",
+    hostId: "host-a",
   });
 
   return render(

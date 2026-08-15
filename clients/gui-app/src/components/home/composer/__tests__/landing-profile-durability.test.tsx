@@ -175,6 +175,7 @@ function createLandingToolbarStore(
     },
     onSettingsChange: null,
     tuiOnly: false,
+    hostId: "host-a",
   });
 }
 

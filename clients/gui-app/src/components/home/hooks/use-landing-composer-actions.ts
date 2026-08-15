@@ -19,11 +19,15 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
@@ -347,13 +351,15 @@ export function useLandingComposerActions(): LandingComposerActions {
 
       // The host request remains a one-shot mutation. Local handoff state is
       // prepared before it, but the draft/layout is deliberately untouched
-      // until this exact runtime's create reports success.
+      // until this exact runtime's create reports success. Last-run memory is
+      // keyed by the host the chat is created on (`activeHostId`, resolved
+      // and null-guarded above).
       useComposerRunSettingsStore
         .getState()
-        .setGlobalRunSettings(settings, now);
+        .setGlobalRunSettings(activeHostId, settings, now);
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(epicId, settings, now);
+        .setEpicRunSettings(epicId, activeHostId, settings, now);
       rememberLandingWorktreeIntent(
         epicId,
         workspaceContext.worktreeIntent,
@@ -779,7 +785,13 @@ function ensureSubmissionDraft(
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore
     .getState()
-    .createDraft(useComposerRunSettingsStore.getState().globalLastRunSettings);
+    .createDraft(
+      useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(
+          getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+        ),
+    );
   useLandingDraftStore
     .getState()
     .setDraftContent(createdDraftId, content, null);
@@ -929,11 +941,16 @@ function readLandingWorkspaceContext(
       draftId: exactDraftId,
     };
   }
-  const globalState = useWorkspaceFoldersStore.getState();
+  // The launch host's own folder bucket - the same `hostId` the cached
+  // default-intent read below is keyed by.
+  const globalBucket = selectWorkspaceFoldersBucket(
+    useWorkspaceFoldersStore.getState(),
+    hostId,
+  );
   const globalWorkspace = {
-    folders: globalState.folders,
-    folderInfoByPath: globalState.folderInfoByPath,
-    primaryPath: globalState.primaryPath,
+    folders: globalBucket.folders,
+    folderInfoByPath: globalBucket.folderInfoByPath,
+    primaryPath: globalBucket.primaryPath,
   };
   return {
     ...canonicalLaunchWorkspace(
@@ -941,7 +958,7 @@ function readLandingWorkspaceContext(
       stagedWorktreeIntent,
       readCachedDefaultWorktreeIntent(queryClient, hostId, globalWorkspace),
     ),
-    workspaceFolderInfoByPath: globalState.folderInfoByPath,
+    workspaceFolderInfoByPath: globalBucket.folderInfoByPath,
     worktreeIntentSuspended,
     draftId: null,
   };

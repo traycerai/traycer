@@ -230,13 +230,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
   } = props;
-  const resolvedMentionRoots = useWorkspaceMentionRoots(
-    mentionRoots,
-    fallbackToGlobalMentionRoots,
-  );
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    fallbackToGlobalMentionRoots,
+    tabHostId,
+  );
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
@@ -311,7 +312,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
-    { hostClient, tuiOnly: false },
+    { hostClient, hostId: tabHostId, tuiOnly: false },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);

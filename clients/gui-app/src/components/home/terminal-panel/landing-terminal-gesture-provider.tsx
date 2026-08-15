@@ -76,7 +76,9 @@ export function LandingTerminalGestureProvider(props: {
     () => ({ surface: "landing", draftId: effectiveDraftId }),
     [effectiveDraftId],
   );
-  const workspace = useHomeWorkspaceSource(stagingKey, null);
+  // The landing surface follows the app-wide active host, so its "global"
+  // workspace representation reads that host's folder bucket.
+  const workspace = useHomeWorkspaceSource(stagingKey, null, activeHostId);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
   const liveWorkspacePaths = workspace.folders;
 

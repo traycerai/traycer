@@ -1,5 +1,5 @@
 import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -16,15 +16,50 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 
+const HOST_A = "host-a";
+
+// `useLandingComposerMentionRoots` follows the app-wide active host via
+// `useReactiveActiveHostId()` to scope its global-folders fallback. No
+// `<TabHostProvider>`/`<HostRuntimeProvider>` is mounted in this suite, so
+// left unmocked it always resolves `null` (empty global folders). Mock the
+// narrow leaf hook module so the landing composer suite below can seed and
+// read the SAME host's bucket the hook resolves against.
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-a",
+}));
+
+// `useLandingDraftStore.createDraft` separately snapshots the workspace of
+// the ACTIVE host resolved imperatively via
+// `getHostBindingSnapshot()?.hostClient.getActiveHostId()` (see
+// `landing-draft-store.ts`). Left unmocked that is always `null` too, so a
+// draft created in this suite would seed an empty workspace even though the
+// reactive hook above resolves "host-a" - pin both resolution paths to the
+// SAME host id. Only `getHostBindingSnapshot` is overridden; every other
+// export is preserved via the `importOriginal` spread.
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () => ({
+      hostClient: { getActiveHostId: () => "host-a" },
+    }),
+  };
+});
+
 function setGlobalFolders(folders: ReadonlyArray<string>): void {
-  useWorkspaceFoldersStore.setState({ folders });
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [HOST_A]: {
+        folders,
+        folderInfoByPath: {},
+        primaryPath: folders[0] ?? null,
+      },
+    },
+  });
 }
 
 function resetStores(): void {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
@@ -106,37 +141,45 @@ describe("useWorkspaceMentionRoots", () => {
   it("uses the preferred roots when they are non-empty", () => {
     setGlobalFolders(["/global/a"]);
     const { result } = renderHook(() =>
-      useWorkspaceMentionRoots(["/epic/x", "/epic/y"], true),
+      useWorkspaceMentionRoots(["/epic/x", "/epic/y"], true, HOST_A),
     );
     expect(result.current).toEqual(["/epic/x", "/epic/y"]);
   });
 
   it("falls back to the global folders when preferred roots are null (landing composer)", () => {
     setGlobalFolders(["/global/a", "/global/b"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots(null, true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots(null, true, HOST_A),
+    );
     expect(result.current).toEqual(["/global/a", "/global/b"]);
   });
 
   it("falls back to the global folders when preferred roots are empty (binding not loaded yet)", () => {
     setGlobalFolders(["/global/a"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
     expect(result.current).toEqual(["/global/a"]);
   });
 
   it("does not fall back to global folders when an empty source is explicit", () => {
     setGlobalFolders(["/global/a"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], false));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], false, HOST_A),
+    );
     expect(result.current).toEqual([]);
   });
 
   it("returns an empty list when neither preferred nor global folders exist", () => {
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
     expect(result.current).toEqual([]);
   });
 
   it("dedupes and trims the resolved roots", () => {
     const { result } = renderHook(() =>
-      useWorkspaceMentionRoots([" /epic/x ", "/epic/x", ""], true),
+      useWorkspaceMentionRoots([" /epic/x ", "/epic/x", ""], true, HOST_A),
     );
     expect(result.current).toEqual(["/epic/x"]);
   });

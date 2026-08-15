@@ -20,12 +20,10 @@ const PINNED: WorkspaceFolderInfo = {
   hostId: null,
 };
 
+const TEST_HOST_ID = "host-a";
+
 function resetStores(): void {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
 }
@@ -47,7 +45,7 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
       draftId: null,
     };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {
@@ -66,7 +64,7 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
     const draftId = useLandingDraftStore.getState().createDraft(null);
     const stagingKey: WorktreeStagingKey = { surface: "landing", draftId };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {
@@ -86,7 +84,7 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
       draftId: null,
     };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {
