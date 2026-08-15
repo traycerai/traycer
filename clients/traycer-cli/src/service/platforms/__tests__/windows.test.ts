@@ -214,7 +214,7 @@ describe("Windows service stale host cleanup", () => {
     };
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"));
+    await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(calls[0]).toMatchObject({
       command: "schtasks",
@@ -246,7 +246,7 @@ describe("Windows service stale host cleanup", () => {
     };
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"));
+    await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(
       calls
@@ -272,7 +272,7 @@ describe("Windows service stale host cleanup", () => {
     };
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"));
+    await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(
       calls
@@ -297,7 +297,7 @@ describe("Windows service stale host cleanup", () => {
     };
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"));
+    await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(
       calls
@@ -321,7 +321,7 @@ describe("Windows service stale host cleanup", () => {
       command === "powershell.exe" ? success("[]") : success("");
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"));
+    await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
   });

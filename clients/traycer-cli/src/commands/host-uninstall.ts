@@ -11,6 +11,7 @@ import {
   createServiceController,
   serviceLabelFor,
   type ServiceLabel,
+  type StopServiceOptions,
   type UninstallServiceOptions,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
@@ -25,7 +26,7 @@ export interface HostUninstallArgs {
 }
 
 export interface RuntimePurgeStopController {
-  stop(label: ServiceLabel): Promise<void>;
+  stop(label: ServiceLabel, options: StopServiceOptions): Promise<void>;
 }
 
 export interface HostUninstallServiceController extends RuntimePurgeStopController {
@@ -58,7 +59,7 @@ export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
 ): Promise<boolean> {
   try {
-    await args.controller.stop(args.label);
+    await args.controller.stop(args.label, { force: false });
     return true;
   } catch (err) {
     args.logger.warn("Host uninstall service stop failed; preserving runtime", {
