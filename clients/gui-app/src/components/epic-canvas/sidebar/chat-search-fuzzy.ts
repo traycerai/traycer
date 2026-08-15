@@ -66,13 +66,13 @@ function matchRows(
 }
 
 /**
- * Local tree ids whose title matches `query`, expanded to include each match's
- * ancestors so a nested agent stays reachable under its parent.
+ * Local tree ids whose title matches `query` - the raw matches, with no
+ * ancestor expansion.
  *
  * `null` means "no active search" - the caller passes that straight through as
- * the no-filter value, exactly like an inactive filter.
+ * the no-narrowing value, exactly like an inactive filter.
  */
-export function chatSearchVisibleIds(args: {
+export function chatSearchMatchIds(args: {
   readonly query: string;
   readonly nodeById: Readonly<Record<string, TreeNode>>;
   /** Which node types this panel renders; anything else never matches. */
@@ -84,10 +84,7 @@ export function chatSearchVisibleIds(args: {
       ? [{ id: node.id, title: chatSearchTitle(node) }]
       : [],
   );
-  return collectWithAncestors(
-    matchRows(rows, args.query).map((row) => row.id),
-    args.nodeById,
-  );
+  return new Set(matchRows(rows, args.query).map((row) => row.id));
 }
 
 /**
@@ -115,19 +112,39 @@ export function filterCloudChatsBySearch(
 }
 
 /**
- * Intersect the active filter's visible ids with the active search's. Either
- * side may be `null` ("not narrowing"), and two nulls stay null so the tree
- * renders unfiltered.
+ * Intersect the filter's MATCHES with the search's. Either side may be `null`
+ * ("not narrowing"), and two nulls stay null so the tree renders unnarrowed.
+ *
+ * Both inputs must be raw matches, never ancestor-expanded sets. Expanding
+ * first and intersecting after lets a row that matched NEITHER predicate
+ * survive: given a terminal-agent parent with a GUI-chat child, a GUI-only
+ * filter expands to {child, parent} and a search for the parent's title expands
+ * to {parent}, whose intersection is {parent} - a terminal agent rendered under
+ * a GUI-only filter, with the child that actually matched the filter dropped.
+ * Intersecting the matches first correctly yields nothing.
  */
-export function intersectVisibleIds(
-  filterVisibleIds: ReadonlySet<string> | null,
-  searchVisibleIds: ReadonlySet<string> | null,
+export function intersectMatchIds(
+  filterMatchIds: ReadonlySet<string> | null,
+  searchMatchIds: ReadonlySet<string> | null,
 ): ReadonlySet<string> | null {
-  if (searchVisibleIds === null) return filterVisibleIds;
-  if (filterVisibleIds === null) return searchVisibleIds;
+  if (searchMatchIds === null) return filterMatchIds;
+  if (filterMatchIds === null) return searchMatchIds;
   const combined = new Set<string>();
-  for (const id of searchVisibleIds) {
-    if (filterVisibleIds.has(id)) combined.add(id);
+  for (const id of searchMatchIds) {
+    if (filterMatchIds.has(id)) combined.add(id);
   }
   return combined;
+}
+
+/**
+ * Ancestor-expand a combined match set so a nested match stays reachable under
+ * parents that did not themselves match. Call this ONCE, after every narrowing
+ * has been intersected.
+ */
+export function expandMatchesToVisibleIds(
+  matchIds: ReadonlySet<string> | null,
+  nodeById: Readonly<Record<string, TreeNode>>,
+): ReadonlySet<string> | null {
+  if (matchIds === null) return null;
+  return collectWithAncestors([...matchIds], nodeById);
 }

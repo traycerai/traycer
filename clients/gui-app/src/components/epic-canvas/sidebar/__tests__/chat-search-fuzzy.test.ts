@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { TreeNode } from "@/stores/epics/open-epic/types";
 import {
+  chatSearchMatchIds,
   chatSearchTitle,
-  chatSearchVisibleIds,
+  expandMatchesToVisibleIds,
   filterCloudChatsBySearch,
-  intersectVisibleIds,
+  intersectMatchIds,
 } from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
 
 const CHATS_TREE_FILTER = (type: string | null | undefined): boolean =>
@@ -77,7 +78,7 @@ describe("chatSearchTitle", () => {
   });
 });
 
-describe("chatSearchVisibleIds", () => {
+describe("chatSearchMatchIds", () => {
   const nodes = nodeById([
     node({
       id: "c1",
@@ -104,14 +105,14 @@ describe("chatSearchVisibleIds", () => {
     // `null` is the shared "not narrowing" value, not an empty match set - an
     // empty set would blank the tree.
     expect(
-      chatSearchVisibleIds({
+      chatSearchMatchIds({
         query: "",
         nodeById: nodes,
         treeFilter: CHATS_TREE_FILTER,
       }),
     ).toBeNull();
     expect(
-      chatSearchVisibleIds({
+      chatSearchMatchIds({
         query: "   ",
         nodeById: nodes,
         treeFilter: CHATS_TREE_FILTER,
@@ -120,7 +121,7 @@ describe("chatSearchVisibleIds", () => {
   });
 
   it("matches a title fuzzily and excludes non-matches", () => {
-    const visible = chatSearchVisibleIds({
+    const visible = chatSearchMatchIds({
       query: "handshake",
       nodeById: nodes,
       treeFilter: CHATS_TREE_FILTER,
@@ -130,7 +131,7 @@ describe("chatSearchVisibleIds", () => {
   });
 
   it("tolerates a typo", () => {
-    const visible = chatSearchVisibleIds({
+    const visible = chatSearchMatchIds({
       query: "sidbar",
       nodeById: nodes,
       treeFilter: CHATS_TREE_FILTER,
@@ -141,7 +142,7 @@ describe("chatSearchVisibleIds", () => {
   it("never matches a node the panel does not render", () => {
     // "Auth spec" would score against "auth", but an artifact is not an agent
     // and must not be revealed by the agent panel's search.
-    const visible = chatSearchVisibleIds({
+    const visible = chatSearchMatchIds({
       query: "auth",
       nodeById: nodes,
       treeFilter: CHATS_TREE_FILTER,
@@ -149,20 +150,38 @@ describe("chatSearchVisibleIds", () => {
     expect(visible?.has("a1")).toBe(false);
   });
 
-  it("includes a match's ancestors so a nested agent stays reachable", () => {
+  it("returns only matches, without their ancestors", () => {
+    // Ancestor expansion happens once, AFTER every narrowing is intersected.
+    // A path ancestor emitted here would be indistinguishable from a match.
     const nested = nodeById([
       node({ id: "p1", title: "Parent agent", type: "chat", parentId: null }),
       node({ id: "c9", title: "Nested zebra", type: "chat", parentId: "p1" }),
     ]);
-    const visible = chatSearchVisibleIds({
+    const matches = chatSearchMatchIds({
       query: "zebra",
       nodeById: nested,
       treeFilter: CHATS_TREE_FILTER,
     });
+    expect(matches === null ? [] : [...matches]).toEqual(["c9"]);
+  });
+});
+
+describe("expandMatchesToVisibleIds", () => {
+  const nested = nodeById([
+    node({ id: "p1", title: "Parent agent", type: "chat", parentId: null }),
+    node({ id: "c9", title: "Nested zebra", type: "chat", parentId: "p1" }),
+  ]);
+
+  it("keeps a nested match reachable by adding its path", () => {
+    const visible = expandMatchesToVisibleIds(new Set(["c9"]), nested);
     expect(visible?.has("c9")).toBe(true);
-    // The parent does not match the query; it is present only as the path to
-    // the match. Dropping it would hide the match behind an unrendered branch.
+    // The parent matched nothing; it is present only as the path to the match.
+    // Dropping it would hide the match behind an unrendered branch.
     expect(visible?.has("p1")).toBe(true);
+  });
+
+  it("passes null through as 'not narrowing'", () => {
+    expect(expandMatchesToVisibleIds(null, nested)).toBeNull();
   });
 });
 
@@ -188,22 +207,61 @@ describe("filterCloudChatsBySearch", () => {
   });
 });
 
-describe("intersectVisibleIds", () => {
+describe("intersectMatchIds", () => {
   it("passes either side through when the other is not narrowing", () => {
     const filter = new Set(["a", "b"]);
-    expect(intersectVisibleIds(filter, null)).toBe(filter);
+    expect(intersectMatchIds(filter, null)).toBe(filter);
     const search = new Set(["b"]);
-    expect(intersectVisibleIds(null, search)).toBe(search);
-    expect(intersectVisibleIds(null, null)).toBeNull();
+    expect(intersectMatchIds(null, search)).toBe(search);
+    expect(intersectMatchIds(null, null)).toBeNull();
   });
 
   it("intersects when both narrow", () => {
     // A row must survive BOTH the filter chips and the query; the union would
     // let search re-reveal rows the filters deliberately hid.
-    const combined = intersectVisibleIds(
+    const combined = intersectMatchIds(
       new Set(["a", "b"]),
       new Set(["b", "c"]),
     );
     expect(combined === null ? [] : [...combined]).toEqual(["b"]);
+  });
+
+  // Regression: intersecting ancestor-EXPANDED sets instead of matches let a
+  // row that satisfied neither predicate survive. A GUI-only filter over a
+  // terminal-agent parent with a GUI-chat child expands to {child, parent};
+  // searching the parent's title expands to {parent}; that intersection is
+  // {parent} - a terminal agent rendered under a GUI-only filter, with the
+  // child that actually matched the filter dropped.
+  it("does not let a path-only ancestor satisfy the other narrowing", () => {
+    const tree = nodeById([
+      node({
+        id: "tui-parent",
+        title: "Deploy runner",
+        type: "terminal-agent",
+        parentId: null,
+      }),
+      node({
+        id: "gui-child",
+        title: "Fix the sidebar",
+        type: "chat",
+        parentId: "tui-parent",
+      }),
+    ]);
+    // The GUI-origin filter matches only the child.
+    const filterMatches = new Set(["gui-child"]);
+    const searchMatches = chatSearchMatchIds({
+      query: "Deploy runner",
+      nodeById: tree,
+      treeFilter: CHATS_TREE_FILTER,
+    });
+    expect(searchMatches === null ? [] : [...searchMatches]).toEqual([
+      "tui-parent",
+    ]);
+
+    const combined = intersectMatchIds(filterMatches, searchMatches);
+    expect(combined === null ? [] : [...combined]).toEqual([]);
+    // And nothing is resurrected by the ancestor pass afterwards.
+    const visible = expandMatchesToVisibleIds(combined, tree);
+    expect(visible === null ? [] : [...visible]).toEqual([]);
   });
 });
