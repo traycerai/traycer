@@ -42,7 +42,7 @@ export function PhaseMigrationSurface(
     >
       <section className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-lg">
         <div className="flex items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-foreground">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-foreground/8 text-foreground">
             {errorMessage !== null ? (
               <span className="text-ui-sm font-semibold">!</span>
             ) : (

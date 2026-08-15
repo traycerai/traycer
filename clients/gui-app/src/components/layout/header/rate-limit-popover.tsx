@@ -1054,7 +1054,7 @@ function RateLimitRail({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex min-h-0 flex-col items-center border-r bg-muted/20 p-1.5">
+    <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
       <div
         role="tablist"
         aria-label="Usage limit providers"
@@ -2101,7 +2101,7 @@ function UnscopedTraycerUsage(): ReactNode {
   const traycerSubscription = useTraycerSubscription();
   if (!traycerSubscription.eligible) return null;
   return (
-    <div className="w-full max-w-full rounded-md border border-border/60 bg-muted/20 p-3">
+    <div className="w-full max-w-full rounded-md border border-border/60 bg-foreground/3 p-3">
       <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
     </div>
   );

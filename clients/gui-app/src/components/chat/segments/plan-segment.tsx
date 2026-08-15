@@ -555,7 +555,8 @@ function planCardTone(status: PlanSegmentModel["planStatus"]): string {
     return "border-emerald-500/25 bg-emerald-500/5";
   }
   if (status === "rejected" || status === "superseded") {
-    return "border-border/35 bg-foreground/3 opacity-85";
+    // muted-fill-ok: plan card tone paints on the chat canvas backdrop, never card/popover
+    return "border-border/35 bg-muted/20 opacity-85";
   }
   return "border-border/45 bg-card";
 }

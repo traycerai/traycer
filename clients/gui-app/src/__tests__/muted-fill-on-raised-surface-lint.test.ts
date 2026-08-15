@@ -17,13 +17,14 @@ import { describe, expect, it } from "vitest";
  * The fix is an alpha of the foreground, which contrasts with whatever
  * surface it lands on by construction - see `clients/gui-app/AGENTS.md`.
  *
- * This guard is deliberately a coarse file-level heuristic rather than a
- * per-element check: a file that renders a raised surface AND names a muted
- * fill is the shape the audit kept finding, and no static rule can resolve
- * which ancestor a given `<div>` actually paints on. That means it can
- * over-report - a file may render a dialog in one branch and legitimately
- * tint a `bg-background` zone in another - so a genuine exception is added
- * to {@link GRANDFATHERED} with a reason rather than fought.
+ * Scope: a file that paints a raised surface somewhere. Whether a given
+ * `<div>` in it actually lands on that surface is not statically decidable,
+ * so a fill that has been traced to a safe surface (`bg-canvas`, or inside
+ * `.canvas-token-scope`, where `--background` remaps to `--canvas` and never
+ * collapses) is kept by annotating it with {@link ALLOW_MARKER} and the
+ * reason. That keeps the exemption ON the line it excuses, next to the
+ * evidence, instead of in a file-level list that silently widens as the file
+ * grows.
  */
 const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -35,59 +36,21 @@ const RAISED_SURFACE =
 const MUTED_FILL = /bg-muted(?!-foreground)/;
 
 /**
- * Files that already paired the two when this guard was written. These are
- * the audit's untriaged tail: each still has to be checked by hand against
- * the surface its fill really lands on, and the ones that turn out to be on
- * `bg-background`/`bg-canvas` are correct as they stand. The list may only
- * shrink - a new entry means a new instance of a bug we have already shipped
- * to users once.
+ * Opt-out for a fill traced to a surface that does not collapse. Must be
+ * followed by a reason naming that surface, e.g.
+ * `// muted-fill-ok: canvas-scoped tile chrome, --canvas never collapses`.
+ *
+ * Mind the comment form. In JSX CHILDREN position a `//` line is not a
+ * comment at all - it is a text node, so it renders to the user and gives
+ * any `asChild` ancestor a second child ("failed to slot onto its
+ * children"). `tsc` accepts it either way, so only a render test catches
+ * it. Use `{@literal {}/* … *}` there and `//` everywhere else (attribute
+ * position, and expression position after `return (`, `= (` or a ternary).
  */
-const GRANDFATHERED: ReadonlySet<string> = new Set([
-  "components/chat/chat-accumulated-changes-panel.tsx",
-  "components/chat/chat-turn-minimap.tsx",
-  "components/chat/segments/restore-checkpoint-dialog.tsx",
-  "components/chat/segments/setup-card-segment.tsx",
-  "components/diff/file-autosave-status.tsx",
-  "components/epic-canvas/canvas/tab-strip.tsx",
-  "components/epic-canvas/git-diff/diff-tab-toolbar.tsx",
-  "components/epic-canvas/panels/epic-sharing/my-agents-section.tsx",
-  "components/epic-canvas/renderers/story-tile.tsx",
-  "components/epic-canvas/renderers/terminal-agent-fork-dialog.tsx",
-  "components/epic-canvas/renderers/ticket-tile.tsx",
-  "components/epic-canvas/renderers/tui-agent-tile.tsx",
-  "components/epic-tabs/phase-migration-surface.tsx",
-  "components/epics/delete-tasks-dialog.tsx",
-  "components/epics/epics-list-panel.tsx",
-  "components/home/composer/composer-shell.tsx",
-  "components/home/host-workspace-selector/workspace-summary-trigger.tsx",
-  "components/host/host-busy-force-defer-dialog.tsx",
-  "components/layout/dialogs/desktop/logs-chooser-dialog.tsx",
-  "components/layout/header/rate-limit-popover.tsx",
-  "components/layout/header/sign-in/device-code-progress.tsx",
-  "components/onboarding/onboarding-diorama.tsx",
-  "components/providers/profile-usage-sidecar.tsx",
-  "components/settings/controls/terminal-cursor-style-picker.tsx",
-  "components/settings/controls/theme-mode-toggle.tsx",
-  "components/settings/host-scope/host-config-notices.tsx",
-  "components/settings/panels/diagnostics-log-entries.tsx",
-  "components/settings/panels/host-overview-status-card.tsx",
-  "components/settings/panels/provider-cli-candidates-section.tsx",
-  "components/settings/panels/provider-model-provider-connect-dialog.tsx",
-  "components/settings/panels/provider-profile-scoped-section.tsx",
-  "components/settings/panels/provider-skill-composer-dialog.tsx",
-  "components/settings/panels/provider-skill-detail-dialog.tsx",
-  "components/settings/panels/provider-skills-tab.tsx",
-  "components/settings/panels/usage-settings-panel.tsx",
-  "components/settings/panels/worktrees-settings-panel.tsx",
-  "components/worktree/worktree-pr-metadata.tsx",
-]);
+const ALLOW_MARKER = /muted-fill-ok:\s*\S/;
 
-/** Comments explain the collapse; they are not markup. */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[^\n]*?\/\/[^\n]*$/gm, "");
-}
+/** How many lines above a fill an annotation may sit and still cover it. */
+const MARKER_LOOKBEHIND = 4;
 
 function collectTsxFiles(dir: string): readonly string[] {
   const found: string[] = [];
@@ -103,43 +66,67 @@ function collectTsxFiles(dir: string): readonly string[] {
   return found;
 }
 
-describe("muted fills on raised surfaces", () => {
-  it("no NEW component pairs a raised surface with a bg-muted fill", () => {
-    const offenders = collectTsxFiles(SRC_DIR)
-      .filter((file) => {
-        const source = stripComments(readFileSync(file, "utf8"));
-        return RAISED_SURFACE.test(source) && MUTED_FILL.test(source);
-      })
-      .map((file) => path.relative(SRC_DIR, file).split(path.sep).join("/"))
-      .filter((file) => !GRANDFATHERED.has(file));
+/** A comment line explaining the collapse is prose, not markup. */
+function isCommentLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("//") || trimmed.startsWith("*");
+}
 
-    expect(offenders).toEqual([]);
+type Offence = { readonly location: string; readonly line: string };
+
+function findUnannotatedFills(file: string): readonly Offence[] {
+  const source = readFileSync(file, "utf8");
+  const lines = source.split("\n");
+  if (!RAISED_SURFACE.test(source)) return [];
+
+  const offences: Offence[] = [];
+  lines.forEach((line, index) => {
+    if (isCommentLine(line)) return;
+    if (!MUTED_FILL.test(line)) return;
+    const from = Math.max(0, index - MARKER_LOOKBEHIND);
+    const covering = lines.slice(from, index + 1);
+    if (covering.some((candidate) => ALLOW_MARKER.test(candidate))) return;
+    const relative = path.relative(SRC_DIR, file).split(path.sep).join("/");
+    offences.push({
+      location: `${relative}:${String(index + 1)}`,
+      line: line.trim(),
+    });
+  });
+  return offences;
+}
+
+describe("muted fills on raised surfaces", () => {
+  it("every muted fill in a file that paints a raised surface is fixed or justified", () => {
+    const offences = collectTsxFiles(SRC_DIR).flatMap(findUnannotatedFills);
+
+    expect(offences.map((offence) => offence.location)).toEqual([]);
   });
 
-  it("the grandfathered list only shrinks", () => {
-    const stillPaired = new Set(
-      collectTsxFiles(SRC_DIR)
-        .filter((file) => {
-          const source = stripComments(readFileSync(file, "utf8"));
-          return RAISED_SURFACE.test(source) && MUTED_FILL.test(source);
-        })
-        .map((file) => path.relative(SRC_DIR, file).split(path.sep).join("/")),
-    );
-    // A fixed file left behind in the list would silently re-open the hole
-    // it was removed for, so retire entries as they are cleaned up.
-    const staleEntries = [...GRANDFATHERED].filter(
-      (file) => !stillPaired.has(file),
-    );
+  it("no annotation is left behind on a line that no longer has a fill", () => {
+    const stale = collectTsxFiles(SRC_DIR).flatMap((file) => {
+      const lines = readFileSync(file, "utf8").split("\n");
+      const relative = path.relative(SRC_DIR, file).split(path.sep).join("/");
+      return lines.flatMap((line, index) => {
+        if (!ALLOW_MARKER.test(line)) return [];
+        const covered = lines.slice(index, index + MARKER_LOOKBEHIND + 1);
+        const excusesSomething = covered.some(
+          (candidate) =>
+            !isCommentLine(candidate) && MUTED_FILL.test(candidate),
+        );
+        return excusesSomething ? [] : [`${relative}:${String(index + 1)}`];
+      });
+    });
 
-    expect(staleEntries).toEqual([]);
+    expect(stale).toEqual([]);
   });
 });
 
 describe("raised-surface primitives", () => {
   const readPrimitive = (file: string): string =>
-    stripComments(
-      readFileSync(path.join(SRC_DIR, "components/ui", file), "utf8"),
-    );
+    readFileSync(path.join(SRC_DIR, "components/ui", file), "utf8")
+      .split("\n")
+      .filter((line) => !isCommentLine(line))
+      .join("\n");
 
   it.each([
     ["skeleton.tsx"],

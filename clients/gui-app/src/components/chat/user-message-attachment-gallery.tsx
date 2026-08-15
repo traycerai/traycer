@@ -115,12 +115,14 @@ function ImageAttachmentThumb({
   let thumbnail: ReactNode;
   if (image.status === "loading") {
     thumbnail = (
-      <div className="size-full animate-pulse bg-foreground/6" aria-hidden />
+      // muted-fill-ok: fills the timeline trigger below, same non-raised chat surface
+      <div className="size-full animate-pulse bg-muted/60" aria-hidden />
     );
   } else if (image.status === "unavailable") {
     thumbnail = (
       <div
-        className="flex size-full items-center justify-center bg-foreground/6 text-muted-foreground"
+        // muted-fill-ok: fills the timeline trigger above, same non-raised chat surface
+        className="flex size-full items-center justify-center bg-muted/60 text-muted-foreground"
         data-user-message-image-unavailable
         aria-hidden
       >
@@ -179,7 +181,8 @@ function ImageAttachmentThumb({
           <button
             type="button"
             aria-label={triggerAriaLabel}
-            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-foreground/5 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
+            // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
+            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span
               className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"

@@ -581,7 +581,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
         <div className="relative overflow-hidden rounded-xl border border-border/60 bg-popover shadow-lg">
           <button
             aria-label={`Jump to message: ${activeItem.userText ?? "User message"}`}
-            className="block w-full cursor-pointer select-none p-3 pr-11 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            className="block w-full cursor-pointer select-none p-3 pr-11 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
             data-chat-turn-minimap-card=""
             onClick={() => {
               onSelect(activeItem.id);
@@ -598,7 +598,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
             aria-label={
               expanded ? "Collapse message list" : "Expand all messages"
             }
-            className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground active:bg-muted/80 active:text-foreground"
+            className="absolute top-2 right-2 z-10 text-muted-foreground/60 hover:text-foreground active:bg-foreground/7 active:text-foreground"
             onClick={() => {
               onToggleExpanded();
             }}
