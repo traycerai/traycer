@@ -1,10 +1,9 @@
-import { ExternalLink } from "lucide-react";
-import type { ToolCallManagedCommand } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { ToolCallManagedCommandStarted } from "@traycer/protocol/persistence/epic/content-blocks";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
-import { ManagedCommandOpenInTabButton } from "@/components/managed-commands/managed-command-open-in-tab-button";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
+import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
 import {
   managedCommandStatusLabel,
   managedCommandTitle,
@@ -41,7 +40,7 @@ export interface ManagedCommandStartSegmentProps {
   /** The tool_call block id, which scopes this card's open state. */
   readonly id: string;
   /** Identity stamped at the call; survives the live record's death. */
-  readonly managedCommand: ToolCallManagedCommand;
+  readonly managedCommand: ToolCallManagedCommandStarted;
   /**
    * The command as the agent WROTE it, off the block's own `inputDetail`.
    *
@@ -86,9 +85,27 @@ export function ManagedCommandStartSegment(
         decorative
         className="size-3.5"
       />
-      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
-        {managedCommandTitle({ description, monitoring })}
-      </span>
+      {/* The directory this call started the shell in, frozen with the block
+          the way the command is - the provider command card carries its cwd
+          on the title exactly like this. Never the live record's `cwd`, which
+          a later restart can move out from under a card that is the record of
+          one call. Silent on blocks stamped before the payload carried it. */}
+      <TooltipWrapper
+        label={
+          managedCommand.cwd === null ? null : (
+            <span className="font-mono text-code-sm">
+              cwd: {managedCommand.cwd}
+            </span>
+          )
+        }
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85">
+          {managedCommandTitle({ description, monitoring })}
+        </span>
+      </TooltipWrapper>
       {/* A deleted shell keeps its name and drops its state: there is no status
           left to report, and "Exited" frozen from before the delete would be
           the card claiming to know something it does not. */}
@@ -129,10 +146,11 @@ export function ManagedCommandStartSegment(
   );
 
   const headerAction = (
-    <ManagedCommandStartDoor
+    <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
       gone={gone}
       onOpen={openOutput}
+      testId={`managed-command-start-door-${managedCommand.commandId}`}
     />
   );
 
@@ -198,50 +216,6 @@ export function ManagedCommandStartSegment(
       headerFindUnitId={props.headerFindUnitId}
       bodyFindUnitId={null}
       className={undefined}
-    />
-  );
-}
-
-/**
- * Open-in-Tab, disabled once the shell is gone. Deleting a shell destroys its
- * log with it, so the tab would open onto nothing but a dead-state banner -
- * the button says why instead of minting one.
- */
-function ManagedCommandStartDoor(props: {
-  readonly commandId: string;
-  readonly gone: boolean;
-  readonly onOpen: ((commandId: string) => void) | null;
-}) {
-  const { commandId, gone, onOpen } = props;
-  if (gone) {
-    return (
-      <TooltipWrapper
-        label="This shell was deleted"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        {/* `aria-disabled` rather than `disabled`: a disabled button takes no
-            pointer events, which would swallow the very tooltip that explains
-            why it cannot be pressed. */}
-        <span
-          role="button"
-          aria-disabled
-          data-testid={`managed-command-start-door-${commandId}`}
-          className="inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-md text-muted-foreground/40"
-        >
-          <ExternalLink aria-hidden className="size-3.5" />
-        </span>
-      </TooltipWrapper>
-    );
-  }
-  if (onOpen === null) return null;
-  return (
-    <ManagedCommandOpenInTabButton
-      testId={`managed-command-start-door-${commandId}`}
-      onOpen={() => {
-        onOpen(commandId);
-      }}
     />
   );
 }

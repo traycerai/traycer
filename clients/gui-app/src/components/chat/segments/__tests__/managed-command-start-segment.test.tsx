@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -94,9 +100,11 @@ function renderCall(input: {
         managedCommand={
           input.correlated
             ? {
+                event: "started",
                 commandId: COMMAND_ID,
                 description: "deploy watcher",
                 monitoring: true,
+                cwd: "/work/repo",
               }
             : null
         }
@@ -246,9 +254,11 @@ describe("the run_shell start card", () => {
           error={null}
           agentMessageSend={null}
           managedCommand={{
+            event: "started",
             commandId: COMMAND_ID,
             description: "deploy watcher",
             monitoring: true,
+            cwd: "/work/repo",
           }}
           isStreaming={false}
           endState={null}
@@ -280,5 +290,59 @@ describe("the run_shell start card", () => {
 
     expect(screen.getByText("Monitor · deploy watcher")).toBeTruthy();
     expect(screen.getByText("Running")).toBeTruthy();
+  });
+
+  it("carries the call's cwd as a title tooltip", () => {
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setCommands([shell({})]);
+    });
+
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay (see tooltip-hit-testing.test.tsx).
+    fireEvent.focus(screen.getByText("Monitor · deploy watcher"));
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.textContent).toContain("cwd: /work/repo");
+  });
+
+  it("renders no cwd tooltip for a legacy payload stamped before cwd existed", () => {
+    render(
+      tree(
+        <ToolSegment
+          id="tool-1"
+          toolName="mcp__traycer_a2a__traycer_run_shell"
+          inputSummary={COMMAND_LINE}
+          inputDetail={{ kind: "command", command: COMMAND_LINE }}
+          error={null}
+          agentMessageSend={null}
+          managedCommand={{
+            event: "started",
+            commandId: COMMAND_ID,
+            description: "deploy watcher",
+            monitoring: true,
+            cwd: null,
+          }}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={10}
+          durationMs={null}
+          imageResults={[]}
+          variant="card"
+          headerFindUnitId={null}
+        />,
+      ),
+    );
+    act(() => {
+      session.setCommands([shell({})]);
+    });
+
+    fireEvent.focus(screen.getByText("Monitor · deploy watcher"));
+    // No `cwd` on the payload ⇒ `TooltipWrapper` degrades to a transparent
+    // Slot, so there is no Radix tooltip to open at all.
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });

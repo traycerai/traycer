@@ -50,6 +50,7 @@ import {
 } from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
 import { ImageGenerationCard } from "./image-generation-card";
+import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 
 interface ToolSegmentProps {
@@ -282,8 +283,20 @@ export function ToolSegment(props: ToolSegmentProps) {
   // the turn - so the call site renders it as one, live status and all. Keyed
   // off the stamped payload rather than the tool name: the name alone would
   // also match a call from a host too old to correlate, which has no shell to
-  // point at and belongs in the generic row.
+  // point at and belongs in the generic row. A restart is the other kind of
+  // stamped call: not the shell's live card but the immutable record of one
+  // relaunch, at the place in the transcript where it happened.
   if (props.managedCommand !== null) {
+    if (props.managedCommand.event === "restarted") {
+      return (
+        <ManagedCommandRestartSegment
+          id={props.id}
+          restart={props.managedCommand}
+          variant={props.variant}
+          headerFindUnitId={props.headerFindUnitId}
+        />
+      );
+    }
     return (
       <ManagedCommandStartSegment
         id={props.id}

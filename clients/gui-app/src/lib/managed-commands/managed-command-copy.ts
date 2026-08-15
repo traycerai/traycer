@@ -62,6 +62,35 @@ export const MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP =
 /** The output window's own name. */
 export const MANAGED_COMMAND_OUTPUT_WINDOW_TITLE = "Shell output";
 
+/**
+ * The restart card's header verb, in the shell's own noun: "Restarted Monitor ·
+ * deploy watcher". Same guard as `managedCommandTitle` for a shell with no
+ * description, and for the same reason.
+ */
+export function managedCommandRestartTitle(
+  command: Pick<ManagedCommand, "description" | "monitoring">,
+): string {
+  return `Restarted ${managedCommandTitle(command)}`;
+}
+
+/**
+ * What a restart changed, as the compact phrase beside its title. Judged
+ * against the spec the shell ran under before the call, never against which
+ * inputs the caller passed - a restart naming the command already stored is
+ * "same command and cwd", because it is.
+ */
+export function managedCommandRestartDeltaPhrase(delta: {
+  readonly commandChanged: boolean;
+  readonly cwdChanged: boolean;
+}): string {
+  if (delta.commandChanged && delta.cwdChanged) {
+    return "command and cwd changed";
+  }
+  if (delta.commandChanged) return "command changed";
+  if (delta.cwdChanged) return "cwd changed";
+  return "same command and cwd";
+}
+
 export function managedCommandStatusLabel(
   status: ManagedCommandStatus,
 ): string {
