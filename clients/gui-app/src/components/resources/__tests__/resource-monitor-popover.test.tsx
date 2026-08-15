@@ -1527,8 +1527,9 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
     const search = screen.getByRole("searchbox", { name: "Search resources" });
-    const ownerRow = screen.getByText("Terminal Alpha").closest("button");
-    if (ownerRow === null) throw new Error("Expected owner row button");
+    const ownerRow = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Terminal Alpha/,
+    });
 
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(document.activeElement).toBe(ownerRow);

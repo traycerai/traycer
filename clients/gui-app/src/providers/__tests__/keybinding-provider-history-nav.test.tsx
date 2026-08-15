@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRouter,
@@ -75,8 +75,7 @@ describe("KeybindingProvider in-app back/forward", () => {
     });
     const router = renderProviderWith(brandedHistory());
     const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});
-    const input = document.querySelector('input[aria-label="Editor"]');
-    if (input === null) throw new Error("expected editor input");
+    const input = screen.getByRole("textbox", { name: "Editor" });
     const modifier = isMac() ? { metaKey: true } : { ctrlKey: true };
     const event = new KeyboardEvent("keydown", {
       code: "ArrowLeft",

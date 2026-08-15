@@ -180,11 +180,14 @@ describe("<UserMenu />", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
-
-    expect((await screen.findByText("App settings")).textContent).toContain(
-      formatChordForDisplay("mod+,"),
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open user menu" }),
     );
+
+    expect(
+      (await screen.findByRole("menuitem", { name: /App settings/ }))
+        .textContent,
+    ).toContain(formatChordForDisplay("mod+,"));
     result.cleanupClient();
   });
 

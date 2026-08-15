@@ -921,7 +921,9 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    const newTaskButton = await screen.findByTestId("tab-new");
+    const newTaskButton = await screen.findByRole("button", {
+      name: "Start Page",
+    });
     expect(
       anyTooltipHasText(`New task (${formatChordForDisplay("mod+n")})`),
     ).toBe(true);
