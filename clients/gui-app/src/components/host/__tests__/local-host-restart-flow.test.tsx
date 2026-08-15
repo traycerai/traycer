@@ -102,6 +102,33 @@ function busyMessage(subject: string): string {
   return `${subject} still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.`;
 }
 
+// A local host that resolves but is NOT dialable - `websocketUrl: null` and
+// `transportDialability: "not-dialable"` - unlike `localEntry` above, which is
+// always dialable. A dedicated helper rather than a parameter on `localEntry`
+// itself, so every existing call site keeps its current (dialable) meaning
+// unchanged.
+function nonDialableLocalEntry(hostId: string): HostDirectoryEntry {
+  return {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: null,
+    version: "1.5.0",
+    transportDialability: "not-dialable",
+  };
+}
+
+// Copied verbatim from `local-host-restart-flow.tsx` (neither constant is
+// exported) so a change to the production copy breaks these assertions
+// instead of silently drifting from what the user actually sees.
+const UNREACHABLE_CLIENT_MESSAGE =
+  "Traycer couldn't open a connection to ask this host to stop cleanly - you " +
+  "may be signed out, or its credentials may be refreshing. Force restart " +
+  "kills the host process and relaunches it, ending whatever it is running.";
+const HOST_CHANGED_DESCRIPTION =
+  "This machine's host was replaced while this dialog was open, so nothing " +
+  "was stopped. Restart again to check the new host.";
+
 function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -871,5 +898,122 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
+  });
+});
+
+describe("<LocalHostRestartFlow /> - confirm re-reads the live local host (Finding 1)", () => {
+  it("a host identity change between render and confirm refuses instead of dispatching", async () => {
+    // A mutable (non-readonly) local binding object - NOT the shared
+    // `PRESENT_BINDING` - so its `getLocalEntry` can be swapped out from
+    // under the component after the confirm dialog is already open, without
+    // a re-render: `onConfirm` re-reads `getLocalEntry()` live at click time
+    // via `liveHostIdNow()`, exactly like the Force click already did.
+    const mutableBinding: {
+      directory: { getLocalEntry: () => HostDirectoryEntry | null };
+    } = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    hostBindingMock.current = mutableBinding;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    // No `overrideHandlers` here, deliberately: the fixture's OWN default
+    // `host.restart` handler is what `restartCalls()` below tracks - if the
+    // confirm dispatched cooperatively despite the host change, this would
+    // catch it.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    // Open the confirm dialog but do NOT confirm yet - `openAndConfirm()`
+    // clicks confirm immediately, which is not what this test needs.
+    fireEvent.click(screen.getByRole("button", { name: "Open restart" }));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    // Mutate the SAME binding object the component already captured,
+    // WITHOUT re-rendering, so `getLocalEntry()` now answers host-b.
+    mutableBinding.directory.getLocalEntry = () => localEntry("host-b");
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host changed",
+        expect.objectContaining({ description: HOST_CHANGED_DESCRIPTION }),
+      );
+    });
+    expect(fixture.restartCalls()).toBe(0);
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+});
+
+describe("<LocalHostRestartFlow /> - a dialable host with no client is offered force explicitly (Finding 2)", () => {
+  it("a dialable local host with no client offers force explicitly instead of killing it", async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    // `localEntry` already builds a dialable entry - verify that, since it
+    // is exactly what makes this case "offer-force" rather than "force".
+    const entry = localEntry("host-a");
+    expect(entry.websocketUrl).not.toBeNull();
+    expect(entry.transportDialability).toBe("dialable");
+    // Simulates a renderer with no authenticated request context (signed
+    // out, or a credential lease being released): the host resolves and
+    // looks reachable, but no client could be built for it.
+    clientForHostIdMock.current = () => null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    await openAndConfirm();
+
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+    const offerDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(offerDialog.textContent).toContain(UNREACHABLE_CLIENT_MESSAGE);
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("a local host that is not dialable still force-restarts in one click", async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => nonDialableLocalEntry("host-a") },
+    };
+    directoryListMock.current = { data: [nonDialableLocalEntry("host-a")] };
+    // Same "no client could be built" resolver as the dialable case above -
+    // the only difference is dialability, which is what must decide between
+    // an explicit force offer and the one-click down-host recovery path.
+    clientForHostIdMock.current = () => null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+    // Pins that the down-host recovery path stays a single click: the busy/
+    // force-offer dialog must never have appeared along the way.
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
   });
 });

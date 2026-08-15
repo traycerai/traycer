@@ -60,15 +60,64 @@ interface ArmedRestartId {
  * `kind: "local"` entry while the host is DOWN, where the live snapshot is
  * `null` - the case a restart most needs to serve.
  */
-function resolveLocalHostId(
+function resolveLocalEntry(
   liveLocalEntry: HostDirectoryEntry | null,
   directoryEntries: readonly HostDirectoryEntry[] | undefined,
-): string | null {
-  if (liveLocalEntry !== null) return liveLocalEntry.hostId;
+): HostDirectoryEntry | null {
+  if (liveLocalEntry !== null) return liveLocalEntry;
   const fromDirectory = (directoryEntries ?? []).find(
     (entry) => entry.kind === "local",
   );
-  return fromDirectory === undefined ? null : fromDirectory.hostId;
+  return fromDirectory === undefined ? null : fromDirectory;
+}
+
+/**
+ * Whether this host is one we should have been able to DIAL - which is what
+ * separates "no local host to ask" from "we could not ask the one that is
+ * there". `useHostClientForHostId` also answers `null` when the renderer has
+ * no authenticated request context (signed out, or the credential lease was
+ * released), and that must never read as absence: the process is alive and
+ * possibly busy, we simply have no way to put the question to it.
+ *
+ * Reading `transportDialability` for a DIALING decision is its sanctioned use;
+ * it is the reason field (`useHostReachability`) that user-facing copy wants.
+ */
+function looksDialable(entry: HostDirectoryEntry | null): boolean {
+  return (
+    entry !== null &&
+    entry.websocketUrl !== null &&
+    entry.transportDialability === "dialable"
+  );
+}
+
+/** What a confirm click resolves to, from values re-read AT click time. */
+type ConfirmAction = "host-changed" | "cooperative" | "offer-force" | "force";
+
+/**
+ * The confirm decision, as data rather than nested branches in the handler.
+ *
+ * Ordering is the invariant: a host that changed under the dialog is refused
+ * before anything is dispatched; a client we can ask is always asked; a host
+ * that looks reachable but has no client turns into an EXPLICIT force offer
+ * rather than a silent kill; and only a host with no dialable route left falls
+ * straight through to the respawn, which is how a stopped host comes back.
+ */
+function decideConfirmAction(
+  liveHostId: string | null,
+  localHostId: string | null,
+  hasCooperativeClient: boolean,
+  localHostLooksDialable: boolean,
+): ConfirmAction {
+  if (
+    liveHostId !== null &&
+    localHostId !== null &&
+    liveHostId !== localHostId
+  ) {
+    return "host-changed";
+  }
+  if (hasCooperativeClient) return "cooperative";
+  if (localHostLooksDialable) return "offer-force";
+  return "force";
 }
 
 /**
@@ -112,6 +161,23 @@ const UNANSWERED_RESTART_MESSAGE =
   "This host didn't complete the restart request. It may be stuck, still " +
   "starting up, or too old to stop cleanly on its own. Force restart kills " +
   "the host process and relaunches it.";
+
+/**
+ * The host is dialable but no client could be built for it - the renderer has
+ * no authenticated request context (signed out, or a credential lease being
+ * renewed). The process is alive and may be busy, so this is NOT the
+ * no-local-host case: the user gets the destructive choice explicitly instead
+ * of the flow taking it on their behalf.
+ */
+const UNREACHABLE_CLIENT_MESSAGE =
+  "Traycer couldn't open a connection to ask this host to stop cleanly - you " +
+  "may be signed out, or its credentials may be refreshing. Force restart " +
+  "kills the host process and relaunches it, ending whatever it is running.";
+
+/** Shown when the machine's host was replaced while a dialog was open. */
+const HOST_CHANGED_DESCRIPTION =
+  "This machine's host was replaced while this dialog was open, so nothing " +
+  "was stopped. Restart again to check the new host.";
 
 /**
  * The forced bridge respawn, shared by both arms of the flow.
@@ -278,10 +344,11 @@ function CooperativeFirstRestartFlow(
   // contract ever turns async, this read silently becomes "unknown" and the
   // force path turns back into the silent kill this flow exists to remove -
   // gate it then.
-  const localHostId = resolveLocalHostId(
+  const localEntry = resolveLocalEntry(
     binding === null ? null : binding.directory.getLocalEntry(),
     directoryQuery.data,
   );
+  const localHostId = localEntry === null ? null : localEntry.hostId;
   const client = useHostClientForHostId(localHostId);
   // NO capability gate on this dispatch, deliberately - not even the tri-state
   // one. The negotiated-manifest registry answers from a host's LAST handshake
@@ -346,6 +413,20 @@ function CooperativeFirstRestartFlow(
     setForceOffer(null);
     props.onClose();
   };
+  // Both click handlers re-read the LIVE local host rather than trusting the
+  // rendered value: a host identity change arrives as a store update, so a
+  // click processed against the previous committed render would compare stale
+  // against stale and sail through. `getLocalEntry()` is synchronous and
+  // current at the instant of the click.
+  const liveHostIdNow = (): string | null => {
+    if (binding === null) return null;
+    const entry = binding.directory.getLocalEntry();
+    return entry === null ? null : entry.hostId;
+  };
+  const refuseForHostChange = (): void => {
+    close();
+    toast.info("Host changed", { description: HOST_CHANGED_DESCRIPTION });
+  };
   const { forceRestart, announceRestartRequested } = useForceHostRespawn(
     close,
     () => {
@@ -407,8 +488,25 @@ function CooperativeFirstRestartFlow(
         }}
         isPending={restart.isPending || forceRestart.isPending}
         onConfirm={() => {
-          if (cooperativeClient !== null && localHostId !== null) {
+          const action = decideConfirmAction(
+            liveHostIdNow(),
+            localHostId,
+            cooperativeClient !== null,
+            looksDialable(localEntry),
+          );
+          if (action === "host-changed") {
+            refuseForHostChange();
+            return;
+          }
+          if (action === "cooperative" && localHostId !== null) {
             dispatchCooperative(localHostId);
+            return;
+          }
+          if (action === "offer-force" && localHostId !== null) {
+            setForceOffer({
+              hostId: localHostId,
+              message: UNREACHABLE_CLIENT_MESSAGE,
+            });
             return;
           }
           forceRestart.mutate();
@@ -420,22 +518,9 @@ function CooperativeFirstRestartFlow(
         isForcing={forceRestart.isPending || respawnInFlight}
         forceLabel="Force restart"
         onForce={() => {
-          // Re-read the LIVE local host rather than trusting the rendered
-          // value. A host identity change arrives as a store update, and a
-          // click processed against the previous committed render would
-          // compare stale against stale and sail through; `getLocalEntry()`
-          // is synchronous and current at the instant of the click.
-          const liveEntry =
-            binding === null ? null : binding.directory.getLocalEntry();
-          if (
-            liveEntry !== null &&
-            isOfferStale(forceOffer, liveEntry.hostId)
-          ) {
-            close();
-            toast.info("Host changed", {
-              description:
-                "This machine's host was replaced while this dialog was open, so nothing was stopped. Restart again to check the new host.",
-            });
+          const liveHostId = liveHostIdNow();
+          if (liveHostId !== null && isOfferStale(forceOffer, liveHostId)) {
+            refuseForHostChange();
             return;
           }
           forceRestart.mutate();
