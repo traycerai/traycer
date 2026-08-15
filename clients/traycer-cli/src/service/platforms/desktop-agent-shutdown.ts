@@ -8,6 +8,7 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
   removeHostPidMetadata,
+  type HostPidMetadata,
 } from "../../host/pid-metadata";
 import { isProcessAlive } from "../../store/cli-lock";
 import { getPublishedProcessIdentityVerdict } from "../../store/process-identity";
@@ -222,7 +223,11 @@ export async function forceStopHostProcess(
   operation: string,
 ): Promise<ForcedShutdownOutcome> {
   const logger = createCliLogger(environment);
-  const outcome = await signalHostForForcedStop(environment, operation, logger);
+  const { outcome, actedOn } = await signalHostForForcedStop(
+    environment,
+    operation,
+    logger,
+  );
   // A force stop's success must not leave a resurrect signal behind. The
   // desktop health monitor reads pid.json AFTER its endpoint probe fails and
   // treats ABSENCE as "deliberate stop" - metadata still present with a dead
@@ -231,12 +236,28 @@ export async function forceStopHostProcess(
   // here has to complete the writer contract on the host's behalf: `stopped`
   // covers a SIGKILL (handler never ran) and a wedged-then-dead SIGTERM;
   // `no-host` covers the stale record naming a dead or recycled pid, which
-  // is precisely the state that invites the resurrection. The rm is
-  // idempotent, so purging when the host already unlinked costs nothing.
-  // Best-effort either way: the stop itself already succeeded.
+  // is precisely the state that invites the resurrection.
+  //
+  // Purge ONLY the instance this stop acted on. A supervisor relaunched
+  // mid-stop (its predecessor crashed for its own reasons) snapshots the
+  // pre-existing stop intent as already served and may publish a REPLACEMENT
+  // host's pid.json inside this window - an unconditional unlink would
+  // delete the replacement's record, leaving that host running but
+  // undiscoverable, with the absence read as a deliberate stop nothing will
+  // recover. Re-read and remove only on an exact instance match (pid + start
+  // identity, the same pair that gated the signals). Best-effort either way:
+  // the stop itself already succeeded.
   if (outcome.kind === "stopped" || outcome.kind === "no-host") {
     try {
-      await removeHostPidMetadata(environment);
+      const current = await readHostPidMetadata(environment);
+      if (
+        current !== null &&
+        actedOn !== null &&
+        current.pid === actedOn.pid &&
+        current.processStartIdentity === actedOn.processStartIdentity
+      ) {
+        await removeHostPidMetadata(environment);
+      }
     } catch (error) {
       logger.warn("Could not remove pid.json after a forced stop", {
         environment,
@@ -248,14 +269,22 @@ export async function forceStopHostProcess(
   return outcome;
 }
 
+// The outcome plus the pid.json record the signals were aimed at (`null`
+// only for `no-metadata`). The caller's purge needs the record to guarantee
+// it removes the STOPPED instance's file and never a replacement's.
+interface ForcedStopSignalResult {
+  readonly outcome: ForcedShutdownOutcome;
+  readonly actedOn: HostPidMetadata | null;
+}
+
 async function signalHostForForcedStop(
   environment: Environment,
   operation: string,
   logger: ILogger,
-): Promise<ForcedShutdownOutcome> {
+): Promise<ForcedStopSignalResult> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) {
-    return { kind: "no-metadata" };
+    return { outcome: { kind: "no-metadata" }, actedOn: null };
   }
   // Identity before signal. A pid.json that survived a host crash can name a
   // RECYCLED pid, and liveness alone would aim SIGTERM/SIGKILL at whatever
@@ -271,13 +300,16 @@ async function signalHostForForcedStop(
       metadata.processStartIdentity,
     );
     if (identity === "dead" || identity === "mismatch") {
-      return { kind: "no-host" };
+      return { outcome: { kind: "no-host" }, actedOn: metadata };
     }
     if (identity === "indeterminate") {
-      return { kind: "identity-unverified", pid: metadata.pid };
+      return {
+        outcome: { kind: "identity-unverified", pid: metadata.pid },
+        actedOn: metadata,
+      };
     }
   } else if (!isProcessAlive(metadata.pid)) {
-    return { kind: "no-host" };
+    return { outcome: { kind: "no-host" }, actedOn: metadata };
   }
   logger.warn("Force-stopping the running host", {
     environment,
@@ -286,10 +318,10 @@ async function signalHostForForcedStop(
     pid: metadata.pid,
   });
   if (!signalPid(metadata.pid, "SIGTERM")) {
-    return { kind: "stopped" };
+    return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
   if (await waitForCooperativeExit(metadata.pid)) {
-    return { kind: "stopped" };
+    return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
   logger.warn(
     "Host survived SIGTERM through the exit grace; escalating to SIGKILL",
@@ -308,19 +340,22 @@ async function signalHostForForcedStop(
       metadata.processStartIdentity,
     );
     if (verdict === "dead" || verdict === "mismatch") {
-      return { kind: "stopped" };
+      return { outcome: { kind: "stopped" }, actedOn: metadata };
     }
     if (verdict === "indeterminate") {
-      return { kind: "identity-unverified", pid: metadata.pid };
+      return {
+        outcome: { kind: "identity-unverified", pid: metadata.pid },
+        actedOn: metadata,
+      };
     }
   }
   if (!signalPid(metadata.pid, "SIGKILL")) {
-    return { kind: "stopped" };
+    return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
   if (await waitForCooperativeExit(metadata.pid)) {
-    return { kind: "stopped" };
+    return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
-  return { kind: "hung", pid: metadata.pid };
+  return { outcome: { kind: "hung", pid: metadata.pid }, actedOn: metadata };
 }
 
 /**

@@ -269,7 +269,7 @@ describe("linux service stop --force", () => {
     vi.useRealTimers();
   });
 
-  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - and purges pid.json", async () => {
+  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - cancels any scheduled auto-restart, then purges pid.json", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -282,15 +282,23 @@ describe("linux service stop --force", () => {
     await createLinuxController(runner).stop(label, { force: true });
 
     // The first is-active probe settles immediately - no poll wait, no
-    // kill, ever.
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    // kill, ever. A settled state alone is not proof nothing is scheduled
+    // (the unit can settle at `failed` from a CRASH mid-grace, with
+    // Restart=on-failure still queuing a relaunch) - the trailing `stop`
+    // cancels it before the purge.
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
+    expect(calls[2]?.args).toEqual([
+      "--user",
+      "stop",
+      "ai.traycer.host.dev.service",
+    ]);
     // A CONFIRMED inactive unit purges the stale pid.json on the host's
     // behalf - the host's own shutdown handler may not have run (or
     // finished) in time to unlink it itself.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
-  it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, then settles and succeeds", async () => {
+  it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, cancels any scheduled auto-restart BEFORE the second poll, then settles and succeeds", async () => {
     vi.useFakeTimers();
     const calls: RecordedCall[] = [];
     let killIssued = false;
@@ -327,13 +335,44 @@ describe("linux service stop --force", () => {
       "--signal=SIGKILL",
       "ai.traycer.host.dev.service",
     ]);
+    // Shape: [stop, is-active...(active, never settling), kill, stop,
+    // is-active...(settles)] - the initial stop, the SIGTERM-grace poll
+    // that never settles, the SIGKILL, a renewed `stop` issued BEFORE the
+    // second poll (cancels a relaunch a crash-during-grace may have
+    // scheduled), and the SIGKILL-grace poll that settles.
+    const verbs = calls.map(verbOf);
+    expect(verbs[0]).toBe("stop");
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    // Everything before the kill is the initial stop plus SIGTERM-grace
+    // is-active polling - never another stop, never settling.
+    expect(
+      verbs.slice(0, killIndex).every((v) => v === "stop" || v === "is-active"),
+    ).toBe(true);
+    expect(verbs.slice(1, killIndex).every((v) => v === "is-active")).toBe(
+      true,
+    );
+    // The renewed stop is issued IMMEDIATELY after the kill, before the
+    // second poll even starts.
+    expect(verbs[killIndex + 1]).toBe("stop");
+    expect(calls[killIndex + 1]?.args).toEqual([
+      "--user",
+      "stop",
+      "ai.traycer.host.dev.service",
+    ]);
+    expect(verbs[killIndex + 2]).toBe("is-active");
+    // Exactly two `stop` verbs total: the initial one and the post-kill
+    // cancel - never a third.
+    expect(verbs.filter((v) => v === "stop")).toHaveLength(2);
     // Purged on the SIGKILL-confirmed path too - same as the SIGTERM one.
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("is still 'active' after the SIGKILL grace too - SERVICE_CONTROL_FAILED, never a false success", async () => {
     vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       if (command === "systemctl" && args[1] === "is-active") {
         return { stdout: "active", stderr: "", exitCode: 0 };
       }
@@ -355,6 +394,13 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
+    // The post-kill cancel `stop` still fires on the still-active failure
+    // path too - it runs unconditionally right after the kill, before the
+    // (here, never-settling) second poll.
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
     // Never confirmed, so nothing is purged - deleting a live host's
     // published endpoint would orphan it.
     expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
@@ -386,13 +432,20 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toBeUndefined();
-    expect(calls.map(verbOf)).toContain("kill");
+    const verbs = calls.map(verbOf);
+    expect(verbs).toContain("kill");
+    // The renewed stop still fires right after the kill even though the
+    // pre-kill state was 'activating' rather than 'active'.
+    const killIndex = verbs.indexOf("kill");
+    expect(verbs[killIndex + 1]).toBe("stop");
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
   it("a probe that throws (systemd unreachable) reads as NOT settled, not as a false success", async () => {
     vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       if (command === "systemctl" && args[1] === "is-active") {
         return Promise.reject(busError(command, args));
       }
@@ -408,6 +461,13 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
+    // The post-kill cancel `stop` is unaffected by the probe always
+    // throwing - it is a different command, and cancelScheduledAutoRestart
+    // has its own try/catch regardless.
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
     expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 
@@ -420,7 +480,9 @@ describe("linux service stop --force", () => {
   // state counts.
   it("empty stdout with a nonzero, tolerated exit (bus unreachable) reads as NOT settled - escalates, still empty - SERVICE_CONTROL_FAILED", async () => {
     vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       if (command === "systemctl" && args[1] === "is-active") {
         return {
           stdout: "",
@@ -441,10 +503,18 @@ describe("linux service stop --force", () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     await assertion;
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
     expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 
-  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL", async () => {
+  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels any scheduled auto-restart before purging", async () => {
+    // 'failed' is exactly the state a CRASH mid-grace settles at (as
+    // opposed to a clean exit from our stop request) - Restart=on-failure
+    // may have a relaunch scheduled, which is precisely why the cancel runs
+    // even on this "already settled" path.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -456,11 +526,11 @@ describe("linux service stop --force", () => {
 
     await createLinuxController(runner).stop(label, { force: true });
 
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 
-  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL", async () => {
+  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels any scheduled auto-restart before purging", async () => {
     // Older systemctl's answer for a unit that is not loaded at all.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -473,7 +543,7 @@ describe("linux service stop --force", () => {
 
     await createLinuxController(runner).stop(label, { force: true });
 
-    expect(calls.map(verbOf)).toEqual(["stop", "is-active"]);
+    expect(calls.map(verbOf)).toEqual(["stop", "is-active", "stop"]);
     expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
   });
 

@@ -229,9 +229,18 @@ export function HostRestartBusyNotice(props: {
    */
   readonly onForceRestart: (() => void) | null;
   readonly forcePending: boolean;
+  /**
+   * The page-wide lifecycle-write gate. Exclusion has to hold in BOTH
+   * directions: the page's other writes (update install, rename, policy,
+   * service register/deregister) already refuse to dispatch while a restart
+   * is in flight, and the notice's actions must equally refuse to recycle
+   * the host in the middle of one of theirs.
+   */
+  readonly pageGatePending: boolean;
 }): ReactNode {
   const { busySessionCount } = props;
-  const anyPending = props.retryPending || props.forcePending;
+  const anyPending =
+    props.retryPending || props.forcePending || props.pageGatePending;
   return (
     <div
       className="flex flex-wrap items-center gap-3 border-b border-amber-700/30 bg-amber-900/10 px-5 py-3 text-ui-sm"

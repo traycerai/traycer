@@ -87,7 +87,7 @@ export function createMacosController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label, run),
-    stop: (label, options) => stopService(label, run, options.force),
+    stop: (label, options) => stopService(label, run, options.force, "stop"),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     stopForRestart: (label, options) =>
@@ -1475,10 +1475,38 @@ async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   force: boolean,
+  operation: "stop" | "restart",
 ): Promise<void> {
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent !== null) {
     await stopDesktopManagedHost(label, desktopAgent, force);
+    return;
+  }
+  if (force) {
+    // Force takes the child-kill engine from the OUTSET, not as an
+    // escalation after the launchctl route: the child helper delivers the
+    // same cooperative SIGTERM the supervisor route forwards (the host's own
+    // handler and force-exit watchdog run identically whoever sends it), so
+    // TERMing the job first and waiting the full exit grace before handing
+    // over would only stack a SECOND full grace on top - over a minute of
+    // wall clock for a wedged host before the SIGKILL it asked for.
+    //
+    // And never `launchctl kill KILL` at the job. The job's service process
+    // is the `host start` SUPERVISOR, and SIGKILL is untrappable: the
+    // supervisor dies without consuming the stop intent,
+    // `KeepAlive{Crashed:true}` reads the signal death as a crash and starts
+    // a replacement, and the replacement snapshots the on-disk intent as
+    // ALREADY SERVED (see `runHostStart` - a record present at supervisor
+    // startup is answered by its own existence) and spawns a fresh host. The
+    // stop would report success and be undone seconds later. Killing the
+    // identity-verified child leaves the supervisor alive to consume the
+    // fresh intent and exit 0 - a clean exit that
+    // `KeepAlive{SuccessfulExit:false}` does not respawn - so the job stays
+    // loaded and DOWN. Same engine as the Desktop-managed force path, so the
+    // pid-identity gate and the instance-matched pid.json purge hold here
+    // too, including when no endpoint is published at all (reported as
+    // `no-metadata`, never as an unverified success).
+    await forceStopCliOwnedHost(label, operation);
     return;
   }
   // Snapshot the live host pid BEFORE signalling so we can confirm the
@@ -1495,59 +1523,39 @@ async function stopService(
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
   });
-  if (before !== null) {
-    const exited = await waitForPidExit(
-      before.pid,
-      STOP_EXIT_TIMEOUT_MS,
-      STOP_EXIT_POLL_MS,
-    );
-    if (exited) return;
-    // The whole point of waiting is that `host stop`/`restart` only take
-    // effect once the old process is gone (a `start` kickstart no-ops while
-    // launchd still sees the job running). A timeout means the host is still
-    // serving, so surface it as a failure instead of reporting success on a
-    // no-op stop.
-    if (!force) {
-      throw cliError({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
-        details: {
-          label: label.id,
-          pid: before.pid,
-          timeoutMs: STOP_EXIT_TIMEOUT_MS,
-        },
-        exitCode: 1,
-      });
-    }
-  } else if (!force) {
-    // Nothing published an endpoint to wait on; the non-force stop keeps its
-    // long-standing best-effort shape (the TERM was delivered, there is no
-    // pid to confirm against).
-    return;
+  if (before === null) return;
+  const exited = await waitForPidExit(
+    before.pid,
+    STOP_EXIT_TIMEOUT_MS,
+    STOP_EXIT_POLL_MS,
+  );
+  // The whole point of waiting is that `host stop`/`restart` only take effect
+  // once the old process is gone (a `start` kickstart no-ops while launchd
+  // still sees the job running). A timeout means the host is still serving,
+  // so surface it as a failure instead of reporting success on a no-op stop.
+  if (!exited) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
+      details: {
+        label: label.id,
+        pid: before.pid,
+        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      },
+      exitCode: 1,
+    });
   }
-  // `--force`, with the SIGTERM outlived (or no endpoint published to wait
-  // on at all): escalate by killing the identity-verified HOST CHILD - never
-  // `launchctl kill KILL` at the job. The job's service process is the
-  // `host start` SUPERVISOR, and SIGKILL is untrappable: the supervisor dies
-  // without consuming the stop intent, `KeepAlive{Crashed:true}` reads the
-  // signal death as a crash and starts a replacement, and the replacement
-  // snapshots the on-disk intent as ALREADY SERVED (see `runHostStart` - a
-  // record present at supervisor startup is answered by its own existence)
-  // and spawns a fresh host. The stop would report success and be undone
-  // seconds later. Killing the child instead leaves the supervisor alive to
-  // consume the fresh intent and exit 0 - a clean exit that
-  // `KeepAlive{SuccessfulExit:false}` does not respawn - so the job stays
-  // loaded and DOWN. Same engine as the Desktop-managed force path, so the
-  // pid-identity gate and the pid.json purge hold here too.
-  await forceStopCliOwnedHost(label);
 }
 
 // Outcome mapping for the CLI-owned force escalation. Mirrors
 // `forceStopDesktopManagedHost` - same engine, same terminal outcomes - with
 // CLI-owned remediation in the messages (this machine has no Desktop-owned
 // registration to relaunch; the wedge escape is service uninstall/install).
-async function forceStopCliOwnedHost(label: ServiceLabel): Promise<void> {
-  const outcome = await forceStopHostProcess(label.environment, "stop");
+async function forceStopCliOwnedHost(
+  label: ServiceLabel,
+  operation: "stop" | "restart",
+): Promise<void> {
+  const outcome = await forceStopHostProcess(label.environment, operation);
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -1555,21 +1563,21 @@ async function forceStopCliOwnedHost(label: ServiceLabel): Promise<void> {
     case "no-metadata":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host stop --force: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so there is no process to kill. If the host is starting, retry in a moment; if it is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
+        message: `host ${operation} --force: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so there is no process to kill. If the host is starting, retry in a moment; if it is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
         details: { label: label.id },
         exitCode: 1,
       });
     case "identity-unverified":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host stop --force: could not verify that pid=${outcome.pid} is still the host process pid.json describes (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
+        message: `host ${operation} --force: could not verify that pid=${outcome.pid} is still the host process pid.json describes (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
         details: { label: label.id, pid: outcome.pid },
         exitCode: 1,
       });
     case "hung":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host stop --force: pid=${outcome.pid} survived SIGKILL through the exit grace; stop did not take effect.`,
+        message: `host ${operation} --force: pid=${outcome.pid} survived SIGKILL through the exit grace; the stop did not take effect.`,
         details: { label: label.id, pid: outcome.pid },
         exitCode: 1,
       });
@@ -1662,7 +1670,7 @@ async function stopServiceForRestart(
   // kickstart, and `kickstart -k` is correct either way - it recycles a running
   // job and starts a stopped one. All it costs is the tail of a deliberate
   // stop's diagnostics, which describe a shutdown nobody is debugging.
-  await stopService(label, run, force);
+  await stopService(label, run, force, "restart");
   return { forcedRecycle: true };
 }
 

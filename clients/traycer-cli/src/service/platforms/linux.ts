@@ -263,6 +263,7 @@ async function stopService(
   // this - and escalate with `systemctl kill -s SIGKILL`, which signals the
   // unit's OWN cgroup.
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGTERM_GRACE_MS)) {
+    await cancelScheduledAutoRestart(label, run);
     await purgePidMetadataAfterConfirmedStop(label);
     return;
   }
@@ -276,6 +277,14 @@ async function stopService(
       tolerateNonZeroExit: true,
     },
   );
+  // Cancel BEFORE polling: if the plain stop above never registered a stop
+  // job (a transient user-bus failure is swallowed by tolerateNonZeroExit),
+  // the SIGKILL lands outside any stop request and `Restart=on-failure`
+  // schedules a relaunch in RestartSec - the unit would sit in
+  // activating(auto-restart) and the poll below would time out over a host
+  // that IS down. The renewed stop both cancels that schedule and lets the
+  // state settle at inactive/failed.
+  await cancelScheduledAutoRestart(label, run);
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
     await purgePidMetadataAfterConfirmedStop(label);
     return;
@@ -286,6 +295,31 @@ async function stopService(
     details: { unit: unitName(label) },
     exitCode: 1,
   });
+}
+
+// A settled unit state is not yet proof that NOTHING is scheduled: the unit
+// can settle at `failed` because the host CRASHED during the grace rather
+// than exiting from our stop request, and `Restart=on-failure` then has a
+// relaunch scheduled for RestartSec later - reporting success and purging
+// pid.json right before systemd resurrects the host. `systemctl stop` on a
+// unit in auto-restart cancels the scheduled relaunch, and is a no-op on a
+// unit that is genuinely down, so issuing it after (or around) every
+// confirmation is pure insurance. Best-effort: the confirmation itself is
+// the poll's job, not this call's.
+async function cancelScheduledAutoRestart(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  try {
+    await run("systemctl", ["--user", "stop", unitName(label)], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 15_000,
+      tolerateNonZeroExit: true,
+    });
+  } catch {
+    // The runner itself failing must not fail a stop the poll confirmed.
+  }
 }
 
 // A SIGKILLed host cannot run its own shutdown cleanup, so the stale

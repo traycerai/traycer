@@ -1070,29 +1070,27 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
   });
 
-  // CLI-owned `stop --force`, once the plain SIGTERM relayed through
-  // launchd has been outlived: the SAME engine as the Desktop-managed force
-  // path (`forceStopHostProcess`) - `launchctl kill KILL` is never used
-  // here. `launchctl kill KILL` targets the JOB's service process, which is
-  // the `host start` SUPERVISOR, not the host: SIGKILL is untrappable,
-  // `KeepAlive{Crashed:true}` respawns a replacement supervisor, and the
-  // replacement reads the on-disk stop intent as already-served and starts
-  // a FRESH host - the stop would report success and be undone seconds
-  // later. Escalating against the identity-verified HOST CHILD instead
+  // CLI-owned `stop --force` goes straight to the child-kill engine
+  // (`forceStopHostProcess`) from the OUTSET - no launchd TERM relay first,
+  // no wait, no launchd kill of ANY kind, KILL or otherwise. Round 5 had
+  // force escalate ONLY after outliving the plain SIGTERM's wait (stacking
+  // a second full exit grace on a wedged host); round 6 removed that double
+  // grace entirely, so these cases no longer need fake timers - the force
+  // path never waits inside `stopService` at all. `launchctl kill KILL` is
+  // still never used at the job: the job's service process is the
+  // `host start` SUPERVISOR, and SIGKILL is untrappable -
+  // `KeepAlive{Crashed:true}` would respawn a replacement that reads the
+  // on-disk stop intent as already-served and starts a FRESH host, undoing
+  // the stop. Escalating against the identity-verified HOST CHILD instead
   // leaves the supervisor alive to consume the intent and exit cleanly, so
   // the job stays down. Reuses the exact `MOCKS.forceStopHostProcess`
   // stubbing pattern the Desktop-managed force tests below already
   // establish - same seam, same outcome union, different caller.
-  describe("CLI-owned stop --force (never launchctl kill KILL)", () => {
-    function stageOutlivedSigterm(): {
+  describe("CLI-owned stop --force (straight to forceStopHostProcess, no launchd kill of any kind)", () => {
+    function stageForceStop(): {
       calls: RecordedCall[];
       controller: ServiceController;
     } {
-      vi.useFakeTimers();
-      MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
-      // Alive throughout - the plain SIGTERM wait must run to its FULL
-      // timeout before any escalation, exactly like the non-force case.
-      MOCKS.isProcessAlive.mockReturnValue(true);
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
@@ -1101,99 +1099,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       return { calls, controller: createMacosController(runner) };
     }
 
-    it("invokes forceStopHostProcess once SIGTERM is outlived, and the launchd job NEVER receives a kill KILL", async () => {
-      const { calls, controller } = stageOutlivedSigterm();
-      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
-
-      const stopping = controller.stop(label, { force: true });
-      // STOP_EXIT_TIMEOUT_MS, plus slack - same margin the non-force
-      // timeout test above uses for the identical wait.
-      await vi.advanceTimersByTimeAsync(40_000);
-
-      await expect(stopping).resolves.toBeUndefined();
-      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
-        label.environment,
-        "stop",
-      );
-      // Only the plain SIGTERM relay to the job ever happened - no
-      // second launchctl kill of any kind, KILL or otherwise.
-      const launchctlKillCalls = calls.filter(
-        (call) => call.command === "launchctl" && call.args[0] === "kill",
-      );
-      expect(launchctlKillCalls).toEqual([
-        {
-          command: "launchctl",
-          args: ["kill", "TERM", `gui/${process.getuid?.() ?? 0}/${label.id}`],
-        },
-      ]);
-    });
-
-    it("resolves when forceStopHostProcess reports no-host (the pid was already gone)", async () => {
-      const { controller } = stageOutlivedSigterm();
-      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
-
-      const stopping = controller.stop(label, { force: true });
-      await vi.advanceTimersByTimeAsync(40_000);
-
-      await expect(stopping).resolves.toBeUndefined();
-    });
-
-    it("throws SERVICE_CONTROL_FAILED naming the missing endpoint when forceStopHostProcess reports no-metadata", async () => {
-      const { controller } = stageOutlivedSigterm();
-      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
-
-      const stopping = controller.stop(label, { force: true });
-      const assertion = expect(stopping).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("no host endpoint is published"),
-      });
-      await vi.advanceTimersByTimeAsync(40_000);
-
-      await assertion;
-    });
-
-    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
-      const { controller } = stageOutlivedSigterm();
-      MOCKS.forceStopHostProcess.mockResolvedValue({
-        kind: "identity-unverified",
-        pid: 4242,
-      });
-
-      const stopping = controller.stop(label, { force: true });
-      const assertion = expect(stopping).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("could not verify"),
-      });
-      await vi.advanceTimersByTimeAsync(40_000);
-
-      await assertion;
-    });
-
-    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
-      const { controller } = stageOutlivedSigterm();
-      MOCKS.forceStopHostProcess.mockResolvedValue({
-        kind: "hung",
-        pid: 4242,
-      });
-
-      const stopping = controller.stop(label, { force: true });
-      const assertion = expect(stopping).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("survived SIGKILL"),
-      });
-      await vi.advanceTimersByTimeAsync(40_000);
-
-      await assertion;
-    });
-
-    it("invokes forceStopHostProcess even when NO pid.json was published at all - force never falls back to a silent success", async () => {
-      // `before === null` used to short-circuit force into an unverified
-      // "success" (nothing to wait on). It must now fall through to the
-      // same engine as every other force outcome - there is no waiting to
-      // do here (no pid to poll), so no fake timers are needed either.
-      MOCKS.readHostPidMetadata.mockResolvedValue(null);
-      const runner: ProcessRunner = async () => buildSuccessResult();
-      const controller = createMacosController(runner);
+    it("goes straight to forceStopHostProcess with operation 'stop' - no TERM, no KILL, no wait on pid.json at all", async () => {
+      const { calls, controller } = stageForceStop();
       MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
 
       await expect(
@@ -1203,6 +1110,86 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
         label.environment,
         "stop",
+      );
+      // No launchctl kill of any kind - neither the old TERM relay nor a
+      // KILL at the job - ever happens on the force path now.
+      const launchctlKillCalls = calls.filter(
+        (call) => call.command === "launchctl" && call.args[0] === "kill",
+      );
+      expect(launchctlKillCalls).toEqual([]);
+      // The instance-matched pid.json purge lives entirely inside
+      // `forceStopHostProcess` (mocked here) - `stopService` itself never
+      // reads pid.json on the force path.
+      expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("resolves when forceStopHostProcess reports no-host (the pid was already gone)", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the missing endpoint when forceStopHostProcess reports no-metadata", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("no host endpoint is published"),
+      });
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not verify"),
+      });
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("the stop did not take effect."),
+      });
+    });
+
+    it("carries operation 'restart' through stopForRestart's force path, and a terminal outcome's message names 'host restart --force'", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("host restart --force"),
+      });
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "restart",
       );
     });
   });

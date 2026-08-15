@@ -900,6 +900,118 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       ).toBe(false);
     });
   });
+
+  it("a pending PAGE-WIDE write (rename in flight) disables both busy-notice buttons; releasing it re-enables them", async () => {
+    // Codex P1: the notice's own buttons only gated each OTHER
+    // (`retryPending || forcePending`) - nothing gated them on the REST of
+    // the page. Every other lifecycle write already refuses to dispatch
+    // while a restart is in flight (`corePending` includes `restart.isPending`
+    // and `forceRestartInFlight`), but the exclusion did not hold in the
+    // other direction: Try again and Force restart stayed clickable while a
+    // rename, an update install, or a service write was running - any of
+    // which a forced bridge respawn would then race. `pageGatePending`
+    // (`anyPending`, the page's fullest write gate) closes that gap.
+    let releaseRename: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      effectiveName: "Host Local Display",
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 2 },
+          }),
+        "host.identity.set": async (req) => {
+          await gate;
+          return {
+            systemName: "host-local",
+            customName: req.customName,
+            effectiveName: req.customName ?? "host-local",
+          };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    const management = buildOverviewManagement({});
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("Host Local Display");
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-overview-restart-busy");
+
+    // Enabled BEFORE the unrelated write - so the lock below is caused by
+    // the rename, not by a fixture that never let the buttons load.
+    expect(
+      screen
+        .getByRole("button", { name: "Force restart" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit name" }));
+    const input = await screen.findByTestId("host-overview-name-input");
+    fireEvent.change(input, { target: { value: "New Name" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Force restart" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    await act(async () => {
+      releaseRename?.();
+      await gate;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Force restart" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Try again" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
 });
 
 describe("<HostSettingsPanel /> Overview update-install degrade", () => {

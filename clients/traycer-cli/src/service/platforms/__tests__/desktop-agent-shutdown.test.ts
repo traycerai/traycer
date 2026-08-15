@@ -562,4 +562,74 @@ describe("forceStopHostProcess", () => {
       });
     });
   });
+
+  // Instance-matched purge: the wrapper's purge fires only when a FRESH
+  // re-read of pid.json (taken AFTER the outcome settles) still names the
+  // exact instance the signals were aimed at (same pid, same
+  // processStartIdentity). A supervisor relaunched mid-stop can snapshot the
+  // pre-existing stop intent as already served and publish a REPLACEMENT
+  // pid.json in the window between the signal and this re-read -
+  // unconditionally unlinking would delete the replacement's record,
+  // leaving that host running but undiscoverable. `readHostPidMetadata` is
+  // mocked with `mockResolvedValueOnce` per call here: the FIRST call is
+  // `signalHostForForcedStop`'s own read (which becomes `actedOn`), the
+  // SECOND is the wrapper's post-outcome re-read - exactly two calls total
+  // regardless of how many identity checks ran in between, since metadata is
+  // read once at the top and reused for the rest of the signal flow.
+  describe("instance-matched purge", () => {
+    it("does NOT purge when the re-read pid.json names a DIFFERENT pid (a replacement instance published mid-stop) - outcome is still stopped", async () => {
+      MOCKS.readHostPidMetadata
+        .mockResolvedValueOnce(LIVE_METADATA) // signalHostForForcedStop's read -> actedOn
+        .mockResolvedValueOnce({ ...LIVE_METADATA, pid: 9999 }); // wrapper's re-read: a replacement
+      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const outcome = await forceStopHostProcess("production", "stop");
+
+      expect(outcome).toEqual({ kind: "stopped" });
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("does NOT purge when the re-read pid.json keeps the same pid but a DIFFERENT processStartIdentity (the pid was recycled into a new instance) - outcome is still stopped", async () => {
+      MOCKS.readHostPidMetadata
+        .mockResolvedValueOnce(LIVE_METADATA)
+        .mockResolvedValueOnce({
+          ...LIVE_METADATA,
+          processStartIdentity: "darwin:1700000000.000000",
+        });
+      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const outcome = await forceStopHostProcess("production", "stop");
+
+      expect(outcome).toEqual({ kind: "stopped" });
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("does NOT purge when the record vanished before the re-read (the host's own shutdown handler already unlinked it) - outcome is still stopped", async () => {
+      MOCKS.readHostPidMetadata
+        .mockResolvedValueOnce(LIVE_METADATA)
+        .mockResolvedValueOnce(null);
+      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const outcome = await forceStopHostProcess("production", "stop");
+
+      expect(outcome).toEqual({ kind: "stopped" });
+      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("DOES purge when the re-read pid.json still names the exact same instance (same pid, same processStartIdentity) - the ordinary confirmed-stop case", async () => {
+      MOCKS.readHostPidMetadata
+        .mockResolvedValueOnce(LIVE_METADATA)
+        .mockResolvedValueOnce({ ...LIVE_METADATA });
+      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const outcome = await forceStopHostProcess("production", "stop");
+
+      expect(outcome).toEqual({ kind: "stopped" });
+      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("production");
+    });
+  });
 });

@@ -623,6 +623,12 @@ export function HostOverviewPanel(props: {
                     })
             }
             forcePending={forceRestartPendingHere}
+            // `anyPending` is the page's FULL write gate (core lifecycle
+            // writes, service register/deregister, an accepted-but-unsettled
+            // update install) - the same one the restart confirm and rename
+            // already honor. Passing anything narrower would let Force
+            // restart recycle the host beside one of those writes.
+            pageGatePending={anyPending}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a
