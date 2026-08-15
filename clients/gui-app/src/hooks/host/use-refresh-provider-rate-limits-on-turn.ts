@@ -25,8 +25,8 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  *   tick into two overlapping subprocess spawns. This enqueue is deliberately
  *   NOT gated by window visibility - only the interval timer pauses when hidden;
  *   a background turn finishing while the user is away must still update data.
- * - `httpFetch` (openrouter, kilocode): invalidates the query directly (no
- *   subprocess to bound), exactly as before.
+ * - `httpFetch` (openrouter, kilocode, huggingface, opencode): invalidates the
+ *   query directly (no subprocess to bound), exactly as before.
  *
  * Unlike the aperture refresh hook, this uses the current `HostRuntimeContext`
  * scope so Settings-selected and future tab-scoped consumers target the same
@@ -95,8 +95,8 @@ export function useRefreshProviderRateLimitsOnTurn(
         );
         return;
       }
-      // httpFetch providers (openrouter, kilocode) never touch the queue - a
-      // plain credential GET has no subprocess to bound, so invalidate directly.
+      // httpFetch providers never touch the queue - a plain credential GET has
+      // no subprocess to bound, so invalidate directly.
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,

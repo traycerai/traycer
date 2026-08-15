@@ -59,11 +59,12 @@ export function useProvidersAwaitModelProviderAuth(): UseMutationResult<
     options: {
       mutationKey: providersMutationKeys.awaitModelProviderAuth(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (data, _variables, context) => {
+      onSuccess: (data, variables, context) => {
         if (data.result.kind !== "done") return;
         void invalidateAfterModelProviderMutation({
           queryClient,
           hostId: context.hostId,
+          providerId: variables.providerId,
         });
       },
     },

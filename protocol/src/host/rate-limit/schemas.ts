@@ -8,6 +8,7 @@ import {
   providerIdSchemaV40,
   providerIdSchemaV50,
   providerIdSchemaV60,
+  providerIdSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -91,6 +92,7 @@ export const rateLimitCapableProviderIdSchema = z.enum([
   "kilocode",
   "grok",
   "huggingface",
+  "opencode",
 ]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
@@ -202,6 +204,21 @@ const huggingFaceRateLimitsSchema = z.object({
   numRequests: z.number().nullable(),
   periodStart: z.string().nullable(),
   periodEnd: z.string().nullable(),
+});
+
+const openCodeGoWindowSchema = providerRateLimitWindowSchema.extend({
+  status: z.enum(["ok", "rate-limited"]),
+});
+
+const openCodeRateLimitsSchema = z.object({
+  provider: z.literal(rateLimitCapableProviderIdSchema.enum.opencode),
+  available: z.literal(true),
+  // Opaque renderer-cache epoch. The credential fingerprint never leaves the
+  // host; this random generation only prevents retaining another key's usage.
+  credentialGeneration: z.string().min(1),
+  fiveHour: openCodeGoWindowSchema,
+  weekly: openCodeGoWindowSchema,
+  monthly: openCodeGoWindowSchema,
 });
 
 // Kilo Code arm - httpFetch-class provider (reads its own credential file,
@@ -348,7 +365,7 @@ export type RateLimitUnavailableReason = z.infer<
 // is split: `unavailableProviderRateLimitsSchemaV1` tags `reason` with the
 // frozen v1 enum (feeds `providerRateLimitsSchemaV1`, which only the v1.2
 // response uses); `unavailableProviderRateLimitsSchemaV2` tags it with the
-// v2 enum (shared by the frozen v2 response and the latest v3 response).
+// v2 enum used by every frozen newer response and the latest response.
 const unavailableProviderRateLimitsSchemaV1 = z.object({
   provider: providerIdSchema,
   available: z.literal(false),
@@ -360,6 +377,13 @@ const unavailableProviderRateLimitsSchemaV2 = z.object({
   available: z.literal(false),
   reason: rateLimitUnavailableReasonSchemaV2,
 });
+
+const unavailableProviderRateLimitsSchema =
+  unavailableProviderRateLimitsSchemaV2.extend({
+    // Present on OpenCode snapshots so renderer retention is scoped to the
+    // credential observed by the host. Other providers omit it.
+    credentialGeneration: z.string().min(1).optional(),
+  });
 
 // Provider-tagged union of account rate-limit snapshots, frozen at the v1
 // reason enum. Feeds `rateLimitUsageResponseSchemaV12` only, so the
@@ -400,9 +424,27 @@ export const providerRateLimitsSchemaV21 = z.union([
 ]);
 export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
-// Latest provider union: identical to the frozen v2.1 union above plus the
-// grok available arm. Feeds the v3.0 host response and the unreleased,
-// still-growing a2a `agent.getProviderProfileRateLimits@2.0`.
+// Frozen provider union carried by host.getRateLimitUsage@4.0 and
+// agent.getProviderProfileRateLimits@4.0. It includes Hugging Face but not
+// OpenCode Go.
+export const providerRateLimitsSchemaV70 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  huggingFaceRateLimitsSchema,
+  z.object({
+    provider: providerIdSchemaV70,
+    available: z.literal(false),
+    reason: rateLimitUnavailableReasonSchemaV2,
+  }),
+]);
+export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
+
+// Latest provider union: the frozen v4 union plus OpenCode Go. The new
+// available arm travels behind the next RPC major; the unavailable arm's
+// optional cache generation is stripped naturally by older object schemas.
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
@@ -410,7 +452,8 @@ export const providerRateLimitsSchema = z.union([
   kiloCodeRateLimitsSchema,
   grokRateLimitsSchema,
   huggingFaceRateLimitsSchema,
-  unavailableProviderRateLimitsSchemaV2,
+  openCodeRateLimitsSchema,
+  unavailableProviderRateLimitsSchema,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
 
@@ -479,6 +522,23 @@ export function mapHuggingFaceAvailableToUnavailable(
   ) {
     return {
       provider: "huggingface",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
+
+export function mapOpenCodeAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "opencode"
+  ) {
+    return {
+      provider: "opencode",
       available: false,
       reason: "unsupported_provider",
     };
@@ -652,17 +712,24 @@ export type RateLimitUsageResponseV30 = z.infer<
   typeof rateLimitUsageResponseSchemaV30
 >;
 
-// v4.0 response - identical to v3.0 except the provider-account snapshot ranges
-// over the live `providerRateLimitsSchema`, which adds the Hugging Face
-// available arm. Same reasoning as the v3.0 cut for grok: a new available union
-// arm needs an explicit downgrade bridge, so it is a major rather than a v3.1
-// minor. The request shape is unchanged from v1.2/v2.x/v3.0.
+// v4.0 response - identical to v3.0 except its frozen provider snapshot adds
+// the Hugging Face available arm. Same reasoning as the v3.0 cut for grok: a
+// new available union arm needs an explicit downgrade bridge, so it is a major
+// rather than a v3.1 minor. The request shape is unchanged from v1.2/v2.x/v3.0.
 export const rateLimitUsageResponseSchemaV40 =
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV70.nullable(),
   });
 export type RateLimitUsageResponseV40 = z.infer<
   typeof rateLimitUsageResponseSchemaV40
+>;
+
+export const rateLimitUsageResponseSchemaV50 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  });
+export type RateLimitUsageResponseV50 = z.infer<
+  typeof rateLimitUsageResponseSchemaV50
 >;
 
 /**

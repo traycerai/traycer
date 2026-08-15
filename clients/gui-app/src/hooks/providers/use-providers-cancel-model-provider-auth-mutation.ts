@@ -62,11 +62,12 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
     options: {
       mutationKey: providersMutationKeys.cancelModelProviderAuth(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (data, _variables, context) => {
+      onSuccess: (data, variables, context) => {
         if (data.cancelled || data.result.kind !== "done") return;
         void invalidateAfterModelProviderMutation({
           queryClient,
           hostId: context.hostId,
+          providerId: variables.providerId,
         });
       },
       // No `onError` toast. The only consumer renders this failure inline, in
