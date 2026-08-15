@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   artifactLayoutFromChain,
   deriveArtifactPathLayoutRootAgnostic,
+  EPIC_ARTIFACT_COMMENTS_DIRNAME,
+  EPIC_ARTIFACT_IMAGES_DIRNAME,
 } from "../artifact-path";
 
 /**
@@ -168,5 +170,63 @@ describe("artifactLayoutFromChain", () => {
 
   it("returns null for an empty chain", () => {
     expect(artifactLayoutFromChain([])).toBeNull();
+  });
+
+  it("returns null for a dot-prefixed segment in the last position", () => {
+    expect(artifactLayoutFromChain(["auth", ".comments"])).toBeNull();
+  });
+
+  it("returns null for a dot-prefixed segment in a middle/parent position", () => {
+    expect(artifactLayoutFromChain([".comments", "auth"])).toBeNull();
+  });
+
+  it("returns null for a plain dotfile-ish single-segment chain", () => {
+    expect(artifactLayoutFromChain([".hidden"])).toBeNull();
+  });
+
+  it("still resolves a normal chain with no dot-prefixed segment", () => {
+    expect(artifactLayoutFromChain(["auth", "sub-spec"])).toEqual({
+      folderName: "sub-spec",
+      parentSegments: ["auth"],
+    });
+  });
+});
+
+describe("deriveArtifactPathLayoutRootAgnostic - dot-prefixed chain segments rejected", () => {
+  it("returns null for a `.comments/index.md` nested under a real artifact folder, with a pinned expectedEpicId", () => {
+    expect(
+      deriveArtifactPathLayoutRootAgnostic(
+        `/x/epics/${EPIC}/artifacts/auth/.comments/index.md`,
+        EPIC,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for a `.comments/index.md` nested under a real artifact folder, with expectedEpicId null", () => {
+    expect(
+      deriveArtifactPathLayoutRootAgnostic(
+        `/x/epics/${EPIC}/artifacts/auth/.comments/index.md`,
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it("still resolves the sibling index.md for the real artifact folder itself", () => {
+    expect(
+      deriveArtifactPathLayoutRootAgnostic(
+        `/x/epics/${EPIC}/artifacts/auth/index.md`,
+        EPIC,
+      ),
+    ).toEqual({ epicId: EPIC, folderName: "auth", parentSegments: [] });
+  });
+});
+
+describe("projection dirname constants - cross-repo contract (host + gui-app also depend on these literals)", () => {
+  it("EPIC_ARTIFACT_IMAGES_DIRNAME is 'images'", () => {
+    expect(EPIC_ARTIFACT_IMAGES_DIRNAME).toBe("images");
+  });
+
+  it("EPIC_ARTIFACT_COMMENTS_DIRNAME is '.comments'", () => {
+    expect(EPIC_ARTIFACT_COMMENTS_DIRNAME).toBe(".comments");
   });
 });
