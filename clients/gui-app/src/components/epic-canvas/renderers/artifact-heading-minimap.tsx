@@ -6,13 +6,11 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from "react";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import {
   resolveMinimapTrackHeightStyle,
-  resolveMinimapTrackIndexFromPointer,
   resolveMinimapTrackTopStyle,
 } from "@/components/minimap/minimap-track-geometry";
 import { cn } from "@/lib/utils";
@@ -72,21 +70,19 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
     [outline.length, scrollToIndex],
   );
 
-  const handleHitStripClick = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>): void => {
-      const rect = regionRef.current?.getBoundingClientRect();
-      if (rect === undefined) return;
-      const index = resolveMinimapTrackIndexFromPointer({
-        itemCount: outline.length,
-        endHitPadding: ARTIFACT_HEADING_END_HIT_PADDING,
-        railTop: rect.top,
-        railHeight: rect.height,
-        pointerY: event.clientY,
-      });
-      if (index !== null) jumpTo(index);
-    },
-    [jumpTo, outline.length],
-  );
+  /**
+   * Opening the outline is all this button does.
+   *
+   * It used to map the pointer's Y to the nearest tick and jump there, which
+   * was unreachable by the time it could fire: entering the rail opens the
+   * index, and the index covers the strip (it replaces the rail in place), so
+   * the click always landed on the card. Keyboard activation is the path that
+   * still reaches this handler, and for that "open the outline" is the honest
+   * behaviour - the rows below are what navigate.
+   */
+  const handleHitStripClick = useCallback((): void => {
+    setOpen(true);
+  }, []);
 
   // Arrows advance an explicit cursor rather than re-reading the current
   // section. Reading it back would stall under repeat presses: the jump scrolls
@@ -174,7 +170,13 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
 
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 left-0 z-30 hidden w-16 [container-type:size] [@media(pointer:fine)]:block"
+      // Spans the whole tile so `cq` units below resolve against the PANE, not
+      // against the rail's own strip. A canvas pane can shrink to
+      // `MIN_PANE_PX` (240px, `tile-tree-constants.ts`) and clips its overflow,
+      // so a card sized from the viewport would hang off the edge with its
+      // labels cut off. Inert: `pointer-events-none` here, re-enabled only on
+      // the control itself.
+      className="pointer-events-none absolute inset-0 z-30 hidden [container-type:size] [@media(pointer:fine)]:block"
       data-testid="artifact-heading-minimap"
     >
       <div
@@ -288,7 +290,7 @@ function ArtifactHeadingMinimapCard(props: {
     // `left-0` puts the index where the ticks were, so opening it reads as the
     // rail expanding in place rather than a popover appearing next to it.
     <div
-      className="pointer-events-auto absolute top-1/2 left-0 w-[min(20rem,calc(100vw-3rem))] -translate-y-1/2 overflow-hidden rounded-xl border border-border/60 bg-popover text-left text-popover-foreground shadow-lg"
+      className="pointer-events-auto absolute top-1/2 left-0 w-[min(20rem,calc(100cqw-1.5rem))] -translate-y-1/2 overflow-hidden rounded-xl border border-border/60 bg-popover text-left text-popover-foreground shadow-lg"
       data-testid="artifact-heading-minimap-card"
     >
       <div className="px-3 pt-3 pb-1 text-ui-xs font-medium tracking-wide text-muted-foreground/70 uppercase">

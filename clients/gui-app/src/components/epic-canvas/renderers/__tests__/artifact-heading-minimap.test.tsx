@@ -397,6 +397,37 @@ describe("ArtifactHeadingMinimap", () => {
   });
 
   /**
+   * A canvas pane can shrink to `MIN_PANE_PX` (240px) and clips its overflow,
+   * so the card has to be sized from the pane. Sizing it from the viewport -
+   * which is what it did when review caught this - leaves a 20rem card hanging
+   * off the edge of a narrow split with its labels cut off. jsdom does not lay
+   * out container queries, so this asserts the sizing SOURCE rather than a
+   * measured width.
+   */
+  it("sizes the outline card from the pane, not the viewport", async () => {
+    await mountThreeHeadingRail();
+    fireEvent.mouseEnter(findRegion());
+    const card = await screen.findByTestId("artifact-heading-minimap-card");
+
+    expect(card.className).toContain("100cqw");
+    expect(card.className).not.toContain("100vw");
+    expect(screen.getByTestId("artifact-heading-minimap").className).toContain(
+      "[container-type:size]",
+    );
+  });
+
+  it("opens the outline when the rail is activated by keyboard", async () => {
+    const { scroller } = await mountThreeHeadingRail();
+    const hitStrip = screen.getByTestId("artifact-heading-minimap-hit-strip");
+
+    fireEvent.click(hitStrip);
+
+    expect(screen.getByTestId("artifact-heading-minimap-card")).toBeTruthy();
+    // Activating the rail reveals the index; it never navigates on its own.
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+
+  /**
    * The desktop shell renders the whole app inside `<StrictMode>`
    * (`clients/desktop/src/renderer-shell/main.tsx`), which replays mount
    * effects. A cleanup that cancelled the pending measurement frame without
