@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
  *
  * It is also a drag source. A click opens the window wherever the door puts it
  * (a preview tab); dragging is how a person says WHERE - onto a canvas pane -
- * exactly as dragging a row out of the Shells menu or the Background panel
+ * exactly as dragging a row out of the Background panel
  * does, on the same payload, so the canvas needs to know nothing about which
  * surface the gesture began in. The identity a drag needs (epic, bound host,
  * owning canvas view) is read from the same contexts the door hook itself

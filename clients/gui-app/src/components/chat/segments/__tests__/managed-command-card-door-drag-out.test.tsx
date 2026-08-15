@@ -23,10 +23,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * card's "Open in tab" button - out onto the canvas, driven as a real pointer
  * gesture through the real `RootDndProvider`.
  *
- * The door became a drag source on the SAME payload the Shells-menu row and
- * the Background-panel row already drop (see `managed-command-menu-drag-out`
- * and `chat-background-panel-drag-out`), so this proves that same contract
- * for a third surface - and its one real difference: a deleted shell's door is
+ * The door became a drag source on the SAME payload the Background-panel row
+ * already drops (see `chat-background-panel-drag-out`), so this proves that
+ * same contract for a second surface - and its one real difference: a deleted shell's door is
  * not a button at all, so it must not register as a drag source either.
  */
 

@@ -755,10 +755,9 @@ describe("chat activity grouping", () => {
       "activity_group",
       "segment",
     ]);
-    for (const index of [1, 3]) {
-      const item = timeline[index];
-      if (item?.kind !== "segment" || item.segment.kind !== "tool") {
-        throw new Error(`Expected promoted shell tool segment at ${index}`);
+    for (const item of [timeline[1], timeline[3]]) {
+      if (item.kind !== "segment" || item.segment.kind !== "tool") {
+        throw new Error("Expected promoted shell tool segment");
       }
       expect(item.segment.managedCommand).not.toBeNull();
     }

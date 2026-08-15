@@ -23,8 +23,8 @@ export interface ShellOutputAvailabilityNoticeProps {
   readonly availability: ShellOutputNoticeAvailability;
   /**
    * Closes the surface's own tab - the way out every terminal state offers.
-   * `null` on a surface with no tab of its own (the Shells menu), which only
-   * ever shows the connection strip anyway.
+   * `null` on a surface with no tab of its own, which only ever shows the
+   * connection strip anyway.
    */
   readonly onClose: (() => void) | null;
   /**

@@ -15,9 +15,9 @@ import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-sche
 /**
  * Drag-source wiring for a shell's output window, wherever a surface offers a
  * shell as a door - the transcript's start and restart cards, the resume
- * divider - so a drag out of any of them lands the same tile the Shells menu's
- * rows and the Background panel's rows already drop, on the same payload. The
- * canvas needs to know nothing about where the gesture started.
+ * divider - so a drag out of any of them lands the same tile the Background
+ * panel's rows already drop, on the same payload. The canvas needs to know
+ * nothing about where the gesture started.
  *
  * Same discipline as `useArtifactDragSource`:
  *
