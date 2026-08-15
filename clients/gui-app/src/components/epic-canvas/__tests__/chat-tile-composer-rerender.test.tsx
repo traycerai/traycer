@@ -166,6 +166,8 @@ const QUEUE: ChatLowerQueueState = {
   editingItem: null,
   editingItemId: null,
   value: { status: "idle", items: [] },
+  resumeRequested: false,
+  keepPausedRequested: false,
   onPause: () => null,
   onResume: () => null,
   onEdit: () => undefined,
