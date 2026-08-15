@@ -2349,6 +2349,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // transcript baseline (which connection hydrated these rows) and reports
   // the semantic transition. This layer only renders it.
   const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  // The rendered sentence is FROZEN when the announcement is made, not
+  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
+  // after its first turn, and can be renamed any time). Recomputing would
+  // rewrite the text inside the already-announced live-region node, and a
+  // screen reader re-announces on content change - a phantom completion for
+  // a rename. A later announcement re-freezes with the title current then.
+  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
+    readonly sequence: number;
+    readonly text: string;
+  } | null>(null);
+  if (
+    announcement !== null &&
+    renderedAnnouncement?.sequence !== announcement.sequence
+  ) {
+    setRenderedAnnouncement({
+      sequence: announcement.sequence,
+      text: announcementTextFor(taskTitle, announcement.kind),
+    });
+  }
   useLayoutEffect(() => {
     if (announcement === null) return;
     // Decision #10/#16: turn completion below the fold stays anchored - no
@@ -2446,11 +2465,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           ) : null}
         </div>
         <div aria-live="polite" className="sr-only">
-          {announcement === null ? null : (
+          {renderedAnnouncement === null ? null : (
             // Keyed by the deriver's monotonic sequence so consecutive
             // identical announcements still mutate the live region.
-            <span key={announcement.sequence}>
-              {announcementTextFor(taskTitle, announcement.kind)}
+            <span key={renderedAnnouncement.sequence}>
+              {renderedAnnouncement.text}
             </span>
           )}
         </div>

@@ -689,6 +689,8 @@ interface RenderChatMessagesOptions {
 interface ChatMessagesRenderState {
   messages: ReadonlyArray<ChatMessageModel>;
   baselineEpoch: number;
+  /** Mutable: a chat is auto-titled after its first turn and can be renamed. */
+  taskTitle: string;
   systemOverlayActive: boolean;
   scrollRequest: ChatMessageScrollRequest | null;
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
@@ -743,6 +745,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     // every non-announcement test wants. The announcement suite drives this
     // explicitly to model mount hydration and reconnect backfill.
     baselineEpoch: options.baselineEpoch ?? 0,
+    taskTitle: options.taskTitle ?? "Test chat",
     systemOverlayActive: options.systemOverlayActive ?? false,
     scrollRequest: options.scrollRequest ?? null,
     backgroundItems: options.backgroundItems,
@@ -784,7 +787,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
         style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
       >
         <ChatMessages
-          taskTitle={options.taskTitle ?? "Test chat"}
+          taskTitle={state.taskTitle}
           taskId={taskId}
           epicId={epicId}
           hostId={null}
@@ -1392,6 +1395,65 @@ describe("ChatMessages scroll policy", () => {
         expect(live?.textContent).toBe(
           "Build plan received a background completion.",
         );
+      });
+    });
+
+    it("keeps an announced sentence frozen when the chat is renamed", async () => {
+      const userMsg = makeMessage(0, "user");
+      const assistantStreaming: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const assistantDone: ChatMessageModel = {
+        ...assistantStreaming,
+        completedAt: 1_700_000_000_000,
+        runState: null,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [userMsg, assistantStreaming],
+        scrollStateKey: "aria-rename-freeze-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderWith({ messages: [userMsg, assistantDone] });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+      const announcedNode = live?.firstElementChild;
+
+      // A chat is auto-titled right after its first turn - exactly when this
+      // announcement is still mounted. Rewriting the text inside the live
+      // region would re-announce a completion that never happened, so the
+      // sentence stays as it was announced.
+      rerenderWith({ taskTitle: "Renamed plan" });
+      await settleLegendList();
+      expect(live?.textContent).toBe("Build plan finished responding.");
+      expect(live?.firstElementChild).toBe(announcedNode);
+
+      // Freezing is per announcement, not permanent: the next one speaks the
+      // title the reader now sees.
+      rerenderWith({
+        messages: [
+          userMsg,
+          assistantDone,
+          makeMessage(2, "user"),
+          {
+            ...makeMessage(3, "assistant"),
+            completedAt: 1_700_000_005_000,
+            stopped: null,
+            runState: null,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Renamed plan finished responding.");
       });
     });
 
