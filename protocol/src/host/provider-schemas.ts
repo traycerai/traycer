@@ -33,6 +33,7 @@ import {
   nativeAuthResultSchema,
   nativeListQuerySchema,
   nativeListResultSchema,
+  nativeListResultSchemaV70,
   nativeMutationResultSchema,
   nativeMutationSchema,
   projectNativeCapabilitiesToV70,
@@ -1730,6 +1731,10 @@ export type ProvidersListResponseV40 = z.infer<
 // nested shape, so growth in any of them turns v7.0 red in plain `bun run test`
 // instead of leaking silently. When that happens, hand-freeze the sub-schema
 // that grew - do not regenerate the fixture to make it green.
+//
+// `native` on this response now uses `nativeListResultSchemaV70` because the
+// live skill row grew `origin` / `conflict`. The capabilities descriptor
+// already pointed at `providerNativeCapabilitiesSchemaV70`.
 const providerCliStateBaseShapeV70 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -1776,7 +1781,7 @@ export type ProviderCliStateV70 = z.infer<typeof providerCliStateSchemaV70>;
 
 export const providersListResponseSchemaV70 = z.object({
   providers: z.array(providerCliStateSchemaV70),
-  native: nativeListResultSchema.nullable().default(null),
+  native: nativeListResultSchemaV70.nullable().default(null),
 });
 export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
