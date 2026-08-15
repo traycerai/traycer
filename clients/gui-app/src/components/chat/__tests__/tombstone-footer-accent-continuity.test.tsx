@@ -94,6 +94,7 @@ function anchor(accentColor: string | null): ChatSessionAnchor {
       secondaryWorkspaces: [],
     },
     claudeMessageUuid: "uuid-1",
+    turnTailUuid: null,
     createdAt: 100,
     coveredUntilMessageId: null,
     profileId: "removed-uuid",

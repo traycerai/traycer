@@ -1,5 +1,5 @@
 {
-  "$comment": "Static policy encoding which host→client payload paths are catalog-gated (id-agnostic — future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host→client payloads — growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
+  "$comment": "Static policy encoding which host\u2192client payload paths are catalog-gated (id-agnostic \u2014 future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host\u2192client payloads \u2014 growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
   "exceptions": [
     {
       "family": "unary",
@@ -208,6 +208,14 @@
       "payload": "serverFrame",
       "path": "**.coveredUntilMessageId",
       "reason": "Session-anchor/chain seed-coverage field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no seed context ever existed' semantic - literally true for a host that predates fake-context seeding (#187). No shipped client reads the field; only the host's own seeding consumes it."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.turnTailUuid",
+      "reason": "Session-anchor turn-tail field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no tail recorded' semantic - literally true for every anchor written before tail recording existed. No shipped client reads the field; only the host's own rewind-fork resolution consumes it."
     },
     {
       "family": "stream",
