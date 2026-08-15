@@ -352,7 +352,6 @@ export function useGitDiffEditing(
     currentComparisonIdentity: args.currentComparisonIdentity,
     contentsQuery,
     editRuntime: fileSession.runtime,
-    setHydration,
     setStaleIdentity,
   });
 
@@ -531,7 +530,6 @@ function useGitDiffDriftRetry(args: {
     HostRpcError
   >;
   readonly editRuntime: FileEditRuntime | null;
-  readonly setHydration: Dispatch<SetStateAction<GitDiffHydration | null>>;
   readonly setStaleIdentity: Dispatch<SetStateAction<string | null>>;
 }): void {
   const {
@@ -540,9 +538,12 @@ function useGitDiffDriftRetry(args: {
     currentComparisonIdentity,
     contentsQuery,
     editRuntime,
-    setHydration,
     setStaleIdentity,
   } = args;
+  const driftCheckedRef = useRef<{
+    readonly hydration: GitDiffHydration;
+    readonly comparisonIdentity: string | null;
+  } | null>(null);
   const driftAttemptRef = useRef<string | null>(null);
   const driftBackoffRef = useRef<{
     readonly identity: string;
@@ -552,20 +553,45 @@ function useGitDiffDriftRetry(args: {
   const [driftRetryGeneration, setDriftRetryGeneration] = useState(0);
 
   useEffect(() => {
+    if (!active || hydration === null) return;
+    let checked = driftCheckedRef.current;
+    if (checked?.hydration !== hydration) {
+      if (driftRetryTimerRef.current !== null) {
+        window.clearTimeout(driftRetryTimerRef.current);
+        driftRetryTimerRef.current = null;
+      }
+      driftAttemptRef.current = null;
+      driftBackoffRef.current = { identity: "", attempts: 0 };
+      checked = {
+        hydration,
+        comparisonIdentity: hydration.comparisonIdentity,
+      };
+      driftCheckedRef.current = checked;
+    }
     if (
-      !active ||
-      hydration === null ||
-      hydration.comparisonIdentity === currentComparisonIdentity ||
+      driftAttemptRef.current !== null &&
+      driftAttemptRef.current !== currentComparisonIdentity
+    ) {
+      if (driftRetryTimerRef.current !== null) {
+        window.clearTimeout(driftRetryTimerRef.current);
+        driftRetryTimerRef.current = null;
+      }
+      driftAttemptRef.current = null;
+      driftBackoffRef.current = { identity: "", attempts: 0 };
+      checked = { ...checked, comparisonIdentity: null };
+      driftCheckedRef.current = checked;
+    }
+    if (
+      checked.comparisonIdentity === currentComparisonIdentity ||
       // `contentsQuery` (a TanStack Query result) is not referentially
-      // stable across renders, so this effect can re-run many times before
-      // the refetch below ever resolves and marks `hydration.comparisonIdentity`
-      // caught up. Without this synchronous guard, each of those re-runs
-      // would start another overlapping `git.getFileContents` RPC for the
-      // same stale identity.
+      // stable across renders, so this effect can re-run while the request is
+      // in flight. Keep that identity separate from the last successful check
+      // so neither case starts a duplicate `git.getFileContents` RPC.
       driftAttemptRef.current === currentComparisonIdentity
     ) {
       return;
     }
+    const attemptHydration = hydration;
     const attemptIdentity = currentComparisonIdentity;
     driftAttemptRef.current = attemptIdentity;
     // A failed check schedules its own bounded retry below instead of
@@ -596,7 +622,11 @@ function useGitDiffDriftRetry(args: {
         // Only clear + retry if this scheduled attempt is still the
         // relevant one - a genuinely different identity may have since
         // superseded it and already reset the backoff itself.
-        if (driftBackoffRef.current.identity === attemptIdentity) {
+        if (
+          driftBackoffRef.current.identity === attemptIdentity &&
+          driftAttemptRef.current === attemptIdentity &&
+          driftCheckedRef.current?.hydration === attemptHydration
+        ) {
           driftAttemptRef.current = null;
           setDriftRetryGeneration((generation) => generation + 1);
         }
@@ -608,7 +638,12 @@ function useGitDiffDriftRetry(args: {
         // `driftAttemptRef` only moves when a genuinely different comparison
         // identity supersedes this one, so this correctly ignores a result
         // that arrived after that happened.
-        if (driftAttemptRef.current !== attemptIdentity) return;
+        if (
+          driftAttemptRef.current !== attemptIdentity ||
+          driftCheckedRef.current?.hydration !== attemptHydration
+        ) {
+          return;
+        }
         // A transport failure (`result.error`, the same field
         // `validateGitEditContents` checks) or a payload-level error (RPC
         // succeeded but reported one) means this comparison never actually
@@ -626,20 +661,24 @@ function useGitDiffDriftRetry(args: {
         const matchesBaseline =
           latestContent !== undefined &&
           latestContent === editRuntime?.store.getState().baselineContent;
-        // Mark this comparison identity checked either way. Leaving it unmarked
-        // on a genuine mismatch would keep `hydration.comparisonIdentity` stale
-        // forever, and since this effect's own `refetch()` changes `contentsQuery`
-        // identity, that would re-fire this effect (and re-hit the host) on
-        // every render for as long as the file stays flagged stale.
-        setHydration((current) =>
-          current === null
-            ? null
-            : { ...current, comparisonIdentity: attemptIdentity },
-        );
+        driftAttemptRef.current = null;
+        // Keep the acknowledgement beside, rather than inside, the structural
+        // hydration seed. A later return to an older identity is checked again
+        // against the runtime's newer baseline, while successful checks do not
+        // rebuild `fileDiffs` and detach the editor.
+        driftCheckedRef.current = {
+          hydration: attemptHydration,
+          comparisonIdentity: attemptIdentity,
+        };
         setStaleIdentity(matchesBaseline ? null : attemptIdentity);
       })
       .catch(() => {
-        if (driftAttemptRef.current === attemptIdentity) scheduleRetry();
+        if (
+          driftAttemptRef.current === attemptIdentity &&
+          driftCheckedRef.current?.hydration === attemptHydration
+        ) {
+          scheduleRetry();
+        }
       });
   }, [
     active,
@@ -647,7 +686,6 @@ function useGitDiffDriftRetry(args: {
     currentComparisonIdentity,
     editRuntime,
     hydration,
-    setHydration,
     setStaleIdentity,
     driftRetryGeneration,
   ]);
