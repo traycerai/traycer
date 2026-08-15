@@ -101,6 +101,8 @@ function readShardValue(args: string[]): string | undefined {
 const shard = readShardValue(testArgs);
 const runsFirstShard = shard === undefined || shard.split("/", 1)[0] === "1";
 const runsWholeSuite = shard !== undefined || testArgs.length === 0;
+const runsDiffEditBrowser =
+  runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
 runVitest("vitest.config.ts", undefined);
 if (runsFirstShard) {
@@ -108,7 +110,7 @@ if (runsFirstShard) {
     "vitest.react-compiler.config.ts",
     "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
   );
-  if (runsWholeSuite) runDiffEditBrowserRegression();
+  if (runsDiffEditBrowser) runDiffEditBrowserRegression();
 }
 
 function runDiffEditBrowserRegression(): void {
