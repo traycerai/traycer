@@ -395,6 +395,9 @@ export const providerSkillsCapabilityActionSchema = z.enum([
   "create",
   "import",
   "remove",
+  "inspect",
+  "edit",
+  "update",
 ]);
 export type ProviderSkillsCapabilityAction = z.infer<
   typeof providerSkillsCapabilityActionSchema
@@ -404,6 +407,11 @@ export const providerSkillsCapabilitiesSchema = z.object({
   /**
    * Action → supported scopes table. Empty array means the action is not
    * offered for any scope.
+   *
+   * `inspect` / `edit` / `update` are the skew gate for the picker/edit
+   * composer. They are optional so an older host (or a descriptor that has
+   * not advertised them yet) still parses; a GUI seeing no `inspect` uses
+   * legacy single-shot `import`. Do not default them - absent is the signal.
    */
   actionScopes: z.object({
     list: z.array(providerNativeScopeSchema),
@@ -411,6 +419,9 @@ export const providerSkillsCapabilitiesSchema = z.object({
     create: z.array(providerNativeScopeSchema),
     import: z.array(providerNativeScopeSchema),
     remove: z.array(providerNativeScopeSchema),
+    inspect: z.array(providerNativeScopeSchema).optional(),
+    edit: z.array(providerNativeScopeSchema).optional(),
+    update: z.array(providerNativeScopeSchema).optional(),
   }),
 });
 export type ProviderSkillsCapabilities = z.infer<
@@ -827,8 +838,49 @@ export const providerSkillSchema = z.object({
   description: z.string().nullable(),
   path: z.string(),
   source: providerSkillSourceBadgeSchema,
+  /**
+   * Provenance display line ("Imported from <source>"). Omitted or null when
+   * the skill was authored locally or has no recorded origin.
+   */
+  origin: z.string().nullable().optional(),
+  /**
+   * True when a foreign real directory occupies a would-be link target.
+   * Omitted means this is not a conflict row.
+   */
+  conflict: z.boolean().optional(),
 });
 export type ProviderSkill = z.infer<typeof providerSkillSchema>;
+
+/**
+ * Frozen skill row as of the `providers.list@7.0` cut. Live
+ * {@link providerSkillSchema} grew `origin` / `conflict`; v7.0 must not.
+ */
+export const providerSkillSchemaV70 = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  path: z.string(),
+  source: providerSkillSourceBadgeSchema,
+});
+export type ProviderSkillV70 = z.infer<typeof providerSkillSchemaV70>;
+
+export const providerSkillInspectCandidateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().nullable(),
+  relPath: z.string().min(1),
+  installed: z.boolean(),
+});
+export type ProviderSkillInspectCandidate = z.infer<
+  typeof providerSkillInspectCandidateSchema
+>;
+
+export const providersSkillsInspectResultSchema = z.object({
+  token: z.string().min(1),
+  commitSha: z.string().min(1),
+  candidates: z.array(providerSkillInspectCandidateSchema),
+});
+export type ProvidersSkillsInspectResult = z.infer<
+  typeof providersSkillsInspectResultSchema
+>;
 
 // ── Mutation action payloads ───────────────────────────────────────────────
 
@@ -889,9 +941,8 @@ export type ProvidersPluginsMutateAction = z.infer<
   typeof providersPluginsMutateActionSchema
 >;
 
-export const providersSkillsMutateActionSchema = z.discriminatedUnion(
-  "action",
-  [
+export const providersSkillsMutateActionSchema = z
+  .discriminatedUnion("action", [
     z.object({
       action: z.literal("add"),
       /**
@@ -930,14 +981,63 @@ export const providersSkillsMutateActionSchema = z.discriminatedUnion(
        * provider-scoped (its store is inherently provider-native).
        */
       providerScoped: z.boolean(),
+      /**
+       * Inspect-session token from a prior `inspect`. Omitted on the legacy
+       * single-shot import path.
+       */
+      token: z.string().min(1).optional(),
+      /**
+       * Candidate names selected in the picker. Omitted on the legacy
+       * single-shot import path.
+       */
+      names: z.array(z.string().min(1)).optional(),
+    }),
+    z.object({
+      action: z.literal("inspect"),
+      /**
+       * File, URL, `owner/repo`, tree URL, or `npx skills add …` wrapper.
+       */
+      source: z.string().min(1),
+      /**
+       * Dest-root scope used to mark candidates `installed`. Same axis as
+       * the mutation envelope's `scope`.
+       */
+      scope: providerNativeScopeSchema,
+    }),
+    z.object({
+      action: z.literal("edit"),
+      path: z.string().min(1),
+      /** SHA-256 of the exact SKILL.md text the editor loaded. */
+      expectedHash: z.string().regex(/^[0-9a-f]{64}$/),
+      name: z.string().min(1),
+      description: z.string(),
+      body: z.string(),
+    }),
+    z.object({
+      action: z.literal("update"),
+      name: z.string().min(1),
+      path: z.string().min(1),
+      /**
+       * Required to clobber local edits (canon hash ≠ recorded
+       * `installedHash`). Omitted / false is a dry check that must not write.
+       */
+      confirm: z.boolean().optional(),
     }),
     z.object({
       action: z.literal("remove"),
       name: z.string().min(1),
       path: z.string().min(1),
     }),
-  ],
-);
+  ])
+  .superRefine((value, ctx) => {
+    if (value.action !== "import") return;
+    if ((value.token === undefined) === (value.names === undefined)) return;
+    ctx.addIssue({
+      code: "custom",
+      path: value.token === undefined ? ["token"] : ["names"],
+      message: "token and names must be provided together",
+    });
+  });
 export type ProvidersSkillsMutateAction = z.infer<
   typeof providersSkillsMutateActionSchema
 >;
@@ -1035,6 +1135,46 @@ export const nativeListResultSchema = z.union([
 ]);
 export type NativeListResult = z.infer<typeof nativeListResultSchema>;
 
+/**
+ * Frozen list result as of the `providers.list@7.0` cut. Live
+ * {@link nativeListResultSchema} grew `origin` / `conflict` on skill rows;
+ * v7.0 must not. Other arms stay pointed at the live object schemas they
+ * already used - those have not grown.
+ */
+const nativeListSuccessResultSchemaV70 = z.discriminatedUnion("kind", [
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("mcp"),
+    servers: z.array(providerMcpServerSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("plugins"),
+    plugins: z.array(providerPluginSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("skills"),
+    skills: z.array(providerSkillSchemaV70),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("mcpDiscover"),
+    server: providerMcpServerSchema,
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("pluginIcon"),
+    icon: providerPluginIconSchema,
+  }),
+]);
+
+export const nativeListResultSchemaV70 = z.union([
+  nativeListSuccessResultSchemaV70,
+  providerNativeErrorResultSchema,
+]);
+export type NativeListResultV70 = z.infer<typeof nativeListResultSchemaV70>;
+
 // ── Carrier payloads: mutate (providers.setEnabled@2.1) ────────────────────
 
 /**
@@ -1063,7 +1203,20 @@ export const nativeMutationSchema = z
       mutation: providersSkillsMutateActionSchema,
     }),
   ])
-  .superRefine(refineProviderNativeScope);
+  .superRefine((value, ctx) => {
+    refineProviderNativeScope(value, ctx);
+    if (
+      value.kind === "skills" &&
+      value.mutation.action === "inspect" &&
+      value.mutation.scope !== value.scope
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["mutation", "scope"],
+        message: "inspect scope must match the mutation scope",
+      });
+    }
+  });
 export type NativeMutation = z.infer<typeof nativeMutationSchema>;
 
 const nativeMutationSuccessResultSchema = z.discriminatedUnion("kind", [
@@ -1081,6 +1234,11 @@ const nativeMutationSuccessResultSchema = z.discriminatedUnion("kind", [
     ok: z.literal(true),
     kind: z.literal("skills"),
     skills: z.array(providerSkillSchema),
+  }),
+  z.object({
+    ok: z.literal(true),
+    kind: z.literal("skillsInspect"),
+    ...providersSkillsInspectResultSchema.shape,
   }),
 ]);
 
@@ -2036,6 +2194,9 @@ export const providerSkillsCapabilitiesSchemaV70 = z.object({
     remove: z.array(providerNativeScopeSchemaV70),
   }),
 });
+export type ProviderSkillsCapabilitiesV70 = z.infer<
+  typeof providerSkillsCapabilitiesSchemaV70
+>;
 
 /**
  * Frozen capability descriptor as shipped on the `providers.list@7.0` line.
@@ -2079,7 +2240,7 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
  * Project a live capability descriptor to the frozen v7.0 shape for the
  * v8->v7 response bridge.
  *
- * Two cuts, made in different ways on purpose:
+ * Three cuts, made in different ways on purpose:
  *
  * 1. `supportedTabs` is FILTERED before the parse, never reparsed:
  *    `z.array(enum)` rejects a whole array for one unknown member, the
@@ -2090,7 +2251,25 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
  *    strict reparse through `providerNativeCapabilitiesSchemaV70` is what
  *    performs the drop, and the destructure writes it out so the projection
  *    reads as the contract it is.
+ * 3. Skills `inspect` / `edit` / `update` actionScopes are dropped. The
+ *    frozen v7.0 table does not model them; a live descriptor that
+ *    advertises them must not leak those keys to a v7.0 peer.
  */
+function projectSkillsCapabilitiesToV70(
+  skills: ProviderSkillsCapabilities | null,
+): ProviderSkillsCapabilitiesV70 | null {
+  if (skills === null) {
+    return null;
+  }
+  const {
+    inspect: _inspect,
+    edit: _edit,
+    update: _update,
+    ...legacyScopes
+  } = skills.actionScopes;
+  return { actionScopes: legacyScopes };
+}
+
 export function projectNativeCapabilitiesToV70(
   capabilities: ProviderNativeCapabilities,
 ): ProviderNativeCapabilitiesV70 {
@@ -2098,6 +2277,7 @@ export function projectNativeCapabilitiesToV70(
   const { modelProviders: _modelProviders, ...rest } = capabilities;
   return providerNativeCapabilitiesSchemaV70.parse({
     ...rest,
+    skills: projectSkillsCapabilitiesToV70(capabilities.skills),
     supportedTabs: capabilities.supportedTabs.filter((tab) => v70Tabs.has(tab)),
   });
 }

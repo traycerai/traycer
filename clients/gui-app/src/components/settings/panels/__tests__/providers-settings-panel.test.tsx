@@ -206,6 +206,7 @@ vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   useProvidersSkillsMutate: () => ({
     mutate: vi.fn(),
+    mutateAsync: vi.fn(),
     isPending: false,
   }),
 }));
@@ -2536,7 +2537,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     selectTab("Skills");
     expect(
-      screen.getByText(/Invoked by the agent when relevant/),
+      screen.getByRole("textbox", { name: "Search skills" }),
     ).toBeDefined();
     expect(
       screen.getByRole("button", { name: /^Skills location/ }),
@@ -2703,8 +2704,8 @@ describe("<ProvidersSettingsPanel />", () => {
     const addProfileButton = screen.getByRole("button", {
       name: "Add profile",
     });
-    expect(addProfileButton.getAttribute("data-variant")).toBe("outline");
-    expect(addProfileButton.getAttribute("data-size")).toBe("xs");
+    expect(addProfileButton.getAttribute("data-variant")).toBe("default");
+    expect(addProfileButton.getAttribute("data-size")).toBe("sm");
     expect(screen.getByText("Profiles")).toBeDefined();
     const manageProfileButton = screen.getByRole("button", {
       name: "Manage profile",
