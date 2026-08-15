@@ -152,7 +152,20 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       client: wsStreamClient.instanceId,
       hasTransport: true,
     });
-    rebuildBackoff.markBuilt(Date.now(), target.hostId);
+    // `identityKey`, not `target.hostId`: this provider rebuilds whenever the
+    // identity moves, and that includes the authenticated user and a remote
+    // host's public key / relay coordinates. Keyed on the bare host id, a
+    // rebuild for a NEW user or a rotated remote identity on the SAME machine
+    // would inherit the previous session's quick-close streak and pace its
+    // first stumble by up to the ceiling.
+    //
+    // Unlike the published `hostId` below, the render's value is the right one
+    // here. That one names a machine on screen and routes kills, so a
+    // commit-to-effect swap must not be able to mislabel it. This only answers
+    // "same endpoint as last build?", and an identity change re-runs this
+    // effect by dependency anyway - so the worst a stale read can do is reset a
+    // streak one rebuild early.
+    rebuildBackoff.markBuilt(Date.now(), identityKey);
     // The client and the host it dials are published in ONE value, so no
     // consumer can observe the new host beside the old client.
     //

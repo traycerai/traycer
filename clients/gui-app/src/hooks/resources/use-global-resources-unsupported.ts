@@ -23,6 +23,22 @@ function resourcesGlobalSupported(
  * monitor's panel, which has to say so. Without the second, a host too old for
  * a global stream sits on "Waiting for <host>…" forever — there is no acquire,
  * so no attribution, so no event that could ever end the wait.
+ *
+ * KNOWN GAP — this answers for LOCAL hosts only. `RemoteStreamClient` reports
+ * `"unknown"` support and a `null` schema version for every method BY DESIGN:
+ * the mux session resolves an incompatible method as a fatal error on the
+ * subscribe attempt, not as a queryable pre-check, so there is no learned
+ * capability cache to read. Both terms below therefore stay false for a remote
+ * host and this returns `false` — the mount acquires and an old remote host
+ * waits rather than being told why.
+ *
+ * That is the pre-picker behaviour preserved, not a regression: the ambient
+ * host this used to gate is normally the local one. But the picker's whole
+ * purpose is watching another machine, so the population that most needs the
+ * notice is exactly the one that cannot get it. Closing it means deriving the
+ * verdict from what the remote session really produces — the terminal failure
+ * of the subscribe — rather than from a pre-check that cannot answer. Tracked
+ * separately rather than widened into this change.
  */
 export function useGlobalResourcesUnsupported(): boolean {
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
