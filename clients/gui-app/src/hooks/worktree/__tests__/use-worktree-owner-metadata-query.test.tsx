@@ -118,7 +118,8 @@ describe("useWorktreeOwnerMetadata", () => {
   it("ignores LEGACY_HOST_RESOLVED_AT rather than rendering it as an age", async () => {
     // A host predating `resolvedAt` gets its rows bridged to the literal `1`.
     // That is a resolved-MARKER, not a time: taken as one it is 1 Jan 1970, so
-    // the card would read "Checked 56y ago" on facts fetched a second ago. It
+    // the card would read "Workspace snapshot 56y ago" on facts fetched a
+    // second ago. It
     // is also the smallest possible value, so a plain `Math.min` would let one
     // legacy folder swallow every real timestamp beside it.
     const fixture = createFixture({

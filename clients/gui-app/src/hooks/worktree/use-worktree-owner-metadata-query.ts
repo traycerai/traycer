@@ -179,8 +179,9 @@ export interface WorktreeOwnerMetadata {
    *
    * Deliberately the rows' own `resolvedAt` and not the query's client-side
    * `dataUpdatedAt`: the card unmounts on close, so every re-open refetches and
-   * `dataUpdatedAt` is always ~now - it reported "Checked now" forever while
-   * the host was serving facts from its TTL cache that could be an hour old.
+   * `dataUpdatedAt` is always ~now - it made the workspace snapshot appear
+   * current forever while the host was serving facts from its TTL cache that
+   * could be an hour old.
    * Staleness is the entire point of the label, so it has to come from the
    * side that actually does the deriving.
    */
