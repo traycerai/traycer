@@ -12,6 +12,7 @@ describe("skillRemovability", () => {
           removeScopes: [...BOTH],
           source,
           effectiveScope: "global",
+          conflict: false,
         }),
       ).toEqual({
         kind: "removable",
@@ -29,6 +30,7 @@ describe("skillRemovability", () => {
         removeScopes: [...BOTH],
         source,
         effectiveScope: "global",
+        conflict: false,
       });
       expect(result.kind).toBe("blocked");
       if (result.kind !== "blocked") throw new Error("expected blocked");
@@ -45,6 +47,7 @@ describe("skillRemovability", () => {
         removeScopes: [],
         source: "shared",
         effectiveScope: "global",
+        conflict: false,
       }),
     ).toEqual({
       kind: "hidden",
@@ -61,6 +64,7 @@ describe("skillRemovability", () => {
         removeScopes: ["project"],
         source: "shared",
         effectiveScope: "global",
+        conflict: false,
       }),
     ).toEqual({ kind: "hidden" });
   });
@@ -71,8 +75,21 @@ describe("skillRemovability", () => {
         removeScopes: ["project"],
         source: "shared",
         effectiveScope: "project",
+        conflict: false,
       }),
     ).toEqual({ kind: "removable" });
+  });
+
+  it("blocks a conflict row even when remove is advertised for a writable source", () => {
+    const result = skillRemovability({
+      removeScopes: [...BOTH],
+      source: "shared",
+      effectiveScope: "global",
+      conflict: true,
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind !== "blocked") throw new Error("expected blocked");
+    expect(result.reason).toMatch(/occupies the provider link/i);
   });
 
   it("prefers `hidden` over `blocked` when neither condition holds", () => {
@@ -83,6 +100,7 @@ describe("skillRemovability", () => {
         removeScopes: [],
         source: "managed",
         effectiveScope: "global",
+        conflict: false,
       }),
     ).toEqual({
       kind: "hidden",

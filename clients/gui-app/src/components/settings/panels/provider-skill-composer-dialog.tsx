@@ -1,7 +1,13 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { ProvidersSkillsMutateAction } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderNativeScope,
+  ProviderSkillInspectCandidate,
+  ProvidersSkillsMutateAction,
+} from "@traycer/protocol/host/provider-native-schemas";
+import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,32 +17,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SelectAllToggle } from "@/components/ui/select-all-toggle";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { cn } from "@/lib/utils";
+import { submitComposer } from "./provider-skill-composer-flow";
 import {
-  previewSkillMd,
   skillBodyScaffold,
-  skillComposerTabs,
   skillDestination,
   skillFilePath,
   skillNameError,
   skillSubmitBlocker,
   SKILL_DESCRIPTION_SOFT_LIMIT,
   type SkillAuthoring,
-  type SkillComposerTab,
+  type SkillComposerStep,
 } from "./provider-skill-composer-model";
 
 /**
  * The one surface for getting a skill onto disk.
  *
- * It replaces a `New ▾` menu whose item count was a function of the capability
- * table (and was therefore always one — every provider contract shipped
- * `create: []`) plus two inline panels that pushed the list down the page.
- * Writing and importing are tabs INSIDE this dialog rather than a choice made
- * before anything is visible, so no capability difference can collapse the
- * entry point into a menu-of-one again.
+ * Opens import-first when import is advertised: a smart source field, then
+ * either a direct install (one candidate) or a picker. "or write one from
+ * scratch" swaps to the authoring form. There is no Write/Import tab strip.
  *
  * Mounted only while open (the caller renders it conditionally), which keeps
  * the draft state's lifetime equal to the dialog's: closing it is what discards
@@ -45,57 +48,17 @@ import {
 export function ProviderSkillComposerDialog(props: {
   readonly providerLabel: string;
   readonly authoring: SkillAuthoring;
-  /** Which tab opens first. The caller picks it from the button that was hit. */
-  readonly initialTab: SkillComposerTab;
+  readonly listScope: ProviderNativeScope;
   /** The provider's own skills root, when the listing has revealed it. */
   readonly providerRoot: string | null;
+  readonly canProviderScope: boolean;
   readonly pending: boolean;
-  /** A failed create/import, surfaced here rather than behind the dialog. */
-  readonly error: string | null;
-  readonly onSubmit: (mutation: ProvidersSkillsMutateAction) => void;
+  readonly onMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
   readonly onClose: () => void;
 }): ReactNode {
-  const tabs = skillComposerTabs(props.authoring);
-  const [tab, setTab] = useState<SkillComposerTab>(props.initialTab);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  // Seeded with the scaffold rather than left empty: the headings are the part
-  // that is hard to invent and cheap to delete.
-  const [body, setBody] = useState(skillBodyScaffold);
-  const [source, setSource] = useState("");
-  const [providerScoped, setProviderScoped] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
-
-  const nameError = useMemo(() => skillNameError(name), [name]);
-  const blocker = skillSubmitBlocker({ tab, name, description, source });
-  const destination = skillDestination({
-    providerScoped,
-    providerLabel: props.providerLabel,
-    providerRoot: props.providerRoot,
-  });
-
-  function onSubmit(): void {
-    if (blocker !== null || props.pending) return;
-    if (tab === "write") {
-      props.onSubmit({
-        action: "create",
-        name: name.trim(),
-        description: description.trim(),
-        body,
-        providerScoped,
-      });
-      return;
-    }
-    // One field drives both git URLs and local folders: the host's `import`
-    // arm already branches on the shape of the string (clone vs. copy), so
-    // asking the user which one they have would be asking a question we can
-    // answer ourselves.
-    props.onSubmit({
-      action: "import",
-      source: source.trim(),
-      providerScoped,
-    });
-  }
+  const draft = useComposerDraft(props);
 
   return (
     <Dialog
@@ -107,68 +70,101 @@ export function ProviderSkillComposerDialog(props: {
       <DialogContent className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,44rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,44rem)]">
         <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
           <DialogTitle className="text-ui-lg">
-            {tabs.length > 0 ? "Add a skill" : titleForSingleTab(tab)}
+            {titleForStep(
+              draft.step,
+              draft.inspectSession?.candidates.length ?? 0,
+            )}
           </DialogTitle>
           <DialogDescription className="text-ui-sm">
-            A skill is a folder with a <code>SKILL.md</code> inside it. The
-            agent loads one on its own when the work matches, or you can invoke
-            it directly with <code>/name</code> in chat.
+            <ComposerDescription step={draft.step} />
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
-          {props.error === null ? null : (
+          {draft.error === null ? null : (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
-              {props.error}
+              {draft.error}
             </div>
           )}
 
-          <ComposerFields
-            tabs={tabs}
-            tab={tab}
-            setTab={setTab}
-            write={
-              <WriteFields
-                name={name}
-                setName={setName}
-                nameError={nameError}
-                description={description}
-                setDescription={setDescription}
-                body={body}
-                setBody={setBody}
-                showPreview={showPreview}
-                setShowPreview={setShowPreview}
-                disabled={props.pending}
-              />
-            }
-            importFields={
-              <ImportFields
-                source={source}
-                setSource={setSource}
-                disabled={props.pending}
-              />
-            }
-          />
+          {draft.step === "write" ? (
+            <WriteFields
+              name={draft.name}
+              setName={draft.setName}
+              nameError={draft.nameError}
+              description={draft.description}
+              setDescription={draft.setDescription}
+              body={draft.body}
+              setBody={draft.setBody}
+              disabled={props.pending}
+              canImport={props.authoring.canImport}
+              onImport={draft.goToImport}
+            />
+          ) : null}
+          {draft.step === "import" ? (
+            <ImportFields
+              source={draft.source}
+              setSource={draft.setSource}
+              disabled={props.pending}
+              canWrite={props.authoring.canWrite}
+              onWrite={draft.goToWrite}
+            />
+          ) : null}
+          {draft.step === "picker" && draft.inspectSession !== null ? (
+            <PickerFields
+              candidates={draft.inspectSession.candidates}
+              selectedNames={draft.selectedNames}
+              note={draft.pickerNote}
+              disabled={props.pending}
+              onToggle={(candidateName) => {
+                draft.setSelectedNames(
+                  draft.selectedNames.includes(candidateName)
+                    ? draft.selectedNames.filter(
+                        (entry) => entry !== candidateName,
+                      )
+                    : [...draft.selectedNames, candidateName],
+                );
+              }}
+              onToggleAll={() => {
+                const candidateNames = draft.inspectSession?.candidates.map(
+                  (candidate) => candidate.name,
+                );
+                if (candidateNames === undefined) return;
+                const selected = new Set(draft.selectedNames);
+                draft.setSelectedNames(
+                  candidateNames.every((name) => selected.has(name))
+                    ? []
+                    : candidateNames,
+                );
+              }}
+              onBack={draft.goToImport}
+            />
+          ) : null}
 
-          <SkillScopeFieldset
-            providerLabel={props.providerLabel}
-            providerScoped={providerScoped}
-            disabled={props.pending}
-            onChange={setProviderScoped}
-          />
+          {draft.showScope ? (
+            <SkillScopeFieldset
+              providerLabel={props.providerLabel}
+              providerScoped={draft.effectiveProviderScoped}
+              disabled={props.pending}
+              onChange={draft.setProviderScoped}
+            />
+          ) : null}
         </div>
 
         <DialogFooter className="mx-0 mb-0 flex-col items-stretch gap-2 rounded-none border-t border-border/40 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
           <DestinationLine
-            tab={tab}
-            destination={destination.display}
-            exact={destination.exact}
-            filePath={skillFilePath({ destination, name })}
+            step={draft.step}
+            destination={draft.destination.display}
+            exact={draft.destination.exact}
+            filePath={skillFilePath({
+              destination: draft.destination,
+              name: draft.name,
+            })}
           />
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {blocker === null ? null : (
+            {draft.blocker === null ? null : (
               <span className="text-ui-xs text-muted-foreground">
-                {blocker}
+                {draft.blocker}
               </span>
             )}
             <Button
@@ -183,11 +179,17 @@ export function ProviderSkillComposerDialog(props: {
             <Button
               type="button"
               size="sm"
-              disabled={props.pending || blocker !== null}
-              onClick={onSubmit}
+              disabled={props.pending || draft.blocker !== null}
+              onClick={() => {
+                void draft.onSubmit();
+              }}
             >
               {props.pending ? <MutedAgentSpinner /> : null}
-              {tab === "write" ? "Create skill" : "Import skill"}
+              {submitLabel(
+                draft.step,
+                draft.selectedNames.length,
+                props.authoring.canInspect,
+              )}
             </Button>
           </div>
         </DialogFooter>
@@ -196,52 +198,159 @@ export function ProviderSkillComposerDialog(props: {
   );
 }
 
-function titleForSingleTab(tab: SkillComposerTab): string {
-  return tab === "write" ? "Write a new skill" : "Import a skill";
+function useComposerDraft(props: {
+  readonly authoring: SkillAuthoring;
+  readonly listScope: ProviderNativeScope;
+  readonly providerLabel: string;
+  readonly providerRoot: string | null;
+  readonly canProviderScope: boolean;
+  readonly pending: boolean;
+  readonly onMutate: (
+    mutation: ProvidersSkillsMutateAction,
+  ) => Promise<SkillsMutateData>;
+  readonly onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"import" | "write">(
+    !props.authoring.canImport ? "write" : "import",
+  );
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [body, setBody] = useState(skillBodyScaffold);
+  const [source, setSource] = useState("");
+  const [providerScoped, setProviderScoped] = useState(false);
+  const [inspectSession, setInspectSession] = useState<{
+    readonly token: string;
+    readonly candidates: readonly ProviderSkillInspectCandidate[];
+  } | null>(null);
+  const [selectedNames, setSelectedNames] = useState<readonly string[]>([]);
+  const [pickerNote, setPickerNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const step: SkillComposerStep = inspectSession !== null ? "picker" : mode;
+  const effectiveProviderScoped = props.canProviderScope && providerScoped;
+  const nameError = useMemo(() => skillNameError(name), [name]);
+  const blocker = skillSubmitBlocker({
+    step,
+    name,
+    description,
+    source,
+    selectedNames,
+  });
+  const destination = skillDestination({
+    providerScoped: effectiveProviderScoped,
+    providerLabel: props.providerLabel,
+    providerRoot: props.providerRoot,
+  });
+  const showScope = step !== "picker" && props.canProviderScope;
+
+  function onSubmit(): void {
+    void submitComposer({
+      step,
+      pending: props.pending,
+      blocker,
+      state: {
+        source,
+        name,
+        description,
+        body,
+        providerScoped: effectiveProviderScoped,
+        selectedNames,
+        inspectSession,
+        canInspect: props.authoring.canInspect,
+        listScope: props.listScope,
+      },
+      sink: {
+        onMutate: props.onMutate,
+        onClose: props.onClose,
+        setError,
+        setInspectSession,
+        setSelectedNames,
+        setPickerNote,
+      },
+    });
+  }
+
+  function resetTransient(): void {
+    setInspectSession(null);
+    setSelectedNames([]);
+    setPickerNote(null);
+    setError(null);
+  }
+
+  return {
+    name,
+    setName,
+    nameError,
+    description,
+    setDescription,
+    body,
+    setBody,
+    source,
+    setSource,
+    inspectSession,
+    selectedNames,
+    setSelectedNames,
+    pickerNote,
+    error,
+    step,
+    effectiveProviderScoped,
+    setProviderScoped,
+    destination,
+    showScope,
+    blocker,
+    onSubmit,
+    goToWrite: () => {
+      setMode("write");
+      resetTransient();
+    },
+    goToImport: () => {
+      setMode("import");
+      resetTransient();
+    },
+  };
 }
 
-/**
- * The two field sets, under a tab strip when there is a choice to make.
- *
- * A provider offering only one path gets the fields bare rather than a
- * one-tab strip that looks like a control but selects nothing. The tabbed arm
- * renders real `TabsContent` panels — a `TabsTrigger` with no panel to own
- * points `aria-controls` at an element that does not exist.
- */
-function ComposerFields({
-  tabs,
-  tab,
-  setTab,
-  write,
-  importFields,
+function ComposerDescription({
+  step,
 }: {
-  readonly tabs: readonly SkillComposerTab[];
-  readonly tab: SkillComposerTab;
-  readonly setTab: (tab: SkillComposerTab) => void;
-  readonly write: ReactNode;
-  readonly importFields: ReactNode;
+  readonly step: SkillComposerStep;
 }): ReactNode {
-  if (tabs.length === 0) return tab === "write" ? write : importFields;
+  if (step === "picker") {
+    return "Selecting an installed skill overwrites it from this source.";
+  }
+  if (step === "import") {
+    return "Paste a source. The host clones or copies it and finds every SKILL.md.";
+  }
   return (
-    <Tabs
-      value={tab}
-      onValueChange={(next) => {
-        setTab(next === "import" ? "import" : "write");
-      }}
-      className="gap-4"
-    >
-      <TabsList>
-        <TabsTrigger value="write">Write a new one</TabsTrigger>
-        <TabsTrigger value="import">Import an existing one</TabsTrigger>
-      </TabsList>
-      <TabsContent value="write" className="flex flex-col gap-4">
-        {write}
-      </TabsContent>
-      <TabsContent value="import" className="flex flex-col gap-4">
-        {importFields}
-      </TabsContent>
-    </Tabs>
+    <>
+      A skill is a folder with a <code>SKILL.md</code> inside it. The agent
+      loads one on its own when the work matches, or you can invoke it directly
+      with <code>/name</code> in chat.
+    </>
   );
+}
+
+function titleForStep(step: SkillComposerStep, candidateCount: number): string {
+  if (step === "picker") {
+    return candidateCount === 1
+      ? "1 skill found"
+      : `${String(candidateCount)} skills found`;
+  }
+  return "Add a skill";
+}
+
+function submitLabel(
+  step: SkillComposerStep,
+  selectedCount: number,
+  canInspect: boolean,
+): string {
+  if (step === "write") return "Create skill";
+  if (step === "picker") {
+    return selectedCount === 1
+      ? "Install 1 skill"
+      : `Install ${String(selectedCount)} skills`;
+  }
+  return canInspect ? "Add skill" : "Import skill";
 }
 
 function WriteFields({
@@ -252,9 +361,9 @@ function WriteFields({
   setDescription,
   body,
   setBody,
-  showPreview,
-  setShowPreview,
   disabled,
+  canImport,
+  onImport,
 }: {
   readonly name: string;
   readonly setName: (v: string) => void;
@@ -263,9 +372,9 @@ function WriteFields({
   readonly setDescription: (v: string) => void;
   readonly body: string;
   readonly setBody: (v: string) => void;
-  readonly showPreview: boolean;
-  readonly setShowPreview: (v: boolean) => void;
   readonly disabled: boolean;
+  readonly canImport: boolean;
+  readonly onImport: () => void;
 }): ReactNode {
   const overSoftLimit =
     description.trim().length > SKILL_DESCRIPTION_SOFT_LIMIT;
@@ -274,9 +383,6 @@ function WriteFields({
       <Field
         htmlFor="skill-name"
         label="Name"
-        // The invocation form is the whole reason the name is constrained;
-        // saying so is what makes the lowercase-and-hyphens rule read as a
-        // consequence rather than an arbitrary validation.
         hint="Becomes the folder name and the /command you type in chat."
         error={nameError}
       >
@@ -294,9 +400,7 @@ function WriteFields({
       <Field
         htmlFor="skill-description"
         label="Description"
-        // This is the field the user is most likely to treat as a throwaway
-        // label, and the one that decides whether the skill is ever used.
-        hint="The agent reads this — and only this — to decide whether to load the skill. Say what it does and when it applies, including the words someone would actually use."
+        hint="The agent reads this - and only this - to decide whether to load the skill. Say what it does and when it applies, including the words someone would actually use."
         error={null}
       >
         <Textarea
@@ -309,50 +413,46 @@ function WriteFields({
         />
         {overSoftLimit ? (
           <p className="text-ui-xs text-muted-foreground">
-            {description.trim().length} characters — over the{" "}
+            {description.trim().length} characters - over the{" "}
             {SKILL_DESCRIPTION_SOFT_LIMIT}-character guideline. Long
             descriptions are harder for the agent to match against.
           </p>
         ) : null}
       </Field>
 
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <label
-            className="text-ui-sm font-medium text-foreground"
-            htmlFor="skill-body"
-          >
+      <div className="flex min-h-48 flex-col gap-1.5">
+        <div className="flex flex-col gap-1">
+          <span className="text-ui-sm font-medium text-foreground">
             Instructions
-          </label>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="text-ui-xs"
-            onClick={() => setShowPreview(!showPreview)}
-          >
-            {showPreview ? "Edit" : "Preview SKILL.md"}
-          </Button>
+          </span>
+          <p className="text-ui-xs text-muted-foreground">
+            Markdown the agent follows once the skill loads. The name and
+            description above become the YAML frontmatter - you don&apos;t write
+            it yourself.
+          </p>
         </div>
-        <p className="text-ui-xs text-muted-foreground">
-          Markdown the agent follows once the skill loads. The name and
-          description above become the YAML frontmatter — you don&apos;t write
-          it yourself.
-        </p>
-        {showPreview ? (
-          <pre className="max-h-[24rem] overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-ui-xs whitespace-pre-wrap text-foreground">
-            {previewSkillMd({ name, description, body })}
-          </pre>
-        ) : (
-          <Textarea
-            id="skill-body"
+        <div className="flex min-h-48 flex-1 flex-col overflow-hidden rounded-md border border-border/60">
+          <MarkdownEditPreview
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            className="min-h-[12rem] font-mono text-ui-xs"
-            disabled={disabled}
+            onChange={setBody}
+            readOnly={disabled}
+            placeholder={undefined}
+            ariaLabel="Instructions"
+            testId="skill-composer-instructions"
+            showPreview
           />
-        )}
+        </div>
       </div>
+      {canImport ? (
+        <button
+          type="button"
+          className="self-start text-ui-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          disabled={disabled}
+          onClick={onImport}
+        >
+          or import an existing one
+        </button>
+      ) : null}
     </>
   );
 }
@@ -361,31 +461,158 @@ function ImportFields({
   source,
   setSource,
   disabled,
+  canWrite,
+  onWrite,
 }: {
   readonly source: string;
   readonly setSource: (v: string) => void;
   readonly disabled: boolean;
+  readonly canWrite: boolean;
+  readonly onWrite: () => void;
 }): ReactNode {
   return (
-    <Field
-      htmlFor="skill-import-source"
-      label="Git URL or folder path"
-      hint="The repository or folder must contain a SKILL.md, either at its root or one level down."
-      error={null}
-    >
-      <Input
-        id="skill-import-source"
-        value={source}
-        onChange={(e) => setSource(e.target.value)}
-        placeholder="https://github.com/org/skill.git"
-        className="text-ui-sm"
+    <>
+      <Field
+        htmlFor="skill-import-source"
+        label="Skill source"
+        hint="Paste an npx skills command, owner/repo, git or tree URL, or a folder path."
+        error={null}
+      >
+        <Input
+          id="skill-import-source"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          placeholder="npx skills add owner/repo"
+          className="text-ui-sm"
+          disabled={disabled}
+        />
+      </Field>
+      {canWrite ? (
+        <button
+          type="button"
+          className="self-start text-ui-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          disabled={disabled}
+          onClick={onWrite}
+        >
+          or write one from scratch
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function PickerFields({
+  candidates,
+  selectedNames,
+  note,
+  disabled,
+  onToggle,
+  onToggleAll,
+  onBack,
+}: {
+  readonly candidates: readonly ProviderSkillInspectCandidate[];
+  readonly selectedNames: readonly string[];
+  readonly note: string | null;
+  readonly disabled: boolean;
+  readonly onToggle: (name: string) => void;
+  readonly onToggleAll: () => void;
+  readonly onBack: () => void;
+}): ReactNode {
+  const selected = new Set(selectedNames);
+  return (
+    <div className="flex flex-col gap-3">
+      {note === null ? null : (
+        <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-ui-sm text-foreground">
+          {note}
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-ui-xs text-muted-foreground">
+          {selectedNames.length} of {candidates.length} selected
+        </span>
+        <SelectAllToggle
+          accessibleLabel="Select all skills"
+          selectableCount={candidates.length}
+          selectedCount={selectedNames.length}
+          disabled={disabled}
+          testId="skill-picker-select-all"
+          onToggle={onToggleAll}
+        />
+      </div>
+      <ul className="flex flex-col gap-2">
+        {candidates.map((candidate) => (
+          <PickerRow
+            key={candidate.relPath}
+            candidate={candidate}
+            checked={selected.has(candidate.name)}
+            disabled={disabled}
+            onToggle={onToggle}
+          />
+        ))}
+      </ul>
+      <button
+        type="button"
+        className="self-start text-ui-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         disabled={disabled}
-      />
-      <p className="text-ui-xs text-muted-foreground">
-        A git URL is cloned; a path on this machine is copied. The skill keeps
-        the name from its own frontmatter.
-      </p>
-    </Field>
+        onClick={onBack}
+      >
+        Choose a different source
+      </button>
+    </div>
+  );
+}
+
+function PickerRow({
+  candidate,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  readonly candidate: ProviderSkillInspectCandidate;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onToggle: (name: string) => void;
+}): ReactNode {
+  const description =
+    candidate.description !== null && candidate.description.length > 0
+      ? candidate.description
+      : null;
+  return (
+    <li>
+      <label
+        className={cn(
+          "flex items-start gap-3 rounded-md border border-border/60 px-3 py-2",
+          disabled ? "opacity-60" : null,
+        )}
+      >
+        <Checkbox
+          className="mt-0.5"
+          checked={checked}
+          disabled={disabled}
+          aria-label={candidate.name}
+          onCheckedChange={() => {
+            onToggle(candidate.name);
+          }}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-ui-sm font-medium text-foreground">
+              {candidate.name}
+            </span>
+            {candidate.installed ? (
+              <span className="rounded-full border border-border/60 px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+                installed
+              </span>
+            ) : null}
+          </span>
+          {description === null ? null : (
+            <span className="mt-0.5 block text-ui-xs text-muted-foreground">
+              {description}
+            </span>
+          )}
+        </span>
+      </label>
+    </li>
   );
 }
 
@@ -419,25 +646,18 @@ function Field({
   );
 }
 
-/**
- * Where the file lands, spelled out before the write rather than after it.
- *
- * Falls back to prose (`exact: false`) when the provider's own root has not
- * been revealed by the listing yet — an invented path here would be worse than
- * an honest sentence.
- */
 function DestinationLine({
-  tab,
+  step,
   destination,
   exact,
   filePath,
 }: {
-  readonly tab: SkillComposerTab;
+  readonly step: SkillComposerStep;
   readonly destination: string;
   readonly exact: boolean;
   readonly filePath: string;
 }): ReactNode {
-  const shown = tab === "write" ? filePath : destination;
+  const shown = step === "write" ? filePath : destination;
   return (
     <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
       <span className="shrink-0">Saves to</span>

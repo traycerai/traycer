@@ -32,6 +32,7 @@ import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 
@@ -281,10 +282,11 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
   UpdateChatRunSettingsRequest
 > {
   const client = useTabHostClient();
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.updateChatRunSettings",
-    unknown,
+    { hostId: string | null },
     UpdateChatRunSettingsRequest
   >({
     client,
@@ -292,6 +294,16 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.updateChatRunSettings(),
+      // Captured at mutate time, per the host-swap convention above.
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_data, _variables, ctx) => {
+        // The write landed in the host store and NOWHERE the renderer projects
+        // from: a registry-only chat's record row summarises to a harness id,
+        // and a pre-pivot chat's doc entry is frozen. The hover card reads the
+        // tuple over `epic.getChatRunSettings`, so without this it keeps
+        // rendering the pre-change model/profile/permission mode.
+        invalidateChatRunSettings(queryClient, ctx.hostId);
+      },
     },
   });
 }
@@ -313,10 +325,11 @@ export function useEpicUpdateChatProfile(): UseMutationResult<
   UpdateChatProfileRequest
 > {
   const client = useTabHostClient();
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.updateChatProfile",
-    unknown,
+    { hostId: string | null },
     UpdateChatProfileRequest
   >({
     client,
@@ -324,6 +337,13 @@ export function useEpicUpdateChatProfile(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.updateChatProfile(),
+      // Same host-swap capture and the same reason as
+      // `useEpicUpdateChatRunSettings` above - a profile move is a settings
+      // write that reaches only the host's own record.
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_data, _variables, ctx) => {
+        invalidateChatRunSettings(queryClient, ctx.hostId);
+      },
     },
   });
 }
