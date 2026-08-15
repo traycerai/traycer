@@ -45,8 +45,8 @@ interface Harness {
   isUnreadMock: Mock<(args: { artifactId: string }) => boolean>;
   artifactsById: Record<string, { updatedAt: number }>;
   /**
-   * The Epic's artifact ids. No longer gates the search affordance - the count
-   * gate is gone - but the projection mock still has to answer `allIds`.
+   * The Epic's artifact ids. Drives the availability gate: EMPTY withholds
+   * search entirely (and closes an open one); any non-empty value offers it.
    */
   artifactIds: ReadonlyArray<string>;
 }
@@ -884,6 +884,34 @@ describe("ArtifactPanelSearchShell", () => {
     expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
+  // Regression: the gate first only blocked ENTERING search. An Epic whose last
+  // artifact was deleted while search was already open kept `searchOpen` true,
+  // so the header went on advertising a search over "No artifacts yet."
+  it("closes an already-open search when the last artifact disappears", () => {
+    harness.artifactIds = ["art-0"];
+    openArtifactsSearch(DEFAULT_TAB_ID, "");
+    const view = render(
+      <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
+        {defaultTreeStub("tree-stub")}
+      </ShellHarness>,
+    );
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(true);
+    expect(screen.getByLabelText("Search artifacts")).toBeTruthy();
+
+    // The last artifact goes - deleted here, by a collaborator, or elsewhere.
+    harness.artifactIds = [];
+    view.rerender(
+      <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
+        {defaultTreeStub("tree-stub")}
+      </ShellHarness>,
+    );
+
+    // The store flag itself must clear: the panel header reads it independently,
+    // so leaving it set would strand an empty search row above the tree.
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
+    expect(screen.queryByLabelText("Search artifacts")).toBeNull();
+  });
+
   it("ignores modified keys so shortcuts still reach their handlers", () => {
     renderShell({
       searchOpen: false,
@@ -1056,6 +1084,9 @@ describe("ArtifactPanelSearchShell dual-surface isolation", () => {
     harness.result = successResult(
       ready([hit({ artifactId: "a1", title: "Shared hit" })], false),
     );
+    // These surfaces are about tab isolation, not the availability gate. Both
+    // Epics need an artifact or the shell closes their search on mount.
+    harness.artifactIds = ["a1"];
     harness.epicNodeRef = { id: "a1", type: "ticket" };
   });
 

@@ -122,6 +122,7 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   );
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   const searchAvailable = useArtifactSearchAvailable();
+  const closeSearch = usePanelHeaderSearchStore((s) => s.closeSearch);
 
   const debouncedRaw = useDebouncedValue(searchQuery, 200);
   // Treat an empty/whitespace box as immediate: clearing or leaving search must
@@ -143,6 +144,20 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
       treeScrollRef.current.scrollTop = treeScrollTopRef.current;
     }
   }, [searchActive]);
+
+  // Leaving the availability window while search is already OPEN - the last
+  // artifact deleted here, by a collaborator, or in another retained view -
+  // has to close the mode, not merely stop new entries into it.
+  //
+  // Closing the store flag rather than deriving an effective-open locally,
+  // because the header reads that same flag independently
+  // (`PanelGroupSectionHeader`). A local derive would unmount this box while
+  // the header kept the search row, leaving an empty input with nothing
+  // portaled into it - a worse version of the state being fixed.
+  useEffect(() => {
+    if (searchAvailable || !searchOpen) return;
+    closeSearch(props.tabId, ARTIFACTS_PANEL_ID);
+  }, [searchAvailable, searchOpen, closeSearch, props.tabId]);
 
   // Type-to-filter: a bare printable key anywhere in the focused tree enters
   // search mode seeded with that character, so the keystroke that started the
