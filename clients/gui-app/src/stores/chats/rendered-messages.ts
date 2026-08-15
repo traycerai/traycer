@@ -461,6 +461,13 @@ interface TurnLifecycleTiming {
  * later adopted if the adapter emits autonomous activity. A lifecycle entry
  * proves the row crossed the provider-turn boundary; its timestamps keep a
  * silent resume's elapsed interval separate from the earlier notification.
+ *
+ * The entry is the turn's LATEST attempt window, not a min/max collapse:
+ * safe-point steering continuations legitimately reuse a turnId, so a later
+ * `turn.started` opens a fresh window — retaining the earliest start would
+ * stretch a silent resume's elapsed interval across the pre-steer attempt. A
+ * terminal event closes the open window; a duplicate terminal after a closed
+ * window is ignored (the host's terminal latch makes that defensive only).
  */
 function turnLifecycleTimingFromEvents(
   events: ReadonlyArray<ChatEvent>,
@@ -468,36 +475,44 @@ function turnLifecycleTimingFromEvents(
   const out = new Map<string, TurnLifecycleTiming>();
   for (const event of events) {
     if (event.turnId === null) continue;
-    const current = out.get(event.turnId) ?? {
-      startedAt: null,
-      endedAt: null,
-    };
     switch (event.type) {
       case "turn.started":
-        out.set(event.turnId, {
-          startedAt:
-            current.startedAt === null
-              ? event.timestamp
-              : Math.min(current.startedAt, event.timestamp),
-          endedAt: current.endedAt,
-        });
+        out.set(event.turnId, { startedAt: event.timestamp, endedAt: null });
         break;
       case "turn.completed":
       case "turn.stopped":
-      case "turn.interrupted":
-        out.set(event.turnId, {
-          startedAt: current.startedAt,
-          endedAt:
-            current.endedAt === null
-              ? event.timestamp
-              : Math.max(current.endedAt, event.timestamp),
-        });
+      case "turn.interrupted": {
+        const current = out.get(event.turnId) ?? {
+          startedAt: null,
+          endedAt: null,
+        };
+        if (current.endedAt === null) {
+          out.set(event.turnId, {
+            startedAt: current.startedAt,
+            endedAt: event.timestamp,
+          });
+        }
         break;
+      }
       default:
         break;
     }
   }
   return out;
+}
+
+/**
+ * Whether the turn's latest attempt window is provably finished: both the
+ * matching `turn.started` and a terminal event exist. A start alone is not
+ * completion evidence — a fatal connection close clears the active turn
+ * while the provider may still be running, and fabricating a completion
+ * there would render a zero-length "Resumed" footer for a turn that never
+ * ended.
+ */
+function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
+  return (
+    timing !== null && timing.startedAt !== null && timing.endedAt !== null
+  );
 }
 
 function nestedSteeredUsersSignature(
@@ -1786,14 +1801,31 @@ function hasOnlyAutonomousResumeAssistantBlocks(
   return foundAutonomousResume;
 }
 
+/**
+ * Whether the turn began as an autonomous resume: its first non-steer block
+ * is the resume divider. Unlike `hasOnlyAutonomousResumeAssistantBlocks` this
+ * stays true after the resumed provider turn produces response blocks, so an
+ * adopted resume keeps measuring from its provider start instead of jumping
+ * back to the pre-resume persisted timestamp once output arrives.
+ */
+function turnInitiatedByAutonomousResume(
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    return block.type === "autonomous_resume";
+  }
+  return false;
+}
+
 function isNotificationOnlyAutonomousResume(
   turnComplete: boolean,
-  hasTurnStarted: boolean,
+  hasCompletedLifecycle: boolean,
   blocks: ReadonlyArray<ContentBlock>,
 ): boolean {
   return (
     turnComplete &&
-    !hasTurnStarted &&
+    !hasCompletedLifecycle &&
     hasOnlyAutonomousResumeAssistantBlocks(blocks)
   );
 }
@@ -1824,7 +1856,7 @@ function assistantTurnTiming(
   const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
   if (
     input.lifecycle === null ||
-    !hasOnlyAutonomousResumeAssistantBlocks(input.blocks) ||
+    !turnInitiatedByAutonomousResume(input.blocks) ||
     input.lifecycle.startedAt === null
   ) {
     return {
@@ -1835,13 +1867,23 @@ function assistantTurnTiming(
     };
   }
   const elapsedStartedAt = input.lifecycle.startedAt;
-  const endedAt =
-    input.stoppedAt ?? input.lifecycle.endedAt ?? fallbackCompletedAt;
+  const terminalAt = input.stoppedAt ?? input.lifecycle.endedAt;
+  // A start without terminal proof adopts the live timer only: completion
+  // stays anchored to persisted state, and the classification keeps such a
+  // row footerless until the matching terminal event lands.
+  if (terminalAt === null) {
+    return {
+      rowAnchorAt: fallbackStartedAt,
+      elapsedStartedAt,
+      completedAt: fallbackCompletedAt,
+      cacheToken: `lifecycle:${elapsedStartedAt}:pending`,
+    };
+  }
   return {
     rowAnchorAt: fallbackStartedAt,
     elapsedStartedAt,
-    completedAt: Math.max(elapsedStartedAt, endedAt),
-    cacheToken: `lifecycle:${elapsedStartedAt}:${input.lifecycle.endedAt ?? "none"}`,
+    completedAt: Math.max(elapsedStartedAt, terminalAt),
+    cacheToken: `lifecycle:${elapsedStartedAt}:${terminalAt}`,
   };
 }
 
@@ -1878,7 +1920,7 @@ function renderPersistedAssistantMessageTurn(
     input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null;
   const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
     turnComplete,
-    lifecycleTiming !== null && lifecycleTiming.startedAt !== null,
+    hasCompletedProviderTurn(lifecycleTiming),
     acc.blocks,
   );
   const timing = assistantTurnTiming({

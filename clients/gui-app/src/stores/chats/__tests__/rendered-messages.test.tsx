@@ -4507,6 +4507,158 @@ describe("useRenderedMessages turn.stopped", () => {
     );
   });
 
+  it("keeps an adopted start without a terminal event footerless", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A fatal connection close clears the active turn while the provider may
+    // still be running: turn.started exists, its terminal event does not. A
+    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    // The live timer still seeds from the provider start.
+    expect(row?.elapsedStartedAt).toBe(13_000);
+  });
+
+  it("keeps lifecycle timing after the adopted resume produces output", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        textBlock("block-1", 14_000, "Resumed answer"),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    // The first response block must not switch the turn back to the
+    // pre-resume persisted start - the elapsed interval stays the provider
+    // window.
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: false,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("measures a steered continuation from the resumed attempt's start", () => {
+    const steeredUser = userMessageAt("m2", 12_500);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", "m2", 12_500),
+      ],
+    };
+
+    // Safe-point steering continuations reuse the turnId, so the turn can
+    // carry a pre-steer turn.started. The resumed attempt is the LATEST
+    // window; collapsing starts to their minimum would stretch the silent
+    // resume's elapsed across both attempts.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
   it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
