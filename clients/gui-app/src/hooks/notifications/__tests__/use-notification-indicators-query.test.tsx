@@ -323,6 +323,7 @@ function cloudRow(input: {
 function cloudApproval(input: {
   readonly entryId: string;
   readonly originHostId: string;
+  readonly readAt: number | null;
   readonly resolvedAt: number | null;
 }): HostNotificationsCloudFeedRow {
   return {
@@ -332,7 +333,7 @@ function cloudApproval(input: {
     entry: {
       id: input.entryId,
       updatedAt: 1_100,
-      readAt: null,
+      readAt: input.readAt,
       kind: "approval.requested",
       sourceRef: input.entryId,
       severity: "needs_action",
@@ -471,6 +472,7 @@ describe("cloud-derived notification indicators", () => {
         cloudApproval({
           entryId: "entry-approval",
           originHostId: OTHER_HOST_ID,
+          readAt: null,
           resolvedAt: null,
         }),
       ],
@@ -489,6 +491,47 @@ describe("cloud-derived notification indicators", () => {
     expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
 
+  it("clears a task approval glyph when the notification is marked read", async () => {
+    const harness = createHarness(EMPTY_HOST_RESPONSE);
+    // Keep the request pending so the assertion can only pass through the
+    // optimistic read marker used by the notification row itself.
+    harness.cloudMarkRead.mode = "never-settles";
+    applyCloudSnapshot(
+      [
+        cloudApproval({
+          entryId: "entry-approval",
+          originHostId: OTHER_HOST_ID,
+          readAt: null,
+          resolvedAt: null,
+        }),
+      ],
+      1,
+    );
+
+    renderSurface(harness, {
+      epicIds: [EPIC_ID],
+      chatIds: [],
+      children: (
+        <>
+          <IndicatorProbe entity={{ epicId: EPIC_ID }} testId="epic" />
+          <RowReadProbe entryId="entry-approval" />
+          <MarkReadButton entryId="entry-approval" />
+        </>
+      ),
+    });
+    await waitFor(() => {
+      expect(indicatorText("epic")).toBe("pendingApproval");
+    });
+
+    screen.getByRole("button", { name: "Mark read" }).click();
+
+    await waitFor(() => {
+      expect(indicatorText("row-read")).toBe("read");
+      expect(indicatorText("epic")).toBe("none");
+    });
+    expect(harness.cloudMarkRead.calls).toEqual(["entry-approval"]);
+  });
+
   it("stops lighting an approval once the cloud row carries resolvedAt", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
@@ -496,6 +539,7 @@ describe("cloud-derived notification indicators", () => {
         cloudApproval({
           entryId: "entry-approval",
           originHostId: OTHER_HOST_ID,
+          readAt: null,
           resolvedAt: null,
         }),
       ],
@@ -516,6 +560,7 @@ describe("cloud-derived notification indicators", () => {
         cloudApproval({
           entryId: "entry-approval",
           originHostId: OTHER_HOST_ID,
+          readAt: null,
           resolvedAt: 2_000,
         }),
       ],

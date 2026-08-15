@@ -1,4 +1,12 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useForm } from "@tanstack/react-form";
 import { Plus, X } from "lucide-react";
 import type {
   ProviderMcpAuthRead,
@@ -23,6 +31,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
@@ -34,6 +47,20 @@ type SecretRow = {
   readonly id: number;
   readonly name: string;
   readonly value: string;
+};
+type McpFormValues = {
+  readonly kind: TransportKind;
+  readonly remoteTransportType: RemoteTransportType;
+  readonly name: string;
+  readonly url: string;
+  readonly command: string;
+  readonly argsText: string;
+  readonly envRows: SecretRow[];
+  readonly headerRows: SecretRow[];
+  readonly envAuthVarName: string;
+  readonly oauthClientId: string;
+  readonly oauthResource: string;
+  readonly authType: ProviderMcpAuthType;
 };
 
 const SECRET_REENTRY_HINT =
@@ -165,110 +192,36 @@ function dialogCopy(
   };
 }
 
-interface ResetFormSetters {
-  readonly setKind: (kind: TransportKind) => void;
-  readonly setRemoteTransportType: (type: RemoteTransportType) => void;
-  readonly setName: (name: string) => void;
-  readonly setUrl: (url: string) => void;
-  readonly setCommand: (command: string) => void;
-  readonly setArgsText: (argsText: string) => void;
-  readonly setEnvRows: (rows: SecretRow[]) => void;
-  readonly setHeaderRows: (rows: SecretRow[]) => void;
-  readonly setEnvAuthVarName: (name: string) => void;
-  readonly setOauthClientId: (id: string) => void;
-  readonly setOauthResource: (resource: string) => void;
-  readonly setAuthType: (type: ProviderMcpAuthType) => void;
-  readonly setFormError: (error: string | null) => void;
-}
-
-interface ResetInputs {
-  readonly open: boolean;
+function formValuesFromServer(args: {
   readonly mode: "add" | "edit";
   readonly initialServer: ProviderMcpServer | null;
   readonly supportsRemote: boolean;
   readonly defaultAuth: ProviderMcpAuthType;
   readonly remoteTransports: readonly RemoteTransportType[];
-}
-
-function resetInputsEqual(a: ResetInputs, b: ResetInputs): boolean {
-  return (
-    a.open === b.open &&
-    a.mode === b.mode &&
-    a.initialServer === b.initialServer &&
-    a.supportsRemote === b.supportsRemote &&
-    a.defaultAuth === b.defaultAuth &&
-    a.remoteTransports === b.remoteTransports
-  );
-}
-
-/**
- * Adjusts state during render (guarded by comparing against the last-applied
- * inputs) rather than in an effect, so reopening the dialog resets its fields
- * in the same commit instead of a cascading post-mount render - see
- * `useMountedTabIds` in epic-tab-host.tsx for the same pattern.
- */
-function useResetFormOnReopen(args: {
-  readonly open: boolean;
-  readonly mode: "add" | "edit";
-  readonly initialServer: ProviderMcpServer | null;
-  readonly supportsRemote: boolean;
-  readonly defaultAuth: ProviderMcpAuthType;
-  readonly remoteTransports: readonly RemoteTransportType[];
-  readonly setters: ResetFormSetters;
-}): void {
-  const {
-    open,
-    mode,
-    initialServer,
-    supportsRemote,
-    defaultAuth,
-    remoteTransports,
-    setters,
-  } = args;
-  const resetInputs: ResetInputs = {
-    open,
-    mode,
-    initialServer,
-    supportsRemote,
-    defaultAuth,
-    remoteTransports,
-  };
-  const [seenResetInputs, setSeenResetInputs] = useState<ResetInputs | null>(
-    null,
-  );
-  const resetInputsChanged =
-    open &&
-    (seenResetInputs === null ||
-      !resetInputsEqual(seenResetInputs, resetInputs));
-  if (!resetInputsChanged) return;
-  setSeenResetInputs(resetInputs);
-  const server = mode === "edit" ? initialServer : null;
+}): McpFormValues {
+  const server = args.mode === "edit" ? args.initialServer : null;
   const auth = remoteAuthFromServer(server);
-  setters.setKind(transportKindFromServer(server, supportsRemote));
-  setters.setRemoteTransportType(
-    remoteTransportTypeFromServer(server, remoteTransports),
-  );
-  setters.setName(server?.name ?? "");
-  setters.setUrl(urlFromServer(server));
-  setters.setCommand(commandFromServer(server));
-  setters.setArgsText("");
-  // Ids derived purely from index (negative, so they can never collide with
-  // `nextRowId()`'s always-positive future output or the reserved `0`) -
-  // `nextRowId()` itself reads a ref and must stay confined to event
-  // handlers, not this render-time reset.
-  setters.setEnvRows(
-    envRowsFromServer(server, (name, index) => ({
+  return {
+    kind: transportKindFromServer(server, args.supportsRemote),
+    remoteTransportType: remoteTransportTypeFromServer(
+      server,
+      args.remoteTransports,
+    ),
+    name: server?.name ?? "",
+    url: urlFromServer(server),
+    command: commandFromServer(server),
+    argsText: "",
+    envRows: envRowsFromServer(server, (name, index) => ({
       id: -(index + 1),
       name,
       value: "",
     })),
-  );
-  setters.setHeaderRows(headerRowsFromAuth(auth));
-  setters.setEnvAuthVarName(envAuthNameFromAuth(auth));
-  setters.setOauthClientId("");
-  setters.setOauthResource("");
-  setters.setAuthType(authTypeFromServer(server, defaultAuth));
-  setters.setFormError(null);
+    headerRows: headerRowsFromAuth(auth),
+    envAuthVarName: envAuthNameFromAuth(auth),
+    oauthClientId: "",
+    oauthResource: "",
+    authType: authTypeFromServer(server, args.defaultAuth),
+  };
 }
 
 export function ProviderMcpAddDialog(props: {
@@ -300,18 +253,11 @@ export function ProviderMcpAddDialog(props: {
   } = props;
 
   const uid = useId();
-  // Starts at 0 so the always-present initial row can use a fixed id without
-  // touching the ref during render (`emptyHeaderRows` must stay ref-free —
-  // it also runs as a useState lazy initializer). Rows added afterward (via
-  // `addHeaderRow`, only ever called from an onClick handler) draw from the
-  // ref-backed counter, which never collides with the fixed 0.
   const rowIdRef = useRef(0);
   const nextRowId = (): number => {
     rowIdRef.current += 1;
     return rowIdRef.current;
   };
-  const emptyHeaderRows = (): SecretRow[] => [{ id: 0, name: "", value: "" }];
-  const emptyEnvRows = (): SecretRow[] => [{ id: 0, name: "", value: "" }];
 
   const remoteTransports = useMemo(
     () =>
@@ -327,217 +273,187 @@ export function ProviderMcpAddDialog(props: {
   const oauthFields: readonly ProviderMcpOauthField[] =
     capabilities.oauthFields ?? [];
   const allowMultipleHeaders = capabilities.supportsMultipleHeaders === true;
-
-  const [kind, setKind] = useState<TransportKind>(() =>
-    transportKindFromServer(initialServer, supportsRemote),
-  );
-  const effectiveKind = computeEffectiveKind(
-    multiTransport,
-    kind,
-    supportsRemote,
-  );
-
-  const [remoteTransportType, setRemoteTransportType] =
-    useState<RemoteTransportType>(() =>
-      remoteTransportTypeFromServer(initialServer, remoteTransports),
-    );
-  const effectiveRemoteTransportType = computeEffectiveRemoteTransportType(
-    remoteTransports,
-    remoteTransportType,
-  );
-
-  const [name, setName] = useState(initialServer?.name ?? "");
-  const [url, setUrl] = useState(() => urlFromServer(initialServer));
-  const [command, setCommand] = useState(() =>
-    commandFromServer(initialServer),
-  );
-  const [argsText, setArgsText] = useState("");
-  const [envRows, setEnvRows] = useState<SecretRow[]>(emptyEnvRows);
-  const [headerRows, setHeaderRows] = useState<SecretRow[]>(emptyHeaderRows);
-  const [envAuthVarName, setEnvAuthVarName] = useState("");
-  const [oauthClientId, setOauthClientId] = useState("");
-  const [oauthResource, setOauthResource] = useState("");
-  const [authType, setAuthType] = useState<ProviderMcpAuthType>(() =>
-    authTypeFromServer(initialServer, defaultAuth),
+  const defaultValues = useMemo(
+    () =>
+      formValuesFromServer({
+        mode,
+        initialServer,
+        supportsRemote,
+        defaultAuth,
+        remoteTransports,
+      }),
+    [defaultAuth, initialServer, mode, remoteTransports, supportsRemote],
   );
   const [formError, setFormError] = useState<string | null>(null);
-
   const mutate = useProvidersMcpMutate();
-
-  const authOptions = useMemo(() => {
-    if (effectiveKind === "local") return [] as ProviderMcpAuthType[];
-    return capabilities.authTypes;
-  }, [capabilities.authTypes, effectiveKind]);
-
-  useResetFormOnReopen({
-    open,
-    mode,
-    initialServer,
-    supportsRemote,
-    defaultAuth,
-    remoteTransports,
-    setters: {
-      setKind,
-      setRemoteTransportType,
-      setName,
-      setUrl,
-      setCommand,
-      setArgsText,
-      setEnvRows,
-      setHeaderRows,
-      setEnvAuthVarName,
-      setOauthClientId,
-      setOauthResource,
-      setAuthType,
-      setFormError,
+  const form = useForm({
+    defaultValues,
+    onSubmit: ({ value }) => {
+      submitValues(value);
     },
   });
 
-  const reset = (): void => {
-    setName("");
-    setUrl("");
-    setCommand("");
-    setArgsText("");
-    setEnvRows(emptyEnvRows());
-    setHeaderRows(emptyHeaderRows());
-    setEnvAuthVarName("");
-    setOauthClientId("");
-    setOauthResource("");
-    setAuthType(defaultAuth);
-    setFormError(null);
-    setKind(supportsRemote ? "remote" : "local");
-    setRemoteTransportType(
-      remoteTransportTypeFromServer(null, remoteTransports),
-    );
-  };
+  useEffect(() => {
+    if (!open) return;
+    form.reset(defaultValues);
+  }, [defaultValues, form, open]);
 
-  const handleOpenChange = (next: boolean): void => {
+  function handleOpenChange(next: boolean): void {
     if (mutate.isPending) return;
     if (!next) {
-      reset();
+      form.reset();
+      setFormError(null);
       // M8: clear the TanStack mutation cache immediately on close so a
       // submitted secret (header/env value) doesn't linger in
       // `mutate.variables` after the user is done with the dialog.
       mutate.reset();
     }
     onOpenChange(next);
-  };
+  }
 
   const addHeaderRow = (): void => {
-    setHeaderRows((rows) => [
+    form.setFieldValue("headerRows", (rows) => [
       ...rows,
       { id: nextRowId(), name: "", value: "" },
     ]);
   };
   const removeHeaderRow = (id: number): void => {
-    setHeaderRows((rows) => rows.filter((r) => r.id !== id));
+    form.setFieldValue("headerRows", (rows) =>
+      rows.filter((row) => row.id !== id),
+    );
   };
   const updateHeaderRow = (
     id: number,
     patch: { name: string } | { value: string },
   ): void => {
-    setHeaderRows((rows) =>
-      rows.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    form.setFieldValue("headerRows", (rows) =>
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
     );
   };
 
   const addEnvRow = (): void => {
-    setEnvRows((rows) => [...rows, { id: nextRowId(), name: "", value: "" }]);
+    form.setFieldValue("envRows", (rows) => [
+      ...rows,
+      { id: nextRowId(), name: "", value: "" },
+    ]);
   };
   const removeEnvRow = (id: number): void => {
-    setEnvRows((rows) => rows.filter((r) => r.id !== id));
+    form.setFieldValue("envRows", (rows) =>
+      rows.filter((row) => row.id !== id),
+    );
   };
   const updateEnvRow = (
     id: number,
     patch: { name: string } | { value: string },
   ): void => {
-    setEnvRows((rows) =>
-      rows.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    form.setFieldValue("envRows", (rows) =>
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
     );
   };
 
-  const validate = (): ProviderMcpServerTransportWrite | null => {
-    const trimmedName = name.trim();
+  function submissionFromValues(values: McpFormValues):
+    | {
+        readonly error: string;
+        readonly transport?: never;
+        readonly name?: never;
+      }
+    | {
+        readonly error: undefined;
+        readonly transport: ProviderMcpServerTransportWrite;
+        readonly name: string;
+      } {
+    const trimmedName = values.name.trim();
     if (trimmedName.length === 0) {
-      setFormError("Name is required.");
-      return null;
+      return { error: "Name is required." };
     }
     if (mode === "add" && existingNames.includes(trimmedName)) {
-      setFormError(
-        `A server named “${trimmedName}” already exists in this scope.`,
-      );
-      return null;
+      return {
+        error: `A server named “${trimmedName}” already exists in this scope.`,
+      };
     }
 
+    const effectiveKind = computeEffectiveKind(
+      multiTransport,
+      values.kind,
+      supportsRemote,
+    );
     if (effectiveKind === "remote") {
-      const trimmedUrl = url.trim();
+      const trimmedUrl = values.url.trim();
       if (trimmedUrl.length === 0) {
-        setFormError("Server URL is required.");
-        return null;
+        return { error: "Server URL is required." };
       }
       if (!isHttpUrl(trimmedUrl)) {
-        setFormError("Enter a valid http(s) URL.");
-        return null;
+        return { error: "Enter a valid http(s) URL." };
       }
-      const auth = buildRemoteAuth(authType, {
-        headerRows,
-        envAuthVarName,
-        oauthClientId,
-        oauthResource,
+      const auth = buildRemoteAuth(values.authType, {
+        headerRows: values.headerRows,
+        envAuthVarName: values.envAuthVarName,
+        oauthClientId: values.oauthClientId,
+        oauthResource: values.oauthResource,
       });
       if (auth === "invalid-header-empty") {
-        setFormError("Enter at least one header name and value.");
-        return null;
+        return { error: "Enter at least one header name and value." };
       }
       if (auth === "invalid-header-name") {
-        setFormError("Header name is required.");
-        return null;
+        return { error: "Header name is required." };
       }
       if (auth === "invalid-env-name") {
-        setFormError("Environment variable name is required.");
-        return null;
+        return { error: "Environment variable name is required." };
       }
-      const remoteType: ProviderMcpTransport = effectiveRemoteTransportType;
+      const remoteType: ProviderMcpTransport =
+        computeEffectiveRemoteTransportType(
+          remoteTransports,
+          values.remoteTransportType,
+        );
       if (remoteType === "http") {
-        return { type: "http", url: trimmedUrl, auth };
+        return {
+          error: undefined,
+          name: trimmedName,
+          transport: { type: "http", url: trimmedUrl, auth },
+        };
       }
-      return { type: "sse", url: trimmedUrl, auth };
+      return {
+        error: undefined,
+        name: trimmedName,
+        transport: { type: "sse", url: trimmedUrl, auth },
+      };
     }
 
-    const trimmedCommand = command.trim();
+    const trimmedCommand = values.command.trim();
     if (trimmedCommand.length === 0) {
-      setFormError("Command is required.");
-      return null;
+      return { error: "Command is required." };
     }
-    const args = splitArgs(argsText);
-    const touchedEnv = envRows.filter(
+    const args = splitArgs(values.argsText);
+    const touchedEnv = values.envRows.filter(
       (r) => r.name.trim().length > 0 || r.value.length > 0,
     );
     if (touchedEnv.some((r) => r.name.trim().length === 0)) {
-      setFormError("Environment variable name is required.");
-      return null;
+      return { error: "Environment variable name is required." };
     }
     const env =
       touchedEnv.length === 0
         ? null
         : touchedEnv.map((r) => ({ name: r.name.trim(), value: r.value }));
     return {
-      type: "stdio",
-      command: trimmedCommand,
-      args,
-      env,
+      error: undefined,
+      name: trimmedName,
+      transport: {
+        type: "stdio",
+        command: trimmedCommand,
+        args,
+        env,
+      },
     };
-  };
+  }
 
-  const handleSubmit = (): void => {
-    const transport = validate();
-    if (transport === null) return;
+  function submitValues(values: McpFormValues): void {
+    const submission = submissionFromValues(values);
+    if (submission.error !== undefined) return;
     setFormError(null);
-    const trimmedName = name.trim();
     const requiresAuth =
-      transport.type !== "stdio" &&
-      transport.auth !== null &&
-      transport.auth.type === "oauth";
+      submission.transport.type !== "stdio" &&
+      submission.transport.auth !== null &&
+      submission.transport.auth.type === "oauth";
     mutate.mutate(
       {
         ...scopeTuple,
@@ -545,20 +461,20 @@ export function ProviderMcpAddDialog(props: {
           mode === "edit"
             ? {
                 action: "update",
-                name: trimmedName,
-                transport,
+                name: submission.name,
+                transport: submission.transport,
               }
             : {
                 action: "add",
-                name: trimmedName,
-                transport,
+                name: submission.name,
+                transport: submission.transport,
               },
         suppressToast: true,
       },
       {
         onSuccess: () => {
           if (mode === "add" && onAdded !== null) {
-            onAdded({ name: trimmedName, requiresAuth });
+            onAdded({ name: submission.name, requiresAuth });
           }
           handleOpenChange(false);
         },
@@ -575,7 +491,7 @@ export function ProviderMcpAddDialog(props: {
         },
       },
     );
-  };
+  }
 
   const isEdit = mode === "edit";
   const { title, submitLabel } = dialogCopy(mode, providerLabel);
@@ -583,150 +499,212 @@ export function ProviderMcpAddDialog(props: {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="flex max-h-[min(85vh,42rem)] w-[min(92vw,28rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="top-[15vh] flex max-h-[min(85vh,42rem)] w-[min(92vw,28rem)] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
         data-testid="provider-mcp-add-dialog"
       >
-        <DialogHeader className="shrink-0 p-4 pb-2">
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            Config is written to this provider&apos;s{" "}
-            {scopeTuple.scope === "global" ? "global" : "project"} scope.
-          </DialogDescription>
-        </DialogHeader>
+        <form
+          className="contents"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const validationError = submissionFromValues(
+              form.state.values,
+            ).error;
+            if (validationError !== undefined) {
+              setFormError(validationError);
+              return;
+            }
+            void form.handleSubmit();
+          }}
+        >
+          <DialogHeader className="shrink-0 p-4 pb-2">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>
+              Config is written to this provider&apos;s{" "}
+              {scopeTuple.scope === "global" ? "global" : "project"} scope.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-2">
-          {multiTransport ? (
-            <SegmentChipGroup label="Transport kind">
-              <SegmentChip
-                label="Remote"
-                active={effectiveKind === "remote"}
-                onClick={() => {
-                  setKind("remote");
-                }}
-              />
-              <SegmentChip
-                label="Local (stdio)"
-                active={effectiveKind === "local"}
-                onClick={() => {
-                  setKind("local");
-                }}
-              />
-            </SegmentChipGroup>
-          ) : null}
+          <form.Subscribe
+            selector={(state) => ({
+              values: state.values,
+              isDefaultValue: state.isDefaultValue,
+            })}
+          >
+            {({ values, isDefaultValue }) => {
+              const effectiveKind = computeEffectiveKind(
+                multiTransport,
+                values.kind,
+                supportsRemote,
+              );
+              const effectiveRemoteTransportType =
+                computeEffectiveRemoteTransportType(
+                  remoteTransports,
+                  values.remoteTransportType,
+                );
+              const authOptions =
+                effectiveKind === "local" ? [] : capabilities.authTypes;
+              return (
+                <>
+                  <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-2">
+                    {multiTransport ? (
+                      <SegmentChipGroup label="Transport kind">
+                        <SegmentChip
+                          label="Remote"
+                          active={effectiveKind === "remote"}
+                          disabledReason={null}
+                          onClick={() => {
+                            form.setFieldValue("kind", "remote");
+                          }}
+                        />
+                        <SegmentChip
+                          label="Local (stdio)"
+                          active={effectiveKind === "local"}
+                          disabledReason={null}
+                          onClick={() => {
+                            form.setFieldValue("kind", "local");
+                          }}
+                        />
+                      </SegmentChipGroup>
+                    ) : null}
 
-          {isEdit ? (
-            <div className="flex flex-col gap-1.5">
-              <Label id={`${uid}-name-label`}>Name</Label>
-              <p className="text-ui-sm font-medium text-foreground">{name}</p>
-            </div>
-          ) : (
-            <Field
-              id={`${uid}-name`}
-              label="Name"
-              value={name}
-              onChange={setName}
-              placeholder="context7"
-              type="text"
-              hint={null}
-            />
-          )}
+                    {isEdit ? (
+                      <div className="flex flex-col gap-1.5">
+                        <Label id={`${uid}-name-label`}>Name</Label>
+                        <p className="text-ui-sm font-medium text-foreground">
+                          {values.name}
+                        </p>
+                      </div>
+                    ) : (
+                      <Field
+                        id={`${uid}-name`}
+                        label="Name"
+                        value={values.name}
+                        onChange={(value) => {
+                          form.setFieldValue("name", value);
+                        }}
+                        placeholder="context7"
+                        type="text"
+                        hint={null}
+                      />
+                    )}
 
-          {effectiveKind === "remote" ? (
-            <>
-              <Field
-                id={`${uid}-url`}
-                label="Server URL"
-                value={url}
-                onChange={setUrl}
-                placeholder="https://mcp.example.com"
-                type="text"
-                hint={null}
-              />
+                    {effectiveKind === "remote" ? (
+                      <>
+                        <Field
+                          id={`${uid}-url`}
+                          label="Server URL"
+                          value={values.url}
+                          onChange={(value) => {
+                            form.setFieldValue("url", value);
+                          }}
+                          placeholder="https://mcp.example.com"
+                          type="text"
+                          hint={null}
+                        />
 
-              <RemoteAuthFields
-                uid={uid}
-                isEdit={isEdit}
-                remoteTransports={remoteTransports}
-                remoteTransportType={effectiveRemoteTransportType}
-                onRemoteTransportTypeChange={setRemoteTransportType}
-                authOptions={authOptions}
-                authType={authType}
-                onAuthTypeChange={setAuthType}
-                headerRows={headerRows}
-                allowMultipleHeaders={allowMultipleHeaders}
-                onAddHeaderRow={addHeaderRow}
-                onRemoveHeaderRow={removeHeaderRow}
-                onChangeHeaderRow={updateHeaderRow}
-                envAuthVarName={envAuthVarName}
-                onEnvAuthVarNameChange={setEnvAuthVarName}
-                oauthClientId={oauthClientId}
-                onOauthClientIdChange={setOauthClientId}
-                oauthResource={oauthResource}
-                onOauthResourceChange={setOauthResource}
-                oauthFields={oauthFields}
-              />
-            </>
-          ) : (
-            <>
-              <Field
-                id={`${uid}-command`}
-                label="Command"
-                value={command}
-                onChange={setCommand}
-                placeholder="npx"
-                type="text"
-                hint={null}
-              />
-              <Field
-                id={`${uid}-args`}
-                label="Args"
-                value={argsText}
-                onChange={setArgsText}
-                placeholder="-y @modelcontextprotocol/server-github"
-                type="text"
-                hint={null}
-              />
-              <SecretRowsEditor
-                idPrefix={`${uid}-env`}
-                groupLabel="Env vars"
-                rowLabel="Env var"
-                namePlaceholder="GITHUB_TOKEN"
-                valuePlaceholder="value"
-                addLabel="Add env var"
-                rows={envRows}
-                allowMultiple
-                onAdd={addEnvRow}
-                onRemove={removeEnvRow}
-                onChange={updateEnvRow}
-              />
-            </>
-          )}
+                        <RemoteAuthFields
+                          uid={uid}
+                          isEdit={isEdit}
+                          remoteTransports={remoteTransports}
+                          remoteTransportType={effectiveRemoteTransportType}
+                          onRemoteTransportTypeChange={(value) => {
+                            form.setFieldValue("remoteTransportType", value);
+                          }}
+                          authOptions={authOptions}
+                          authType={values.authType}
+                          onAuthTypeChange={(value) => {
+                            form.setFieldValue("authType", value);
+                          }}
+                          headerRows={values.headerRows}
+                          allowMultipleHeaders={allowMultipleHeaders}
+                          onAddHeaderRow={addHeaderRow}
+                          onRemoveHeaderRow={removeHeaderRow}
+                          onChangeHeaderRow={updateHeaderRow}
+                          envAuthVarName={values.envAuthVarName}
+                          onEnvAuthVarNameChange={(value) => {
+                            form.setFieldValue("envAuthVarName", value);
+                          }}
+                          oauthClientId={values.oauthClientId}
+                          onOauthClientIdChange={(value) => {
+                            form.setFieldValue("oauthClientId", value);
+                          }}
+                          oauthResource={values.oauthResource}
+                          onOauthResourceChange={(value) => {
+                            form.setFieldValue("oauthResource", value);
+                          }}
+                          oauthFields={oauthFields}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Field
+                          id={`${uid}-command`}
+                          label="Command"
+                          value={values.command}
+                          onChange={(value) => {
+                            form.setFieldValue("command", value);
+                          }}
+                          placeholder="npx"
+                          type="text"
+                          hint={null}
+                        />
+                        <Field
+                          id={`${uid}-args`}
+                          label="Args"
+                          value={values.argsText}
+                          onChange={(value) => {
+                            form.setFieldValue("argsText", value);
+                          }}
+                          placeholder="-y @modelcontextprotocol/server-github"
+                          type="text"
+                          hint={null}
+                        />
+                        <SecretRowsEditor
+                          idPrefix={`${uid}-env`}
+                          groupLabel="Env vars"
+                          rowLabel="Env var"
+                          namePlaceholder="GITHUB_TOKEN"
+                          valuePlaceholder="value"
+                          addLabel="Add env var"
+                          rows={values.envRows}
+                          allowMultiple
+                          onAdd={addEnvRow}
+                          onRemove={removeEnvRow}
+                          onChange={updateEnvRow}
+                        />
+                      </>
+                    )}
 
-          {formError !== null ? (
-            <p className="text-ui-xs text-destructive">{formError}</p>
-          ) : null}
-        </div>
+                    {formError !== null ? (
+                      <p className="text-ui-xs text-destructive">{formError}</p>
+                    ) : null}
+                  </div>
 
-        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              handleOpenChange(false);
+                  <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        handleOpenChange(false);
+                      }}
+                      disabled={mutate.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      disabled={mutate.isPending || (isEdit && isDefaultValue)}
+                    >
+                      {mutate.isPending ? <MutedAgentSpinner /> : null}
+                      {submitLabel}
+                    </Button>
+                  </div>
+                </>
+              );
             }}
-            disabled={mutate.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={handleSubmit}
-            disabled={mutate.isPending}
-          >
-            {mutate.isPending ? <MutedAgentSpinner /> : null}
-            {submitLabel}
-          </Button>
-        </div>
+          </form.Subscribe>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -760,11 +738,16 @@ function RemoteAuthFields(props: {
   const { uid } = props;
   return (
     <>
-      {props.remoteTransports.length > 1 ? (
+      {props.remoteTransports.length > 0 ? (
         <SegmentChipGroup label="Transport protocol">
           <SegmentChip
             label="HTTP"
             active={props.remoteTransportType === "http"}
+            disabledReason={
+              props.remoteTransports.includes("http")
+                ? null
+                : "Streamable HTTP isn’t supported by this provider."
+            }
             onClick={() => {
               props.onRemoteTransportTypeChange("http");
             }}
@@ -772,6 +755,11 @@ function RemoteAuthFields(props: {
           <SegmentChip
             label="SSE"
             active={props.remoteTransportType === "sse"}
+            disabledReason={
+              props.remoteTransports.includes("sse")
+                ? null
+                : "SSE isn’t supported by this provider."
+            }
             onClick={() => {
               props.onRemoteTransportTypeChange("sse");
             }}
@@ -884,22 +872,34 @@ function SegmentChipGroup(props: {
 function SegmentChip(props: {
   readonly label: string;
   readonly active: boolean;
+  readonly disabledReason: string | null;
   readonly onClick: () => void;
 }): ReactNode {
-  return (
+  let stateClass = "text-muted-foreground hover:text-foreground";
+  if (props.active) stateClass = "bg-background text-foreground shadow-sm";
+  if (props.disabledReason !== null) {
+    stateClass = "cursor-not-allowed text-muted-foreground/50";
+  }
+  const button = (
     <button
       type="button"
-      onClick={props.onClick}
+      onClick={props.disabledReason === null ? props.onClick : undefined}
       aria-pressed={props.active}
+      aria-disabled={props.disabledReason === null ? undefined : true}
       className={cn(
         "rounded px-2.5 py-1 text-ui-xs transition-colors",
-        props.active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
+        stateClass,
       )}
     >
       {props.label}
     </button>
+  );
+  if (props.disabledReason === null) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent>{props.disabledReason}</TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -1882,11 +1882,6 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       providerPluginsCapabilitiesSchemaV70,
     ],
     [
-      "skills capabilities",
-      providerSkillsCapabilitiesSchema,
-      providerSkillsCapabilitiesSchemaV70,
-    ],
-    [
       "env override scope",
       providerEnvOverrideScopeSchema,
       providerEnvOverrideScopeSchemaV70,
@@ -1901,6 +1896,18 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       );
     },
   );
+
+  it("frozen skills actionScopes = live keys minus inspect/edit/update, exactly", () => {
+    const liveKeys = Object.keys(
+      providerSkillsCapabilitiesSchema.shape.actionScopes.shape,
+    ).sort();
+    const frozenKeys = Object.keys(
+      providerSkillsCapabilitiesSchemaV70.shape.actionScopes.shape,
+    ).sort();
+    expect(liveKeys).toEqual(
+      [...frozenKeys, "edit", "inspect", "update"].sort(),
+    );
+  });
 
   it("frozen tabs = live tabs minus modelProviders, exactly", () => {
     // Pins BOTH directions of the projection's premise: the frozen enum has

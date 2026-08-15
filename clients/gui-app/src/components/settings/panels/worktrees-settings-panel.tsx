@@ -34,7 +34,6 @@ import {
   GitMerge,
   HelpCircle,
   ListFilter,
-  Minus,
   MoreHorizontal,
   RefreshCw,
   Search,
@@ -87,6 +86,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SelectAllToggle } from "@/components/ui/select-all-toggle";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Dialog,
@@ -1553,9 +1553,12 @@ export function WorktreesList(props: {
           {...props.toolbarProps}
           selectionControls={
             <>
-              <WorktreeSelectAllToggle
+              <SelectAllToggle
+                accessibleLabel="Select all visible worktrees"
                 selectableCount={selectableWorktreePaths.length}
                 selectedCount={selectedCount}
+                disabled={false}
+                testId="worktrees-select-all"
                 onToggle={toggleSelectAllVisible}
               />
               <WorktreesRepoExpansionControl
@@ -1801,80 +1804,6 @@ function WorktreeDeleteProgressStrip(props: {
       </div>
     </div>
   );
-}
-
-/**
- * Standard tri-state select-all - lives as a quiet toggle in the persistent
- * toolbar action group (next to Collapse/Expand all and Refresh) instead of a
- * dedicated header row above the list, so there is no permanent chrome bar
- * sitting before the content. Selects/deselects every CURRENTLY-VISIBLE,
- * selectable row (post-filter + post-search, across all repo groups, minus
- * collapsed groups). Indeterminate when some-but-not-all are selected;
- * disabled when nothing is selectable. In-use / mid-delete rows are excluded
- * from the selectable count (standard table behavior).
- */
-function WorktreeSelectAllToggle(props: {
-  readonly selectableCount: number;
-  readonly selectedCount: number;
-  readonly onToggle: () => void;
-}): ReactNode {
-  const allSelected =
-    props.selectableCount > 0 && props.selectedCount === props.selectableCount;
-  const indeterminate =
-    props.selectedCount > 0 && props.selectedCount < props.selectableCount;
-  const ariaChecked = worktreeSelectAllAriaChecked(allSelected, indeterminate);
-  let indicator: ReactNode = null;
-  if (allSelected) indicator = <Check className="size-3" />;
-  else if (indeterminate) indicator = <Minus className="size-3" />;
-  const label = "Select all visible worktrees";
-  return (
-    <TooltipWrapper
-      label={label}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span className="inline-flex">
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={ariaChecked}
-          aria-label={label}
-          data-testid="worktrees-select-all"
-          disabled={props.selectableCount === 0}
-          onClick={props.onToggle}
-          className={cn(
-            "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
-            allSelected || indeterminate
-              ? "border-border bg-muted text-foreground"
-              : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
-          )}
-        >
-          <span
-            aria-hidden
-            className={cn(
-              "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
-              allSelected || indeterminate
-                ? "border-foreground/70 bg-foreground text-background"
-                : "border-muted-foreground/50",
-            )}
-          >
-            {indicator}
-          </span>
-          <span>Select all</span>
-        </button>
-      </span>
-    </TooltipWrapper>
-  );
-}
-
-function worktreeSelectAllAriaChecked(
-  allSelected: boolean,
-  indeterminate: boolean,
-): "true" | "mixed" | "false" {
-  if (allSelected) return "true";
-  if (indeterminate) return "mixed";
-  return "false";
 }
 
 /**

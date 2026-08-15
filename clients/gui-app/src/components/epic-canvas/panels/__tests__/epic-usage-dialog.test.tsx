@@ -37,6 +37,24 @@ function chartDayCount(): number {
   return data.length;
 }
 
+/**
+ * The mounted trend chart's series names, in the last captured ECharts
+ * option's series order - reads the same "last mocked instance, last
+ * captured option" seam as {@link chartDayCount}, so a `chartGroupBy` switch
+ * (which remounts the chart via its `key` prop) is picked up by re-reading
+ * the newest mock instance rather than the original one.
+ */
+function chartSeriesNames(): readonly string[] {
+  const option = getEChartsMockInstances().at(-1)?.options.at(-1);
+  if (option === undefined) throw new Error("no ECharts option captured");
+  const { series } = option as UsageChartOption;
+  if (series === undefined) return [];
+  const list = Array.isArray(series) ? series : [series];
+  return list.map((entry) =>
+    typeof entry.name === "string" ? entry.name : "",
+  );
+}
+
 type UsageSummaryRequest = RequestOfMethod<
   HostRpcRegistry,
   "host.usage.summary"
@@ -156,6 +174,45 @@ function usageSummaryResponse(): UsageSummaryResponse {
   };
 }
 
+/**
+ * `usageSummaryResponse()` plus a second same-day bucket from a different
+ * harness/model, so the chart has something to actually regroup: switching
+ * `chartGroupBy` folds the same two buckets by a different key and the
+ * series names must change with it. `totals.factCount` tracks the bucket
+ * count rather than staying pinned at the base fixture's `1`.
+ */
+function usageSummaryResponseWithTwoBuckets(): UsageSummaryResponse {
+  const base = usageSummaryResponse();
+  const secondBucket = {
+    day: "2026-08-09",
+    harnessId: "codex",
+    model: "gpt-5.6-sol",
+    factCount: 1,
+    tokens: {
+      uncachedInputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 50,
+    },
+    knownCostUsd: 2.5,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
+    costProvenance: "providerReported",
+  } satisfies UsageSummaryResponse["summary"]["buckets"][number];
+  return {
+    ...base,
+    summary: {
+      ...base.summary,
+      totals: {
+        ...base.summary.totals,
+        factCount: 2,
+        knownCostUsd: 5,
+      },
+      buckets: [...base.summary.buckets, secondBucket],
+    },
+  };
+}
+
 function renderDialog(
   handler: (request: UsageSummaryRequest) => UsageSummaryResponse,
 ): {
@@ -245,6 +302,41 @@ describe("<EpicUsageDialog />", () => {
       expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
     });
     expect(chartDayCount()).toBe(30);
+  });
+
+  it("groups the chart by harness by default, and by model after switching the toggle", async () => {
+    const user = userEvent.setup();
+    renderDialog(usageSummaryResponseWithTwoBuckets);
+    await screen.findByTestId("usage-cost-figure");
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
+    });
+    expect(chartSeriesNames()).toEqual(["claude", "codex"]);
+
+    await user.click(screen.getByTestId("usage-chart-groupby-model"));
+
+    await waitFor(() => {
+      expect(chartSeriesNames()).toEqual(["claude-sonnet-5", "gpt-5.6-sol"]);
+    });
+  });
+
+  it("does not render the group-by toggle when the window has no facts", async () => {
+    renderDialog(() => {
+      const base = usageSummaryResponse();
+      return {
+        ...base,
+        summary: {
+          ...base.summary,
+          totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+          buckets: [],
+        },
+      };
+    });
+
+    const costFigure = await screen.findByTestId("usage-cost-figure");
+    expect(costFigure).toBeTruthy();
+    expect(screen.queryByTestId("usage-chart-groupby-harness")).toBeNull();
+    expect(screen.queryByTestId("usage-chart-groupby-model")).toBeNull();
   });
 
   it("renders a retryable error card, never a silent fallback, when the RPC fails", async () => {

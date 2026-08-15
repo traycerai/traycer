@@ -260,7 +260,11 @@ describe("credentials mutation store", () => {
       const out = await store.signOut(null);
       expect(out.outcome).toBe("deleted");
       expect(await readCredentialsFile(credentialsPath)).toBeNull();
-      const back = await store.signIn({ ...CREDS, token: "tok-2" }, false, null);
+      const back = await store.signIn(
+        { ...CREDS, token: "tok-2" },
+        false,
+        null,
+      );
       expect(back.outcome).toBe("applied");
       expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-2");
     });
@@ -319,9 +323,9 @@ describe("credentials mutation store", () => {
       expect(result.outcome).toBe("applied");
       expect(result.credentials?.refreshToken).toBe("");
       expect(result.credentials?.user.id).toBe("u2");
-      expect(
-        (await readCredentialsFile(credentialsPath))?.refreshToken,
-      ).toBe("");
+      expect((await readCredentialsFile(credentialsPath))?.refreshToken).toBe(
+        "",
+      );
     });
   });
 
@@ -631,7 +635,11 @@ describe("credentials mutation store", () => {
         }),
       ).rejects.toThrow();
       // Interactive signIn rebuilds the sidecar and proceeds.
-      const back = await store.signIn({ ...CREDS, token: "rebuilt" }, false, null);
+      const back = await store.signIn(
+        { ...CREDS, token: "rebuilt" },
+        false,
+        null,
+      );
       expect(back.outcome).toBe("applied");
     });
   });
@@ -1149,7 +1157,19 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
-        const storeA = makeStore(stubA.fn);
+        // Park the automatic retry. `driveContinuation()` takes the same lock B's
+        // observe needs; under parallel load that hold outlives B's 500ms
+        // wait and the pin reads `lock-busy` instead of the marker gate.
+        // `continuationRetryMs` is the injected test hook; we drive the
+        // parked continuation explicitly after the sibling observe.
+        const storeA = createCredentialsMutationStore({
+          paths: { credentialsPath, metaPath, lockPath },
+          refresh: stubA.fn,
+          lockWaitMs: 500,
+          lockPollIntervalMs: 25,
+          continuationRetryMs: 60_000,
+        });
+        stores.push(storeA);
         await seedSignedIn(storeA);
 
         const failed = await storeA.rotate({
@@ -1180,14 +1200,22 @@ describe("credentials mutation store", () => {
         expect(deferred.outcome).toBe("spend-pending");
         expect(stubB.calls()).toBe(0);
 
-        // Unfreeze: A's continuation lands the minted pair and releases the
-        // marker; B then adopts via the normal superseded path.
+        // Unfreeze and land A's parked continuation under the lock preamble.
+        // Rotate against the spent base: land first, then the body sees the
+        // successor and returns superseded - no second spend. After this
+        // returns, `pending` and the marker are both gone (no timer race).
         chmodSync(workDir, 0o700);
-        // Same barrier as the migration case above: `pending` is cleared before
-        // the marker unlink is awaited, so the flag alone races the release.
-        await waitUntil(
-          () => !storeA.hasPendingContinuation() && !existsSync(markerPath()),
-        );
+        const landed = await storeA.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(storeA.hasPendingContinuation()).toBe(false);
+        expect(existsSync(markerPath())).toBe(false);
+        expect(landed.outcome).toBe("superseded");
+        expect(landed.credentials?.token).toBe(`${CREDS.token}::r`);
+        expect(stubA.calls()).toBe(1);
 
         const adopted = await storeB.rotate({
           expectedUserId: CREDS.user.id,

@@ -176,6 +176,7 @@ describe("cloud notification indicator derivation", () => {
     entryId: string,
     kind: "approval.requested" | "interview.requested",
     resolvedAt: number | null,
+    readAt: number | null,
   ): HostNotificationsCloudFeedRow {
     const shared = {
       epicId: "epic-1",
@@ -186,7 +187,7 @@ describe("cloud notification indicator derivation", () => {
     return wrap(entryId, {
       id: entryId,
       updatedAt: 1,
-      readAt: null,
+      readAt,
       kind,
       sourceRef: null,
       severity: "needs_action",
@@ -480,7 +481,7 @@ describe("cloud notification indicator derivation", () => {
 
   it("rolls a retained unread prompt into its epic without a chat projection", () => {
     const result = selectCloudNotificationIndicators(
-      rowsById([prompt("approval", "approval.requested", null)]),
+      rowsById([prompt("approval", "approval.requested", null, null)]),
       ["epic-1"],
       [],
     );
@@ -527,25 +528,31 @@ describe("cloud notification indicator derivation", () => {
     expect(result).toEqual({ epics: {}, chats: {} });
   });
 
-  it("pends an approval only while resolvedAt is null", () => {
+  it("lights an approval only while it is unresolved and unread", () => {
     const unresolved = selectCloudNotificationIndicators(
-      rowsById([prompt("approval", "approval.requested", null)]),
+      rowsById([prompt("approval", "approval.requested", null, null)]),
       [],
       ["chat-1"],
     );
-    const resolved = selectCloudNotificationIndicators(
-      rowsById([prompt("approval", "approval.requested", 9)]),
+    const resolvedButUnread = selectCloudNotificationIndicators(
+      rowsById([prompt("approval", "approval.requested", 9, null)]),
+      [],
+      ["chat-1"],
+    );
+    const unresolvedButRead = selectCloudNotificationIndicators(
+      rowsById([prompt("approval", "approval.requested", null, 10)]),
       [],
       ["chat-1"],
     );
 
     expect(unresolved.chats["chat-1"].pendingApproval).toBe(true);
-    expect(resolved.chats["chat-1"]).toBeUndefined();
+    expect(resolvedButUnread.chats["chat-1"]).toBeUndefined();
+    expect(unresolvedButRead.chats["chat-1"]).toBeUndefined();
   });
 
   it("pends an interview independently of the approval arm", () => {
     const result = selectCloudNotificationIndicators(
-      rowsById([prompt("interview", "interview.requested", null)]),
+      rowsById([prompt("interview", "interview.requested", null, null)]),
       [],
       ["chat-1"],
     );
