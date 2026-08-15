@@ -1,4 +1,9 @@
-import { useMemo, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -8,7 +13,7 @@ import {
   useHostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
-import { useEpicStore } from "@/hooks/use-epic-store";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
 import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
@@ -24,6 +29,7 @@ import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
+  isPublishedCopyBehind,
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
@@ -185,29 +191,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // ── Point-of-read freshness ──────────────────────────────────────────────
   const { publishedAt: copyPublishedAt, throughRecordSeq: copyThroughSeq } =
     publishedCopyStamp(state);
-  // Does the owner's log run PAST this copy? The record row carries that
-  // host's durable head (own rows directly, foreign rows through the inbox),
-  // and it is the one number comparable with the head's `throughRecordSeq`.
-  //
-  // Selected down to a boolean rather than reading `revision` out: the owner
-  // advancing its log would otherwise re-render this transcript on every turn
-  // to change a value nothing renders. As a boolean the tile repaints once,
-  // when the answer actually flips.
-  //
-  // Absent record row (a copy opened from a cloud row this host holds no
-  // replica of) or absent sequence on either side = no evidence, so `false`.
-  // The sentence then states age alone and claims nothing, which is the honest
-  // reading: silence here means "unproven", never "current".
-  const copyIsBehind = useEpicStore((s) => {
-    if (copyThroughSeq === null) return false;
-    if (!Object.hasOwn(s.chats.byId, node.chatId)) return false;
-    const revision = s.chats.byId[node.chatId].revision;
-    if (revision === null) return false;
-    // STRICTLY greater. A head that lands before the metadata projection
-    // covering the same records leaves the copy transiently AHEAD; that is a
-    // race in the reporting, not staleness, and must not raise the notice.
-    return revision > copyThroughSeq;
-  });
+  const copyIsBehind = usePublishedCopyIsBehind(node.chatId, copyThroughSeq);
 
   // The doc-replica fallback: enabled ONLY once the cloud read has settled
   // `unpublished` - every other refusal (needs-newer-app, ambiguous-identity,
@@ -371,6 +355,52 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     </div>
   );
 }
+
+/**
+ * Whether the owner's log is PROVEN to run past the copy on screen.
+ *
+ * The record row carries that host's durable head (own rows directly, foreign
+ * rows through the inbox), and it is the one number comparable with the head's
+ * `throughRecordSeq` - both are positions in the same per-chat log, written by
+ * the same host.
+ *
+ * Reads the Epic store through the OPTIONAL handle, never `useEpicStore`. A
+ * tile must not require an Epic session merely to decorate itself: the surface
+ * host publishes nothing until `EpicSessionGate` opens (see `TileSurfaceSlot`),
+ * so a throwing `useOpenEpicHandle` here would take the whole transcript down
+ * for a sentence clause. No handle = no evidence = `false`.
+ *
+ * Collapsed to a boolean inside the snapshot rather than returning `revision`:
+ * the owner advancing its log would otherwise re-render this transcript on
+ * every turn to change a value nothing renders. As a boolean the tile repaints
+ * once, when the answer actually flips.
+ */
+function usePublishedCopyIsBehind(
+  chatId: string,
+  throughRecordSeq: number | null,
+): boolean {
+  const handle = useMaybeOpenEpicHandle();
+  const store = handle?.store ?? null;
+  const subscribe = useCallback(
+    (onChange: () => void): (() => void) =>
+      store === null ? NO_OP_UNSUBSCRIBE : store.subscribe(onChange),
+    [store],
+  );
+  const getSnapshot = useCallback((): boolean => {
+    if (store === null) return false;
+    const chats = store.getState().chats.byId;
+    if (!Object.hasOwn(chats, chatId)) return false;
+    return isPublishedCopyBehind({
+      revision: chats[chatId].revision,
+      throughRecordSeq,
+    });
+  }, [store, chatId, throughRecordSeq]);
+  // Safe as its own server snapshot: the value is a primitive, so identity
+  // cannot churn between renders.
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function NO_OP_UNSUBSCRIBE(): void {}
 
 /**
  * What the copy on screen actually IS: the head it was rendered from, and when

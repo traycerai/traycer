@@ -1,11 +1,36 @@
 /**
- * The locked-composer reason sentences for the two read-only chat copies.
+ * The locked-composer reason sentences for the two read-only chat copies, and
+ * the one predicate that decides what they may claim.
  *
  * Their own module so `published-chat-tile.tsx` exports only its component: a
  * file that exports both components and non-components breaks fast refresh for
- * everything importing it. Pure string builders.
+ * everything importing it. Everything here is pure.
  */
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
+
+/**
+ * Whether a published copy is PROVEN to be behind the chat it copies.
+ *
+ * `revision` is the owning host's durable record head; `throughRecordSeq` is
+ * how far the head this copy was rendered from reaches. Both are positions in
+ * the same per-chat log written by the same host, so the comparison is in one
+ * unit and needs no clock - unlike the two timestamps on the same row, which
+ * come from different clocks (server and host) and would report skew as
+ * staleness.
+ *
+ * STRICTLY greater, so the window where a head lands before the metadata
+ * projection covering the same records - leaving the copy transiently AHEAD -
+ * reads as current rather than behind. Either side missing is no evidence at
+ * all, never zero: absence means unproven, and the caller's answer to unproven
+ * is to state the copy's age and claim nothing further.
+ */
+export function isPublishedCopyBehind(input: {
+  readonly revision: number | null;
+  readonly throughRecordSeq: number | null;
+}): boolean {
+  if (input.revision === null || input.throughRecordSeq === null) return false;
+  return input.revision > input.throughRecordSeq;
+}
 
 /**
  * The locked composer's reason, in one sentence a reader can act on.
