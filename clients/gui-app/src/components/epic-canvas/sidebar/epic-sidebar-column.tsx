@@ -15,7 +15,7 @@
  * cap matches the drag-time cap of half the layout row, so a persisted
  * width never starves the canvas on a small window.
  */
-import { useMemo, useRef, type ReactNode } from "react";
+import { memo, useMemo, useRef, type ReactNode } from "react";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import {
   EpicLeftPanelHost,
@@ -59,9 +59,14 @@ export interface EpicSidebarColumnProps {
   readonly tabId: string;
 }
 
-export function EpicSidebarColumn(props: EpicSidebarColumnProps): ReactNode {
+// Top-level activation rerenders every retained EpicSurface with new activity
+// context values. The sidebar identity does not change, and its live inputs use
+// context or component-owned store subscriptions that update through this memo.
+export const EpicSidebarColumn = memo(function EpicSidebarColumn(
+  props: EpicSidebarColumnProps,
+): ReactNode {
   return <EpicSidebarColumnBody epicId={props.epicId} tabId={props.tabId} />;
-}
+});
 
 function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
   const { epicId, tabId } = props;
