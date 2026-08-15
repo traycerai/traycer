@@ -17,7 +17,6 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { DndContext } from "@dnd-kit/core";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
