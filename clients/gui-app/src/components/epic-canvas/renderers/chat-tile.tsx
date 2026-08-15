@@ -2228,11 +2228,35 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
+  // A worktree-creating send holds the host's per-chat serializer so the
+  // final workspace binding is established before later queue actions run.
+  // Keep both sides of a reversible resume visible while their action
+  // acknowledgements wait behind serialized host work. A normal pause of a
+  // running queue is not "Keep paused"; the authoritative paused rows make
+  // this specifically the superseding action for a pending resume.
+  const pendingQueueIntent = useMemo(() => {
+    const pendingActions = Object.values(state.pendingActions);
+    const resumeRequested = pendingActions.some(
+      (action) => action.action === "resumeQueue",
+    );
+    const pauseRequested = pendingActions.some(
+      (action) => action.action === "pauseQueue",
+    );
+    return {
+      resumeRequested,
+      keepPausedRequested:
+        pauseRequested &&
+        state.queue.items.some((item) => item.status === "paused"),
+    };
+  }, [state.pendingActions, state.queue.items]);
+
   const lowerQueue = useMemo(
     () => ({
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
       value: state.queue,
+      resumeRequested: pendingQueueIntent.resumeRequested,
+      keepPausedRequested: pendingQueueIntent.keepPausedRequested,
       onPause: chatActions.pauseQueue,
       onResume: chatActions.resumeQueue,
       onEdit: editQueuedItem,
@@ -2248,6 +2272,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       editingQueueItem,
       activeEditingQueueItemId,
       state.queue,
+      pendingQueueIntent,
       chatActions.pauseQueue,
       chatActions.resumeQueue,
       editQueuedItem,

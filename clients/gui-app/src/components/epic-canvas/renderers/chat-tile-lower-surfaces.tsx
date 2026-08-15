@@ -160,6 +160,8 @@ export interface ChatLowerQueueState {
   readonly editingItem: ChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   readonly onEdit: (item: ChatQueuedPromptItem) => void;
@@ -398,6 +400,8 @@ export function ChatLowerInteractionSurfaces(
         backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
         canAct={props.access.canAct}
+        queueResumeRequested={props.queue.resumeRequested}
+        queueKeepPausedRequested={props.queue.keepPausedRequested}
         readOnly={props.access.isViewer}
         editingQueueItemId={props.queue.editingItemId}
         topSpacing={pinnedStackTopSpacing}
