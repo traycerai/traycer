@@ -458,6 +458,8 @@ import {
   prSubscribeListForEpicV10,
   prSubscribeDetailV10,
   prGetLocalDiffV10,
+  prGetLocalDiffSummaryV10,
+  prGetLocalFileDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
 import {
   mentionGithubCatalogV10,
@@ -6755,6 +6757,37 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: prGetLocalDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The split form of `pr.getLocalDiff` - a cheap metadata frame plus one
+  // patch per file, fetched per visible row. Same optional-capability posture
+  // as the monolith above (and always registered together with it): a client
+  // that finds these missing calls `pr.getLocalDiff` instead, so neither
+  // touches the released floor / baseline surface.
+  "pr.getLocalDiffSummary": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prGetLocalDiffSummaryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "pr.getLocalFileDiff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prGetLocalFileDiffV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -602,6 +602,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
+  private readonly systemResumedHandlers = new Set<() => void>();
   private readonly bridgeSubscriptions: Disposable[] = [];
 
   constructor(options: DesktopRunnerHostOptions) {
@@ -632,6 +633,11 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.cachedLocalHost = snapshot;
         for (const handler of this.localHostHandlers) {
           handler(snapshot);
+        }
+      }),
+      this.bridge.onSystemResumed(() => {
+        for (const handler of this.systemResumedHandlers) {
+          handler();
         }
       }),
     );
@@ -889,10 +895,12 @@ export class DesktopRunnerHost implements IRunnerHost {
   }
 
   onSystemResumed(handler: () => void): Disposable {
-    // Pure pass-through to the preload bridge's per-event subscription; the
-    // caller owns the returned Disposable (unlike `onLocalHostChange`, there
-    // is no cached snapshot to replay on subscribe).
-    return toDisposable(this.bridge.onSystemResumed(handler));
+    this.systemResumedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.systemResumedHandlers.delete(handler);
+      },
+    };
   }
 
   requestHostRespawn(): Promise<HostRestartRequestResult> {
@@ -905,6 +913,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       subscription?.dispose();
     }
     this.localHostHandlers.clear();
+    this.systemResumedHandlers.clear();
   }
 
   private buildHostPicker(): IHostPicker {
