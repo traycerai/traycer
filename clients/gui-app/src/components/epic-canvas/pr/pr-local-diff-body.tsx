@@ -16,6 +16,8 @@ import type {
 } from "@traycer/protocol/host/pr-schemas";
 import { DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
+import { BundleDiffFindRegistrationProvider } from "@/components/diff/bundle-diff-find-registration";
+import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
 import { DiffContentPrimitive } from "@/components/epic-canvas/git-diff/diff-content-primitive";
 import { DiffBundleCollapseChevron } from "@/components/epic-canvas/git-diff/diff-bundle-file-section";
 import { DiffContentLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-content-loading-skeleton";
@@ -24,8 +26,13 @@ import { TruncatedBanner } from "@/components/epic-canvas/git-diff/truncated-ban
 import { GitSectionStatsSummary } from "@/components/epic-canvas/git-diff/diff-tab-shell";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
-import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
+import {
+  prBundleDiffFindFileId,
+  prBundleLoadedPatchCacheKey,
+  usePrBundleDiffFind,
+} from "@/components/epic-canvas/pr/pr-bundle-diff-find";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
+import { isPrLocalDiffLargeFile } from "@/lib/pr/pr-local-diff-large-file";
 import {
   isHostUnsupportedError,
   usePrLocalFileDiffQuery,
@@ -283,6 +290,23 @@ function PrLocalDiffFilesView(props: {
       props.node.instanceId,
       props.files.length > 0,
     );
+  // One find session for BOTH patch modes - the sections below register their
+  // coverage and loaded patches through its context regardless of where the
+  // bytes came from, so what "searchable" means cannot diverge between a new
+  // host and the old-host fallback. Registered before the empty-range return
+  // so the hook order is stable across a range that empties and refills.
+  const { registration: bundleFindRegistration, setRootElement } =
+    usePrBundleDiffFind({
+      node: props.node,
+      viewTabId: props.viewTabId,
+      files: props.files,
+      comparisonKey: props.mode.comparisonKey,
+      patchMode: props.mode.kind,
+      monolithPatches:
+        props.mode.kind === "monolith" ? props.mode.patches : null,
+      ignoreWhitespace: props.preferences.ignoreWhitespace,
+      virtuosoRef,
+    });
 
   if (props.files.length === 0) {
     return (
@@ -296,63 +320,68 @@ function PrLocalDiffFilesView(props: {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {props.isStale ? (
-        <p
-          className="flex min-w-0 shrink-0 items-start gap-2 border-b border-warning/40 bg-warning/10 px-3 py-2 text-ui-xs text-foreground"
-          data-testid="pr-diff-stale"
-        >
-          <FileWarning
-            className="mt-px size-3.5 shrink-0 text-warning"
-            aria-hidden
-          />
-          <span className="min-w-0">
-            This is your local checkout at{" "}
-            <span className="font-mono">{props.localHeadOid.slice(0, 7)}</span>.
-            GitHub is showing a different commit, so pushed changes you haven’t
-            pulled — or local commits you haven’t pushed — will not match.
-          </span>
-        </p>
-      ) : null}
-      <Virtuoso
-        ref={virtuosoRef}
-        restoreStateFrom={restoreStateFrom}
-        isScrolling={isScrolling}
-        data={props.files}
-        className="min-h-0 flex-1"
-        overscan={6}
-        computeItemKey={(_index, file) => file.path}
-        // eslint-disable-next-line react/no-unstable-nested-components -- Virtuoso row renderer, not a component definition.
-        itemContent={(_index, file) => (
-          <PrLocalDiffFileSection
-            node={props.node}
-            viewTabId={props.viewTabId}
-            file={file}
-            mode={props.mode}
-            prUrl={props.prUrl}
-            preferences={props.preferences}
-          />
-        )}
-      />
-      {props.monolithTruncation !== null ? (
-        <p
-          className="shrink-0 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground/70"
-          data-testid="pr-diff-truncated"
-        >
-          The patch was cut off after {props.monolithTruncation.shownPatches} of{" "}
-          {props.files.length} files.{" "}
-          {props.prUrl !== null ? (
-            <PrExternalGitHubLink
-              href={`${props.prUrl}/files`}
-              className="text-primary hover:underline"
-              testId="pr-diff-truncated-github-link"
-            >
-              View the full diff on GitHub
-            </PrExternalGitHubLink>
-          ) : null}
-        </p>
-      ) : null}
-    </div>
+    <BundleDiffFindRegistrationProvider value={bundleFindRegistration}>
+      <div ref={setRootElement} className="flex h-full min-h-0 flex-col">
+        {props.isStale ? (
+          <p
+            className="flex min-w-0 shrink-0 items-start gap-2 border-b border-warning/40 bg-warning/10 px-3 py-2 text-ui-xs text-foreground"
+            data-testid="pr-diff-stale"
+          >
+            <FileWarning
+              className="mt-px size-3.5 shrink-0 text-warning"
+              aria-hidden
+            />
+            <span className="min-w-0">
+              This is your local checkout at{" "}
+              <span className="font-mono">
+                {props.localHeadOid.slice(0, 7)}
+              </span>
+              . GitHub is showing a different commit, so pushed changes you
+              haven’t pulled — or local commits you haven’t pushed — will not
+              match.
+            </span>
+          </p>
+        ) : null}
+        <Virtuoso
+          ref={virtuosoRef}
+          restoreStateFrom={restoreStateFrom}
+          isScrolling={isScrolling}
+          data={props.files}
+          className="min-h-0 flex-1"
+          overscan={6}
+          computeItemKey={(_index, file) => file.path}
+          // eslint-disable-next-line react/no-unstable-nested-components -- Virtuoso row renderer, not a component definition.
+          itemContent={(_index, file) => (
+            <PrLocalDiffFileSection
+              node={props.node}
+              viewTabId={props.viewTabId}
+              file={file}
+              mode={props.mode}
+              prUrl={props.prUrl}
+              preferences={props.preferences}
+            />
+          )}
+        />
+        {props.monolithTruncation !== null ? (
+          <p
+            className="shrink-0 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground/70"
+            data-testid="pr-diff-truncated"
+          >
+            The patch was cut off after {props.monolithTruncation.shownPatches}{" "}
+            of {props.files.length} files.{" "}
+            {props.prUrl !== null ? (
+              <PrExternalGitHubLink
+                href={`${props.prUrl}/files`}
+                className="text-primary hover:underline"
+                testId="pr-diff-truncated-github-link"
+              >
+                View the full diff on GitHub
+              </PrExternalGitHubLink>
+            ) : null}
+          </p>
+        ) : null}
+      </div>
+    </BundleDiffFindRegistrationProvider>
   );
 }
 
@@ -371,6 +400,8 @@ function PrLocalDiffFileSection(props: {
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
   const { file, node } = props;
+  const bundleFindRegistration = useBundleDiffFindRegistrationContext();
+  const bundleFindFileId = prBundleDiffFindFileId(file);
   const toggleCollapsed = useEpicCanvasStore(
     (state) => state.togglePrDiffFileCollapsedInTab,
   );
@@ -379,6 +410,14 @@ function PrLocalDiffFileSection(props: {
   const toggle = useCallback((): void => {
     toggleCollapsed(viewTabId, node.id, file.path);
   }, [file.path, node.id, toggleCollapsed, viewTabId]);
+  // Re-notify when a collapsed section expands (find-driven or manual): the
+  // diff body only mounts while expanded, so a mount-only notification would
+  // leave a freshly-revealed match painted nowhere. The find session repaints
+  // in place from this - no scroll, no search replay.
+  useEffect(() => {
+    if (collapsed) return;
+    bundleFindRegistration.notifySectionMounted(bundleFindFileId);
+  }, [bundleFindFileId, bundleFindRegistration, collapsed]);
 
   const label =
     file.previousPath === null
@@ -389,11 +428,14 @@ function PrLocalDiffFileSection(props: {
   // "open in editor" button, and a range diff has no file on disk to open -
   // both endpoints are commits, and the working-tree copy of a path may hold
   // neither side of the change. The rest of the frame (sticky header, border
-  // rhythm, chevron) is reproduced so the two diff surfaces still read alike.
+  // rhythm, chevron) is reproduced so the two diff surfaces still read alike -
+  // including the two find identity attributes the frame stamps, which are
+  // how a revealed match is scoped to this section's DOM.
   return (
     <div
       className="border-b border-border/70 bg-background"
       data-diff-find-file={file.path}
+      data-bundle-diff-file-id={bundleFindFileId}
     >
       <button
         type="button"
@@ -414,6 +456,7 @@ function PrLocalDiffFileSection(props: {
       {collapsed ? null : (
         <PrLocalDiffFileBody
           file={file}
+          bundleFindFileId={bundleFindFileId}
           mode={props.mode}
           prUrl={props.prUrl}
           preferences={props.preferences}
@@ -423,24 +466,16 @@ function PrLocalDiffFileSection(props: {
   );
 }
 
-/**
- * `null` line counts count as LARGE, not small: they mean the numstat sweep
- * had nothing to say about a (non-binary) file, so its size is unknown - and
- * the placeholder's failure mode ("one extra click") is far cheaper than the
- * inline mode's (parsing an unbounded patch on mount).
- */
-function isLargeFile(file: PrLocalDiffSummaryFile): boolean {
-  if (file.insertions === null || file.deletions === null) return true;
-  return file.insertions + file.deletions > BUNDLE_INLINE_LINE_THRESHOLD;
-}
-
 function PrLocalDiffFileBody(props: {
   readonly file: PrLocalDiffSummaryFile;
+  readonly bundleFindFileId: string;
   readonly mode: PrDiffPatchMode;
   readonly prUrl: string | null;
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
   const { file, mode } = props;
+  // A summary-declared binary needs no section-level find registration: the
+  // session already files it under "binary" coverage from the file list.
   if (file.isBinary) {
     return (
       <PrLocalDiffNote>Binary file — no text diff to show.</PrLocalDiffNote>
@@ -456,6 +491,8 @@ function PrLocalDiffFileBody(props: {
       <PrMonolithFileBody
         key={stateKey}
         file={file}
+        bundleFindFileId={props.bundleFindFileId}
+        comparisonKey={mode.comparisonKey}
         patch={mode.patches.get(file.path) ?? null}
         prUrl={props.prUrl}
         preferences={props.preferences}
@@ -466,6 +503,7 @@ function PrLocalDiffFileBody(props: {
     <PrSplitFileBody
       key={stateKey}
       file={file}
+      bundleFindFileId={props.bundleFindFileId}
       mode={mode}
       preferences={props.preferences}
     />
@@ -479,6 +517,7 @@ function PrLocalDiffFileBody(props: {
  */
 function PrSplitFileBody(props: {
   readonly file: PrLocalDiffSummaryFile;
+  readonly bundleFindFileId: string;
   readonly mode: Extract<PrDiffPatchMode, { kind: "split" }>;
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
@@ -486,7 +525,11 @@ function PrSplitFileBody(props: {
   const handleLoad = useCallback((): void => {
     setLoadRequested(true);
   }, []);
-  if (isLargeFile(props.file) && !loadRequested) {
+  // The placeholder registers nothing with find: the session already files a
+  // large file under "large" coverage from the file list, and a find reveal
+  // deliberately does NOT press this button for the reader - the guard exists
+  // to keep an unbounded patch off the main thread until asked for.
+  if (isPrLocalDiffLargeFile(props.file) && !loadRequested) {
     return (
       <PrLargeDiffPlaceholder path={props.file.path} onLoad={handleLoad} />
     );
@@ -494,6 +537,7 @@ function PrSplitFileBody(props: {
   return (
     <PrLocalFileDiffContent
       file={props.file}
+      bundleFindFileId={props.bundleFindFileId}
       mode={props.mode}
       preferences={props.preferences}
     />
@@ -508,6 +552,8 @@ function PrSplitFileBody(props: {
  */
 function PrMonolithFileBody(props: {
   readonly file: PrLocalDiffSummaryFile;
+  readonly bundleFindFileId: string;
+  readonly comparisonKey: string;
   readonly patch: string | null;
   readonly prUrl: string | null;
   readonly preferences: DiffViewerPreferences;
@@ -518,7 +564,9 @@ function PrMonolithFileBody(props: {
   }, []);
   // `null` and empty are different facts and get different sentences: the byte
   // budget never reached this file, versus the range genuinely changed nothing
-  // in it (a pure mode change, say).
+  // in it (a pure mode change, say). Neither state registers with find here:
+  // the session files a `null` patch under "truncated" coverage from the
+  // monolith itself, and an empty patch registers as loaded below.
   if (props.patch === null) {
     return (
       <PrLocalDiffNote>
@@ -535,7 +583,7 @@ function PrMonolithFileBody(props: {
       </PrLocalDiffNote>
     );
   }
-  if (isLargeFile(props.file) && !loadRequested) {
+  if (isPrLocalDiffLargeFile(props.file) && !loadRequested) {
     return (
       <PrLargeDiffPlaceholder path={props.file.path} onLoad={handleLoad} />
     );
@@ -544,6 +592,16 @@ function PrMonolithFileBody(props: {
     <PrPatchContent
       patch={props.patch}
       cacheScope={`pr-local-diff:${props.file.path}`}
+      find={{
+        fileId: props.bundleFindFileId,
+        cacheKey: prBundleLoadedPatchCacheKey({
+          comparisonKey: props.comparisonKey,
+          file: props.file,
+          ignoreWhitespace: props.preferences.ignoreWhitespace,
+          isTruncated: false,
+        }),
+        isTruncated: false,
+      }}
       preferences={props.preferences}
     />
   );
@@ -557,10 +615,12 @@ function PrMonolithFileBody(props: {
  */
 function PrLocalFileDiffContent(props: {
   readonly file: PrLocalDiffSummaryFile;
+  readonly bundleFindFileId: string;
   readonly mode: Extract<PrDiffPatchMode, { kind: "split" }>;
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
-  const { file, mode } = props;
+  const { bundleFindFileId, file, mode } = props;
+  const bundleFindRegistration = useBundleDiffFindRegistrationContext();
   const [loadFull, setLoadFull] = useState(false);
   const handleLoadFull = useCallback((): void => {
     setLoadFull(true);
@@ -608,6 +668,29 @@ function PrLocalFileDiffContent(props: {
     onRangeDrift();
   }, [unavailableReason, methodUnsupported, onRangeDrift]);
 
+  // Find coverage for the answers that carry NO searchable patch: an errored
+  // query and an `unavailable` file both mean the reader is looking at an
+  // error block, not content ("failed"); a response the summary called text
+  // but git calls binary joins the summary-declared binaries. A loaded patch
+  // registers itself from `PrPatchContent`, and a later success supersedes a
+  // registered failure in the session's coverage counts.
+  const responseBinary = response?.kind === "diff" && response.isBinary;
+  const responseFailed = query.error !== null || unavailableReason !== null;
+  useEffect(() => {
+    if (responseFailed) {
+      bundleFindRegistration.registerCoverageState(bundleFindFileId, "failed");
+      return;
+    }
+    if (responseBinary) {
+      bundleFindRegistration.registerCoverageState(bundleFindFileId, "binary");
+    }
+  }, [
+    bundleFindFileId,
+    bundleFindRegistration,
+    responseBinary,
+    responseFailed,
+  ]);
+
   if (query.isPending) {
     return (
       <DiffContentLoadingSkeleton
@@ -651,17 +734,52 @@ function PrLocalFileDiffContent(props: {
       <PrPatchContent
         patch={response.patch}
         cacheScope={`pr-local-diff:${mode.mergeBaseOid}:${mode.headOid}:${file.path}`}
+        find={{
+          fileId: bundleFindFileId,
+          cacheKey: prBundleLoadedPatchCacheKey({
+            comparisonKey: mode.comparisonKey,
+            file,
+            ignoreWhitespace: props.preferences.ignoreWhitespace,
+            isTruncated: response.isTruncated,
+          }),
+          isTruncated: response.isTruncated,
+        }}
         preferences={props.preferences}
       />
     </>
   );
 }
 
+/**
+ * The one place a PR file's patch bytes reach the screen, in either patch
+ * mode - so it is also the one place they reach the find index. Registering
+ * here (rather than in each mode's fetch/lookup body) is what keeps "what
+ * find can search" identical between a new host and the fallback: a rendered
+ * patch is a searchable patch, and stays one after the row virtualizes away.
+ */
 function PrPatchContent(props: {
   readonly patch: string;
   readonly cacheScope: string;
+  readonly find: {
+    readonly fileId: string;
+    readonly cacheKey: string;
+    readonly isTruncated: boolean;
+  };
   readonly preferences: DiffViewerPreferences;
 }): ReactNode {
+  const bundleFindRegistration = useBundleDiffFindRegistrationContext();
+  const { cacheKey, fileId, isTruncated } = props.find;
+  // Registered BEFORE the hunk check on purpose: a header-only change has no
+  // rows to search, but leaving it unregistered would count it as "unloaded"
+  // in the coverage message forever, and it is fully loaded.
+  useEffect(() => {
+    bundleFindRegistration.registerLoadedPatch({
+      fileId,
+      patch: props.patch,
+      cacheKey,
+      isTruncated,
+    });
+  }, [bundleFindRegistration, cacheKey, fileId, isTruncated, props.patch]);
   // A patch with no `@@` hunk is a change git states entirely in headers — a
   // pure rename, or a mode change. Real, but there are no lines to render, and
   // the diff viewer would draw an empty frame for it. The wire contract does
