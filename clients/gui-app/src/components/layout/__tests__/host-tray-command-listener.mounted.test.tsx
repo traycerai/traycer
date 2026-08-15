@@ -247,10 +247,22 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     expect(navigation.state).toEqual(expect.any(Function));
   });
 
-  it("opens a confirmation dialog for restartHost and only invokes restartHost after confirm", async () => {
+  it("opens a confirmation dialog for restartHost and only calls requestHostRespawn after confirm", async () => {
+    // `LocalHostRestartFlow` now owns this flow (shared with the menu
+    // listener). Mounted here with no `<HostRuntimeProvider>`, so
+    // `useHostBinding()` reads `null` and the flow takes its ForceOnly arm:
+    // confirm dispatches the bridge respawn directly, not the CLI's
+    // `IHostManagement.restartHost` (that RPC belongs to the cooperative
+    // Settings ▸ Overview path, exercised in `host-overview-mutations.test.tsx`).
     const tray = createTray();
     const management = makeManagement({});
-    renderListener(makeHost(tray.bridge, management));
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const host = Object.assign(makeHost(tray.bridge, management), {
+      requestHostRespawn,
+    });
+    renderListener(host);
 
     act(() => {
       tray.emit({ kind: "restartHost" });
@@ -258,12 +270,16 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(dialog).not.toBeNull();
+    expect(requestHostRespawn).not.toHaveBeenCalled();
     expect(management.restartHost).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(management.restartHost).toHaveBeenCalledTimes(1);
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
     });
+    // The consolidation is deliberate: the OLD `management.restartHost()`
+    // bridge call must never fire from this surface any more.
+    expect(management.restartHost).not.toHaveBeenCalled();
   });
 
   it("previews the version, submits applyStaged after confirm when a stage is updateReady", async () => {
