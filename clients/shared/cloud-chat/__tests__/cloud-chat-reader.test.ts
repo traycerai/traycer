@@ -5,8 +5,10 @@ import {
   webCryptoSha256Hex,
 } from "@traycer-clients/shared/cloud-chat/bytes";
 import {
+  CLOUD_CHAT_PART_FETCH_CONCURRENCY,
   readCloudChat,
   type CloudChatRead,
+  type CloudChatReadPort,
 } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import {
   InMemoryChatPartCache,
@@ -119,6 +121,81 @@ describe("cold read", () => {
       result.outcome.chat.messages.map((message) => message.raw.messageId),
     ).toEqual(["m-user", "m-assistant", "m-user-2", "m-assistant-2"]);
   });
+
+  it("never exceeds the part request concurrency ceiling", async () => {
+    const published = await publishCloudChat({
+      ...DEFAULT_PUBLISH,
+      cohorts: Array.from(
+        { length: CLOUD_CHAT_PART_FETCH_CONCURRENCY + 5 },
+        (_, index) => [userMessage(`m-${index}`)],
+      ),
+    });
+    const serving = servingBehaviour(published);
+    let active = 0;
+    let maximum = 0;
+    const port = recordingPort({
+      resolve: serving.resolve,
+      part: async (sha256) => {
+        active += 1;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        try {
+          return serving.part(sha256);
+        } finally {
+          active -= 1;
+        }
+      },
+    });
+
+    expect((await read(port, new InMemoryChatPartCache())).outcome.kind).toBe(
+      "ok",
+    );
+    expect(maximum).toBe(CLOUD_CHAT_PART_FETCH_CONCURRENCY);
+    expect(port.partCalls).toHaveLength(published.parts.length);
+  });
+
+  it("settles when queued port work throws synchronously", async () => {
+    const published = await publishCloudChat({
+      ...DEFAULT_PUBLISH,
+      cohorts: Array.from(
+        { length: CLOUD_CHAT_PART_FETCH_CONCURRENCY + 1 },
+        (_, index) => [userMessage(`m-${index}`)],
+      ),
+    });
+    const serving = servingBehaviour(published);
+    const queuedDigest =
+      published.parts[CLOUD_CHAT_PART_FETCH_CONCURRENCY]?.address.sha256 ?? "";
+    let releaseSaturated: () => void = () => undefined;
+    const saturated = new Promise<void>((resolve) => {
+      releaseSaturated = resolve;
+    });
+    const releases: Array<() => void> = [];
+    const port: CloudChatReadPort = {
+      resolveHead: () => Promise.resolve(serving.resolve()),
+      readPart: (request) => {
+        if (request.sha256 === queuedDigest) {
+          throw new Error("synchronous queued failure");
+        }
+        return new Promise((resolve) => {
+          releases.push(() => resolve(serving.part(request.sha256)));
+          if (releases.length === CLOUD_CHAT_PART_FETCH_CONCURRENCY) {
+            releaseSaturated();
+          }
+        });
+      },
+    };
+
+    const result = readCloudChat({
+      identity: IDENTITY,
+      port,
+      cache: new InMemoryChatPartCache(),
+      sha256Hex: webCryptoSha256Hex,
+    });
+    await saturated;
+    releases[0]?.();
+
+    await expect(result).rejects.toThrow("synchronous queued failure");
+  });
 });
 
 describe("the incremental read", () => {
@@ -204,6 +281,33 @@ describe("the incremental read", () => {
     expect(await cache.get(published.parts[0].address.sha256)).toEqual(
       published.parts[0].bytes,
     );
+  });
+
+  it("resumes after a failed part without refetching verified siblings", async () => {
+    const published = await publishCloudChat(DEFAULT_PUBLISH);
+    const serving = servingBehaviour(published);
+    const cache = new InMemoryChatPartCache();
+    const failedDigest = published.parts[1].address.sha256;
+    let shouldFail = true;
+    const firstPort = recordingPort({
+      resolve: serving.resolve,
+      part: async (sha256) => {
+        if (sha256 === failedDigest && shouldFail) {
+          shouldFail = false;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          throw new Error("transient part failure");
+        }
+        return serving.part(sha256);
+      },
+    });
+
+    await expect(read(firstPort, cache)).rejects.toThrow(
+      "transient part failure",
+    );
+
+    const retryPort = recordingPort(serving);
+    expect((await read(retryPort, cache)).outcome.kind).toBe("ok");
+    expect(retryPort.partCalls).toEqual([failedDigest]);
   });
 
   it("does not cache bytes that fail their own content address", async () => {

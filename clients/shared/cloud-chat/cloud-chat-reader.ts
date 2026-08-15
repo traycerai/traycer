@@ -101,6 +101,9 @@ export interface ReadCloudChatOptions {
   readonly sha256Hex: Sha256Hex;
 }
 
+/** Maximum simultaneous part downloads for one cloud-chat materialization. */
+export const CLOUD_CHAT_PART_FETCH_CONCURRENCY = 12;
+
 // ---- Outcomes ----------------------------------------------------------- //
 
 export type CloudChatReadOutcome =
@@ -274,10 +277,11 @@ export async function readCloudChat(
   // port, so a refusal here reaches `fetchPart` zero times. That is structural
   // rather than a discipline this module keeps, which is what makes "no part
   // egress for a chat we cannot read" assertable as a call count.
+  const partFetchGate = new ConcurrencyGate(CLOUD_CHAT_PART_FETCH_CONCURRENCY);
   const assembly = await assembleChat({
     head: decoded.record,
     readerSupports: CHAT_SYNC_READER_VERSION,
-    fetch: (request) => stagePart(request, options),
+    fetch: (request) => stagePart(request, options, partFetchGate),
   }).catch((error: unknown) => {
     if (error instanceof PartUnavailableError) return error;
     if (error instanceof PartOversizedError) return error;
@@ -382,6 +386,7 @@ class PartOversizedError extends Error {
 async function stagePart(
   request: ChatPartRequest,
   options: ReadCloudChatOptions,
+  partFetchGate: ConcurrencyGate,
 ): Promise<StagedChatPart> {
   const cached = await options.cache.get(request.part.sha256);
   if (cached !== null) {
@@ -396,12 +401,14 @@ async function stagePart(
     if (matchesRequestedPart(staged, request)) return staged;
   }
 
-  const response = await options.port.readPart({
-    identity: options.identity,
-    sha256: request.part.sha256,
-    // From the HEAD, so the host can bound the transfer without parsing it.
-    declaredByteLength: request.part.byteLength,
-  });
+  const response = await partFetchGate.run(() =>
+    options.port.readPart({
+      identity: options.identity,
+      sha256: request.part.sha256,
+      // From the HEAD, so the host can bound the transfer without parsing it.
+      declaredByteLength: request.part.byteLength,
+    }),
+  );
 
   if (response.outcome.status === "not-found") {
     throw new PartUnavailableError(
@@ -506,4 +513,31 @@ function corruptRead(
       diagnostic,
     },
   };
+}
+
+type QueuedWork = () => void;
+
+/** Small per-read semaphore; completion order remains assembly's concern. */
+class ConcurrencyGate {
+  private active = 0;
+  private readonly queued: QueuedWork[] = [];
+
+  constructor(private readonly ceiling: number) {}
+
+  run<T>(work: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const start = (): void => {
+        this.active += 1;
+        Promise.resolve()
+          .then(work)
+          .then(resolve, reject)
+          .finally(() => {
+            this.active -= 1;
+            this.queued.shift()?.();
+          });
+      };
+      if (this.active < this.ceiling) start();
+      else this.queued.push(start);
+    });
+  }
 }
