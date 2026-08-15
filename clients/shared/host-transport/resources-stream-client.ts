@@ -208,17 +208,20 @@ export class ResourcesStreamClient {
       // previous verdict is what keeps a terminal incompatible close STANDING:
       // it is disposed, so nothing follows it that could clear the notice.
       //
-      // KNOWN LIMIT, and it is only this branch. A version verdict SELF-HEALS:
-      // that stream stays open, so a drop takes its negotiated version with it
-      // (see below), the verdict falls back to "unknown", and the resume
-      // re-negotiates - an upgraded host clears itself. A terminal close has no
-      // such path: an incompatible METHOD fails only the stream
-      // (`RemoteSession.openSubscription` calls `goFatal` and deletes the
-      // subscription) while the shared session stays healthy, so the transport
-      // identity never changes and nothing re-probes. A host that advertises no
-      // bridgeable `resources.subscribe` at all and is then upgraded in place
-      // keeps this verdict until the surface remounts. Narrow, and strictly
-      // better than the wait-forever it replaces, but not self-correcting.
+      // This verdict cannot expire on its own, and that asymmetry is the point.
+      // A version verdict SELF-HEALS: that stream stays open, so a drop takes
+      // its negotiated version with it (see below), the verdict falls back to
+      // "unknown", and the resume re-negotiates - an upgraded host clears
+      // itself. A terminal close has no such path: an incompatible METHOD fails
+      // only the stream (`RemoteSession.openSubscription` calls `goFatal` and
+      // deletes the subscription) while the shared session stays healthy, so
+      // the transport identity never changes and nothing here re-probes.
+      //
+      // Clearing it is therefore an OWNER's job, not this rule's: the verdict
+      // is what this session observed, and this session will observe nothing
+      // further. `GlobalResourcesStreamMount` re-probes by rebuilding the
+      // stream when the transport reports the endpoint recovered - the only
+      // evidence that the host on the other end may not be the one we judged.
       return isMethodIncompatibleClose(reason) ? "unsupported" : null;
     }
     // Otherwise the verdict is worth exactly what this session's negotiated
