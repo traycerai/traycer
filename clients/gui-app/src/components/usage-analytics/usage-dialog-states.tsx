@@ -10,6 +10,21 @@ export interface UsageDialogSkeletonProps {
 }
 
 /**
+ * `Skeleton`'s default `bg-muted` fill is invisible on this dialog: the
+ * surface is the primitive's `bg-popover`, and most preset themes define
+ * `--muted` IDENTICAL to `--popover` (amoled, dracula, catppuccin,
+ * tokyo-night, github, nord, gruvbox, ayu, everforest, traycer-green - only
+ * the default light/dark pair separates them). A foreground-alpha fill
+ * contrasts with whatever surface it sits on, in every theme, by
+ * construction.
+ */
+const SKELETON_ON_POPOVER = "bg-foreground/10";
+
+function DialogSkeleton(props: { readonly className: string }): ReactNode {
+  return <Skeleton className={cn(SKELETON_ON_POPOVER, props.className)} />;
+}
+
+/**
  * Loading fill that mirrors the loaded layout - the same hero grid, chart
  * clamp, and row rhythm as the data that replaces it, so nothing shifts
  * when it lands. Deliberately not a spinner (and outside the
@@ -55,26 +70,26 @@ function EpicUsageSkeletonBlocks(): ReactNode {
       <div className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-col gap-2">
-            <Skeleton className="h-8 w-1/3" />
-            <Skeleton className="h-3 w-1/2" />
+            <DialogSkeleton className="h-8 w-1/3" />
+            <DialogSkeleton className="h-3 w-1/2" />
           </div>
           <div className="flex flex-col gap-2.5">
-            <Skeleton className="h-3.5 w-full" />
-            <Skeleton className="h-3.5 w-full" />
+            <DialogSkeleton className="h-3.5 w-full" />
+            <DialogSkeleton className="h-3.5 w-full" />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
+          <DialogSkeleton className="h-16" />
+          <DialogSkeleton className="h-16" />
+          <DialogSkeleton className="h-16" />
+          <DialogSkeleton className="h-16" />
         </div>
       </div>
-      <Skeleton className="h-[clamp(11rem,26vh,16rem)] w-full" />
+      <DialogSkeleton className="h-[clamp(11rem,26vh,16rem)] w-full" />
       <div className="flex flex-col gap-2.5">
-        <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-3.5 w-2/3" />
+        <DialogSkeleton className="h-3.5 w-full" />
+        <DialogSkeleton className="h-3.5 w-full" />
+        <DialogSkeleton className="h-3.5 w-2/3" />
       </div>
     </>
   );
@@ -85,13 +100,13 @@ function ChatUsageSkeletonBlocks(): ReactNode {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <Skeleton className="h-8 w-1/3" />
-        <Skeleton className="h-3 w-1/2" />
+        <DialogSkeleton className="h-8 w-1/3" />
+        <DialogSkeleton className="h-3 w-1/2" />
       </div>
       <div className="flex flex-col gap-2.5">
-        <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-3.5 w-2/3" />
+        <DialogSkeleton className="h-3.5 w-full" />
+        <DialogSkeleton className="h-3.5 w-full" />
+        <DialogSkeleton className="h-3.5 w-2/3" />
       </div>
     </>
   );
@@ -119,7 +134,10 @@ export function UsageDialogEmpty(props: UsageDialogEmptyProps): ReactNode {
       className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-4 py-6 text-center"
       data-testid="usage-dialog-empty"
     >
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      {/* `bg-foreground/10`, not `bg-muted`, for the SKELETON_ON_POPOVER
+          reason: preset themes collapse `--muted` into `--popover`, which
+          would leave the icon floating without its ring. */}
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-muted-foreground">
         <LineChart className="size-5" aria-hidden />
       </div>
       <div className="space-y-1">
