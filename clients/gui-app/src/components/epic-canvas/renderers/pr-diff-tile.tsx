@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   useQueryClient,
   type Query,
@@ -337,9 +337,25 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
   // OIDs invalidates the per-file scope, because the sections' cached
   // `unavailable` answers would otherwise sit un-rekeyed forever.
   const recoveredRangeRef = useRef<string | null>(null);
+  // The token bounds one continuous EPISODE of a range, not the range's OID
+  // pair forever: leaving A for B and force-pushing back to A serves A's
+  // still-cached summary and per-file answers, and a spent token from A's
+  // first episode would silently suppress the new episode's one recovery.
+  // `episodeRangeRef` names the episode the token belongs to. It is opened in
+  // TWO places because of effect ordering: the returning range's remounted
+  // sections report drift from their own effects, which run BEFORE this
+  // component's - so the handler opens an unseen episode lazily (voiding a
+  // previous episode's spent token), and the effect below records
+  // report-free range changes so an excursion the sections never reported
+  // still closes the old episode.
+  const episodeRangeRef = useRef<string | null>(null);
   const rangeKey = summaryRangeKey(summaryData);
   const handleRangeDrift = useCallback((): void => {
     if (rangeKey === null) return;
+    if (episodeRangeRef.current !== rangeKey) {
+      episodeRangeRef.current = rangeKey;
+      recoveredRangeRef.current = null;
+    }
     if (recoveredRangeRef.current === rangeKey) return;
     recoveredRangeRef.current = rangeKey;
     void refetchSummary().then((result) => {
@@ -350,6 +366,11 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
       invalidateFileDiffs();
     });
   }, [invalidateFileDiffs, refetchSummary, rangeKey]);
+  useEffect(() => {
+    if (episodeRangeRef.current === rangeKey) return;
+    episodeRangeRef.current = rangeKey;
+    recoveredRangeRef.current = null;
+  }, [rangeKey]);
 
   const collapseAll = collapseAllFor(range, node.view.collapsedFilePaths);
   const header = prDiffTileHeader(node, core, range);

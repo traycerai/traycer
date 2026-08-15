@@ -156,6 +156,16 @@ function populatedSubscription(): PrDetailSubscriptionResult {
   };
 }
 
+/** The populated subscription with its core's `headRefOid` replaced. */
+function subscriptionWithHead(headRefOid: string): PrDetailSubscriptionResult {
+  const base = populatedSubscription();
+  if (base.data === null) throw new Error("populatedSubscription has data");
+  return {
+    ...base,
+    data: { ...base.data, core: { ...base.data.core, headRefOid } },
+  };
+}
+
 function summaryOkWithFiles(
   files: readonly PrLocalDiffSummaryFile[],
 ): PrGetLocalDiffSummaryResponse {
@@ -543,6 +553,94 @@ describe("PrDiffTile range-drift recovery", () => {
       expect(summaryCalls).toBe(afterFirstRecovery + 1);
     });
     expect(summaryCalls).toBe(afterFirstRecovery + 1);
+  });
+
+  it("permits a NEW recovery when a spent range returns after an intervening range", async () => {
+    // Range A drifts and spends its token; the PR advances to range D (which
+    // is healthy); a force-push returns the PR to A, whose summary and
+    // unavailable per-file answers are all still cached. The return is a new
+    // EPISODE of A - without the render-time token reset on range change,
+    // A's second death would be suppressed until a manual refresh.
+    const headA = "a".repeat(40);
+    const headD = "d".repeat(40);
+    let summaryCalls = 0;
+    tabHostClient.request.mockImplementation(
+      (
+        method: string,
+        request: {
+          readonly expectedHeadOid?: string | null;
+          readonly headOid?: string;
+        },
+      ) => {
+        if (method === "pr.getLocalDiffSummary") {
+          summaryCalls += 1;
+          if (request.expectedHeadOid === headD) {
+            return Promise.resolve({
+              ...summaryOk(),
+              mergeBaseOid: "e".repeat(40),
+              localHeadOid: headD,
+            });
+          }
+          return Promise.resolve(summaryOk());
+        }
+        if (method === "pr.getLocalFileDiff") {
+          if (request.headOid === headD) return Promise.resolve(fileOk());
+          return Promise.resolve({
+            kind: "unavailable",
+            reason: "ref-unavailable",
+          });
+        }
+        return Promise.reject(new Error(`unexpected method ${method}`));
+      },
+    );
+    const queryClient = makeQueryClient();
+    const mounted = renderTile(queryClient);
+
+    // Episode 1 of A: drift reported, one recovery, quiesce.
+    expect(
+      await screen.findByText(/no longer available from the local checkout/u),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(summaryCalls).toBe(2);
+    });
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+
+    // The PR advances to D - healthy, no drift, token untouched.
+    detailSubscription.current = subscriptionWithHead(headD);
+    mounted.view.rerender(
+      tileTree({
+        queryClient,
+        node: tileOnTab(mounted.tabId, mounted.node.instanceId),
+        tabId: mounted.tabId,
+      }),
+    );
+    await waitFor(() => {
+      expect(summaryCalls).toBe(3);
+    });
+    expect(await screen.findByTestId("diff-content")).toBeTruthy();
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+
+    // Force-push back to A: cached summary, cached unavailable answers,
+    // remounted sections - a new episode that must get its ONE recovery.
+    detailSubscription.current = subscriptionWithHead(headA);
+    mounted.view.rerender(
+      tileTree({
+        queryClient,
+        node: tileOnTab(mounted.tabId, mounted.node.instanceId),
+        tabId: mounted.tabId,
+      }),
+    );
+    await waitFor(() => {
+      expect(summaryCalls).toBe(4);
+    });
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(summaryCalls).toBe(4);
   });
 
   it("invalidates the per-file scope when a drift refetch resolves the same OIDs", async () => {
