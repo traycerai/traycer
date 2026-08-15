@@ -1,10 +1,11 @@
 import { useEffect, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
-  useStreamMethodSchemaVersion,
+  useStreamHostId,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
+import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
@@ -15,12 +16,6 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface ResourcesStreamMountProps {
   readonly epicId: string;
-}
-
-function resourcesGlobalSupported(
-  version: { readonly major: number; readonly minor: number } | null,
-): boolean {
-  return version === null || (version.major === 1 && version.minor >= 1);
 }
 
 /**
@@ -43,6 +38,11 @@ export function ResourcesStreamMount(
 ): ReactNode {
   const { epicId } = props;
   const wsStreamClient = useWsStreamClient();
+  // Named for the same reason the global mount is: these entries are what the
+  // registry aggregates when no global stream exists (a pre-v1.1 host), so a
+  // reader checking "did this come from the machine I name" must be able to
+  // answer it for the fallback too, not just the global entry.
+  const hostId = useStreamHostId();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
   const showGlobalResourceMonitor = useSettingsStore(
@@ -75,7 +75,7 @@ export function ResourcesStreamMount(
               callbacks,
             });
           };
-    resourcesRegistry.acquire(epicId, clientToken, () =>
+    resourcesRegistry.acquire(epicId, clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "epic", epicId },
         streamClientFactory,
@@ -84,18 +84,19 @@ export function ResourcesStreamMount(
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, resourcesUnsupported, streamWanted, wsStreamClient]);
+  }, [epicId, hostId, resourcesUnsupported, streamWanted, wsStreamClient]);
 
   return null;
 }
 
 export function GlobalResourcesStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
-  const resourcesSupport = useStreamMethodSupport("resources.subscribe");
-  const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
-  const resourcesUnsupported =
-    resourcesSupport === "unsupported" ||
-    (resourcesVersion !== null && !resourcesGlobalSupported(resourcesVersion));
+  // Taken from the SAME binding as the client above, never from a prop or a
+  // scope model: the host id republished on the projection is what a scoped
+  // reader checks its data against, so it has to be the host this transport is
+  // actually dialing rather than the one the caller believes it asked for.
+  const hostId = useStreamHostId();
+  const resourcesUnsupported = useGlobalResourcesUnsupported();
 
   useEffect(() => {
     if (resourcesUnsupported) return;
@@ -117,7 +118,7 @@ export function GlobalResourcesStreamMount(): ReactNode {
               callbacks,
             });
           };
-    resourcesRegistry.acquireGlobal(clientToken, () =>
+    resourcesRegistry.acquireGlobal(clientToken, hostId, () =>
       createResourcesStore({
         scope: { kind: "global" },
         streamClientFactory,
@@ -126,7 +127,12 @@ export function GlobalResourcesStreamMount(): ReactNode {
     return () => {
       resourcesRegistry.releaseGlobal();
     };
-  }, [resourcesUnsupported, wsStreamClient]);
+    // `hostId` belongs in the deps, not just in the closure: the name is fixed
+    // at acquire time, so a host id that resolves after its transport did must
+    // rebuild the entry rather than leave the projection speaking for the wrong
+    // machine. In practice it now moves WITH `wsStreamClient` (one binding, one
+    // change), so this rarely fires on its own.
+  }, [hostId, resourcesUnsupported, wsStreamClient]);
 
   return null;
 }
