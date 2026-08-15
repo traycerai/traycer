@@ -1,13 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import type { ResourcesStreamCallbacks } from "@traycer-clients/shared/host-transport/resources-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 
-// A remote host, as the transport actually reports one: `"unknown"` support and
-// no client-wide schema version for any method. This is what makes the
-// pre-check unable to convict, which is the state this mount has to survive.
+// The two inputs the pre-check reads. Defaults are a REMOTE host as the
+// transport actually reports one — `"unknown"` support and no client-wide
+// schema version for any method — which is the state that leaves the pre-check
+// unable to convict, and the state this mount has to survive.
+// Typed through the factory's RETURN annotation, not an `as` on the value:
+// `eslint --fix` strips a redundant-looking assertion here, and `support` then
+// widens to `string`, which quietly accepts a typo'd verdict.
+const streamMock = vi.hoisted(
+  (): {
+    support: StreamMethodSupport;
+    version: { readonly major: number; readonly minor: number } | null;
+  } => ({
+    support: "unknown",
+    version: null,
+  }),
+);
+
 vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/host/stream-runtime-context")>();
@@ -15,8 +30,8 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
     ...actual,
     useWsStreamClient: () => null,
     useStreamHostId: () => "host-a",
-    useStreamMethodSupport: () => "unknown",
-    useStreamMethodSchemaVersion: () => null,
+    useStreamMethodSupport: () => streamMock.support,
+    useStreamMethodSchemaVersion: () => streamMock.version,
   };
 });
 
@@ -24,6 +39,30 @@ describe("GlobalResourcesStreamMount", () => {
   afterEach(() => {
     __setResourcesStreamClientFactoryForTests(null);
     resourcesRegistry.disposeAll();
+    cleanup();
+    streamMock.support = "unknown";
+    streamMock.version = null;
+  });
+
+  /**
+   * The other side of the gate, and the reason it is still the PRE-STREAM
+   * verdict: when the pre-check CAN convict — a local host, where the
+   * client-wide capability cache is real — nothing is dialled at all. That is
+   * what the pre-check buys, and it is only visible as an absence.
+   */
+  it("never opens a stream when the pre-check already convicted the host", () => {
+    streamMock.support = "supported";
+    streamMock.version = { major: 1, minor: 0 };
+    let builds = 0;
+    __setResourcesStreamClientFactoryForTests((_scope, _callbacks) => {
+      builds += 1;
+      return { close: () => undefined };
+    });
+
+    render(<GlobalResourcesStreamMount />);
+
+    expect(builds).toBe(0);
+    expect(resourcesRegistry.getGlobal()).toBeNull();
   });
 
   /**

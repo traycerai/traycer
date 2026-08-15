@@ -537,6 +537,47 @@ describe("global scope support", () => {
   // Two unnamed things are not the same thing. An entry whose mount could not
   // name its host, asked about a scope that has not resolved one either, would
   // match on `null === null` and convict a machine neither side identified.
+  // Following the ACTIVE host nothing on screen names a machine, so no
+  // incompatible notice is shown — the surface just renders the projection. An
+  // `@1.0` host's global entry outranks the per-epic fallback purely by
+  // existing, so leaving it in place publishes emptiness from a stream that
+  // will never carry anything, while the per-epic streams on the very same
+  // transport hold that host's real numbers. That read as "Waiting for resource
+  // data." forever.
+  it("falls back to the per-epic entries when the global stream cannot serve the scope", () => {
+    const globalFake = makeFakeClient();
+    const epicFake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-global", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: globalFake.factory,
+      }),
+    );
+    resourcesRegistry.acquire("epic-1", "token-epic", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        streamClientFactory: epicFake.factory,
+      }),
+    );
+    epicFake.callbacks().onSnapshot(
+      projection({
+        sampledAt: 1_000,
+        owners: [makeOwner("terminal", "term-1", { cpuPercent: 11 })],
+      }),
+    );
+
+    // While the global stream has not judged itself, it still owns the answer -
+    // and it is empty, because an `@1.0` host answered about `__global__`.
+    expect(resourcesRegistry.getGlobalProjection().owners).toHaveLength(0);
+
+    globalFake.callbacks().onScopeSupport("unsupported");
+
+    const projected = resourcesRegistry.getGlobalProjection();
+    expect(projected.owners).toHaveLength(1);
+    expect(projected.owners[0].cpuPercent).toBe(11);
+    expect(projected.hostId).toBe("host-a");
+  });
+
   it("does not match an unnamed entry to an unnamed claim", () => {
     const fake = makeFakeClient();
     resourcesRegistry.acquireGlobal("token-a", null, () =>

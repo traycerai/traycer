@@ -138,19 +138,33 @@ function completeHandshakeAt(
   respondToOpen(socket, resourcesVersion);
 }
 
-/** Records every scope verdict the client publishes, newest last. */
+/**
+ * Records every scope verdict the client publishes, newest last — plus one
+ * ORDERED log interleaving verdicts with connection statuses, because the
+ * client documents that it publishes the verdict first and a consumer reacting
+ * to `closed` depends on it. Recording only the verdicts would let a swap of
+ * those two calls pass every test here.
+ */
 function trackScopeSupport(): {
   readonly callbacks: ResourcesStreamCallbacks;
   readonly verdicts: ResourcesScopeSupport[];
+  readonly events: string[];
 } {
   const verdicts: ResourcesScopeSupport[] = [];
+  const events: string[] = [];
   return {
     verdicts,
+    events,
     callbacks: {
       onSnapshot: () => undefined,
       onUpdate: () => undefined,
-      onConnectionStatus: () => undefined,
-      onScopeSupport: (support) => verdicts.push(support),
+      onConnectionStatus: (status) => {
+        events.push(`status:${status}`);
+      },
+      onScopeSupport: (support) => {
+        events.push(`support:${support}`);
+        verdicts.push(support);
+      },
     },
   };
 }
@@ -587,6 +601,27 @@ describe("ResourcesStreamClient scope support", () => {
     });
 
     expect(verdicts).toEqual(["supported"]);
+
+    client.close();
+  });
+
+  // The client documents this ordering as load-bearing: a consumer reacting to
+  // the `closed` transition has to already see WHY, rather than reading the
+  // verdict from the previous round. Nothing but this asserts it.
+  it("publishes the verdict before the status it was derived from", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, events } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    // Terminal INCOMPATIBLE: the transition that carries both a status and the
+    // verdict explaining it, which is exactly where the order can be observed.
+    completeHandshakeAt(sockets[0], { major: 2, minor: 0 });
+
+    expect(events).toEqual(["support:unsupported", "status:closed"]);
 
     client.close();
   });

@@ -128,10 +128,9 @@ class ResourcesRegistry {
     if (this.globalProjectionCache?.version === this.globalVersion) {
       return this.globalProjectionCache.projection;
     }
-    if (this.globalEntry !== null) {
-      const projection = this.getGlobalProjectionFromGlobalEntry(
-        this.globalEntry,
-      );
+    const globalEntry = this.usableGlobalEntry();
+    if (globalEntry !== null) {
+      const projection = this.getGlobalProjectionFromGlobalEntry(globalEntry);
       this.globalProjectionCache = {
         version: this.globalVersion,
         projection,
@@ -188,6 +187,31 @@ class ResourcesRegistry {
       projection,
     };
     return projection;
+  }
+
+  /**
+   * The global entry, or `null` when its own stream has reported that this host
+   * cannot serve a global subscribe.
+   *
+   * An `@1.0` host accepts the downgraded global probe and answers with one
+   * empty projection for an epic named `__global__` that does not exist. That
+   * entry outranks the per-epic fallback below purely by existing, so without
+   * this the surface publishes emptiness from a stream that will never carry
+   * anything, while the per-epic streams on the very same transport are holding
+   * that host's real numbers. Following the active host — where nothing on
+   * screen names a machine and so no incompatible notice is shown — that read
+   * as "Waiting for resource data." forever.
+   *
+   * Only `"unsupported"` disqualifies it. `"unknown"` is the ordinary state
+   * before a negotiation settles, and treating it as a verdict would drop every
+   * global projection for the whole handshake window.
+   */
+  private usableGlobalEntry(): RegistryEntry | null {
+    const entry = this.globalEntry;
+    if (entry === null) return null;
+    return entry.handle.store.getState().scopeSupport === "unsupported"
+      ? null
+      : entry;
   }
 
   private getGlobalProjectionFromGlobalEntry(

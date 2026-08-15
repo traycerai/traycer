@@ -60,6 +60,17 @@ export type StreamCloseReason =
  * channel and say nothing about what the host can serve. Reading any of them as
  * incompatibility would pin a permanent "this host is too old" verdict on a
  * failure the next dial clears - and worse, on hosts that are perfectly capable.
+ *
+ * `INCOMPATIBLE` is the whole list, because it is the whole set that is
+ * actually emitted here: `checkStreamMethodCompatibility` (both the local
+ * mirror check and `RemoteSession.openSubscription`) is the only producer of a
+ * capability fatal on a stream. `DOWNGRADE_UNSUPPORTED` reads like a member and
+ * is NOT one - it is a `DowngradeResult` error on a unary RPC result, never a
+ * `FatalErrorDetails.code` - so adding it would widen this to a code that
+ * cannot arrive, which no test could ever hold honest. `FatalErrorDetails.code`
+ * is an open `string` by design (older hosts must be able to send codes we do
+ * not know), so this cannot be a total switch; it is a membership test, and it
+ * must only name codes with a real emitter.
  */
 export function isMethodIncompatibleClose(
   reason: StreamCloseReason | null,
@@ -67,8 +78,7 @@ export function isMethodIncompatibleClose(
   if (reason === null || reason.kind !== "fatalError") {
     return false;
   }
-  const code = reason.details.code;
-  return code === "INCOMPATIBLE" || code === "DOWNGRADE_UNSUPPORTED";
+  return reason.details.code === "INCOMPATIBLE";
 }
 
 /**
