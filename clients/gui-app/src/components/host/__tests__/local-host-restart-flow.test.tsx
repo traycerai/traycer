@@ -366,7 +366,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     },
   );
 
-  it("an RPC rejection offers force with the 'didn't answer' copy; deferring and retrying carries the SAME transitionId", async () => {
+  it("an RPC rejection offers force with the 'didn't complete' copy; deferring and retrying carries the SAME transitionId", async () => {
     hostBindingMock.current = PRESENT_BINDING;
     directoryListMock.current = { data: [localEntry("host-a")] };
     const transitionIds: string[] = [];
@@ -399,7 +399,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       "host-busy-force-defer-dialog",
     );
     expect(errorDialog.textContent).toContain(
-      "This host didn't answer the restart request.",
+      "This host didn't complete the restart request.",
     );
     expect(transitionIds).toHaveLength(1);
 
@@ -459,6 +459,83 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     expect(transitionIds[0]).not.toBe(transitionIds[1]);
   });
 
+  it("attempts the cooperative RPC when the local host's manifest is unknown (no handshake recorded yet), and never force-respawns", async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    // No `overrideHandlers` here, deliberately, same reasoning as the
+    // "dispatches the host.restart RPC" test above: the fixture's OWN default
+    // `host.restart` handler is what `restartCalls()` tracks.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    // Deliberately NOT calling `recordNegotiatedHostMethods` for "host-a" -
+    // this is the tri-state's `null` case: no handshake with this host has
+    // completed yet, so `useHostMethodSupport` cannot say either way. This is
+    // the P1 regression guard: the OLD code forced the fallback on this exact
+    // state (unknown treated as absent, silently killing a live session); the
+    // fix attempts the cooperative RPC here exactly like the known-`true`
+    // case, and only degrades to the force offer if the host itself answers
+    // that it cannot (see the next test).
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(fixture.restartCalls()).toBe(1);
+    });
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+
+  it("an unknown manifest whose cooperative RPC is rejected degrades to an explicit force choice, not a silent kill", async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () =>
+          Promise.reject(new Error("host too old for host.restart")),
+      },
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    // Same unknown tri-state as the test above (no `recordNegotiatedHostMethods`
+    // call for "host-a"), but this time the host itself proves it cannot
+    // answer the cooperative RPC - simulating a host too old to have
+    // `host.restart`, or simply unreachable. The dial itself IS the
+    // negotiation the unknown state was waiting on: it must land on the
+    // force-offer dialog, exactly like the known-`false` case, rather than
+    // dead-ending in an error toast the user cannot act on.
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    await openAndConfirm();
+
+    const errorDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(errorDialog.textContent).toContain(
+      "This host didn't complete the restart request.",
+    );
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("falls back to requestHostRespawn directly when the local host's manifest does not advertise host.restart", async () => {
     hostBindingMock.current = PRESENT_BINDING;
     directoryListMock.current = { data: [localEntry("host-a")] };
@@ -468,8 +545,11 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     });
     clientForHostIdMock.current = (hostId) =>
       hostId === "host-a" ? fixture.client : null;
-    // Handshaked, but WITHOUT host.restart - the "old host" shape, not the
-    // "never dialled" one (which the null tri-state already covers).
+    // Handshaked, but WITHOUT host.restart - the "old host" shape (known
+    // `false`, fails closed to force). Deliberately NOT the "never dialled"
+    // shape (unknown `null`, no manifest recorded yet) - that state now
+    // ATTEMPTS the cooperative RPC instead of forcing; see the two "unknown
+    // manifest" tests above for that coverage.
     recordNegotiatedHostMethods("host-a", ["host.status", "host.doctor"]);
     const requestHostRespawn = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),

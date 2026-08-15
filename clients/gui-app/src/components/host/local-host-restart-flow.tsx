@@ -12,7 +12,7 @@ import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defe
 import { useHostRestart } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostBinding } from "@/lib/host";
 import {
@@ -50,8 +50,9 @@ function busyRestartMessage(busySessionCount: number): string {
  * act on.
  */
 const UNANSWERED_RESTART_MESSAGE =
-  "This host didn't answer the restart request. It may be stuck or still " +
-  "starting up. Force restart kills the host process and relaunches it.";
+  "This host didn't complete the restart request. It may be stuck, still " +
+  "starting up, or too old to stop cleanly on its own. Force restart kills " +
+  "the host process and relaunches it.";
 
 /**
  * The forced bridge respawn, shared by both arms of the flow.
@@ -150,9 +151,15 @@ export function LocalHostRestartFlow(
 
 /**
  * Confirm → forced bridge respawn, exactly what both surfaces shipped before
- * this flow existed. Reached when no host runtime is mounted; a host that
- * cannot even be dialed has no sessions a claim could protect, so forcing is
- * the recovery action here, not a destruction.
+ * this flow existed. Reached only when NO host runtime is mounted, so there is
+ * no transport to ask a cooperative question over and no id to ask about.
+ *
+ * Not a claim that such a host has nothing to protect - it may be alive and
+ * busy; we simply cannot ask it. In this tree the app mounts both listeners
+ * under `HostRuntimeProvider`, which renders its fallback rather than children
+ * until the binding publishes, so production does not reach this arm today.
+ * It exists because `useHostClientForHostId` THROWS without that provider, and
+ * a surface that force-restarts must not be the thing that crashes the root.
  */
 function ForceOnlyRestartFlow(props: LocalHostRestartFlowProps): ReactNode {
   const { forceRestart } = useForceHostRespawn(props.onClose);
@@ -169,12 +176,12 @@ function ForceOnlyRestartFlow(props: LocalHostRestartFlowProps): ReactNode {
 }
 
 /**
- * Fallback semantics (deliberate): when the LOCAL host cannot take the
- * cooperative path - no directory entry yet, no client, or its negotiated
- * manifest does not advertise `host.restart` (`useHostSupportsMethod` fails
- * closed, covering both "too old" and "no completed handshake because it is
- * down") - confirm dispatches the bridge respawn directly, which is the
- * pre-flow behavior and the right recovery action for a dead host.
+ * Fallback semantics (deliberate): confirm dispatches the bridge respawn
+ * directly only where there is POSITIVELY no cooperative route - no local
+ * directory entry resolves (no id, so no client to dial with), or the host's
+ * last completed handshake proves it does not advertise `host.restart` (a
+ * host too old for the cooperative RPC). "Not negotiated yet" is deliberately
+ * NOT one of those cases; see `cooperativeSupport` below.
  *
  * No renderer-side gate against in-flight update/activate mutations, on
  * purpose: the host's claim machinery already refuses a restart whose
@@ -199,15 +206,25 @@ function CooperativeFirstRestartFlow(
     return binding?.directory.getLocalEntry()?.hostId ?? null;
   }, [directoryQuery.data, binding]);
   const client = useHostClientForHostId(localHostId);
-  const supportsCooperativeRestart = useHostSupportsMethod(
-    localHostId,
-    "host.restart",
-  );
+  // The TRI-STATE read, deliberately not the `useHostSupportsMethod` boolean:
+  // that form collapses "no handshake with this host has completed yet" into
+  // "does not have it". Fail-closed is right for HIDING an affordance and
+  // wrong here - this decision force-kills live sessions, so reading unknown
+  // as absent acts on a fact not yet in evidence. The window is real: the
+  // manifest registry fills in from the first completed RPC to that host, so a
+  // restart taken right after the runtime binds can land inside it.
+  //
+  // Unknown therefore ATTEMPTS the cooperative call, because the RPC's own
+  // dial and `openAck` IS the negotiation this would otherwise be waiting on:
+  // a host that has the method answers normally, and one that does not rejects
+  // into the force offer below. Every branch ends in an answer or an explicit
+  // choice; none of them ends in a silent kill.
+  const cooperativeSupport = useHostMethodSupport(localHostId, "host.restart");
   // `useHostClientForHostId(null)` follows the app-wide default host, which
   // is exactly the client this flow must never dispatch against - hence the
   // id-null guard rides with the client, not just with the dispatch.
   const cooperativeClient =
-    localHostId !== null && supportsCooperativeRestart ? client : null;
+    localHostId !== null && cooperativeSupport !== false ? client : null;
   const restart = useHostRestart(cooperativeClient);
 
   // Non-null once the cooperative attempt settled anything other than
