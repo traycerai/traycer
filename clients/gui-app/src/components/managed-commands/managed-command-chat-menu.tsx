@@ -25,10 +25,10 @@ import {
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
-import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
+import { ShellOutputAvailabilityNotice } from "@/components/managed-commands/shell-output-availability-notice";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -140,11 +140,22 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
           rowDragging ? "opacity-40" : null,
         )}
       >
+        {/*
+         * The output window's own connection strip, over the last rows this
+         * menu was served: a frozen list is indistinguishable from a quiet one
+         * without a word for it. Reconnecting once there is something to be
+         * stale about, connecting before that.
+         */}
         {connectionStatus === "open" ? null : (
-          <ManagedCommandConnectionNotice
-            hasContent={commands.length > 0}
-            testId="managed-command-chat-menu-disconnected"
+          <ShellOutputAvailabilityNotice
+            availability={{
+              kind: "stale",
+              phase: commands.length > 0 ? "reconnecting" : "connecting",
+            }}
+            onClose={null}
+            onReopen={null}
             className={undefined}
+            testId="managed-command-chat-menu-disconnected"
           />
         )}
         <ManagedCommandMenuRows

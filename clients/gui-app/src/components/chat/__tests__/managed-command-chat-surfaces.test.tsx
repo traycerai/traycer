@@ -947,9 +947,11 @@ describe("the chat's Shells menu", () => {
 
     // A dropped stream freezes the menu on its last snapshot. Without a word
     // for it, a stale list is indistinguishable from a quiet one.
-    expect(
-      screen.getByTestId("managed-command-chat-menu-disconnected"),
-    ).not.toBeNull();
+    const notice = screen.getByTestId("managed-command-chat-menu-disconnected");
+    expect(notice).not.toBeNull();
+    expect(notice.getAttribute("data-availability")).toBe("stale");
+    expect(notice.getAttribute("data-phase")).toBe("reconnecting");
+    expect(screen.getByText("Reconnecting…")).not.toBeNull();
     expect(
       screen.getByTestId("managed-command-menu-row-frozen"),
     ).not.toBeNull();

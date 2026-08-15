@@ -33,11 +33,10 @@ import { SegmentCopyButton } from "@/components/chat/segments/segment-copy-butto
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
-import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
-import { ManagedCommandDeletedBanner } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import { ShellOutputAvailabilityNotice } from "@/components/managed-commands/shell-output-availability-notice";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
-import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
+import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
 import type {
   ManagedCommand,
@@ -52,6 +51,12 @@ import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
 } from "@/lib/managed-commands/managed-command-copy";
+import {
+  isShellOutputBanner,
+  isShellOutputPanelReplacement,
+  shellOutputHostAvailability,
+  shellOutputStreamAvailability,
+} from "@/lib/managed-commands/shell-output-availability";
 import type { ManagedCommandOutputTileRef } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -70,6 +75,11 @@ import {
 const FOLLOW_SLACK_PX = 24;
 /** Distance from the top that asks for the next page of older lines. */
 const LOAD_OLDER_THRESHOLD_PX = 48;
+/**
+ * One test id for whatever the window has to say instead of (or over) the log;
+ * the notice's `data-availability` carries WHICH state it is.
+ */
+const AVAILABILITY_NOTICE_TEST_ID = "managed-command-output-availability";
 
 let nextManagedOutputSessionIdentity = 1;
 const managedOutputSessionIdentityByStore = new WeakMap<object, string>();
@@ -127,6 +137,13 @@ export interface ManagedCommandOutputTileProps {
   readonly epicId: string;
 }
 
+/**
+ * Three layers, because each one gates the hooks of the next: the host has to
+ * be reachable before a stream is dialled, and the stream's store has to exist
+ * before it can be read. Every layer answers with the same
+ * `ShellOutputAvailability` vocabulary and the same notice, so the reader
+ * cannot tell where the seam is - only which wait, or which ending, this is.
+ */
 export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
   const { epicId, node } = props;
   const reachability = useHostReachability(node.hostId);
@@ -136,40 +153,16 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
     node.instanceId,
   );
 
-  if (reachability.status === "unreachable") {
+  const hostGate = shellOutputHostAvailability(reachability);
+  if (hostGate !== null) {
     return (
-      <div
-        className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
-        data-testid="managed-command-output-unreachable"
-        role="status"
-      >
-        <p className="max-w-md">
-          Host &quot;{reachability.hostLabel}&quot; is unreachable, so this
-          output cannot be read. The shell and its log are kept on that host.
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={closeCanvasTile}
-        >
-          Close tab
-        </Button>
-      </div>
-    );
-  }
-  if (
-    reachability.status === "checking" ||
-    reachability.status === "host-starting"
-  ) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-canvas">
-        <AgentSpinningDots
-          className="text-muted-foreground"
-          testId={undefined}
-          variant={undefined}
-        />
-      </div>
+      <ShellOutputAvailabilityNotice
+        availability={hostGate}
+        onClose={closeCanvasTile}
+        onReopen={null}
+        className={undefined}
+        testId={AVAILABILITY_NOTICE_TEST_ID}
+      />
     );
   }
   return (
@@ -189,7 +182,7 @@ function ManagedCommandOutputTileLive(props: {
   readonly onClose: () => void;
 }) {
   const { epicId, node } = props;
-  const session = useManagedCommandOutputSession({
+  const { session, reopen } = useManagedCommandOutputSession({
     epicId,
     commandId: node.id,
     hostId: node.hostId,
@@ -197,13 +190,13 @@ function ManagedCommandOutputTileLive(props: {
 
   if (session === null) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-canvas">
-        <AgentSpinningDots
-          className="text-muted-foreground"
-          testId={undefined}
-          variant={undefined}
-        />
-      </div>
+      <ShellOutputAvailabilityNotice
+        availability={{ kind: "bootstrapping", phase: "opening-stream" }}
+        onClose={props.onClose}
+        onReopen={null}
+        className={undefined}
+        testId={AVAILABILITY_NOTICE_TEST_ID}
+      />
     );
   }
   return (
@@ -212,6 +205,7 @@ function ManagedCommandOutputTileLive(props: {
       node={node}
       viewTabId={props.viewTabId}
       onClose={props.onClose}
+      onReopen={reopen}
       session={session}
     />
   );
@@ -222,6 +216,7 @@ function ManagedCommandOutputTileBody(props: {
   readonly node: ManagedCommandOutputTileRef;
   readonly viewTabId: string;
   readonly onClose: () => void;
+  readonly onReopen: () => void;
   readonly session: ManagedCommandOutputStoreHandle;
 }) {
   const { epicId, node, session } = props;
@@ -234,8 +229,15 @@ function ManagedCommandOutputTileBody(props: {
   const reachedStart = useStore(store, (state) => state.reachedStart);
   const loadingOlder = useStore(store, (state) => state.loadingOlder);
   const loadOlder = useStore(store, (state) => state.loadOlder);
-  const unsupported =
-    useStreamMethodSupport("managedCommand.subscribeOutput") === "unsupported";
+  // Asked of the client this window's own subscription rides on. The app-wide
+  // reader answers for the DEFAULT host, and a tab is bound to its own host for
+  // life - when the two differ, the default host's answer is about the wrong
+  // machine, and this window would either call a capable host too old or take
+  // an old host's refusal for a deletion.
+  const streamSupport = useStreamMethodSupportFor(
+    session.streamMethodSupport,
+    "managedCommand.subscribeOutput",
+  );
   const terminalFont = useEffectiveTerminalFont();
 
   const visible = useTileBodyVisible();
@@ -399,48 +401,60 @@ function ManagedCommandOutputTileBody(props: {
     }
   }, [loadOlder, readingIdentity]);
 
-  if (unsupported) {
+  // Derived here, after the scroll machinery above, and read only by the JSX
+  // below: what the window shows is a pure function of the store's signals
+  // and the bound host's capability, computed once per render.
+  const availability = shellOutputStreamAvailability({
+    streamSupport,
+    connectionStatus,
+    snapshotArrived: command !== null,
+    hasLines: lines.length > 0,
+    deleted,
+    fatalClose,
+  });
+
+  // A terminal state, or a host that cannot serve the stream: the panel is the
+  // sentence, and nothing of the log survives under it. Whatever this window
+  // had read is not the history any more - the host destroyed or withdrew
+  // that - and a ghost of it contradicted every other surface's account of a
+  // deleted shell.
+  if (isShellOutputPanelReplacement(availability)) {
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
-        data-testid="managed-command-output-unavailable"
-        role="status"
-      >
-        This host is too old to show shells.
-      </div>
+      <ShellOutputAvailabilityNotice
+        availability={availability}
+        onClose={props.onClose}
+        onReopen={props.onReopen}
+        className={undefined}
+        testId={AVAILABILITY_NOTICE_TEST_ID}
+      />
     );
   }
 
-  // The command is gone either way; only how we learned differs. A `deleted`
-  // frame arrives while the window is open, a NOT_FOUND close greets a window
-  // restored for a command deleted while the app was shut.
-  const gone = deleted || fatalClose !== null;
-
   return (
     <div className="flex h-full w-full min-w-0 flex-col bg-canvas">
-      {gone ? (
-        <ManagedCommandDeletedBanner
-          deletionConfirmed={command !== null}
+      {isShellOutputBanner(availability) ? (
+        <ShellOutputAvailabilityNotice
+          availability={availability}
           onClose={props.onClose}
-          testId="managed-command-output-deleted"
-        />
-      ) : null}
-      {!gone && connectionStatus !== "open" ? (
-        <ManagedCommandConnectionNotice
-          hasContent={lines.length > 0}
-          testId="managed-command-output-disconnected"
+          onReopen={props.onReopen}
+          testId={AVAILABILITY_NOTICE_TEST_ID}
           className="border-b border-border/60 px-3"
         />
       ) : null}
 
       <div className="relative min-h-0 flex-1">
+        {/*
+         * Present whenever a snapshot has said what this shell is - including
+         * under a failed stream. Process status and stream status are two
+         * different facts: a broken output stream must never hide Stop for a
+         * process that is still running.
+         */}
         {command === null ? null : (
           <ManagedCommandOutputControls
             command={command}
             epicId={epicId}
             hostId={node.hostId}
             viewTabId={props.viewTabId}
-            gone={gone}
           />
         )}
         <div
@@ -481,6 +495,19 @@ function ManagedCommandOutputTileBody(props: {
             <p className="py-1 text-center text-muted-foreground/60">
               Start of the retained log
             </p>
+          ) : null}
+          {/*
+           * An opened, empty log says so. Blank, it was indistinguishable from
+           * a stream that never connected.
+           */}
+          {availability.kind === "empty" ? (
+            <ShellOutputAvailabilityNotice
+              availability={availability}
+              onClose={props.onClose}
+              onReopen={props.onReopen}
+              className={undefined}
+              testId={AVAILABILITY_NOTICE_TEST_ID}
+            />
           ) : null}
           {lines.map((line) => (
             <OutputRow key={line.seq} line={line} />
@@ -527,8 +554,6 @@ function ManagedCommandOutputControls(props: {
   readonly epicId: string;
   readonly hostId: string;
   readonly viewTabId: string;
-  /** The command is gone - lifecycle verbs would act on nothing. */
-  readonly gone: boolean;
 }) {
   return (
     <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center gap-1">
@@ -554,14 +579,12 @@ function ManagedCommandOutputControls(props: {
           hostId={props.hostId}
           viewTabId={props.viewTabId}
         />
-        {props.gone ? null : (
-          <ManagedCommandLifecycleActions
-            command={props.command}
-            epicId={props.epicId}
-            hostId={props.hostId}
-            className={undefined}
-          />
-        )}
+        <ManagedCommandLifecycleActions
+          command={props.command}
+          epicId={props.epicId}
+          hostId={props.hostId}
+          className={undefined}
+        />
       </span>
     </div>
   );
