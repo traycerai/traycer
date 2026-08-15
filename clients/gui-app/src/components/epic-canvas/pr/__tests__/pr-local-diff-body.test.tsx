@@ -49,6 +49,11 @@ import type { PrLocalDiffTarget } from "@/hooks/pr/use-pr-local-diff";
 
 const tabHostClient = vi.hoisted(() => ({
   request: vi.fn(),
+  // The readiness surface `useReactiveHostReadiness` reads; "ready" unless a
+  // test overrides these.
+  onChange: (_listener: () => void) => () => undefined,
+  getActiveHostId: vi.fn((): string | null => "host-1"),
+  getRequestContextUserId: vi.fn((): string | null => "user-1"),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({

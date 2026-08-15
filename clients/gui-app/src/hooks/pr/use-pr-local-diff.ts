@@ -17,6 +17,7 @@ import { DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET } from "@traycer/protocol/host/pr-sch
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 
@@ -131,8 +132,15 @@ export function usePrLocalDiffQuery(args: {
 }): UseQueryResult<PrGetLocalDiffResponse, HostRpcError> {
   const hostId = useTabHostId();
   const client = useTabHostClient();
+  // A non-null tab client is NOT yet a usable one: during startup, sign-in
+  // changes and reconnects it exists before its active host and request
+  // context resolve. Issuing then caches a transport error under
+  // `staleTime: Infinity`, wedging the tile until a manual refresh - so gate
+  // on the same reactive readiness the bundle tile's file-diff hook uses.
+  const readiness = useReactiveHostReadiness(client);
   const { target } = args;
-  const isEnabled = args.enabled && client !== null && target !== null;
+  const isEnabled =
+    args.enabled && client !== null && readiness.isReady && target !== null;
 
   return useQuery({
     // `client` is correlated 1:1 with `hostId`, which the key already carries
@@ -219,8 +227,15 @@ export function usePrLocalDiffSummaryQuery(args: {
 }): UseQueryResult<PrGetLocalDiffSummaryResponse, HostRpcError> {
   const hostId = useTabHostId();
   const client = useTabHostClient();
+  // A non-null tab client is NOT yet a usable one: during startup, sign-in
+  // changes and reconnects it exists before its active host and request
+  // context resolve. Issuing then caches a transport error under
+  // `staleTime: Infinity`, wedging the tile until a manual refresh - so gate
+  // on the same reactive readiness the bundle tile's file-diff hook uses.
+  const readiness = useReactiveHostReadiness(client);
   const { target } = args;
-  const isEnabled = args.enabled && client !== null && target !== null;
+  const isEnabled =
+    args.enabled && client !== null && readiness.isReady && target !== null;
 
   return useQuery({
     // `client` is correlated 1:1 with `hostId`, which the key already carries
@@ -301,8 +316,10 @@ export function usePrLocalFileDiffQuery(args: {
 }): UseQueryResult<PrGetLocalFileDiffResponse, HostRpcError> {
   const hostId = useTabHostId();
   const client = useTabHostClient();
+  // Same not-ready gate as the two range-level hooks above.
+  const readiness = useReactiveHostReadiness(client);
   const { target } = args;
-  const isEnabled = args.enabled && client !== null;
+  const isEnabled = args.enabled && client !== null && readiness.isReady;
 
   return useQuery({
     // Same 1:1 `client`/`hostId` correlation note as the two hooks above.

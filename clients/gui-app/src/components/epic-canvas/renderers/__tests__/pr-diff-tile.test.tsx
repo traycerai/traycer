@@ -42,6 +42,11 @@ import { PrDiffTile } from "@/components/epic-canvas/renderers/pr-diff-tile";
 
 const tabHostClient = vi.hoisted(() => ({
   request: vi.fn(),
+  // The readiness surface `useReactiveHostReadiness` reads; "ready" unless a
+  // test overrides these.
+  onChange: (_listener: () => void) => () => undefined,
+  getActiveHostId: vi.fn((): string | null => "host-1"),
+  getRequestContextUserId: vi.fn((): string | null => "user-1"),
 }));
 
 const detailSubscription: { current: PrDetailSubscriptionResult } = vi.hoisted(
@@ -306,6 +311,8 @@ beforeEach(() => {
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
   tabHostClient.request.mockReset();
+  tabHostClient.getActiveHostId.mockReturnValue("host-1");
+  tabHostClient.getRequestContextUserId.mockReturnValue("user-1");
   detailSubscription.current = populatedSubscription();
 });
 
@@ -331,6 +338,20 @@ describe("PrDiffTile call-and-degrade", () => {
     expect(methodCalls("pr.getLocalDiff")).toHaveLength(0);
     expect(methodCalls("pr.getLocalDiffSummary")).toHaveLength(1);
     expect(methodCalls("pr.getLocalFileDiff").length).toBeGreaterThan(0);
+  });
+
+  it("issues nothing while the tab client's readiness is unresolved", async () => {
+    // A non-null client whose active host has not resolved yet (startup,
+    // sign-in change, reconnect). Probing now would cache a transport error
+    // under `staleTime: Infinity` with `retry: false` - a wedged tile.
+    tabHostClient.getActiveHostId.mockReturnValue(null);
+    tabHostClient.request.mockResolvedValue(summaryOk());
+    renderTile(makeQueryClient());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(tabHostClient.request).not.toHaveBeenCalled();
   });
 
   it("falls back to exactly one monolith call when the summary is E_HOST_UNSUPPORTED", async () => {
