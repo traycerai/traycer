@@ -1534,6 +1534,7 @@ function SingleProfileRateLimitProviderBlock({
     providerId,
     profileId: null,
     usageUpdatedAt: null,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
     fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
@@ -1839,12 +1840,14 @@ function RateLimitProviderProfileRow({
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
-  useRefreshProviderRateLimitsOnMount(
+  useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
-    profile.usageUpdatedAt,
+    usageUpdatedAt: profile.usageUpdatedAt,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
     fetchEligible,
-  );
+    refetch: null,
+  });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,

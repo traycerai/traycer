@@ -1354,7 +1354,7 @@ describe("<RateLimitPopover /> rail", () => {
     );
   });
 
-  it("enqueues open-time refresh only for stale multi-profile rows", async () => {
+  it("does not enqueue open-time refresh for stale multi-profile rows with cached values", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -1384,12 +1384,7 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    await waitFor(() => expect(mocks.enqueue).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: false, profileId: "work-profile" },
-    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
