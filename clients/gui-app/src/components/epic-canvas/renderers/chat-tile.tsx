@@ -113,6 +113,7 @@ import {
   promoteQueuedMessageToFront,
 } from "@/lib/chats/compact-conversation";
 import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import { chatTileActivationQueryPolicy } from "./chat-tile-activation-query-policy";
 import {
   ChatDeadTileBanner,
   ChatHostStartingBanner,
@@ -1377,18 +1378,24 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     state.snapshotLoaded,
     effectiveMissingPaths,
   );
+  const activationQueries = chatTileActivationQueryPolicy({
+    readOnlyNotice: props.readOnlyNotice,
+    surfaceVisible,
+    surfaceFocused,
+    tileActive: isActive,
+    hasWorktreeBinding:
+      state.worktreeBinding !== null &&
+      state.worktreeBinding.entries.length > 0,
+  });
   // Pair the missing-folder send-disable with an on-focus / pane-activation
   // re-check so restoring a deleted folder clears the disable without a send or
-  // reload. Syncs the fresh server-side missing set into the same store field
-  // the gate (and the recovery toast) read.
+  // reload. A locked published copy has no send gate to recover, so its retained
+  // surface never enables this activation query.
   useChatMissingWorktreeFocusRefresh({
     handle,
     epicId: currentEpicId,
     chatId: node.id,
-    surfaceVisible,
-    hasBinding:
-      state.worktreeBinding !== null &&
-      state.worktreeBinding.entries.length > 0,
+    enabled: activationQueries.refreshMissingWorktreePaths,
   });
 
   const displayContext = useMemo<SenderDisplayContext>(
@@ -1611,9 +1618,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // The tile's own send paths - next steps, compact, inline edit - never touch
   // the composer, so they cannot read the catalog off its picker store. Subscribe
   // to the same query under the SAME `surfaceFocused` predicate the composer uses
-  // (`chatComposerFocused` → `chatTileCatalogActivity`): identical gating means an
-  // off-screen tile still adds no `agent.gui.listCommands` subscription, and when
-  // both are on, TanStack Query dedupes the two subscribers into one fetch.
+  // (`chatComposerFocused` → `chatTileCatalogActivity`). Locked published copies
+  // cannot invoke those actions and stay detached. For live surfaces, identical
+  // gating means an off-screen tile adds no `agent.gui.listCommands` subscription,
+  // and when both are on, TanStack Query dedupes the subscribers into one fetch.
   const tabHostClient = useTabHostClient();
   const {
     data: slashCommands,
@@ -1627,7 +1635,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
     // and resolving against a catalog the composer never saw.
     workingDirectories: resolvedComposerMentionRoots,
-    enabled: surfaceFocused,
+    enabled: activationQueries.discoverActionSlashCommands,
   });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
@@ -1639,7 +1647,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // resolves lexically; the cost is the pill, never the skill.
   const slashCatalog = useMemo<SlashCommandCatalog | null>(
     () =>
-      surfaceFocused && !slashCommandsLoading && slashCommandsError === null
+      activationQueries.discoverActionSlashCommands &&
+      !slashCommandsLoading &&
+      slashCommandsError === null
         ? new Map(
             slashCommands.map((command) => [
               command.name.toLowerCase(),
@@ -1647,7 +1657,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
             ]),
           )
         : null,
-    [surfaceFocused, slashCommands, slashCommandsLoading, slashCommandsError],
+    [
+      activationQueries.discoverActionSlashCommands,
+      slashCommands,
+      slashCommandsLoading,
+      slashCommandsError,
+    ],
   );
   const canModifyMessages = canModifyChatMessages({ canAct, state });
   const activeInlineEdit = normalizeInlineEditForSession(
@@ -1835,6 +1850,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activeEditingQueueItemId,
       canAct,
       chatActions,
+      dispatchUi,
       node.id,
       node.name,
       profile,
@@ -2026,9 +2042,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     setEpicRunSettings,
     persistChatRunSettings,
   });
-  const handleForkOpenChange = useCallback((open: boolean): void => {
-    if (!open) setForkTarget(null);
-  }, []);
+  const handleForkOpenChange = useCallback(
+    (open: boolean): void => {
+      if (!open) setForkTarget(null);
+    },
+    [setForkTarget],
+  );
   // The chip renders as a sibling block below the composer (mirroring
   // the landing page) so the input box stays focused on prompt editing
   // and the binding affordances live alongside it. The selector reads
@@ -2080,7 +2099,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         handle={handle}
         harnessId={currentComposerSettings.harnessId}
         workingDirectories={resolvedComposerMentionRoots}
-        isActive={isActive}
+        commandsEnabled={activationQueries.discoverCompactSlashCommands}
         onCompact={canSendNextStep ? compactConversation : null}
       />
     ),
@@ -2090,7 +2109,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       resolvedComposerMentionRoots,
       currentComposerSettings.harnessId,
       handle,
-      isActive,
+      activationQueries.discoverCompactSlashCommands,
     ],
   );
   // Composer v3 cluster: host select + Workspace rail picker on the left, with
@@ -2424,7 +2443,7 @@ function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly harnessId: GuiHarnessId;
   readonly workingDirectories: ReadonlyArray<string>;
-  readonly isActive: boolean;
+  readonly commandsEnabled: boolean;
   readonly onCompact: ((commandName: string) => void) | null;
 }): ReactNode {
   const usage = useStore(props.handle.store, selectContextUsage);
@@ -2433,14 +2452,14 @@ function ContextUsageChipForChat(props: {
   // (`resolvedComposerMentionRoots` in the parent), not the raw chat binding -
   // that's what makes this the SAME `agent.gui.listCommands` cache entry
   // `useKnownSlashCommandNames` already warms, not just a query sharing its
-  // `enabled: isActive` gate. An active tile therefore pays no extra RPC, and
+  // activation gate. An actionable tile therefore pays no extra RPC, and
   // an inactive one still fetches nothing and shows no compact affordance - it
   // also has no focusable composer to compact from.
   const { data: commands } = useSlashCommands("", {
     hostClient: client,
     harnessId: props.harnessId,
     workingDirectories: props.workingDirectories,
-    enabled: props.isActive,
+    enabled: props.commandsEnabled,
   });
   const compactCommand = findManualCompactCommand(commands);
   const requestCompact = props.onCompact;
@@ -2562,14 +2581,14 @@ function useChatTileComposerSettingsSeeds(input: {
  * `enabled` gate so backgrounded keep-alive chats - including a non-front tab
  * stacked in the same visible pane - don't all re-stat on every window focus;
  * selecting the tab re-enables the query (with `staleTime: 0`) and refetches,
- * which doubles as the surface-activation re-check.
+ * which doubles as the surface-activation re-check. Explicit locked copies stay
+ * disabled because they have no composer send gate to recover.
  */
 function useChatMissingWorktreeFocusRefresh(args: {
   readonly handle: ChatSessionStoreHandle;
   readonly epicId: string;
   readonly chatId: string;
-  readonly surfaceVisible: boolean;
-  readonly hasBinding: boolean;
+  readonly enabled: boolean;
 }): void {
   const client = useTabHostClient();
   const bindingQuery = useHostQuery({
@@ -2578,7 +2597,7 @@ function useChatMissingWorktreeFocusRefresh(args: {
     method: "worktree.getBinding",
     params: { epicId: args.epicId, ownerId: args.chatId, ownerKind: "chat" },
     options: {
-      enabled: args.hasBinding && args.surfaceVisible,
+      enabled: args.enabled,
       poll: false,
       staleTime: 0,
       refetchOnWindowFocus: true,

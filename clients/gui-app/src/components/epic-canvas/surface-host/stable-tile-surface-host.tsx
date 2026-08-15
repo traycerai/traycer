@@ -209,7 +209,11 @@ function TileSurfaceRecord(props: {
       inert={!visible}
       className={cn(
         "pointer-events-auto absolute left-0 top-0 overflow-hidden",
-        !visible && "invisible",
+        // `visibility: hidden` can leave independently composited descendant
+        // layers painted for several frames in Electron. Opacity makes the
+        // retained record an atomic invisible compositor group while keeping
+        // its last usable geometry available to the mounted body.
+        !visible && "invisible opacity-0",
       )}
       data-testid={`stable-tile-surface-record-${instanceId}`}
       {...{ [HOSTED_TILE_INSTANCE_ID_ATTRIBUTE]: instanceId }}
