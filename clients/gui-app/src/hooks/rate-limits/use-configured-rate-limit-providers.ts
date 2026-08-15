@@ -173,19 +173,31 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
 
   return useMemo(
     () =>
-      candidates.flatMap((provider) =>
-        provider.fetchEligibility.ambient ||
-        provider.profiles.some((profile) =>
-          isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
-        ) ||
-        cacheTargets.some(
-          (target, targetIndex) =>
-            target.providerId === provider.providerId &&
-            hasProviderRateLimitCacheState(cacheQueries[targetIndex]),
-        )
+      candidates.flatMap((provider) => {
+        const hideOpenCode =
+          provider.providerId === "opencode" &&
+          cacheTargets.some((target, targetIndex) => {
+            if (target.providerId !== "opencode") return false;
+            const latest = cacheQueries[targetIndex]?.data?.latest;
+            return (
+              latest?.provider === "opencode" &&
+              !latest.available &&
+              latest.reason === "rate_limits_not_available"
+            );
+          });
+        if (hideOpenCode) return [];
+        return provider.fetchEligibility.ambient ||
+          provider.profiles.some((profile) =>
+            isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+          ) ||
+          cacheTargets.some(
+            (target, targetIndex) =>
+              target.providerId === provider.providerId &&
+              hasProviderRateLimitCacheState(cacheQueries[targetIndex]),
+          )
           ? [provider]
-          : [],
-      ),
+          : [];
+      }),
     [cacheQueries, cacheTargets, candidates],
   );
 }

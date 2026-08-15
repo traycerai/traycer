@@ -284,6 +284,11 @@ export const PERSIST_STORES = [
     leaf: "rate-limit-popover",
     kind: "static",
   },
+  {
+    camelName: "resourceMonitor",
+    leaf: "resource-monitor",
+    kind: "static",
+  },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
   {
     camelName: "workspaceFolders",

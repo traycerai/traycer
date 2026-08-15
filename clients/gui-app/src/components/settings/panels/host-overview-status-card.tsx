@@ -220,8 +220,27 @@ export function HostRestartBusyNotice(props: {
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
   readonly retryPending: boolean;
+  /**
+   * The Force-restart offer, or `null` where none can be made. Non-null only
+   * for the LOCAL machine's host with a CLI bridge present: force is a bridge
+   * respawn of this machine's host process, and a remote host has no
+   * transport that can kill its process. Forcing ends the sessions the count
+   * above describes — the copy says so before the button does it.
+   */
+  readonly onForceRestart: (() => void) | null;
+  readonly forcePending: boolean;
+  /**
+   * The page-wide lifecycle-write gate. Exclusion has to hold in BOTH
+   * directions: the page's other writes (update install, rename, policy,
+   * service register/deregister) already refuse to dispatch while a restart
+   * is in flight, and the notice's actions must equally refuse to recycle
+   * the host in the middle of one of theirs.
+   */
+  readonly pageGatePending: boolean;
 }): ReactNode {
   const { busySessionCount } = props;
+  const anyPending =
+    props.retryPending || props.forcePending || props.pageGatePending;
   return (
     <div
       className="flex flex-wrap items-center gap-3 border-b border-amber-700/30 bg-amber-900/10 px-5 py-3 text-ui-sm"
@@ -235,18 +254,40 @@ export function HostRestartBusyNotice(props: {
             ? "1 session is"
             : `${busySessionCount} sessions are`}{" "}
           still working. Nothing was interrupted; try again when they finish.
+          {props.onForceRestart === null
+            ? null
+            : " Force restart ends them immediately."}
         </span>
       </span>
       <Button
         type="button"
         size="sm"
         variant="outline"
-        disabled={props.retryPending}
+        disabled={anyPending}
         onClick={props.onRetry}
         data-testid="host-overview-restart-busy-retry"
       >
         Try again
       </Button>
+      {props.onForceRestart === null ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          disabled={anyPending}
+          onClick={props.onForceRestart}
+          data-testid="host-overview-restart-busy-force"
+        >
+          {props.forcePending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Force restart
+        </Button>
+      )}
       <Button type="button" size="sm" variant="ghost" onClick={props.onDismiss}>
         Dismiss
       </Button>

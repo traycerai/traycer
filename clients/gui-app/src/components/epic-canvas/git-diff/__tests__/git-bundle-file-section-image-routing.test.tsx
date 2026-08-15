@@ -92,6 +92,7 @@ vi.mock("@/components/diff/bundle-diff-find-registration-hooks", () => ({
     registerCoverageState: state.coverage,
     notifySectionMounted: state.mounted,
     registerLoadedPatch: vi.fn(),
+    unregisterLoadedPatch: vi.fn(),
   }),
 }));
 

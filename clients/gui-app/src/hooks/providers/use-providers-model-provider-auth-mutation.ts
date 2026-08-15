@@ -87,6 +87,7 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
           void invalidateAfterModelProviderMutation({
             queryClient,
             hostId: context.hostId,
+            providerId: variables.providerId,
           });
         }
       },

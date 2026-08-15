@@ -122,7 +122,7 @@ describe("PrPanelBody card list", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <StreamRuntimeContext.Provider
-            value={{ wsStreamClient: mockWsStreamClient }}
+            value={{ wsStreamClient: mockWsStreamClient, hostId: null }}
           >
             <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
           </StreamRuntimeContext.Provider>

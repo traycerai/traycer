@@ -14,6 +14,7 @@ import {
   agentSenderSchema,
   agentSenderSchemaPreInReplyTo,
   chatSessionAnchorSchema,
+  chatSessionAnchorSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
 } from "@traycer/protocol/persistence/epic/senders";
@@ -261,10 +262,37 @@ export const assistantMessageSchemaPreImage = z.object({
   serviceTier: z.string().nullable().default(null),
 });
 
-// `userMessageSchema` is reused live (unswapped): user-authored messages
-// never carry image results or a resolution record, so nothing about them
-// changes at the image-freeze point.
+// Wire-freeze copy of `userMessageSchema` with `sessionAnchor` swapped for
+// its pre-`turnTailUuid` freeze (see `claudeChatSessionAnchorSchemaPreTurnTail`).
+// Bound to the released `chat.subscribe@1.6` line - snapshot frames via
+// `messageSchemaPreImage` below, `messageAccepted` frames via the
+// pre-turn-tail common frame bundle in `subscribe.ts` - whose surface is
+// frozen EXACTLY, so it can never observe the Claude anchor's `turnTailUuid`.
+// Field-for-field hand copy, NOT `.omit()`/`.extend()` off the live shape.
+export const userMessageSchemaPreTurnTail = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchema,
+    message: userMessagePayloadSchema,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
+  })
+  .superRefine((message, ctx) => {
+    if (message.sender.type === message.message.kind) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message", "kind"],
+      message: "User message sender.type must match message.kind.",
+    });
+  });
+
+// The user branch is the pre-turn-tail freeze, not the live `userMessageSchema`:
+// user messages carry no image fields (nothing changed for them at the
+// image-freeze point), but their `sessionAnchor` gained `turnTailUuid` after
+// `chat.subscribe@1.6` shipped, and this union is bound to that exactly-frozen
+// line via the frozen chat trees.
 export const messageSchemaPreImage = z.discriminatedUnion("role", [
-  userMessageSchema,
+  userMessageSchemaPreTurnTail,
   assistantMessageSchemaPreImage,
 ]);

@@ -476,6 +476,7 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     expect(record.getAttribute("aria-hidden")).toBe("false");
     expect(record.hasAttribute("inert")).toBe(false);
     expect(record.classList.contains("invisible")).toBe(false);
+    expect(record.classList.contains("opacity-0")).toBe(false);
   });
 
   it("a top-level-hidden record is aria-hidden, inert, AND non-painted", () => {
@@ -491,9 +492,11 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     const record = screen.getByTestId("stable-tile-surface-record-chat-1");
     expect(record.getAttribute("aria-hidden")).toBe("true");
     expect(record.hasAttribute("inert")).toBe(true);
-    // The F1 gap: aria-hidden/inert alone do not stop painting - only a real
-    // non-paint rule does.
+    // The F1 gap: aria-hidden/inert alone do not stop painting - only real
+    // non-paint rules do. Opacity also flushes independently composited child
+    // layers that Electron can otherwise retain after visibility changes.
     expect(record.classList.contains("invisible")).toBe(true);
+    expect(record.classList.contains("opacity-0")).toBe(true);
   });
 
   it("pins the pointer-event split, overflow clipping, and no positive record z-index", () => {
