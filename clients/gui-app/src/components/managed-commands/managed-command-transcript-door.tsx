@@ -44,6 +44,7 @@ export function ManagedCommandTranscriptDoor(props: {
   if (onOpen === null) return null;
   return (
     <ManagedCommandOpenInTabButton
+      commandId={commandId}
       testId={props.testId}
       onOpen={() => {
         onOpen(commandId);

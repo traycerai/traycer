@@ -140,6 +140,47 @@ export function useManagedCommandInEpic(
 }
 
 /**
+ * Whether a shell still exists, as far as this window can honestly tell.
+ *
+ * `useManagedCommandInEpic` answers null both for "the owning chat's set
+ * arrived and does not hold it" and for "no set has arrived yet" - a chat's
+ * session opens with an empty set until its snapshot lands, and holds an
+ * empty stand-in while it has no live session at all. A card that read null as
+ * "deleted" told every reader, on every chat open, that every shell was gone
+ * for the first few frames - and kept saying so across a dropped connection.
+ *
+ * So absence is only a verdict when the OWNING chat's stream is open: that is
+ * the moment its command set is the host's word rather than a placeholder.
+ * `owner` is the chat the transcript belongs to, which is the chat that
+ * created the shells its cards point at. Anything less is `unknown`, and a
+ * surface treats unknown as "still there" - the door stays open, and the
+ * output window it opens has its own honest account of what it finds.
+ */
+export type ManagedCommandPresence =
+  | { readonly kind: "present"; readonly command: ManagedCommand }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unknown" };
+
+export function useManagedCommandPresence(args: {
+  readonly epicId: string | null;
+  readonly commandId: string;
+  readonly owner: { readonly chatId: string; readonly hostId: string } | null;
+}): ManagedCommandPresence {
+  const { epicId, commandId, owner } = args;
+  const live = useManagedCommandInEpic(epicId ?? "", commandId);
+  const ownerStreamStatus = useManagedCommandsConnectionStatus(
+    epicId ?? "",
+    owner?.chatId ?? "",
+    owner?.hostId ?? "",
+  );
+  if (live !== null) return { kind: "present", command: live };
+  if (epicId === null || owner === null) return { kind: "unknown" };
+  return ownerStreamStatus === "open"
+    ? { kind: "absent" }
+    : { kind: "unknown" };
+}
+
+/**
  * Stable across calls while nothing changes: the host sends the set whole, so
  * the array - and the record inside it - keeps its identity until a new frame
  * replaces it. That is what lets `useSyncExternalStore` read this directly.

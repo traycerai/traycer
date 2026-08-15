@@ -10,7 +10,8 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import {
   scopedChatOpenId,
   useChatOpenStoreScope,
@@ -50,7 +51,11 @@ export function ManagedCommandRestartSegment(
   const { restart, variant } = props;
   const epicHandle = useMaybeOpenEpicHandle();
   const epicId = epicHandle?.epicId ?? null;
-  const live = useManagedCommandInEpic(epicId ?? "", restart.commandId);
+  const presence = useManagedCommandPresence({
+    epicId,
+    commandId: restart.commandId,
+    owner: useMaybeChatTranscript(),
+  });
   const openOutput = useManagedCommandDoor();
   const openScope = useChatOpenStoreScope();
   const open = useToolOpenStore((state) =>
@@ -58,10 +63,10 @@ export function ManagedCommandRestartSegment(
   );
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
 
-  // Same reading as the start card's: inside a mounted transcript the chat's
-  // set is authoritative, and a shell missing from it is gone; outside one,
-  // absence proves nothing.
-  const gone = epicId !== null && live === null;
+  // Same reading as the start card's: only the owning chat's open stream
+  // saying the shell is not there counts as gone; a set that has not arrived
+  // yet proves nothing.
+  const gone = presence.kind === "absent";
 
   const header = (
     <>

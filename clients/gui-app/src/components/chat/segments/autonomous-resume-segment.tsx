@@ -156,6 +156,7 @@ function ResumeManagedCommandDoor(props: {
   if (managedCommand === null || openOutput === null) return null;
   return (
     <ManagedCommandOpenInTabButton
+      commandId={managedCommand.commandId}
       testId={`resume-managed-command-door-${props.trigger.blockId}`}
       onOpen={() => {
         openOutput(managedCommand.commandId);

@@ -476,11 +476,16 @@ function ManagedCommandOutputTileBody(props: {
             fontSize: `${terminalFont.fontSize}px`,
           }}
           // The floating cluster hangs over this surface, so the log reserves
-          // a lane wide enough for it on the right. Without that, the cluster
-          // sits on the tail of whichever line happens to be at the top -
-          // permanently, since the log scrolls under it - and a reader loses
-          // the end of a line for no reason they can see.
-          className="h-full w-full overflow-y-auto py-2 pr-48 pl-3 leading-relaxed"
+          // a lane for it on the right. Without that, the cluster sits on the
+          // tail of whichever line happens to be at the top - permanently,
+          // since the log scrolls under it - and a reader loses the end of a
+          // line for no reason they can see. The lane is a share of the
+          // width, capped: a fixed lane the cluster's full width took a third
+          // of a narrow pane away from the log, which is the one thing a
+          // person opened it to read - so on a narrow pane the lane shrinks
+          // and the cluster may overlap the tail of a long line, and on a wide
+          // one it never grows past what the cluster actually needs.
+          className="h-full w-full overflow-y-auto py-2 pr-[min(30%,12rem)] pl-3 leading-relaxed"
         >
           {loadingOlder ? (
             <div className="flex justify-center py-1">

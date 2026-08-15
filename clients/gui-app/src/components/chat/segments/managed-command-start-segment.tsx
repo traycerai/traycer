@@ -10,7 +10,8 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import {
   scopedChatOpenId,
   useChatOpenStoreScope,
@@ -60,7 +61,12 @@ export function ManagedCommandStartSegment(
   const { managedCommand, command, variant } = props;
   const epicHandle = useMaybeOpenEpicHandle();
   const epicId = epicHandle?.epicId ?? null;
-  const live = useManagedCommandInEpic(epicId ?? "", managedCommand.commandId);
+  const presence = useManagedCommandPresence({
+    epicId,
+    commandId: managedCommand.commandId,
+    owner: useMaybeChatTranscript(),
+  });
+  const live = presence.kind === "present" ? presence.command : null;
   const openOutput = useManagedCommandDoor();
   const openScope = useChatOpenStoreScope();
   const open = useToolOpenStore((state) =>
@@ -68,11 +74,12 @@ export function ManagedCommandStartSegment(
   );
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
 
-  // Inside a mounted chat transcript - which is what feeds the chat's own
-  // command set - a shell missing from that set is one the host no longer has.
-  // OUTSIDE an epic session there is nowhere to have looked, so absence proves
-  // nothing and the card must not claim a deletion it cannot see.
-  const gone = epicId !== null && live === null;
+  // Only an authoritative absence is a deletion: the owning chat's stream is
+  // open and its set omits the shell. Before that set has arrived - a chat
+  // still hydrating, a dropped connection, a transcript with no live session -
+  // absence proves nothing, and the card must not claim a deletion it cannot
+  // see; the door stays open, and the window it opens says what it finds.
+  const gone = presence.kind === "absent";
   const monitoring =
     live === null ? managedCommand.monitoring : live.monitoring;
   const description =
