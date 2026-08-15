@@ -53,7 +53,15 @@ const hostResolution = vi.hoisted(() => ({
 const scopedReads = vi.hoisted(() => ({
   catalogClients: [] as unknown[],
   providersClients: [] as unknown[],
+  warmupCalls: [] as Array<{
+    readonly client: unknown;
+    readonly harnessId: string | null;
+    readonly enabled: boolean;
+  }>,
 }));
+/** Availability of the fixture's one harness, so tests can drive the subject
+ *  warmup's availability gate (a tombstoned/disabled subject must not fetch). */
+const catalogAvailability = vi.hoisted(() => ({ subjectAvailable: true }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () =>
@@ -96,11 +104,29 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       modelsLoading: false,
     };
   },
+  // The header's targeted subject-harness warmup (its catalog read is
+  // `"cached-only"`, so this is the ONLY model fetch the card may cause).
+  // Recorded so tests can assert it targets the owner's host and the subject
+  // harness - never a fan-out and never another host's client.
+  useGuiHarnessModelsWarmup: (
+    client: unknown,
+    harnessId: string | null,
+    activity: { readonly enabled: boolean; readonly subscribed: boolean },
+  ) => {
+    scopedReads.warmupCalls.push({
+      client,
+      harnessId,
+      enabled: activity.enabled,
+    });
+  },
 }));
 const catalogHarnesses = vi.hoisted(() => () => [
   {
     id: "claude",
     label: "Claude Code",
+    // The subject warmup gates on this flag (an availability-blind warmup
+    // would hit a disabled provider's listModels on every card open).
+    available: catalogAvailability.subjectAvailable,
     models: [
       {
         harnessId: "claude",
@@ -271,6 +297,50 @@ describe("WorktreeOwnerSettingsHeader", () => {
     hostResolution.byHostId.clear();
     scopedReads.catalogClients = [];
     scopedReads.providersClients = [];
+    scopedReads.warmupCalls = [];
+    catalogAvailability.subjectAvailable = true;
+  });
+
+  it("warms exactly the subject harness's models on the owner's host - the card's only permitted model fetch", () => {
+    // The catalog read is `"cached-only"` (an all-harness `listModels`
+    // fan-out here would spawn every provider server on the owner's host to
+    // label one tuple), so the targeted warmup is what keeps a cold remote
+    // owner's model label resolving instead of falling back to a raw slug
+    // forever. It must aim at the subject harness on the OWNER's client.
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    const ownerClient = hostResolution.byHostId.get("host-1");
+    expect(ownerClient).toBeDefined();
+    expect(scopedReads.warmupCalls.length).toBeGreaterThan(0);
+    for (const call of scopedReads.warmupCalls) {
+      expect(call.client).toBe(ownerClient);
+      expect(call.harnessId).toBe("claude");
+      expect(call.enabled).toBe(true);
+    }
+  });
+
+  it("keeps the warmup disabled while the subject harness is unavailable - a tombstoned subject must not hit its provider's listModels", () => {
+    // The tuple is persisted history: it can name a harness the owner's host
+    // has since disabled or lost. `hasSubject` is still true (the card
+    // renders, with the raw-slug fallback), so availability is the ONLY thing
+    // standing between every card open and a doomed listModels attempt.
+    catalogAvailability.subjectAvailable = false;
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(scopedReads.warmupCalls.length).toBeGreaterThan(0);
+    for (const call of scopedReads.warmupCalls) {
+      expect(call.enabled).toBe(false);
+    }
   });
 
   it("reads the harness catalog through the OWNER's host client - the same one the provider list uses", () => {
@@ -524,6 +594,8 @@ describe("chat settings sourced from the host", () => {
     hostResolution.byHostId.clear();
     scopedReads.catalogClients = [];
     scopedReads.providersClients = [];
+    scopedReads.warmupCalls = [];
+    catalogAvailability.subjectAvailable = true;
   });
 
   function renderRegistryOnlyChat(): void {

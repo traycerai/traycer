@@ -203,12 +203,14 @@ describe("ProviderRateLimitForProvider", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh usage limits" }),
     ).toBeNull();
-    expect(mocks.refreshOnMount).toHaveBeenCalledWith(
-      "codex",
-      "work-profile",
-      123,
-      true,
-    );
+    expect(mocks.refreshOnMount).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "work-profile",
+      usageUpdatedAt: 123,
+      hasCachedValue: false,
+      fetchEligible: true,
+      refetch: mocks.refetch,
+    });
   });
 
   it("renders nothing for a provider without native usage limits", () => {
