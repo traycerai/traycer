@@ -589,6 +589,63 @@ describe("PrLocalDiffBody (split)", () => {
     });
   });
 
+  it("reports E_HOST_UNSUPPORTED per-file errors through onRangeDrift once per episode", async () => {
+    const node = tile();
+    const tabId = openRealTabWithTile(node);
+    const onRangeDrift = vi.fn();
+    tabHostClient.request.mockRejectedValue(
+      new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "host does not support this method",
+        requestId: "req-unsupported",
+        method: "pr.getLocalFileDiff",
+        fatalDetails: null,
+      }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const view = render(
+      bodyTree({
+        node,
+        viewTabId: tabId,
+        target: localDiffTarget(),
+        summary: summaryResponse({}),
+        monolith: null,
+        onRangeDrift,
+        queryClient,
+      }),
+    );
+
+    // The section renders its ordinary error block while the TILE recovery
+    // (a summary refetch that will itself fail unsupported and flip the tile
+    // to monolith) is in flight - and reports exactly once.
+    expect(await screen.findByText("Diff Loading Error")).toBeTruthy();
+    await waitFor(() => {
+      expect(onRangeDrift).toHaveBeenCalledTimes(1);
+    });
+
+    // A new callback identity re-runs the report effect - the exact path a
+    // tile re-render takes after a failed recovery releases its token. The
+    // once-per-episode ref must keep the same cached error from re-reporting
+    // through it.
+    const onRangeDriftNext = vi.fn();
+    view.rerender(
+      bodyTree({
+        node,
+        viewTabId: tabId,
+        target: localDiffTarget(),
+        summary: summaryResponse({}),
+        monolith: null,
+        onRangeDrift: onRangeDriftNext,
+        queryClient,
+      }),
+    );
+    expect(await screen.findByText("Diff Loading Error")).toBeTruthy();
+    expect(onRangeDriftNext).not.toHaveBeenCalled();
+    expect(onRangeDrift).toHaveBeenCalledTimes(1);
+  });
+
   it("renders TruncatedBanner and Load Full re-issues with byteBudget null", async () => {
     const node = tile();
     const tabId = openRealTabWithTile(node);

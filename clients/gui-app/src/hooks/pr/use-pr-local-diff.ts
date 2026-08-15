@@ -348,6 +348,10 @@ export function usePrLocalFileDiffQuery(args: {
       // reader scrolling back up should not re-pay for patches already seen.
       // Mirrors `useGitGetFileDiffQuery`.
       gcTime: 30 * 60 * 1000,
+      // No `retry` override: the app default (one retry, with the transport-
+      // error carve-out) is fine for both transient failures and the rare
+      // `E_HOST_UNSUPPORTED` here - the latter answers in loopback time, so
+      // one extra attempt barely delays the section's fallback report.
     }),
     enabled: isEnabled,
   });

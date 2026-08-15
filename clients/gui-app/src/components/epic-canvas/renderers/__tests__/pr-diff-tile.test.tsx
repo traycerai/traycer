@@ -400,6 +400,40 @@ describe("PrDiffTile call-and-degrade", () => {
       fileCallsAfterSplit,
     );
   });
+
+  it("falls back to monolith when the DOWNGRADE is first observed by a per-file call", async () => {
+    // The summary succeeded while the host still had the split methods; the
+    // downgrade (or reconnect to an older build) lands before any row is
+    // fetched. The cached summary never re-asks on its own at
+    // `staleTime: Infinity`, so the per-file E_HOST_UNSUPPORTED must route
+    // through the sections' drift report: the recovery's summary refetch
+    // fails unsupported, which is what flips the tile to monolith.
+    let hostDowngraded = false;
+    tabHostClient.request.mockImplementation((method: string) => {
+      if (method === "pr.getLocalDiffSummary") {
+        if (hostDowngraded) return Promise.reject(unsupportedError());
+        return Promise.resolve(summaryOk());
+      }
+      if (method === "pr.getLocalFileDiff") {
+        hostDowngraded = true;
+        return Promise.reject(unsupportedError());
+      }
+      if (method === "pr.getLocalDiff") return Promise.resolve(monolithOk());
+      return Promise.reject(new Error(`unexpected method ${method}`));
+    });
+    renderTile(makeQueryClient());
+
+    await waitFor(() => {
+      expect(screen.getByTestId("diff-content").textContent).toContain(
+        "+from-monolith",
+      );
+    });
+    expect(methodCalls("pr.getLocalDiff")).toHaveLength(1);
+    // Every mounted row observed the downgrade, but the tile's once-per-range
+    // token must collapse that burst into ONE recovery refetch: the initial
+    // summary ask plus exactly one re-ask.
+    expect(methodCalls("pr.getLocalDiffSummary")).toHaveLength(2);
+  });
 });
 
 describe("PrDiffTile range-drift recovery", () => {

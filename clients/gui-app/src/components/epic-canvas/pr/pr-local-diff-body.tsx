@@ -27,6 +27,7 @@ import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-gi
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import {
+  isHostUnsupportedError,
   usePrLocalFileDiffQuery,
   type PrLocalDiffTarget,
 } from "@/hooks/pr/use-pr-local-diff";
@@ -575,30 +576,37 @@ function PrLocalFileDiffContent(props: {
     enabled: true,
   });
 
-  // `ref-unavailable` here means the checkout no longer has the summary's
-  // OIDs (pruned, or moved and gc'd). The recovery is a summary refetch -
-  // fresh OIDs re-key every section - and it is BOUNDED at the tile so a
-  // repeatedly-failing range cannot loop. The ref makes the report
-  // once-per-EPISODE for this section instance: the effect re-runs whenever
-  // `onRangeDrift`'s identity moves (any tile re-render can do that), and
-  // without the guard a failed recovery - which releases the tile's
-  // once-per-range token AND re-renders the tile - would re-report the same
-  // cached answer and hot-loop. A genuinely new episode arrives as a new
-  // result (ref reset) or a remounted section (fresh ref).
+  // Two section-observed facts about the tile's SPINE route to the same
+  // recovery, a summary refetch: `ref-unavailable` (the checkout no longer
+  // has the summary's OIDs - pruned, or moved and gc'd) re-resolves the
+  // range, and `E_HOST_UNSUPPORTED` (the HOST lost the method between the
+  // summary and this row - a downgrade, or a reconnect to an older build)
+  // makes the refetch itself fail unsupported, which is what flips the tile
+  // to the monolith fallback - the summary query is the split view's only
+  // capability probe and never re-asks on its own at `staleTime: Infinity`.
+  // The recovery is BOUNDED at the tile so a repeatedly-failing range cannot
+  // loop. The ref makes the report once-per-EPISODE for this section
+  // instance: the effect re-runs whenever `onRangeDrift`'s identity moves
+  // (any tile re-render can do that), and without the guard a failed
+  // recovery - which releases the tile's once-per-range token AND re-renders
+  // the tile - would re-report the same cached answer and hot-loop. A
+  // genuinely new episode arrives as a new result (ref reset) or a
+  // remounted section (fresh ref).
   const response = query.data;
   const unavailableReason =
     response?.kind === "unavailable" ? response.reason : null;
+  const methodUnsupported = isHostUnsupportedError(query.error);
   const reportedDriftRef = useRef(false);
   const { onRangeDrift } = mode;
   useEffect(() => {
-    if (unavailableReason !== "ref-unavailable") {
+    if (unavailableReason !== "ref-unavailable" && !methodUnsupported) {
       reportedDriftRef.current = false;
       return;
     }
     if (reportedDriftRef.current) return;
     reportedDriftRef.current = true;
     onRangeDrift();
-  }, [unavailableReason, onRangeDrift]);
+  }, [unavailableReason, methodUnsupported, onRangeDrift]);
 
   if (query.isPending) {
     return (
