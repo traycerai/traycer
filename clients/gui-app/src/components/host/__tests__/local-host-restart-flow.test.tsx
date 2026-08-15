@@ -409,6 +409,101 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     expect(requestHostRespawn).not.toHaveBeenCalled();
   });
 
+  it("an armed id minted against one host is not adopted when dispatching to another", async () => {
+    const queryClient = makeQueryClient();
+    let liveEntry: HostDirectoryEntry | null = localEntry("host-a");
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => liveEntry },
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    const hostATransitionIds: string[] = [];
+    const hostBTransitionIds: string[] = [];
+    // Host A's `host.restart` never answers definitively - it rejects, which
+    // is the one outcome that keeps `armedRestartIdRef` armed rather than
+    // clearing it (see "an RPC rejection offers force ... SAME transitionId"
+    // above). That armed id is exactly what a dispatch to host B must refuse
+    // to adopt.
+    const hostAFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": (req) => {
+          hostATransitionIds.push(req.transitionId);
+          return Promise.reject(new Error("relay dropped the ack"));
+        },
+      },
+    });
+    const hostBFixture = buildOverviewHostFixture({
+      hostId: "host-b",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": (req) => {
+          hostBTransitionIds.push(req.transitionId);
+          return Promise.resolve({ outcome: "accepted" as const });
+        },
+      },
+    });
+    clientForHostIdMock.current = (hostId) => {
+      if (hostId === "host-a") return hostAFixture.client;
+      if (hostId === "host-b") return hostBFixture.client;
+      return null;
+    };
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    // A fresh element tree (not a reused reference) on every call: React's
+    // reconciler bails out of an update entirely - without re-invoking any
+    // function component below it - when a fiber's incoming props are
+    // REFERENTIALLY identical to its previous props and nothing scheduled a
+    // state update in that subtree. Reusing one `harness` element for both
+    // `render` and `rerender` would hit exactly that bailout, since mutating
+    // `hostBindingMock.current` is invisible to React - so this is a fresh
+    // JSX evaluation each call, not a cosmetic difference.
+    function buildHarness(): ReactNode {
+      return (
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <RestartFlowHarness />
+          </RunnerHostProvider>
+        </QueryClientProvider>
+      );
+    }
+    const result = render(buildHarness());
+
+    await openAndConfirm();
+    const errorDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(errorDialog.textContent).toContain(
+      "This host didn't complete the restart request.",
+    );
+    expect(hostATransitionIds).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+
+    // The machine's local host is now host-b. Both resolution sources have to
+    // agree, or the live entry would simply win and the test would not
+    // exercise the directory-list side of the switch.
+    liveEntry = localEntry("host-b");
+    directoryListMock.current = { data: [localEntry("host-b")] };
+    result.rerender(buildHarness());
+
+    await openAndConfirm();
+    await waitFor(() => {
+      expect(hostBTransitionIds).toHaveLength(1);
+    });
+
+    // The armed id from host A's ambiguous rejection must NOT have been
+    // handed to host B - that would ask host B to adopt a claim it never
+    // granted.
+    expect(hostBTransitionIds[0]).not.toBe(hostATransitionIds[0]);
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+
   it("after a busy verdict, a fresh invoke+confirm carries a NEW transitionId", async () => {
     hostBindingMock.current = PRESENT_BINDING;
     directoryListMock.current = { data: [localEntry("host-a")] };
@@ -646,5 +741,135 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     });
     expect(staleFixture.restartCalls()).toBe(0);
     expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("<LocalHostRestartFlow /> - a local host identity change under an open force offer", () => {
+  it("a host identity change while the offer is open dismisses it and returns to the confirm step", async () => {
+    const queryClient = makeQueryClient();
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    let restartCallCount = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () => {
+          restartCallCount += 1;
+          return Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 1 },
+          });
+        },
+      },
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    // A fresh element tree (not a reused reference) on every call: React's
+    // reconciler bails out of an update entirely - without re-invoking any
+    // function component below it - when a fiber's incoming props are
+    // REFERENTIALLY identical to its previous props and nothing scheduled a
+    // state update in that subtree. Reusing one `harness` element for both
+    // `render` and `rerender` would hit exactly that bailout, since mutating
+    // `hostBindingMock.current` is invisible to React - so this is a fresh
+    // JSX evaluation each call, not a cosmetic difference.
+    function buildHarness(): ReactNode {
+      return (
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <RestartFlowHarness />
+          </RunnerHostProvider>
+        </QueryClientProvider>
+      );
+    }
+    const result = render(buildHarness());
+
+    await openAndConfirm();
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(restartCallCount).toBe(1);
+
+    // The machine's local host identity changed while the offer sat open -
+    // both resolution sources now describe host-b.
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-b") },
+    };
+    directoryListMock.current = { data: [localEntry("host-b")] };
+    result.rerender(buildHarness());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).not.toBeNull();
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+
+  it("a Force click after the live host changed under an open offer refuses and explains, instead of killing the new host", async () => {
+    // A mutable (non-readonly) local type so the SAME object the component
+    // captures via `hostBindingMock.current` can have its `getLocalEntry`
+    // swapped out from under it, without a re-render - reproducing a click
+    // processed against a previously committed render.
+    const mutableBinding: {
+      directory: { getLocalEntry: () => HostDirectoryEntry | null };
+    } = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    hostBindingMock.current = mutableBinding;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    let restartCallCount = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () => {
+          restartCallCount += 1;
+          return Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: 1 },
+          });
+        },
+      },
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost);
+
+    await openAndConfirm();
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(restartCallCount).toBe(1);
+
+    // Mutate the SAME binding object the component already captured, WITHOUT
+    // re-rendering. `onForce` closes over `mutableBinding` (via
+    // `hostBindingMock.current`, read during render) and re-reads
+    // `getLocalEntry()` live at click time, so this changes what the click
+    // sees without the component ever re-rendering against host-b.
+    mutableBinding.directory.getLocalEntry = () => localEntry("host-b");
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host changed",
+        expect.objectContaining({
+          description:
+            "This machine's host was replaced while this dialog was open, so nothing was stopped. Restart again to check the new host.",
+        }),
+      );
+    });
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
   });
 });

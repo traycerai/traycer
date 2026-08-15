@@ -6,6 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
@@ -21,6 +22,65 @@ import {
 import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+
+/**
+ * A pending "force restart?" offer, bound to the host whose answer produced
+ * it. The binding is load-bearing rather than informational: the force leg
+ * respawns whatever local host exists when it runs, so an offer must never be
+ * acted on once it stops describing that process.
+ */
+interface ForceOffer {
+  readonly hostId: string;
+  readonly message: string;
+}
+
+/**
+ * One armed restart claim. Keyed by host because a `transitionId` names a
+ * claim granted by a single host process - reusing it against a different one
+ * asks that host to adopt a transition it never started.
+ */
+interface ArmedRestartId {
+  readonly hostId: string;
+  readonly transitionId: string;
+}
+
+/**
+ * Which host id this machine's local host currently has, from the two sources
+ * that answer it - each covering the other's blind spot.
+ *
+ * The LIVE entry wins. `HostDirectoryService` assigns it inside the
+ * `onLocalHostChange` callback, so it is correct the instant this machine's
+ * host identity changes. The directory query deliberately RETAINS its previous
+ * data across a refetch (so consumers never flash a loading state), which means
+ * it can still be serving the PREVIOUS local id in that window - and if that id
+ * still resolves, dispatching there would ask one host to stand down while the
+ * force leg kills another.
+ *
+ * The query is still needed: it keeps presenting this machine as a
+ * `kind: "local"` entry while the host is DOWN, where the live snapshot is
+ * `null` - the case a restart most needs to serve.
+ */
+function resolveLocalHostId(
+  liveLocalEntry: HostDirectoryEntry | null,
+  directoryEntries: readonly HostDirectoryEntry[] | undefined,
+): string | null {
+  if (liveLocalEntry !== null) return liveLocalEntry.hostId;
+  const fromDirectory = (directoryEntries ?? []).find(
+    (entry) => entry.kind === "local",
+  );
+  return fromDirectory === undefined ? null : fromDirectory.hostId;
+}
+
+/**
+ * Whether a pending force offer has stopped describing the host it would kill,
+ * because this machine's local host was replaced while the offer sat open.
+ */
+function isOfferStale(
+  offer: ForceOffer | null,
+  localHostId: string | null,
+): boolean {
+  return offer !== null && offer.hostId !== localHostId;
+}
 
 interface LocalHostRestartFlowProps {
   /** The surface's "Restart Host was invoked" state; the flow owns the rest. */
@@ -207,38 +267,21 @@ function CooperativeFirstRestartFlow(
 ): ReactNode {
   const binding = useHostBinding();
   const directoryQuery = useHostDirectoryList();
-  // Precedence is deliberate, and each source covers the other's blind spot.
-  //
-  // The LIVE entry wins. `HostDirectoryService` assigns it inside the
-  // `onLocalHostChange` callback, so it is correct the instant this machine's
-  // host identity changes. The query behind `useHostDirectoryList` deliberately
-  // RETAINS its previous data across a refetch (so consumers never flash a
-  // loading state), which means it can still be serving the PREVIOUS local id
-  // in that window - and if that id is still resolvable (a registry twin of
-  // this machine), dispatching there would ask one host to stand down while
-  // the force leg kills another. The whole flow rests on those being the same
-  // process.
-  //
-  // The query is not redundant: it keeps presenting this machine as a
-  // `kind: "local"` entry while the host is DOWN, where the live snapshot is
-  // `null`. That is the case a restart most needs to serve, so it is the
-  // fallback rather than the primary.
-  //
-  // `null` from BOTH is SETTLED, not "still loading" - which is what makes
-  // falling back to force legitimate. The ordering that guarantees it:
-  // `IRunnerHost.onLocalHostChange` fires synchronously on subscribe with the
-  // current snapshot (or `null`), `HostDirectoryService` assigns `localEntry`
-  // in that callback while installing the subscription inside `start()`, and
-  // the runtime provider awaits `directory.start()` before publishing the
-  // binding this component renders under. So a real snapshot is in hand by the
-  // first render. If that contract ever turns async, this read silently
-  // becomes "unknown" and the force path turns back into the silent kill this
-  // flow exists to remove - gate it then.
-  const liveLocalHostId = binding?.directory.getLocalEntry()?.hostId ?? null;
-  const directoryLocalHostId =
-    (directoryQuery.data ?? []).find((entry) => entry.kind === "local")
-      ?.hostId ?? null;
-  const localHostId = liveLocalHostId ?? directoryLocalHostId;
+  // `null` from BOTH sources (see `resolveLocalHostId`) is SETTLED, not "still
+  // loading" - which is what makes falling back to force legitimate. The
+  // ordering that guarantees it: `IRunnerHost.onLocalHostChange` fires
+  // synchronously on subscribe with the current snapshot (or `null`),
+  // `HostDirectoryService` assigns `localEntry` in that callback while
+  // installing the subscription inside `start()`, and the runtime provider
+  // awaits `directory.start()` before publishing the binding this component
+  // renders under. So a real snapshot is in hand by the first render. If that
+  // contract ever turns async, this read silently becomes "unknown" and the
+  // force path turns back into the silent kill this flow exists to remove -
+  // gate it then.
+  const localHostId = resolveLocalHostId(
+    binding === null ? null : binding.directory.getLocalEntry(),
+    directoryQuery.data,
+  );
   const client = useHostClientForHostId(localHostId);
   // NO capability gate on this dispatch, deliberately - not even the tri-state
   // one. The negotiated-manifest registry answers from a host's LAST handshake
@@ -262,10 +305,13 @@ function CooperativeFirstRestartFlow(
   const restart = useHostRestart(cooperativeClient);
 
   // Non-null once the cooperative attempt settled anything other than
-  // "accepted"; the message is what the force-offer dialog shows.
-  const [forceOfferMessage, setForceOfferMessage] = useState<string | null>(
-    null,
-  );
+  // "accepted". It carries the host id it describes, because
+  // `requestHostRespawn()` is NOT host-scoped - it respawns whichever local
+  // host this machine has at the moment it is called - so an offer that
+  // outlives a local host identity change would put A's session count above a
+  // button that kills B, whose claim was never asked and whose sessions were
+  // never counted.
+  const [forceOffer, setForceOffer] = useState<ForceOffer | null>(null);
   // A dismissed-mid-flight cooperative attempt settles AFTER close and parks
   // its verdict here, where the NEXT invocation would render it as a stale
   // force offer that skipped confirm. Reset on the closed→requested
@@ -275,16 +321,29 @@ function CooperativeFirstRestartFlow(
   const [prevRequested, setPrevRequested] = useState(props.requested);
   if (prevRequested !== props.requested) {
     setPrevRequested(props.requested);
-    if (props.requested) setForceOfferMessage(null);
+    if (props.requested) setForceOffer(null);
+  }
+  // Same discipline for the other way this offer goes stale: the host it
+  // describes was replaced while it sat open. Drop it and fall back to the
+  // confirm step, which re-asks the NEW host cooperatively instead of
+  // presenting the old one's verdict over a kill.
+  if (isOfferStale(forceOffer, localHostId)) {
+    setForceOffer(null);
   }
   // The claim-adoption contract `host.restart` documents: minted when the
   // action is armed, REUSED for a retry after an ambiguous transport failure
   // (the host may already hold the claim under it), cleared on every
   // definitive answer so a genuinely new action never adopts a stale claim.
-  const armedRestartIdRef = useRef<string | null>(null);
+  //
+  // Keyed by host id, because a claim is granted by ONE host: adopting an id
+  // minted against A when dispatching to B is precisely the cross-transition
+  // correlation the contract forbids. (Kept as a ref rather than reset during
+  // render because writing `ref.current` while rendering is an error under the
+  // React Compiler rules; the dispatch below re-mints on a host mismatch.)
+  const armedRestartIdRef = useRef<ArmedRestartId | null>(null);
 
   const close = (): void => {
-    setForceOfferMessage(null);
+    setForceOffer(null);
     props.onClose();
   };
   const { forceRestart, announceRestartRequested } = useForceHostRespawn(
@@ -299,9 +358,16 @@ function CooperativeFirstRestartFlow(
   const respawnInFlight =
     useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
 
-  const dispatchCooperative = (): void => {
-    const transitionId = armedRestartIdRef.current ?? newTransitionId();
-    armedRestartIdRef.current = transitionId;
+  const dispatchCooperative = (hostId: string): void => {
+    // Adopt the armed id only when it was minted against THIS host; a
+    // different host means a different claim-granting process, so that id is
+    // spent as far as this dispatch is concerned.
+    const armed = armedRestartIdRef.current;
+    const transitionId =
+      armed !== null && armed.hostId === hostId
+        ? armed.transitionId
+        : newTransitionId();
+    armedRestartIdRef.current = { hostId, transitionId };
     restart.mutate(
       { transitionId },
       {
@@ -311,9 +377,10 @@ function CooperativeFirstRestartFlow(
           // confirm is a NEW action and must not adopt this id.
           armedRestartIdRef.current = null;
           if (response.outcome === "busy") {
-            setForceOfferMessage(
-              busyRestartMessage(response.verdict.busySessionCount),
-            );
+            setForceOffer({
+              hostId,
+              message: busyRestartMessage(response.verdict.busySessionCount),
+            });
             return;
           }
           close();
@@ -323,14 +390,14 @@ function CooperativeFirstRestartFlow(
           // Deliberately NOT cleared: a transport failure says nothing about
           // whether the host granted the claim, so the id stays armed for the
           // retry that adopts it.
-          setForceOfferMessage(UNANSWERED_RESTART_MESSAGE);
+          setForceOffer({ hostId, message: UNANSWERED_RESTART_MESSAGE });
         },
       },
     );
   };
 
-  const confirmOpen = props.requested && forceOfferMessage === null;
-  const busyOpen = props.requested && forceOfferMessage !== null;
+  const confirmOpen = props.requested && forceOffer === null;
+  const busyOpen = props.requested && forceOffer !== null;
   return (
     <>
       <RestartHostConfirmDialog
@@ -340,8 +407,8 @@ function CooperativeFirstRestartFlow(
         }}
         isPending={restart.isPending || forceRestart.isPending}
         onConfirm={() => {
-          if (cooperativeClient !== null) {
-            dispatchCooperative();
+          if (cooperativeClient !== null && localHostId !== null) {
+            dispatchCooperative(localHostId);
             return;
           }
           forceRestart.mutate();
@@ -349,10 +416,30 @@ function CooperativeFirstRestartFlow(
       />
       <HostBusyForceDeferDialog
         open={busyOpen}
-        message={forceOfferMessage ?? ""}
+        message={forceOffer?.message ?? ""}
         isForcing={forceRestart.isPending || respawnInFlight}
         forceLabel="Force restart"
-        onForce={() => forceRestart.mutate()}
+        onForce={() => {
+          // Re-read the LIVE local host rather than trusting the rendered
+          // value. A host identity change arrives as a store update, and a
+          // click processed against the previous committed render would
+          // compare stale against stale and sail through; `getLocalEntry()`
+          // is synchronous and current at the instant of the click.
+          const liveEntry =
+            binding === null ? null : binding.directory.getLocalEntry();
+          if (
+            liveEntry !== null &&
+            isOfferStale(forceOffer, liveEntry.hostId)
+          ) {
+            close();
+            toast.info("Host changed", {
+              description:
+                "This machine's host was replaced while this dialog was open, so nothing was stopped. Restart again to check the new host.",
+            });
+            return;
+          }
+          forceRestart.mutate();
+        }}
         onDefer={close}
       />
     </>
