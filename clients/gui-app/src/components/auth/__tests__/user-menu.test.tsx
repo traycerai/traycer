@@ -27,6 +27,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -164,6 +165,26 @@ describe("<UserMenu />", () => {
     const identity = await screen.findByTestId("user-menu-identity");
     expect(identity.textContent).toContain("Ada Lovelace");
     expect(identity.textContent).toContain("ada@example.com");
+    result.cleanupClient();
+  });
+
+  it("shows the current Settings shortcut beside the menu item", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+
+    expect((await screen.findByText("App settings")).textContent).toContain(
+      formatChordForDisplay("mod+,"),
+    );
     result.cleanupClient();
   });
 

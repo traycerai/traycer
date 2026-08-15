@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 const WINDOW_ID = "history-nav-buttons-test-window";
 
@@ -82,6 +83,21 @@ describe("HistoryNavButtons", () => {
     );
     expect(screen.getByRole("button", { name: "Go back" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Go forward" })).toBeTruthy();
+  });
+
+  it("shows the current navigation shortcuts in the arrow tooltips", async () => {
+    renderButtons(
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 1)),
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Go back" }));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      `Go back (${formatChordForDisplay(
+        navigator.platform.toLowerCase().includes("mac")
+          ? "mod+arrowleft"
+          : "alt+arrowleft",
+      )})`,
+    );
   });
 
   it("reflects canGoBack/canGoForward in the disabled state", () => {

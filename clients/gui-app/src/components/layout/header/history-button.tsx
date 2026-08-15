@@ -8,6 +8,8 @@ import {
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
 import { cn } from "@/lib/utils";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 /**
  * Header trigger that opens (or focuses) the History tab. Click =
@@ -20,11 +22,14 @@ export function HistoryButton() {
   const historyOverlayActive = useSystemOverlayActive("history");
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isActive = isHistoryPath(pathname) || historyOverlayActive;
+  const chord = useBindingForAction("app.history.open");
+  const tooltip =
+    chord === null ? "History" : `History (${formatChordForDisplay(chord)})`;
   const onClick = () => {
     openHistory();
   };
   return (
-    <TooltipWrapper label="History" side="top" sideOffset={6} align={undefined}>
+    <TooltipWrapper label={tooltip} side="top" sideOffset={6} align={undefined}>
       <Button
         type="button"
         variant="ghost"
