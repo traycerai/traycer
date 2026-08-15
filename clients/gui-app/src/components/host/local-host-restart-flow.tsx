@@ -12,7 +12,6 @@ import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defe
 import { useHostRestart } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostBinding } from "@/lib/host";
 import {
@@ -61,8 +60,19 @@ const UNANSWERED_RESTART_MESSAGE =
  * cache-derived restart gate (`useIsMutating` on this key) sees a menu/tray
  * initiated respawn too - the menu's old mutation ran under its own key and
  * was invisible to the Settings page-wide lifecycle gate.
+ *
+ * `onRestarted` fires only for a respawn the bridge actually performed. That
+ * ENDS the logical restart action, which the caller's armed `transitionId`
+ * outlives if nothing says so: the id is deliberately kept across an ambiguous
+ * cooperative failure (see `dispatchCooperative`), and forcing after such a
+ * failure is a definitive end - the process it named is gone. A `declined`
+ * result performed nothing, so it deliberately does NOT fire and the id stays
+ * armed for a retry that may still need to adopt the claim.
  */
-function useForceHostRespawn(close: () => void): {
+function useForceHostRespawn(
+  close: () => void,
+  onRestarted: () => void,
+): {
   readonly forceRestart: UseMutationResult<
     HostRestartRequestResult,
     Error,
@@ -107,6 +117,7 @@ function useForceHostRespawn(close: () => void): {
         toastHostRestartDeclined(result.message);
         return;
       }
+      onRestarted();
       announceRestartRequested();
     },
     onError: (err) => {
@@ -134,12 +145,12 @@ function useForceHostRespawn(close: () => void): {
  * bridge respawn of THIS machine's host process, so the cooperative leg must
  * ask the same process the force leg would kill.
  *
- * Split on the host-runtime binding because the listeners that render this
- * flow mount outside every host gate, where no runtime may exist yet - and
- * `useHostClientForHostId` (the one shared "which host does this id resolve
- * to" resolution) requires one. No runtime also means no route to ask a
- * cooperative question over, so the fallback arm IS the correct semantics for
- * that state, not merely a crash guard.
+ * Split on the host-runtime binding because `useHostClientForHostId` - the one
+ * shared "which host does this id resolve to" resolution - THROWS without a
+ * mounted runtime, and a surface whose whole job is a safe restart must not be
+ * the thing that crashes the root. The app renders its router beneath
+ * `HostRuntimeProvider`, which shows a fallback rather than children until the
+ * binding publishes, so the bound arm is the one production takes.
  */
 export function LocalHostRestartFlow(
   props: LocalHostRestartFlowProps,
@@ -162,7 +173,9 @@ export function LocalHostRestartFlow(
  * a surface that force-restarts must not be the thing that crashes the root.
  */
 function ForceOnlyRestartFlow(props: LocalHostRestartFlowProps): ReactNode {
-  const { forceRestart } = useForceHostRespawn(props.onClose);
+  // No armed transition id on this arm - it never mints one, because it never
+  // reaches the cooperative RPC that a transition id identifies.
+  const { forceRestart } = useForceHostRespawn(props.onClose, () => undefined);
   return (
     <RestartHostConfirmDialog
       open={props.requested}
@@ -177,11 +190,10 @@ function ForceOnlyRestartFlow(props: LocalHostRestartFlowProps): ReactNode {
 
 /**
  * Fallback semantics (deliberate): confirm dispatches the bridge respawn
- * directly only where there is POSITIVELY no cooperative route - no local
- * directory entry resolves (no id, so no client to dial with), or the host's
- * last completed handshake proves it does not advertise `host.restart` (a
- * host too old for the cooperative RPC). "Not negotiated yet" is deliberately
- * NOT one of those cases; see `cooperativeSupport` below.
+ * directly only where there is no cooperative route to attempt at all - no
+ * local host id resolves, so there is no client to dial. A host that merely
+ * looks unsupported is still asked; what a cached manifest claims about it is
+ * never allowed to authorize the kill (see `cooperativeClient` below).
  *
  * No renderer-side gate against in-flight update/activate mutations, on
  * purpose: the host's claim machinery already refuses a restart whose
@@ -195,48 +207,58 @@ function CooperativeFirstRestartFlow(
 ): ReactNode {
   const binding = useHostBinding();
   const directoryQuery = useHostDirectoryList();
-  // Same durable read `use-host-options` documents: the directory keeps
-  // presenting this machine's id as a `kind: "local"` entry while the host is
-  // down; `getLocalEntry()` is only the faster path to the same id.
+  // Precedence is deliberate, and each source covers the other's blind spot.
   //
-  // `null` here is SETTLED, not "still loading" - which is what makes forcing
-  // on it legitimate, unlike the capability read below. The ordering that
-  // guarantees it: `IRunnerHost.onLocalHostChange` fires synchronously on
-  // subscribe with the current snapshot (or `null`), `HostDirectoryService`
-  // assigns `localEntry` in that callback while installing the subscription
-  // inside `start()`, and the runtime provider awaits `directory.start()`
-  // before it publishes the binding this component renders under. So a real
-  // snapshot has already been answered by our first render, and an unresolved
-  // query is not a window we can observe. If that contract ever turns async,
-  // this read silently becomes "unknown" and the force path below turns back
-  // into the silent kill this flow exists to remove - gate it then.
-  const localDirectoryEntry = (directoryQuery.data ?? []).find(
-    (entry) => entry.kind === "local",
-  );
-  const localHostId =
-    localDirectoryEntry?.hostId ??
-    binding?.directory.getLocalEntry()?.hostId ??
-    null;
+  // The LIVE entry wins. `HostDirectoryService` assigns it inside the
+  // `onLocalHostChange` callback, so it is correct the instant this machine's
+  // host identity changes. The query behind `useHostDirectoryList` deliberately
+  // RETAINS its previous data across a refetch (so consumers never flash a
+  // loading state), which means it can still be serving the PREVIOUS local id
+  // in that window - and if that id is still resolvable (a registry twin of
+  // this machine), dispatching there would ask one host to stand down while
+  // the force leg kills another. The whole flow rests on those being the same
+  // process.
+  //
+  // The query is not redundant: it keeps presenting this machine as a
+  // `kind: "local"` entry while the host is DOWN, where the live snapshot is
+  // `null`. That is the case a restart most needs to serve, so it is the
+  // fallback rather than the primary.
+  //
+  // `null` from BOTH is SETTLED, not "still loading" - which is what makes
+  // falling back to force legitimate. The ordering that guarantees it:
+  // `IRunnerHost.onLocalHostChange` fires synchronously on subscribe with the
+  // current snapshot (or `null`), `HostDirectoryService` assigns `localEntry`
+  // in that callback while installing the subscription inside `start()`, and
+  // the runtime provider awaits `directory.start()` before publishing the
+  // binding this component renders under. So a real snapshot is in hand by the
+  // first render. If that contract ever turns async, this read silently
+  // becomes "unknown" and the force path turns back into the silent kill this
+  // flow exists to remove - gate it then.
+  const liveLocalHostId = binding?.directory.getLocalEntry()?.hostId ?? null;
+  const directoryLocalHostId =
+    (directoryQuery.data ?? []).find((entry) => entry.kind === "local")
+      ?.hostId ?? null;
+  const localHostId = liveLocalHostId ?? directoryLocalHostId;
   const client = useHostClientForHostId(localHostId);
-  // The TRI-STATE read, deliberately not the `useHostSupportsMethod` boolean:
-  // that form collapses "no handshake with this host has completed yet" into
-  // "does not have it". Fail-closed is right for HIDING an affordance and
-  // wrong here - this decision force-kills live sessions, so reading unknown
-  // as absent acts on a fact not yet in evidence. The window is real: the
-  // manifest registry fills in from the first completed RPC to that host, so a
-  // restart taken right after the runtime binds can land inside it.
+  // NO capability gate on this dispatch, deliberately - not even the tri-state
+  // one. The negotiated-manifest registry answers from a host's LAST handshake
+  // and is refreshed by traffic alone: it never evicts, so a `false` recorded
+  // against an old host survives that host being upgraded in place until some
+  // unrelated RPC happens to refresh it, and `null` only ever meant "nobody has
+  // asked yet". Neither is current evidence about the process we are about to
+  // kill, and the registry's own docs warn against parking a decision on a
+  // recorded absence.
   //
-  // Unknown therefore ATTEMPTS the cooperative call, because the RPC's own
-  // dial and `openAck` IS the negotiation this would otherwise be waiting on:
-  // a host that has the method answers normally, and one that does not rejects
-  // into the force offer below. Every branch ends in an answer or an explicit
-  // choice; none of them ends in a silent kill.
-  const cooperativeSupport = useHostMethodSupport(localHostId, "host.restart");
+  // The cooperative RPC is its own probe: dialing performs the handshake, so
+  // attempting it is both the question and the answer. A host that has
+  // `host.restart` runs it; one that genuinely lacks it rejects into the force
+  // offer below. That costs a too-old host one round trip and one extra click,
+  // and buys the guarantee that nothing is ever killed on a cached verdict.
+  //
   // `useHostClientForHostId(null)` follows the app-wide default host, which
   // is exactly the client this flow must never dispatch against - hence the
   // id-null guard rides with the client, not just with the dispatch.
-  const cooperativeClient =
-    localHostId !== null && cooperativeSupport !== false ? client : null;
+  const cooperativeClient = localHostId !== null ? client : null;
   const restart = useHostRestart(cooperativeClient);
 
   // Non-null once the cooperative attempt settled anything other than
@@ -265,7 +287,12 @@ function CooperativeFirstRestartFlow(
     setForceOfferMessage(null);
     props.onClose();
   };
-  const { forceRestart, announceRestartRequested } = useForceHostRespawn(close);
+  const { forceRestart, announceRestartRequested } = useForceHostRespawn(
+    close,
+    () => {
+      armedRestartIdRef.current = null;
+    },
+  );
   // Cache-derived rather than observer-derived: menu, tray and Settings all
   // submit respawns under this key, and each surface's own observer only sees
   // its own dispatches.
