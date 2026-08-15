@@ -208,7 +208,7 @@ describe("<EpicConnectionPill />", () => {
     };
     renderPill("synced");
 
-    const pill = screen.getByTestId("epic-connection-pill");
+    const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.textContent).toBe("");
     expect(pill.getAttribute("aria-label")).toBe("Backing up chats");
     await expectTooltip("Backing up chats");
@@ -222,7 +222,7 @@ describe("<EpicConnectionPill />", () => {
     };
     renderPill("syncing");
 
-    const pill = screen.getByTestId("epic-connection-pill");
+    const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.dataset.source).toBe("chat-backup");
     expect(pill.textContent).toBe("");
     expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
@@ -242,7 +242,7 @@ describe("<EpicConnectionPill />", () => {
     };
     renderPill("offline");
 
-    const pill = screen.getByTestId("epic-connection-pill");
+    const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.dataset.source).toBe("artifact");
     expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
       "bg-red-500",
@@ -258,7 +258,7 @@ describe("<EpicConnectionPill />", () => {
     };
     renderPill("connecting");
 
-    const pill = screen.getByTestId("epic-connection-pill");
+    const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.dataset.source).toBe("artifact");
     expect(pill.textContent).toContain("Connecting…");
     await expectTooltip("Connecting to server");
