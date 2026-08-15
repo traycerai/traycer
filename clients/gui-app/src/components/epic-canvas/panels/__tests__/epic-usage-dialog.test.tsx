@@ -437,6 +437,17 @@ describe("<EpicUsageDialog />", () => {
     expect(screen.getByTestId("usage-window-7")).toBeTruthy();
     expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
 
+    // Every block must override the primitive's `bg-muted`: preset themes
+    // define `--muted` identical to `--popover` (the dialog surface), which
+    // made the whole skeleton render invisibly. A foreground-alpha fill is
+    // the surface-independent guarantee.
+    const blocks = status.querySelectorAll('[data-slot="skeleton"]');
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block.className).toContain("bg-foreground/10");
+      expect(block.className).not.toContain("bg-muted");
+    }
+
     await screen.findByTestId("usage-cost-figure");
     expect(screen.queryByTestId("usage-dialog-skeleton")).toBeNull();
   });
