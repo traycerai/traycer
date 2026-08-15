@@ -1,24 +1,21 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   BusyContinuation,
-  HostRestartRequestResult,
   HostTrayCommand,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
-import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import { runnerQueryKeys } from "@/lib/query-keys";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { activateTabIntent } from "@/lib/tab-navigation";
-import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
@@ -41,9 +38,10 @@ interface TrayBusyState {
  * NP-6: listens for host-scoped tray commands forwarded from the
  * Electron main process and dispatches them against the renderer:
  *   - openSettingsHost → navigate to /settings/host.
- *   - restartHost      → confirm with the user, then invoke
- *                          hostManagement.restartHost() and surface
- *                          success/error via toast.
+ *   - restartHost      → hand off to `LocalHostRestartFlow`: confirm, then
+ *                          attempt the claim-gated cooperative restart, and
+ *                          only offer the forced bridge respawn when the
+ *                          host refuses (busy) or cannot answer.
  *   - openLogs           → navigate to /settings/host (logs surface lives
  *                          inside the host panel) and open the legacy logs
  *                          dialog as a redundant entry point.
@@ -155,37 +153,6 @@ export function HostTrayCommandListener() {
     );
   };
 
-  const restartMutation = useMutation<HostRestartRequestResult>({
-    mutationKey: runnerMutationKeys.hostRestart(),
-    mutationFn: () => {
-      if (management === null) {
-        return Promise.reject(new Error("Host management unavailable"));
-      }
-      return management.restartHost();
-    },
-    onSuccess: (result) => {
-      setPendingRestart(false);
-      // `declined` resolves (rather than rejecting) because it is not an
-      // error - the host deliberately was not restarted and a later retry
-      // succeeds on its own; see `toastHostRestartDeclined`.
-      if (result.kind === "declined") {
-        toastHostRestartDeclined(result.message);
-        return;
-      }
-      toast.success("Host restart requested");
-      if (management !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostInstalledRecord(management),
-        });
-      }
-      invalidate();
-    },
-    onError: (err) => {
-      setPendingRestart(false);
-      toastFromRunnerError(err, "Couldn't restart host");
-    },
-  });
-
   useEffect(() => {
     const tray = runnerHost.hostTray;
     if (tray === null) {
@@ -212,8 +179,9 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "restart_host",
           });
-          // Destructive: restart kills PTYs and in-flight RPC sessions.
-          // Surface the confirmation modal before executing.
+          // Potentially destructive: hand off to the shared restart flow,
+          // which confirms, tries the cooperative claim-gated restart, and
+          // reserves the forced respawn for an explicit choice.
           setPendingRestart(true);
           return;
         case "openLogs":
@@ -253,13 +221,9 @@ export function HostTrayCommandListener() {
 
   return (
     <>
-      <RestartHostConfirmDialog
-        open={pendingRestart}
-        onOpenChange={(open) => {
-          if (!open) setPendingRestart(false);
-        }}
-        isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
+      <LocalHostRestartFlow
+        requested={pendingRestart}
+        onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog
         open={pendingInstallVersion !== null}
