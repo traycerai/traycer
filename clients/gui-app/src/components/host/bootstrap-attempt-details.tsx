@@ -35,6 +35,7 @@ export function BootstrapAttemptDetails(
   return (
     <div
       data-testid="local-host-bootstrap-details"
+      // muted-fill-ok: delimited by its own border border-border
       className="flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-left text-ui-xs text-muted-foreground"
     >
       {shell !== null ? (

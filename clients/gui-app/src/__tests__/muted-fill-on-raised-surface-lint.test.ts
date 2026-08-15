@@ -128,25 +128,67 @@ function withoutComments(source: string): string {
     .join("\n");
 }
 
+/** Resolves `@/x` and `./x` to an absolute path; null for a package. */
+function localSpecifierBase(specifier: string, from: string): string | null {
+  if (specifier.startsWith("@/")) return path.join(SRC_DIR, specifier.slice(2));
+  if (specifier.startsWith(".")) {
+    return path.resolve(path.dirname(from), specifier);
+  }
+  return null;
+}
+
+function isFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Files that paint a raised surface in their OWN markup.
+ * Local `.tsx` modules a file imports, as absolute paths.
  *
- * Known limit: a reusable leaf never spells `bg-popover` - its surface is
- * whatever its caller mounted it on - so this scan cannot see a collapse in
- * a composed child. Carrying the context one hop along the import graph was
- * measured against this tree and flags 23 further load-bearing fills, each
- * needing its own surface trace (many resolve to `bg-canvas` via a raised
- * parent that mounts the child somewhere else entirely). That is an audit,
- * not a lint tightening, so it is deliberately not bundled here - see the
- * muted-on-popover audit artifact. The four composed-child collapses found
- * while measuring it ARE fixed in this changeset.
+ * Carries raised-surface context ONE hop into composed children: a reusable
+ * leaf never spells `bg-popover` - its surface is whatever the caller
+ * mounted it on - so a purely file-local scan calls it safe. Both of the
+ * worst collapses in this changeset had that shape (the epic usage dialog's
+ * share track, the agent stop list inside a `PopoverContent`).
+ */
+function importedLocalFiles(source: string, from: string): readonly string[] {
+  const specifiers = [...source.matchAll(/from\s+"([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  return specifiers.flatMap((specifier) => {
+    const base = localSpecifierBase(specifier, from);
+    if (base === null) return [];
+    return [`${base}.tsx`, path.join(base, "index.tsx")].filter(isFile);
+  });
+}
+
+/**
+ * Files that paint a raised surface, plus the children they mount there.
+ *
+ * ONE hop, not the transitive closure: nearly every component is eventually
+ * reachable from some dialog, so a full closure would mark the whole tree
+ * raised and say nothing. The cost of that cut is real - the model picker's
+ * capacity pill sits TWO hops from its `PopoverContent`
+ * (`picker-panel` -> `picker-group` -> `picker-item`) and is invisible here,
+ * so it was found and fixed by hand. A fill inside a component this scan
+ * never reaches still needs the AGENTS.md rule applied by a human.
  */
 function raisedSurfaceFiles(files: readonly string[]): ReadonlySet<string> {
-  return new Set(
-    files.filter((file) =>
-      RAISED_SURFACE.test(withoutComments(readFileSync(file, "utf8"))),
+  const sources = new Map(files.map((f) => [f, readFileSync(f, "utf8")]));
+  const raised = new Set(
+    files.filter((f) =>
+      RAISED_SURFACE.test(withoutComments(sources.get(f) ?? "")),
     ),
   );
+  for (const file of [...raised]) {
+    for (const dep of importedLocalFiles(sources.get(file) ?? "", file)) {
+      raised.add(dep);
+    }
+  }
+  return raised;
 }
 
 type Offence = { readonly location: string; readonly line: string };
