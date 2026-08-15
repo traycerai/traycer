@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type {
@@ -73,6 +73,8 @@ export interface WorktreeDeleteRunRecord {
 }
 
 export interface WorktreeDeleteProgressSummary {
+  /** Stable identities of the deletion actions included in this summary. */
+  readonly scopeKeys: readonly string[];
   readonly total: number;
   readonly deleted: number;
   readonly failed: number;
@@ -816,14 +818,13 @@ function reportTerminalDeleteOutcome(
 }
 
 export function useWorktreeDeleteProgressSummary(): WorktreeDeleteProgressSummary {
-  // `summarizeProgress` builds a fresh object each call, so compare the result
-  // shallowly: without this the selector returns a new reference every render,
-  // which makes `useSyncExternalStore` re-render in an infinite loop.
-  return useWorktreeDeleteRunStore(
-    useShallow((state) =>
-      summarizeProgress(state.runs.filter((record) => record.backgrounded)),
-    ),
+  // Select the records before summarizing so the nested `scopeKeys` array is
+  // stable while the underlying records are unchanged. Returning a freshly
+  // allocated nested array from the store selector would defeat `useShallow`.
+  const backgroundedRuns = useWorktreeDeleteRunStore(
+    useShallow((state) => state.runs.filter((record) => record.backgrounded)),
   );
+  return useMemo(() => summarizeProgress(backgroundedRuns), [backgroundedRuns]);
 }
 
 export function summarizeWorktreeDeleteRuns(
@@ -1006,6 +1007,9 @@ function summarizeProgress(
   runs: readonly WorktreeDeleteRunRecord[],
 ): WorktreeDeleteProgressSummary {
   const scopedRuns = activeProgressScope(runs);
+  const scopeKeys = [
+    ...new Set(scopedRuns.map((record) => progressGroupKey(record))),
+  ];
   const total = scopedRuns.length;
   const deleted = scopedRuns.filter(
     (record) => record.run.status === "complete" && record.run.deleted,
@@ -1016,6 +1020,7 @@ function summarizeProgress(
       (record.run.status === "complete" && !record.run.deleted),
   ).length;
   return {
+    scopeKeys,
     total,
     deleted,
     failed,
@@ -1046,7 +1051,7 @@ function progressGroups(
 ): ReadonlyArray<ReadonlyArray<WorktreeDeleteRunRecord>> {
   const groups = new Map<string, WorktreeDeleteRunRecord[]>();
   runs.forEach((record) => {
-    const key = record.batchKey ?? record.key;
+    const key = progressGroupKey(record);
     const existing = groups.get(key);
     if (existing === undefined) {
       groups.set(key, [record]);
@@ -1055,6 +1060,10 @@ function progressGroups(
     existing.push(record);
   });
   return [...groups.values()];
+}
+
+function progressGroupKey(record: WorktreeDeleteRunRecord): string {
+  return record.batchKey ?? record.key;
 }
 
 function flushSettledCallbacksIfIdle(): void {
