@@ -196,6 +196,68 @@ describe("cold read", () => {
 
     await expect(result).rejects.toThrow("synchronous queued failure");
   });
+
+  it("stops dialling queued parts once the read has already failed", async () => {
+    const published = await publishCloudChat({
+      ...DEFAULT_PUBLISH,
+      cohorts: Array.from(
+        { length: CLOUD_CHAT_PART_FETCH_CONCURRENCY + 8 },
+        (_, index) => [userMessage(`m-${index}`)],
+      ),
+    });
+    const serving = servingBehaviour(published);
+    const failingDigest = published.parts[0]?.address.sha256 ?? "";
+    let releaseSaturated: () => void = () => undefined;
+    const saturated = new Promise<void>((resolve) => {
+      releaseSaturated = resolve;
+    });
+    const releases: Array<() => void> = [];
+    let failFirstPart: (reason: Error) => void = () => undefined;
+    let dialled = 0;
+
+    const port: CloudChatReadPort = {
+      resolveHead: () => Promise.resolve(serving.resolve()),
+      readPart: (request) => {
+        dialled += 1;
+        if (request.sha256 === failingDigest) {
+          return new Promise((_resolve, reject) => {
+            failFirstPart = reject;
+          });
+        }
+        return new Promise((resolve) => {
+          releases.push(() => resolve(serving.part(request.sha256)));
+          if (releases.length === CLOUD_CHAT_PART_FETCH_CONCURRENCY - 1) {
+            releaseSaturated();
+          }
+        });
+      },
+    };
+
+    const result = readCloudChat({
+      identity: IDENTITY,
+      port,
+      cache: new InMemoryChatPartCache(),
+      sha256Hex: webCryptoSha256Hex,
+    });
+
+    // Saturate the gate, so the remaining parts are genuinely QUEUED behind it
+    // rather than already dialled, then fail the read.
+    await saturated;
+    failFirstPart(new Error("part transport failure"));
+    await expect(result).rejects.toThrow("part transport failure");
+
+    // Draining the in-flight wave is what would otherwise pull each queued part
+    // in behind it - one `startNext` per completion.
+    for (const release of releases) release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A rejected fetch abandons the queue directly, so the failing wave is all
+    // that is ever dialled. The tolerance covers the other failure shape - a
+    // part that RESOLVES and is then rejected by verification - where the read
+    // dies a few microtask hops later and one queued part can slip in first.
+    expect(dialled).toBeLessThanOrEqual(CLOUD_CHAT_PART_FETCH_CONCURRENCY + 1);
+    expect(dialled).toBeLessThan(published.parts.length);
+  });
 });
 
 describe("the incremental read", () => {

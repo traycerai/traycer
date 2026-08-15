@@ -282,11 +282,17 @@ export async function readCloudChat(
     head: decoded.record,
     readerSupports: CHAT_SYNC_READER_VERSION,
     fetch: (request) => stagePart(request, options, partFetchGate),
-  }).catch((error: unknown) => {
-    if (error instanceof PartUnavailableError) return error;
-    if (error instanceof PartOversizedError) return error;
-    throw error;
-  });
+  })
+    .catch((error: unknown) => {
+      if (error instanceof PartUnavailableError) return error;
+      if (error instanceof PartOversizedError) return error;
+      throw error;
+    })
+    // The read is over either way, so nothing queued behind the ceiling is
+    // still wanted. On the failure path this is what stops a dead read from
+    // spending the rest of the chat's egress; on the success path every part
+    // has already run, so it is a no-op.
+    .finally(() => partFetchGate.abandonQueued());
 
   if (assembly instanceof PartOversizedError) {
     return {
@@ -515,29 +521,83 @@ function corruptRead(
   };
 }
 
-type QueuedWork = () => void;
+type QueuedWork = {
+  readonly start: () => void;
+  readonly drop: (reason: Error) => void;
+};
+
+/** Raised for queued parts a settled read no longer needs. */
+class PartFetchAbandonedError extends Error {
+  constructor() {
+    super("cloud-chat-reader: part fetch abandoned after the read settled");
+    this.name = "PartFetchAbandonedError";
+  }
+}
 
 /** Small per-read semaphore; completion order remains assembly's concern. */
 class ConcurrencyGate {
   private active = 0;
   private readonly queued: QueuedWork[] = [];
+  private abandoned: Error | null = null;
 
   constructor(private readonly ceiling: number) {}
 
   run<T>(work: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
+      if (this.abandoned !== null) {
+        reject(this.abandoned);
+        return;
+      }
       const start = (): void => {
         this.active += 1;
         Promise.resolve()
           .then(work)
-          .then(resolve, reject)
+          .then(resolve, (error: unknown) => {
+            // This gate serves exactly one `assembleChat`, and that fails the
+            // whole read on the first bad part - so a rejected fetch means
+            // nothing still queued can be wanted. Abandoning here rather than
+            // waiting for the outer `finally` matters because this callback
+            // runs several microtask hops earlier: otherwise the completing
+            // request's own dequeue admits one more part on the way out.
+            // Reject BEFORE abandoning: `assembleChat` reports whichever part
+            // promise settles first, and the caller must see the real transport
+            // failure rather than this gate's synthetic abandonment reason.
+            reject(error);
+            this.abandonQueued();
+          })
           .finally(() => {
             this.active -= 1;
-            this.queued.shift()?.();
+            this.startNext();
           });
       };
       if (this.active < this.ceiling) start();
-      else this.queued.push(start);
+      else this.queued.push({ start, drop: reject });
     });
+  }
+
+  /**
+   * Stop admitting queued parts, because the read they belong to has already
+   * settled.
+   *
+   * `assembleChat` fails the whole read on the FIRST bad part, so without this
+   * every queued part would still be dialled afterwards: a 400-part chat that
+   * fails on part 3 would go on to fetch the other ~388 for a transcript no
+   * caller can still receive. Worse, the GUI retries a failed read twice
+   * (`use-cloud-chat-queries.ts`), and each attempt builds its own gate - so
+   * abandoned gates draining alongside live ones put far more than `ceiling`
+   * requests in flight, defeating the bound this class exists to impose.
+   *
+   * Requests already started are left alone: cancelling them buys nothing (the
+   * bytes are in flight) and their results still populate any caller cache.
+   */
+  abandonQueued(): void {
+    if (this.abandoned !== null) return;
+    this.abandoned = new PartFetchAbandonedError();
+    for (const entry of this.queued.splice(0)) entry.drop(this.abandoned);
+  }
+
+  private startNext(): void {
+    if (this.abandoned !== null) return;
+    this.queued.shift()?.start();
   }
 }
