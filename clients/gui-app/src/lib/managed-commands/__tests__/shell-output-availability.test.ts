@@ -144,7 +144,11 @@ describe("shellOutputStreamAvailability", () => {
 
 describe("shellOutputHostAvailability", () => {
   function reachability(over: Partial<HostReachability>): HostReachability {
-    return { status: "reachable", hostLabel: "Work laptop", ...over };
+    return {
+      status: over.status ?? "reachable",
+      hostLabel: over.hostLabel ?? "Work laptop",
+      unavailability: over.unavailability ?? null,
+    };
   }
 
   it("maps each directory status to its own bootstrapping phase or unreachable-host", () => {

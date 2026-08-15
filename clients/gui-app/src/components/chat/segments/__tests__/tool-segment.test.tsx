@@ -329,6 +329,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           responseId: null,
           expectReply: false,
         }}
+        managedCommand={null}
         isStreaming={false}
         endState={null}
         stopped={false}
