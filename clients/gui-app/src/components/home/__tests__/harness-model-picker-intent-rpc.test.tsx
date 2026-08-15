@@ -430,6 +430,19 @@ async function openPickerByTriggerName(
   await screen.findByRole("textbox", { name: /^Search/ });
 }
 
+/**
+ * Waits for `label` to appear among the MODEL ROWS. Scoped to the row list
+ * because the trigger shows the same text after a commit - and re-queried on
+ * every retry because a cold browse renders the "Loading models" state row
+ * (no scroller) until the browsed provider's real fetch lands, then remounts
+ * the Virtuoso list under a fresh node.
+ */
+async function findModelRow(label: string): Promise<void> {
+  await waitFor(() => {
+    within(screen.getByTestId("virtuoso-scroller")).getByText(label);
+  });
+}
+
 async function closePickerByTriggerName(
   triggerName: string | RegExp,
 ): Promise<void> {
@@ -518,7 +531,58 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
   });
 
-  it("refetches ONLY the selected harness when the picker opens after the refresh window, never the whole catalog", async () => {
+  it("first open on a cold host fetches ONLY the selected harness's models - never the whole rail", async () => {
+    const fixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+      harnessEntry("claude", true),
+      harnessEntry("opencode", true),
+    ]);
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+
+    await openPickerByTriggerName(/^codex Model 1/);
+    // The open edge prewarms the selected harness's commands - wait for that
+    // real RPC so the open has fully settled before asserting an absence.
+    await waitFor(() => {
+      expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
+    });
+
+    // The cold-host regression this suite now holds: the picker's catalog
+    // read is `"cached-only"`, so opening it on a host whose model slots are
+    // all empty (this fixture's fresh client stands in for a remote host no
+    // prefetcher ever filled) issues zero rail-wide listModels - previously
+    // one spawned provider server per available entry - and exactly one for
+    // the harness the user is actually on.
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(0);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+  });
+
+  it("browsing a rail entry fetches exactly that provider's models, exactly once - the rest of the rail stays cold", async () => {
+    const fixture = createPickerRpcFixture([
+      harnessEntry("codex", true),
+      harnessEntry("claude", true),
+      harnessEntry("opencode", true),
+    ]);
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+
+    // Exactly once: browsing an available entry commits the selection in the
+    // same commit that enables its first fetch, so the browsed-provider and
+    // selected-harness queries land on ONE cold slot and dedupe into one
+    // fetch. (The selection intent edge also races this slot; its in-flight
+    // guard is covered as a unit in `use-gui-harness-catalog.test.tsx` - this
+    // mock transport honors the abort before its handler runs, so a canceled
+    // re-issue would not be countable here.)
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+  });
+
+  it("refetches ONLY the selected harness when the picker opens after the refresh window, never the rest of the rail", async () => {
     const fixture = createPickerRpcFixture([
       harnessEntry("codex", true),
       harnessEntry("claude", true),
@@ -527,14 +591,12 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText("codex Model 1");
 
     await openPickerByTriggerName(/^codex Model 1/);
-    // The batched fan-out fills every AVAILABLE harness the first time the
-    // picker opens - claude has no cached entry yet, and TanStack's no-data
-    // path ignores `staleTime`. Wait for that real RPC before snapshotting: the
-    // rows only render for whichever provider is browsed (still codex), so it
-    // isn't observable in the DOM.
-    await waitFor(() => {
-      expect(countFor(fixture.calls.listModels, "claude")).toBeGreaterThan(0);
-    });
+    // Warm claude the way anything warms on a cold host now: by browsing it.
+    // Then return the committed selection to codex before closing.
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+    fireEvent.click(screen.getByRole("tab", { name: "codex" }));
+    await findModelRow("codex Model 1");
     await closePickerByTriggerName(/^codex Model 1/);
     const codexBeforeReopen = countFor(fixture.calls.listModels, "codex");
     const claudeBeforeReopen = countFor(fixture.calls.listModels, "claude");
@@ -542,23 +604,20 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     ageCachePastRefreshWindow();
     await openPickerByTriggerName(/^codex Model 1/);
 
-    // The aged catalog re-pulls exactly the harness the user is on...
+    // The aged open re-pulls exactly the harness the user is on...
     await waitFor(() => {
       expect(countFor(fixture.calls.listModels, "codex")).toBe(
         codexBeforeReopen + 1,
       );
     });
-    // ...and NOT the ones they aren't. This is the regression the suite exists
-    // for: with a finite `staleTime` on the batched fan-out, re-mounting it on
-    // an aged cache re-pulled the ENTIRE rail on this edge - every provider,
-    // including OpenCode-backed ones the user never touched, each respawning a
-    // reaped server.
+    // ...and NOT the warm-but-aged one they aren't: no fan-out exists to
+    // re-pull the rail, and the open edge refreshes only the selection.
     expect(countFor(fixture.calls.listModels, "claude")).toBe(
       claudeBeforeReopen,
     );
   });
 
-  it("prewarms the newly selected harness's commands on a rail selection change, without refetching its warm models", async () => {
+  it("prewarms the newly selected harness's commands on a rail selection change, without re-pulling the models that switch just fetched", async () => {
     const fixture = createPickerRpcFixture([
       harnessEntry("codex", true),
       harnessEntry("claude", true),
@@ -567,27 +626,20 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText("codex Model 1");
 
     await openPickerByTriggerName(/^codex Model 1/);
-    await waitFor(() => {
-      expect(countFor(fixture.calls.listModels, "claude")).toBeGreaterThan(0);
-    });
-    const claudeModelsAfterOpen = countFor(fixture.calls.listModels, "claude");
 
     fireEvent.click(screen.getByRole("tab", { name: "claude" }));
     // "claude Model 1" now matches both the trigger's updated label AND the
     // browsed row - scope to the row list to disambiguate.
-    await within(screen.getByTestId("virtuoso-scroller")).findByText(
-      "claude Model 1",
-    );
+    await findModelRow("claude Model 1");
 
     // Commands have never loaded for claude, so selecting it warms its server.
     await waitFor(() => {
       expect(countFor(fixture.calls.listCommands, "claude")).toBe(1);
     });
-    // Its models were fetched by the fan-out moments ago, so the selection edge
-    // leaves them on cache rather than re-pulling them.
-    expect(countFor(fixture.calls.listModels, "claude")).toBe(
-      claudeModelsAfterOpen,
-    );
+    // ONE models fetch for the whole browse+commit: the browsed-provider and
+    // selected-harness queries share the cache slot, and the intent edge
+    // joins the fetch in flight rather than re-issuing it.
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
   });
 
   it("refetches only the newly selected harness's models on a rail selection change after the refresh window, and never the harness it left", async () => {
@@ -599,17 +651,19 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText("codex Model 1");
 
     await openPickerByTriggerName(/^codex Model 1/);
-    await waitFor(() => {
-      expect(countFor(fixture.calls.listModels, "claude")).toBeGreaterThan(0);
-    });
+    // Warm claude by browsing it, then return to codex, so the aged switch
+    // below is a real selection CHANGE landing on warm-but-aged data.
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+    fireEvent.click(screen.getByRole("tab", { name: "codex" }));
+    await findModelRow("codex Model 1");
+
     ageCachePastRefreshWindow();
     const codexModelsAged = countFor(fixture.calls.listModels, "codex");
     const claudeModelsAged = countFor(fixture.calls.listModels, "claude");
 
     fireEvent.click(screen.getByRole("tab", { name: "claude" }));
-    await within(screen.getByTestId("virtuoso-scroller")).findByText(
-      "claude Model 1",
-    );
+    await findModelRow("claude Model 1");
 
     await waitFor(() => {
       expect(countFor(fixture.calls.listModels, "claude")).toBe(

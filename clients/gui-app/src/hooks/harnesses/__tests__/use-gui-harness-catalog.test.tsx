@@ -26,6 +26,8 @@ import {
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import {
+  HARNESS_CATALOG_REFRESH_AFTER_MS,
+  harnessCatalogEntryNeedsRefresh,
   useGuiHarnessCatalog,
   useGuiHarnessCatalogForClient,
   useGuiHarnessCommandsQuery,
@@ -33,6 +35,7 @@ import {
   useGuiHarnessesQueryForClient,
   useGuiHarnessModelsQuery,
   useGuiHarnessModelsQueryForClient,
+  useGuiHarnessModelsWarmup,
   useRefreshHarnessCatalog,
   useRefreshHarnessCatalogForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -538,7 +541,12 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     });
 
     renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
       { wrapper: fixture.Wrapper },
     );
 
@@ -561,7 +569,12 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     });
 
     const hook = renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -604,7 +617,12 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     });
 
     renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
       { wrapper: fixture.Wrapper },
     );
 
@@ -645,7 +663,12 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
 
     // The prefetch/owner warms the host-keyed cache once.
     const owner = renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -658,7 +681,12 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     // A VISIBLE-but-not-owning reader (enabled:false) reads the same cache with
     // no live publisher and issues zero requests, yet gets friendly labels.
     const reader = renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: false, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: false,
+          subscribed: true,
+          modelsFetch: "cached-only",
+        }),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -678,7 +706,12 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
       "agent.gui.listModels": () => modelsResponse(2),
     });
     const owner = renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -687,7 +720,12 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     owner.unmount();
 
     const hidden = renderHook(
-      () => useGuiHarnessCatalog(null, { enabled: false, subscribed: false }),
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: false,
+          subscribed: false,
+          modelsFetch: "cached-only",
+        }),
       { wrapper: fixture.Wrapper },
     );
     await act(async () => {
@@ -905,6 +943,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
         useGuiHarnessCatalogForClient(null, null, {
           enabled: true,
           subscribed: true,
+          modelsFetch: "all-harnesses",
         }),
       { wrapper: Wrapper },
     );
@@ -922,5 +961,299 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
     expect(result.current.modelsLoading).toBe(false);
     expect(result.current.harnessesError).toBeNull();
     expect(defaultHostCalls).toEqual({ harnesses: 0, models: 0, commands: 0 });
+  });
+});
+
+// The intent-edge freshness predicate, as a unit: the in-flight arm cannot be
+// proven through a mocked transport (it honors the abort before its handler
+// runs, so the canceled first request of a cancel-and-re-issue never shows in
+// an RPC count), but on a real host both requests arrive - the picker's
+// intent-rpc suite counts the OTHER arms and leans on this one directly.
+describe("harnessCatalogEntryNeedsRefresh", () => {
+  it("never reports an in-flight entry as due - refetch() defaults to cancelRefetch, so 'due' would cancel and re-issue the request underway", () => {
+    // The cold browse-commit race: the enabled-transition fetch has already
+    // dispatched (dataUpdatedAt still 0) when the selection intent edge asks.
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: 0,
+        isError: false,
+        isFetching: true,
+      }),
+    ).toBe(false);
+    // Same while an errored entry's recovery refetch is already underway.
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: 1,
+        isError: true,
+        isFetching: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the due arms: never-loaded, errored and aged entries refresh; a fresh one does not", () => {
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: 0,
+        isError: false,
+        isFetching: false,
+      }),
+    ).toBe(true);
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: Date.now(),
+        isError: true,
+        isFetching: false,
+      }),
+    ).toBe(true);
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: Date.now() - HARNESS_CATALOG_REFRESH_AFTER_MS - 1,
+        isError: false,
+        isFetching: false,
+      }),
+    ).toBe(true);
+    expect(
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: Date.now(),
+        isError: false,
+        isFetching: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+// Coverage for the cold-host narrowing: the all-harness `listModels` fan-out
+// belongs to the app-load fill alone (`modelsFetch: "all-harnesses"`); every
+// user-facing surface passes `"cached-only"` and warms specific harnesses
+// through its own targeted query on the shared cache slot. TanStack's no-data
+// path ignores `staleTime`, so before this scope existed ANY enabled catalog
+// mount on a cold (non-prefetched, usually remote) host fanned `listModels`
+// across every available harness - one spawned provider server per rail entry,
+// on first picker open.
+describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
+  afterEach(() => {
+    hostBindingMock.current = null;
+    cleanup();
+  });
+
+  interface ScopedFixture {
+    readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+    readonly client: HostClient<HostRpcRegistry>;
+    /** Harness ids of every `agent.gui.listModels` request, in arrival order. */
+    readonly modelCalls: GuiHarnessId[];
+  }
+
+  function createScopedFixture(
+    ids: ReadonlyArray<GuiHarnessId>,
+    listModelsHandler:
+      | (() => Promise<ListGuiAgentModelsResponse> | ListGuiAgentModelsResponse)
+      | null,
+  ): ScopedFixture {
+    const queryClient = createAppQueryClient();
+    const modelCalls: GuiHarnessId[] = [];
+    let requestCounter = 0;
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-${String(requestCounter)}`;
+        },
+        handlers: {
+          "agent.gui.listHarnesses": () => ({ harnesses: harnesses(ids) }),
+          "agent.gui.listModels": (params) => {
+            modelCalls.push(params.harnessId);
+            return listModelsHandler === null
+              ? modelsResponse(1)
+              : listModelsHandler();
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    return { Wrapper, client, modelCalls };
+  }
+
+  it("issues ZERO listModels on a cold cache, and reports entries as not loading rather than eternally pending", async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "cached-only",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses).toHaveLength(2);
+    });
+    // The fan-out (were it enabled) dispatches in an effect right after the
+    // harness list lands - give it that beat so this asserts absence where
+    // absence would show, not before the code under test could have run.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.modelCalls).toEqual([]);
+    // The trap the `isLoading` predicate exists for: a disabled observer on a
+    // no-data slot is `isPending` forever, and surfacing that as "loading"
+    // would spin every consumer for a fetch that never starts.
+    expect(result.current.harnesses[0].modelsLoading).toBe(false);
+    expect(result.current.modelsLoading).toBe(false);
+  });
+
+  it('"all-harnesses" on the same fixture still fans out across every available harness - the positive control for the zero above', async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect([...fixture.modelCalls].sort()).toEqual(["claude", "opencode"]);
+    });
+  });
+
+  it("surfaces models a targeted per-harness query fetched into the shared slot, leaving every other harness unfetched", async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    const { result } = renderHook(
+      () => ({
+        catalog: useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "cached-only",
+        }),
+        // The picker's composition: its own standalone query for the harness
+        // it is actually about (selected/browsed), same cache slot.
+        selected: useGuiHarnessModelsQueryForClient(
+          fixture.client,
+          "opencode",
+          null,
+          { enabled: true, subscribed: true },
+        ),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      const entry = result.current.catalog.harnesses.find(
+        (harness) => harness.id === "opencode",
+      );
+      expect(entry?.models).toHaveLength(1);
+    });
+    expect(fixture.modelCalls).toEqual(["opencode"]);
+    const claude = result.current.catalog.harnesses.find(
+      (harness) => harness.id === "claude",
+    );
+    expect(claude?.models).toHaveLength(0);
+    expect(claude?.modelsLoading).toBe(false);
+  });
+
+  it("reports modelsLoading for exactly the harness a targeted fetch is filling, while it is in flight", async () => {
+    // The initializer is unreachable: a Promise executor runs synchronously,
+    // so `release` is the real resolver before the fixture is even built -
+    // but TS cannot see that, and a `| null` type would narrow the later call
+    // to `null`.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fixture = createScopedFixture(["opencode", "claude"], async () => {
+      await gate;
+      return modelsResponse(1);
+    });
+    const { result } = renderHook(
+      () => ({
+        catalog: useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "cached-only",
+        }),
+        selected: useGuiHarnessModelsQueryForClient(
+          fixture.client,
+          "opencode",
+          null,
+          { enabled: true, subscribed: true },
+        ),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+    // The cached-only entry tracks the SHARED slot's fetch state, so the
+    // in-flight targeted fetch shows as loading on the catalog entry too...
+    await waitFor(() => {
+      const entry = result.current.catalog.harnesses.find(
+        (harness) => harness.id === "opencode",
+      );
+      expect(entry?.modelsLoading).toBe(true);
+    });
+    // ...while a slot nothing is filling stays honestly not-loading.
+    const claudeDuring = result.current.catalog.harnesses.find(
+      (harness) => harness.id === "claude",
+    );
+    expect(claudeDuring?.modelsLoading).toBe(false);
+    release();
+    await waitFor(() => {
+      const entry = result.current.catalog.harnesses.find(
+        (harness) => harness.id === "opencode",
+      );
+      expect(entry?.models).toHaveLength(1);
+      expect(entry?.modelsLoading).toBe(false);
+    });
+  });
+
+  it("useGuiHarnessModelsWarmup fetches its one subject harness exactly once, and nothing for a null subject", async () => {
+    const fixture = createScopedFixture(["opencode", "claude"], null);
+    const noSubject = renderHook(
+      () =>
+        useGuiHarnessModelsWarmup(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.modelCalls).toEqual([]);
+    noSubject.unmount();
+
+    const warm = renderHook(
+      () =>
+        useGuiHarnessModelsWarmup(fixture.client, "claude", {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelCalls).toEqual(["claude"]);
+    });
+    warm.unmount();
+    // Cache-only contract: a warm slot is never re-pulled by a remount.
+    renderHook(
+      () =>
+        useGuiHarnessModelsWarmup(fixture.client, "claude", {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.modelCalls).toEqual(["claude"]);
   });
 });

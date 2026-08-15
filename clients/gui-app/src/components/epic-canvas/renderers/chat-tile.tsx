@@ -1226,13 +1226,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // (or a reasoning-effort label, which is version-specific) from a host that
   // never served the turn. On a default-host tab this is the slot the
   // app-load prefetcher already filled, so nothing changes there; on a
-  // remote-host tab the labels appear once anything warms that host's catalog
-  // — opening this tile's own composer picker does exactly that.
+  // remote-host tab the labels appear as that host's per-harness slots warm —
+  // this tile's own composer warms its selected harness on mount, and its
+  // picker warms whatever the user browses (the catalog fan-out itself is
+  // `"cached-only"` everywhere but the app-load fill).
   const tabHostCatalogClient = useTabHostClient();
   const tabModelCatalog = useGuiHarnessCatalogForClient(
     tabHostCatalogClient,
     null,
-    { enabled: false, subscribed: surfaceVisible },
+    { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(

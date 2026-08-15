@@ -51,6 +51,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({ getActiveHostId: () => "host-1" }),
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // The header's subject-harness warmup; targeting is covered by
+  // `worktree-owner-settings-header.test.tsx`, so a no-op suffices here.
+  useGuiHarnessModelsWarmup: () => undefined,
   // The header resolves the catalog through the owner's host client; this
   // suite is about hover-card identity, not host scoping (covered by
   // `worktree-owner-settings-header.test.tsx`), so it answers for any client.
