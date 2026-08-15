@@ -17,6 +17,20 @@ export const EPIC_ARTIFACTS_DIRNAME = "artifacts";
 export const EPIC_ARTIFACT_INDEX_FILENAME = "index.md";
 
 /**
+ * The two projection directories that live INSIDE an artifact folder, as
+ * siblings of its `index.md`. Neither is a chain segment: both are written
+ * (and regenerated) by file-sync from an authority elsewhere - `images/` from
+ * the durable local attachment store, `.comments/` from the artifact room's
+ * thread state - so both are exempt from the unmanaged-folder sweep and
+ * neither may ever be ingested as an artifact of its own (see
+ * {@link artifactLayoutFromChain}). Named here rather than as bare literals at
+ * each site so the sweep exemption, the ingest rejection, and the writers
+ * cannot drift apart on the spelling.
+ */
+export const EPIC_ARTIFACT_IMAGES_DIRNAME = "images";
+export const EPIC_ARTIFACT_COMMENTS_DIRNAME = ".comments";
+
+/**
  * The structural shape recovered from an artifact `index.md` path: the chain
  * folder that directly contains the `index.md` (`folderName`) plus the chain of
  * ancestor folders above it (`parentSegments`, empty for a top-level artifact),
@@ -52,14 +66,26 @@ function normalizeArtifactPathSegments(filePath: string): string[] {
 /**
  * Build the `{ folderName, parentSegments }` layout from the chain of folders
  * between `artifacts/` and the trailing `index.md`. Returns `null` when the
- * chain is empty (a bare `…/artifacts/index.md` is not an artifact). The single
- * tail shared by both the root-agnostic scan and the host's root-checked
- * deriver, so the two cannot drift on how a chain maps to a layout.
+ * chain is empty (a bare `…/artifacts/index.md` is not an artifact) or when any
+ * segment is DOT-PREFIXED. The single tail shared by both the root-agnostic
+ * scan and the host's root-checked deriver, so the two cannot drift on how a
+ * chain maps to a layout - which is also why the dot gate belongs here and not
+ * in either caller.
+ *
+ * The dot gate makes the "a projection dir cannot collide with an artifact
+ * folder" claim TRUE rather than merely conventional. Artifact folder names are
+ * minted as slugs (`^[a-z0-9]`), so nothing legitimate is dot-prefixed, while
+ * `.comments/` (see {@link EPIC_ARTIFACT_COMMENTS_DIRNAME}) sits inside the
+ * tree: without this, a stray `.comments/index.md` would be ingested as a real
+ * artifact named `.comments` and fight the projection for the same directory.
+ * `.` / `..` are normalized away before the chain is built, but they are
+ * dot-prefixed too, so this gate is a backstop for them as well.
  */
 export function artifactLayoutFromChain(
   chain: string[],
 ): { folderName: string; parentSegments: string[] } | null {
   if (chain.length === 0) return null;
+  if (chain.some((segment) => segment.startsWith("."))) return null;
   return {
     folderName: chain[chain.length - 1],
     parentSegments: chain.slice(0, -1),
