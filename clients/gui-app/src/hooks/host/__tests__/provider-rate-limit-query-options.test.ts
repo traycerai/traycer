@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 
 describe("providerRateLimitQueryOptions", () => {
-  it("opts an httpFetch provider into table-owned fixed polling and keeps TanStack's default refetchOnMount", () => {
+  it("opts an httpFetch provider into table-owned fixed polling without stale-on-mount refetch", () => {
     const { options } = providerRateLimitQueryOptions("openrouter", null, true);
     expect(options.enabled).toBe(true);
     expect(options.gcTime).toBe(Infinity);
     expect(options.poll).toBe(true);
     expect(options.retry).toBe(false);
-    expect(options.refetchOnMount).toBe(true);
+    expect(options.refetchOnMount).toBe(false);
   });
 
   it("opts an ephemeralProcess provider out of observer polling and disables remount refetch", () => {
