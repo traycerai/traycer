@@ -91,6 +91,26 @@ export function managedCommandRestartDeltaPhrase(delta: {
   return "same command and cwd";
 }
 
+/**
+ * The frozen outcome a restart card shows when the relaunch did NOT come up.
+ * A spawn failure is `exited` with neither code nor signal - "Exited" would
+ * read as though something ran; it did not. Anything else keeps the shared
+ * status vocabulary. (A `running` outcome is not shown at all: it is the
+ * normal case, and frozen it reads as a live claim.)
+ */
+export function managedCommandRestartOutcomeLabel(
+  outcome: ManagedCommandStatus,
+): string {
+  if (
+    outcome.state === "exited" &&
+    outcome.exitCode === null &&
+    outcome.signal === null
+  ) {
+    return "Failed to start";
+  }
+  return managedCommandStatusLabel(outcome);
+}
+
 export function managedCommandStatusLabel(
   status: ManagedCommandStatus,
 ): string {

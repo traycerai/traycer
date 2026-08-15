@@ -4,8 +4,8 @@ import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-c
 import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
 import {
   managedCommandRestartDeltaPhrase,
+  managedCommandRestartOutcomeLabel,
   managedCommandRestartTitle,
-  managedCommandStatusLabel,
 } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -32,9 +32,10 @@ import { SegmentRow } from "./segment-row";
  *
  * Everything shown comes off the payload the host stamped from the successful
  * tool RESULT: the effective command the shell relaunched under, the host's own
- * verdict on what changed (command, cwd, both, neither), and the status the
- * result reported, frozen. The directory itself is not shown - a host-disk
- * detail the output window's popover carries; the phrase is what matters here. Only the door is live - it asks whether the shell still exists, and
+ * verdict on what changed (command, cwd, both, neither), and - only when the
+ * relaunch did not come up - the status the result reported, frozen. The
+ * directory itself is not shown - a host-disk detail the output window's
+ * popover carries; the phrase is what matters here. Only the door is live - it asks whether the shell still exists, and
  * says so instead of opening a tab onto nothing.
  */
 export interface ManagedCommandRestartSegmentProps {
@@ -89,23 +90,30 @@ export function ManagedCommandRestartSegment(
       >
         {managedCommandRestartDeltaPhrase(restart)}
       </span>
-      {/* The outcome the result reported, in the shared status vocabulary and
-          FROZEN there: no pulse, no elapsed, no re-read - what this restart
-          ended in, not what the shell is doing now. Kept after deletion too,
-          for the same reason: it is history, not a claim about the present. */}
-      <span aria-hidden className="shrink-0 text-muted-foreground/40">
-        ·
-      </span>
-      <span
-        className="flex shrink-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
-        data-testid={`managed-command-restart-outcome-${restart.commandId}`}
-      >
-        <ManagedCommandStatusDot
-          status={restart.outcome}
-          className={undefined}
-        />
-        {managedCommandStatusLabel(restart.outcome)}
-      </span>
+      {/* The outcome the result reported, FROZEN - but only when it is news.
+          A restart that came up running is the normal case and says nothing;
+          worse, a frozen "● Running" reads as a live claim beside the start
+          card's real one, and stays green after the shell is stopped. So the
+          header stays quiet unless the relaunch did NOT come up: a spawn
+          failure ("Failed to start"), or a command that had already exited by
+          the time the tool returned. Never re-read from the live record. */}
+      {restart.outcome.state === "running" ? null : (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/40">
+            ·
+          </span>
+          <span
+            className="flex shrink-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+            data-testid={`managed-command-restart-outcome-${restart.commandId}`}
+          >
+            <ManagedCommandStatusDot
+              status={restart.outcome}
+              className={undefined}
+            />
+            {managedCommandRestartOutcomeLabel(restart.outcome)}
+          </span>
+        </>
+      )}
     </>
   );
 

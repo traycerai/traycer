@@ -3,6 +3,7 @@ import {
   MANAGED_COMMAND_NOUN,
   managedCommandNoun,
   managedCommandRestartDeltaPhrase,
+  managedCommandRestartOutcomeLabel,
   managedCommandRestartTitle,
   managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
@@ -87,5 +88,26 @@ describe("restart card copy", () => {
         cwdChanged: true,
       }),
     ).toBe("command and cwd changed");
+  });
+
+  it("names a spawn failure as a failure to start, and keeps the shared label otherwise", () => {
+    // Nothing ran, so "Exited" would misdescribe it.
+    expect(
+      managedCommandRestartOutcomeLabel({
+        state: "exited",
+        exitCode: null,
+        signal: null,
+        exitedAtMs: 20,
+      }),
+    ).toBe("Failed to start");
+    // A command that ran and finished before the tool returned did exit.
+    expect(
+      managedCommandRestartOutcomeLabel({
+        state: "exited",
+        exitCode: 2,
+        signal: null,
+        exitedAtMs: 20,
+      }),
+    ).toBe("Exited · code 2");
   });
 });

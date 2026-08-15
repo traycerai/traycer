@@ -246,7 +246,7 @@ describe("the restart shell card", () => {
     ).toBe("command and cwd changed");
   });
 
-  it("freezes the outcome the result reported and never follows a later live status change", () => {
+  it("shows no outcome for a restart that came up running, and never follows a later live status change", () => {
     renderCall({
       variant: "card",
       managedCommand: restartPayload({
@@ -256,13 +256,15 @@ describe("the restart shell card", () => {
       headerFindUnitId: null,
     });
 
+    // Coming up running is the normal case and says nothing - and a frozen
+    // "● Running" would read as a live claim beside the start card's real one.
     expect(
-      screen.getByTestId(`managed-command-restart-outcome-${COMMAND_ID}`)
-        .textContent,
-    ).toBe("Running");
+      screen.queryByTestId(`managed-command-restart-outcome-${COMMAND_ID}`),
+    ).toBeNull();
+    expect(screen.queryByText("Running")).toBeNull();
 
     // The start card would follow this into the SAME shell's live record;
-    // this card is history and must not.
+    // this card is history and must not grow a status now either.
     act(() => {
       session.setCommands([
         shell({
@@ -277,15 +279,15 @@ describe("the restart shell card", () => {
     });
 
     expect(
-      screen.getByTestId(`managed-command-restart-outcome-${COMMAND_ID}`)
-        .textContent,
-    ).toBe("Running");
+      screen.queryByTestId(`managed-command-restart-outcome-${COMMAND_ID}`),
+    ).toBeNull();
+    expect(screen.queryByText(/Exited/)).toBeNull();
     // No live cluster at all on this card - no pulse, no ticking elapsed.
     expect(screen.queryByLabelText("Shell running")).toBeNull();
     expect(screen.queryByText(/^\d+s$/)).toBeNull();
   });
 
-  it("reads a spawn failure (exited, no code, no signal) as a plain 'Exited', never destructive", () => {
+  it("reads a spawn failure (exited, no code, no signal) as 'Failed to start', never destructive", () => {
     const { container } = renderCall({
       variant: "card",
       managedCommand: restartPayload({
@@ -300,10 +302,11 @@ describe("the restart shell card", () => {
       headerFindUnitId: "restart-spawn-failure",
     });
 
+    // The one outcome worth a word: nothing ran, so not "Exited".
     expect(
       screen.getByTestId(`managed-command-restart-outcome-${COMMAND_ID}`)
         .textContent,
-    ).toBe("Exited");
+    ).toBe("Failed to start");
     // A spawn failure is routine for a shell the agent restarted on purpose -
     // the red status DOT beside the label is the whole signal, per the start
     // card's own demotion decision (checked above via textContent). The
@@ -343,7 +346,7 @@ describe("the restart shell card", () => {
     expect(screen.queryByText("This shell was deleted")).toBeNull();
   });
 
-  it("keeps its title, delta and frozen outcome after the shell is deleted, disables the door, and still expands", () => {
+  it("keeps its title and delta after the shell is deleted, disables the door, and still expands", () => {
     const restart = restartPayload({});
     const { container } = renderCall({
       variant: "card",
@@ -363,10 +366,10 @@ describe("the restart shell card", () => {
       screen.getByTestId(`managed-command-restart-delta-${COMMAND_ID}`)
         .textContent,
     ).toBe("command changed");
+    // A restart that came up running shows no outcome - deleted or not.
     expect(
-      screen.getByTestId(`managed-command-restart-outcome-${COMMAND_ID}`)
-        .textContent,
-    ).toBe("Running");
+      screen.queryByTestId(`managed-command-restart-outcome-${COMMAND_ID}`),
+    ).toBeNull();
 
     const door = screen.getByTestId(
       `managed-command-restart-door-${COMMAND_ID}`,
