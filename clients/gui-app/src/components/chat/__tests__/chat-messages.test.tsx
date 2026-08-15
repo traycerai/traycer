@@ -1218,6 +1218,73 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("does not announce a footerless row backfilled behind known messages", async () => {
+      const knownUser = makeMessage(2, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-backfill-history-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Reconnect/backfill hydrates an OLDER footerless notification into a
+      // transcript that mounted partial. It does not extend the transcript
+      // past the known messages, so it is history, not news.
+      rerenderMessages([
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_699_999_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+        knownUser,
+        knownAssistant,
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("announces a turn that arrives whole past every known message", async () => {
+      const userMsg = makeMessage(0, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg],
+        scrollStateKey: "aria-arrived-whole-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // A batched snapshot can deliver the notification and its adopting
+      // provider turn together: a new id, already terminal, footer already
+      // on. Extending the tail past every known message makes it news.
+      rerenderMessages([
+        userMsg,
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_700_000_005_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
     it("does not announce a completedAt shift when the footer state is unchanged", async () => {
       const userMsg = makeMessage(0, "user");
       const completedRow: ChatMessageModel = {
