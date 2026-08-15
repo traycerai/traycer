@@ -136,9 +136,22 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
 /**
  * The app-wide default host's client (`null` while unbound), factored out so
  * the `?.`/`??` fallback lives in one place instead of being repeated at
- * every call site below - and so callers outside this module (e.g. the model
- * picker's commands-prewarm query) can resolve the same default-host scope
- * without duplicating it inline.
+ * every call site below - and so callers outside this module can resolve the
+ * same default-host scope without duplicating it inline.
+ *
+ * App-wide surfaces (the app-load prefetcher, Settings, and the command
+ * palette WHEN NO COMPOSER IS FOCUSED) read the catalog through the
+ * default-host wrappers below. A COMPOSER never does: every composer surface
+ * has a target host - the tab's bound host, a fork dialog's fixed host, or
+ * the app-wide default followed through `null` (the landing page, whose
+ * picker rebinds that default, and the new-conversation modal opened from the
+ * sidebar's app-wide trigger) - and reads its catalog through the
+ * `...ForClient` variants with that host's client, so the harnesses, models
+ * and commands it offers are the ones the run will actually see. With a
+ * composer focused the palette follows it, reading through
+ * `FocusedComposerEntry.hostClient` - otherwise its Pick provider / Pick
+ * model subpages would list one host's catalog and dispatch into another
+ * host's composer store.
  */
 export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
   return useHostBinding()?.hostClient ?? null;
@@ -147,7 +160,19 @@ export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
 export function useGuiHarnessesQuery(
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
-  const client = useDefaultHostClient();
+  return useGuiHarnessesQueryForClient(useDefaultHostClient(), activity);
+}
+
+/**
+ * Client-scoped `agent.gui.listHarnesses`. `client === null` (a tab host the
+ * directory has not resolved yet, or an unbound runtime) disables the query
+ * rather than falling back to the default host - a composer must never offer
+ * another host's harnesses under its own host's name.
+ */
+export function useGuiHarnessesQueryForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  activity: QueryActivityOptions,
+): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
   return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
     cacheKeyIdentity: undefined,
     client,
@@ -166,7 +191,21 @@ export function useGuiHarnessModelsQuery(
   workingDirectory: string | null,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
-  const client = useDefaultHostClient();
+  return useGuiHarnessModelsQueryForClient(
+    useDefaultHostClient(),
+    harnessId,
+    workingDirectory,
+    activity,
+  );
+}
+
+/** Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`. */
+export function useGuiHarnessModelsQueryForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  harnessId: GuiHarnessId,
+  workingDirectory: string | null,
+  activity: QueryActivityOptions,
+): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
   const params = useMemo(
     () => ({ harnessId, workingDirectory }),
     [harnessId, workingDirectory],
@@ -225,8 +264,24 @@ export function useGuiHarnessCatalog(
   workingDirectory: string | null,
   activity: QueryActivityOptions,
 ): GuiHarnessCatalog {
-  const harnessesQuery = useGuiHarnessesQuery(activity);
-  const client = useDefaultHostClient();
+  return useGuiHarnessCatalogForClient(
+    useDefaultHostClient(),
+    workingDirectory,
+    activity,
+  );
+}
+
+/**
+ * Client-scoped harness + model catalog; see `useGuiHarnessesQueryForClient`.
+ * The model picker reads its rail/rows through this with the composer's
+ * run-target client.
+ */
+export function useGuiHarnessCatalogForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  workingDirectory: string | null,
+  activity: QueryActivityOptions,
+): GuiHarnessCatalog {
+  const harnessesQuery = useGuiHarnessesQueryForClient(client, activity);
   // Fetching is gated by `enabled` (inside the sub-query hooks); the projection
   // is gated by `subscribed` alone, so a cache-only reader
   // (`{ enabled: false, subscribed: true }`) still surfaces the cached catalog
@@ -302,15 +357,22 @@ export function useGuiHarnessCatalog(
     () => modelQueries.some((query) => query.isPending),
     [modelQueries],
   );
+  // "Loading" means a fetch is actually coming. With no client the harness
+  // query is disabled, and a disabled query with no cached data reports
+  // `isPending` forever - reading it raw would leave the picker's rail (and
+  // any other consumer) spinning for a fetch that will never start. The model
+  // fan-out needs no such gate: it only exists once harnesses loaded, which
+  // needs a client.
+  const harnessesLoading = client !== null && harnessesQuery.isPending;
 
   return useMemo(
     () => ({
       harnesses,
-      harnessesLoading: harnessesQuery.isPending,
+      harnessesLoading,
       harnessesError: harnessesQuery.error,
       modelsLoading,
     }),
-    [harnesses, harnessesQuery.error, harnessesQuery.isPending, modelsLoading],
+    [harnesses, harnessesQuery.error, harnessesLoading, modelsLoading],
   );
 }
 
@@ -331,10 +393,22 @@ const REFRESHABLE_CATALOG_METHODS = [
  * at spawn.)
  */
 export function useRefreshHarnessCatalog(): () => Promise<void> {
+  return useRefreshHarnessCatalogForClient(useHostClient());
+}
+
+/**
+ * Client-scoped catalog refresh: invalidates the catalog keys of the host
+ * `client` targets, so the picker's refresh button re-fetches the catalog of
+ * the host the composer runs on - never the app-wide active host's while a tab
+ * or dialog is bound elsewhere. A `null` client (host not resolved yet) is a
+ * no-op, matching the disabled queries it would otherwise refetch.
+ */
+export function useRefreshHarnessCatalogForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): () => Promise<void> {
   const queryClient = useQueryClient();
-  const client = useHostClient();
   return useCallback(async () => {
-    const hostId = client.getActiveHostId();
+    const hostId = client?.getActiveHostId() ?? null;
     if (hostId === null) return;
     getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
       hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(

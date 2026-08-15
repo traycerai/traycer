@@ -55,11 +55,13 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
   type UIEvent,
 } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { ArtifactChildIndex } from "./artifact-child-index";
+import { ArtifactHeadingMinimap } from "./artifact-heading-minimap";
 import {
   resolveArtifactEditorBackgroundFocusPosition,
   shouldHandleArtifactEditorBackgroundFocus,
@@ -196,6 +198,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     null,
   );
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const headingMinimapRefreshRef = useRef<() => void>(() => undefined);
   const epicId = useOpenEpicId();
   const artifactLinkOpener = useArtifactLinkOpener({
     epicId,
@@ -474,6 +477,10 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>): void => {
       onScrollRestoration(event);
+      // Pure arithmetic against the rail's cached heading offsets - kept on
+      // this existing handler so the rail never attaches a scroll listener of
+      // its own (the lesson the chat rail's own consolidation encodes).
+      headingMinimapRefreshRef.current();
       if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
         return;
       }
@@ -485,78 +492,113 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
   );
 
+  // The heading rail is a sibling of the scroller, not a child: the scroller is
+  // its own positioning context, so an overlay inside it would scroll away with
+  // the document instead of holding the tile edge.
   return (
-    <div
-      ref={setScrollContainerRef}
-      data-testid={testId}
-      data-node-id={node.id}
-      className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
-      onScroll={onScroll}
-    >
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-        <div className="tc-editor-surface">
-          <div
-            className="tc-editor-body"
-            {...artifactPasteHandlers(
-              artifactImagePaste.supported && editable,
-              artifactImagePaste.paste,
-            )}
-          >
-            {editor !== null && isEpicArtifactKind(node.type) ? (
-              <ArtifactFindAdapterRegistration editor={editor} node={node} />
+    <div className="relative flex h-full min-h-0 w-full flex-col">
+      <ArtifactHeadingMinimapMount
+        editor={editor}
+        node={node}
+        refreshRef={headingMinimapRefreshRef}
+        scroller={scrollContainer}
+      />
+      <div
+        ref={setScrollContainerRef}
+        data-testid={testId}
+        data-node-id={node.id}
+        className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
+        onScroll={onScroll}
+      >
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+          <div className="tc-editor-surface">
+            <div
+              className="tc-editor-body"
+              {...artifactPasteHandlers(
+                artifactImagePaste.supported && editable,
+                artifactImagePaste.paste,
+              )}
+            >
+              {editor !== null && isEpicArtifactKind(node.type) ? (
+                <ArtifactFindAdapterRegistration editor={editor} node={node} />
+              ) : null}
+              <EditorContent editor={editor} />
+            </div>
+            {editor !== null ? (
+              <ArtifactToolbar
+                editor={editor}
+                className={undefined}
+                scrollTarget={scrollContainer}
+                commentAction={commentAction}
+                suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+              />
             ) : null}
-            <EditorContent editor={editor} />
           </div>
-          {editor !== null ? (
-            <ArtifactToolbar
-              editor={editor}
-              className={undefined}
-              scrollTarget={scrollContainer}
-              commentAction={commentAction}
-              suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+          {isEpicArtifactKind(node.type) ? (
+            <ArtifactChildIndex
+              epicId={epicId}
+              parentId={node.id}
+              viewTabId={viewTabId}
+              hostId={node.hostId}
             />
           ) : null}
         </div>
-        {isEpicArtifactKind(node.type) ? (
-          <ArtifactChildIndex
-            epicId={epicId}
-            parentId={node.id}
-            viewTabId={viewTabId}
-            hostId={node.hostId}
+        {editor !== null && commentArtifactKind !== null ? (
+          <>
+            <FloatingDraftPopover
+              epicId={epicId}
+              artifactType={commentArtifactKind}
+              artifactId={node.id}
+              tileId={tileId}
+              editor={editor}
+              onCreated={onActivateThread}
+            />
+            <ThreadAnchorHoverPopover
+              epicId={epicId}
+              artifactType={commentArtifactKind}
+              artifactId={node.id}
+              editor={editor}
+              resolvedThreadIds={resolvedThreadIds}
+              onActivateThread={onActivateThread}
+            />
+          </>
+        ) : null}
+        {editor !== null ? (
+          <ArtifactLinkPopover
+            editor={editor}
+            editable={editable}
+            scrollContainer={scrollContainer}
+            openLink={artifactLinkOpener.openLink}
+            openLinkPending={artifactLinkOpener.isExternalPending}
+            onOpenChange={setLinkPopoverOpen}
           />
         ) : null}
       </div>
-      {editor !== null && commentArtifactKind !== null ? (
-        <>
-          <FloatingDraftPopover
-            epicId={epicId}
-            artifactType={commentArtifactKind}
-            artifactId={node.id}
-            tileId={tileId}
-            editor={editor}
-            onCreated={onActivateThread}
-          />
-          <ThreadAnchorHoverPopover
-            epicId={epicId}
-            artifactType={commentArtifactKind}
-            artifactId={node.id}
-            editor={editor}
-            resolvedThreadIds={resolvedThreadIds}
-            onActivateThread={onActivateThread}
-          />
-        </>
-      ) : null}
-      {editor !== null ? (
-        <ArtifactLinkPopover
-          editor={editor}
-          editable={editable}
-          scrollContainer={scrollContainer}
-          openLink={artifactLinkOpener.openLink}
-          openLinkPending={artifactLinkOpener.isExternalPending}
-          onOpenChange={setLinkPopoverOpen}
-        />
-      ) : null}
     </div>
+  );
+}
+
+/**
+ * Gate for the heading rail, kept out of `CollabTileBodyEditor` so its two
+ * conditions do not count against that component's complexity ceiling. Only
+ * artifact kinds get an outline - a workspace file tile shares this body but
+ * is not a document with a heading skeleton.
+ */
+function ArtifactHeadingMinimapMount(props: {
+  readonly editor: Editor | null;
+  readonly node: EpicNodeRef;
+  readonly refreshRef: RefObject<() => void>;
+  readonly scroller: HTMLElement | null;
+}) {
+  if (props.editor === null || !isEpicArtifactKind(props.node.type)) {
+    return null;
+  }
+  return (
+    <ArtifactHeadingMinimap
+      editor={props.editor}
+      refreshRef={props.refreshRef}
+      scroller={props.scroller}
+    />
   );
 }
 

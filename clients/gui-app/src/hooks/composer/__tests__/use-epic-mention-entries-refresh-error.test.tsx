@@ -109,7 +109,14 @@ function pendingRefetch(): {
 }
 
 function renderEntries() {
-  return renderHook(() => useEpicMentionEntries({ requests: [] }));
+  // `@/hooks/host/use-reactive-host-readiness` and `@/hooks/host/use-host-queries`
+  // are mocked wholesale above and ignore their arguments entirely, so `client`
+  // is never actually read by anything this suite exercises - `null` is enough
+  // (this file's whole point is the refetch/host-swap toast logic downstream
+  // of those two hooks, not client resolution itself).
+  return renderHook(() =>
+    useEpicMentionEntries({ requests: [], client: null }),
+  );
 }
 
 afterEach(() => {
