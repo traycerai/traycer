@@ -112,23 +112,24 @@ describe("shellOutputStreamAvailability", () => {
           hasLines: true,
         }),
       ),
-    ).toEqual({ kind: "stale", phase: "connecting" });
+    ).toEqual({ kind: "bootstrapping", phase: "connecting" });
   });
 
   it("only reads as reconnecting once a snapshot has actually landed", () => {
     // Without a snapshot the transport dropping is still "connecting" - the
-    // window never had anything to reconnect FROM.
+    // window never had anything to reconnect FROM, so it stays a centred
+    // bootstrapping panel rather than a banner over nothing.
     expect(
       shellOutputStreamAvailability(
         signals({ snapshotArrived: false, connectionStatus: "reconnecting" }),
       ),
-    ).toEqual({ kind: "stale", phase: "connecting" });
+    ).toEqual({ kind: "bootstrapping", phase: "connecting" });
 
     expect(
       shellOutputStreamAvailability(
         signals({ snapshotArrived: true, connectionStatus: "reconnecting" }),
       ),
-    ).toEqual({ kind: "stale", phase: "reconnecting" });
+    ).toEqual({ kind: "stale" });
   });
 
   it("tells an opened-empty log apart from one with lines to read", () => {

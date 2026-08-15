@@ -696,12 +696,13 @@ describe("S4 · output window", () => {
     expect(screen.getByText("after the retry")).toBeTruthy();
   });
 
-  it("S4g: reads 'Connecting…' until a snapshot lands whatever the transport says, then an empty tail as 'No output yet.'", () => {
+  it("S4g: reads 'Connecting…' as a centred panel until a snapshot lands whatever the transport says, then an empty tail as 'No output yet.'", () => {
     renderTile();
 
-    // Present from the very first render - role=log exists even before
-    // anything has been said about the stream.
-    expect(screen.getByTestId("managed-command-output-timeline")).toBeTruthy();
+    // Before the opening snapshot there is nothing to keep in view, so the
+    // window is a centred connecting panel - the timeline is not mounted yet,
+    // and no strip sits along the top where a header bar used to.
+    expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
     expect(screen.getByText("Connecting…")).toBeTruthy();
 
     // The socket declaring itself open is not the snapshot landing.

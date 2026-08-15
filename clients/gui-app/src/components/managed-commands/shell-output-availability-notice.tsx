@@ -186,6 +186,8 @@ function bootstrappingPhrase(
       return "Waiting for the host to start…";
     case "opening-stream":
       return "Opening stream…";
+    case "connecting":
+      return "Connecting…";
   }
 }
 
@@ -228,7 +230,6 @@ function BannerNotice(props: {
         )}
         data-testid={props.testId}
         data-availability="stale"
-        data-phase={availability.phase}
         role="status"
         aria-busy
       >
@@ -237,11 +238,7 @@ function BannerNotice(props: {
           testId={undefined}
           variant={undefined}
         />
-        <span>
-          {availability.phase === "reconnecting"
-            ? "Reconnecting…"
-            : "Connecting…"}
-        </span>
+        <span>Reconnecting…</span>
       </div>
     );
   }

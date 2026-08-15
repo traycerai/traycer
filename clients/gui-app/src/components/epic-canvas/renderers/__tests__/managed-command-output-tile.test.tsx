@@ -635,7 +635,6 @@ describe("managed-command output window", () => {
 
     const banner = screen.getByTestId("managed-command-output-availability");
     expect(banner.getAttribute("data-availability")).toBe("stale");
-    expect(banner.getAttribute("data-phase")).toBe("reconnecting");
     expect(screen.getByText("Reconnecting…")).not.toBeNull();
     // The lines already read stay readable while the socket is down, and the
     // shell's own controls stay in reach - a broken transport is not a claim
@@ -759,8 +758,11 @@ describe("managed-command output window", () => {
     // Retry tears the old store down and opens a brand new stream - not a
     // reconnect on the one that just failed.
     expect(stub.factoryCalls()).toBe(2);
+    // The fresh stream has no snapshot yet, so the window is back to its
+    // centred connecting panel - not a banner over the failed stream's lines,
+    // which are gone with it.
     const reopened = screen.getByTestId("managed-command-output-availability");
-    expect(reopened.getAttribute("data-availability")).toBe("stale");
+    expect(reopened.getAttribute("data-availability")).toBe("bootstrapping");
     expect(reopened.getAttribute("data-phase")).toBe("connecting");
     expect(screen.queryByText("before the failure")).toBeNull();
 
@@ -770,12 +772,19 @@ describe("managed-command output window", () => {
     expect(screen.queryByText("before the failure")).toBeNull();
   });
 
-  it("stays 'Connecting…' until the opening snapshot lands, whatever the transport reports", () => {
+  it("stays a centred 'Connecting…' panel until the opening snapshot lands, whatever the transport reports", () => {
     const stub = installOutputStub();
     renderTile();
 
-    expect(screen.getByRole("log")).not.toBeNull();
+    // A full panel, not a strip along the top of an empty log: there is
+    // nothing to keep in view yet, and a top strip reads as chrome.
+    expect(screen.queryByRole("log")).toBeNull();
     expect(screen.getByText("Connecting…")).not.toBeNull();
+    const connecting = screen.getByTestId(
+      "managed-command-output-availability",
+    );
+    expect(connecting.getAttribute("data-availability")).toBe("bootstrapping");
+    expect(connecting.getAttribute("data-phase")).toBe("connecting");
 
     // The socket declaring itself open is not the snapshot landing - the host
     // only serves the tail after its first log read.
@@ -783,6 +792,7 @@ describe("managed-command output window", () => {
       stub.emit().onConnectionStatus("open", null);
     });
     expect(screen.getByText("Connecting…")).not.toBeNull();
+    expect(screen.queryByRole("log")).toBeNull();
 
     openAtTail(stub.emit, []);
 

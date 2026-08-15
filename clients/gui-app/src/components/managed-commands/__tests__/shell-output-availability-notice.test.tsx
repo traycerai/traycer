@@ -168,22 +168,24 @@ describe("ShellOutputAvailabilityNotice", () => {
     expect(screen.getByRole("button", { name: "Close tab" })).not.toBeNull();
   });
 
-  describe("stale", () => {
-    it("says Connecting before a snapshot has ever landed", () => {
-      renderNotice({ availability: { kind: "stale", phase: "connecting" } });
+  describe("connecting / stale", () => {
+    it("renders Connecting as a centred bootstrapping panel, not a banner - there is nothing to keep in view yet", () => {
+      renderNotice({
+        availability: { kind: "bootstrapping", phase: "connecting" },
+      });
 
       expect(screen.getByText("Connecting…")).not.toBeNull();
-      const banner = screen.getByRole("status");
-      expect(banner.getAttribute("data-availability")).toBe("stale");
-      expect(banner.getAttribute("data-phase")).toBe("connecting");
+      const panel = screen.getByRole("status");
+      expect(panel.getAttribute("data-availability")).toBe("bootstrapping");
+      expect(panel.getAttribute("data-phase")).toBe("connecting");
     });
 
-    it("says Reconnecting once a snapshot has landed and the stream drops", () => {
-      renderNotice({ availability: { kind: "stale", phase: "reconnecting" } });
+    it("says Reconnecting as a banner once a snapshot has landed and the stream drops", () => {
+      renderNotice({ availability: { kind: "stale" } });
 
       expect(screen.getByText("Reconnecting…")).not.toBeNull();
-      expect(screen.getByRole("status").getAttribute("data-phase")).toBe(
-        "reconnecting",
+      expect(screen.getByRole("status").getAttribute("data-availability")).toBe(
+        "stale",
       );
     });
   });

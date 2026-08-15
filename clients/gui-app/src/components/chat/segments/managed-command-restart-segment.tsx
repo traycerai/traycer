@@ -16,7 +16,7 @@ import {
   useChatOpenStoreScope,
 } from "@/stores/chats/open-store-scope";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
-import { SegmentCard } from "./segment-card";
+import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 
@@ -175,7 +175,11 @@ export function ManagedCommandRestartSegment(
       open={open}
       onOpenChange={setOpen}
       header={header}
-      headerAction={headerAction}
+      headerAction={
+        <SegmentCardHeaderActionCell>
+          {headerAction}
+        </SegmentCardHeaderActionCell>
+      }
       collapsedPreview={null}
       body={body}
       tone="default"

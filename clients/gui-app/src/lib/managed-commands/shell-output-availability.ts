@@ -24,7 +24,8 @@ import type { HostReachability } from "@/hooks/agent/use-host-reachability";
 export type ShellOutputAvailability =
   | {
       readonly kind: "bootstrapping";
-      readonly phase: "checking-host" | "starting-host" | "opening-stream";
+      readonly phase:
+        "checking-host" | "starting-host" | "opening-stream" | "connecting";
     }
   | { readonly kind: "unsupported-host" }
   | { readonly kind: "unreachable-host"; readonly hostLabel: string }
@@ -43,8 +44,14 @@ export type ShellOutputAvailability =
    * controls stay usable and the stream can be reopened.
    */
   | { readonly kind: "stream-error"; readonly message: string }
-  /** RECOVERABLE. Keyed on whether a snapshot ever landed, not on line count. */
-  | { readonly kind: "stale"; readonly phase: "connecting" | "reconnecting" }
+  /**
+   * RECOVERABLE. The stream dropped AFTER a snapshot had landed, so there is
+   * cached content worth keeping in view under the banner. (Before any
+   * snapshot the window is still `bootstrapping`/`connecting`: nothing to
+   * keep, so it gets the same centred panel as the other opening phases
+   * rather than a strip along the top that reads as chrome.)
+   */
+  | { readonly kind: "stale" }
   /** Open, snapshot landed, nothing in the log yet. */
   | { readonly kind: "empty" }
   | { readonly kind: "available" };
@@ -156,11 +163,13 @@ export function shellOutputStreamAvailability(
   // Until the opening tail lands the window is still connecting, whatever the
   // transport says: the socket declares itself open the moment the subscribe
   // is acknowledged, but the host serves the snapshot only after its first
-  // log read, and a blank surface with no word on it reads as broken.
-  if (!signals.snapshotArrived) return { kind: "stale", phase: "connecting" };
-  if (signals.connectionStatus !== "open") {
-    return { kind: "stale", phase: "reconnecting" };
+  // log read, and a blank surface with no word on it reads as broken. It is
+  // a bootstrapping phase, not a stale one: there is no cached content to
+  // keep in view, so it takes the centred panel like the phases before it.
+  if (!signals.snapshotArrived) {
+    return { kind: "bootstrapping", phase: "connecting" };
   }
+  if (signals.connectionStatus !== "open") return { kind: "stale" };
   if (!signals.hasLines) return { kind: "empty" };
   return { kind: "available" };
 }

@@ -10,7 +10,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
-import { SegmentCard } from "./segment-card";
+import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 
 /**
@@ -155,13 +155,15 @@ function ResumeManagedCommandDoor(props: {
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
   return (
-    <ManagedCommandOpenInTabButton
-      commandId={managedCommand.commandId}
-      testId={`resume-managed-command-door-${props.trigger.blockId}`}
-      onOpen={() => {
-        openOutput(managedCommand.commandId);
-      }}
-    />
+    <SegmentCardHeaderActionCell>
+      <ManagedCommandOpenInTabButton
+        commandId={managedCommand.commandId}
+        testId={`resume-managed-command-door-${props.trigger.blockId}`}
+        onOpen={() => {
+          openOutput(managedCommand.commandId);
+        }}
+      />
+    </SegmentCardHeaderActionCell>
   );
 }
 
