@@ -126,7 +126,6 @@ import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
-  useGuiHarnessCatalog,
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -1214,36 +1213,27 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const collaborators = useCachedCollaborators(currentEpicId);
   // Label-only, cache-only projection: this tile's own composer (which fetches
-  // the TAB host's catalog) and the app-wide `HarnessCatalogPrefetcher` (which
-  // fills the default host's, for every harness) own the fetch; this reads
-  // those host-keyed caches (never fetches) so ANY visible transcript —
-  // including a restored terminal-focused split with an inactive chat and no
-  // live catalog publisher — renders friendly model/reasoning labels
-  // immediately, and a host/user switch re-keys the queries and swaps labels.
-  // Detaches when hidden.
+  // the TAB host's catalog) owns the fetch; this reads that host-keyed cache
+  // (never fetches) so ANY visible transcript — including a restored
+  // terminal-focused split with an inactive chat and no live catalog publisher
+  // — renders friendly model/reasoning labels immediately, and a host/user
+  // switch re-keys the queries and swaps labels. Detaches when hidden.
   //
-  // Two slots, tab host layered OVER the default host: the tab slot is the
-  // catalog the composer below actually offers, so a model only that host has
-  // gets its friendly label; the default slot covers a harness whose models
-  // the tab slot has not fetched yet (an older turn's harness) with the same
-  // slug's label from the host every user has. On a default-host tab both
-  // reads are the same slot.
+  // ONE slot, the tab host's - never layered over the default host's. This
+  // transcript describes turns that ran on the TAB host, so a slug that host
+  // does not advertise must degrade to the raw slug rather than borrow a label
+  // (or a reasoning-effort label, which is version-specific) from a host that
+  // never served the turn. On a default-host tab this is the slot the
+  // app-load prefetcher already filled, so nothing changes there; on a
+  // remote-host tab the labels appear once anything warms that host's catalog
+  // — opening this tile's own composer picker does exactly that.
   const tabHostCatalogClient = useTabHostClient();
   const tabModelCatalog = useGuiHarnessCatalogForClient(
     tabHostCatalogClient,
     null,
     { enabled: false, subscribed: surfaceVisible },
   );
-  const defaultModelCatalog = useGuiHarnessCatalog(null, {
-    enabled: false,
-    subscribed: surfaceVisible,
-  });
-  // Later entries win in the `new Map(...)` builders below, so the tab host's
-  // labels take precedence wherever both slots know the same model.
-  const displayCatalog = useMemo(
-    () => [...defaultModelCatalog.harnesses, ...tabModelCatalog.harnesses],
-    [defaultModelCatalog.harnesses, tabModelCatalog.harnesses],
-  );
+  const displayCatalog = tabModelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(
     () =>
       new Map(
