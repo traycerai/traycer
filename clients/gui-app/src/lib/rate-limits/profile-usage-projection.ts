@@ -5,6 +5,7 @@ import {
   isOpenCodeGoRateLimitWindowLimited,
   providerRateLimitWindows,
   type LiveProviderRateLimitSeverity,
+  type OpenCodeGoRateLimitWindow,
   type ProviderRateLimits,
   type ProviderRateLimitSeverity,
   type ProviderRateLimitWindow,
@@ -166,16 +167,11 @@ function windowProjection(
   };
 }
 
-type OpenCodeGoWindow = Extract<
-  ProviderRateLimits,
-  { provider: "opencode"; available: true }
->["fiveHour"];
-
 function openCodeWindowProjection(input: {
   readonly id: string;
   readonly role: ProfileUsageWindowRole;
   readonly name: string;
-  readonly window: OpenCodeGoWindow;
+  readonly window: OpenCodeGoRateLimitWindow;
   readonly now: number;
 }): ProfileUsageWindow | null {
   const projected = windowProjection(input);

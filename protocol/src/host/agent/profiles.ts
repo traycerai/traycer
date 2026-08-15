@@ -844,11 +844,12 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
-      const mapped = mapOpenCodeAvailableToUnavailable(response.rateLimits);
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
           ...response,
-          rateLimits: mapGrokAvailableToUnavailable(mapped) ?? mapped,
+          rateLimits: mapGrokAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
         });
       if (!parsed.success) {
         return {

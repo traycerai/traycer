@@ -1239,6 +1239,40 @@ describe("host.getRateLimitUsage v5.0 OpenCode freeze + downgrade bridges", () =
     ).not.toThrow();
   });
 
+  it("keeps an unavailable OpenCode reason through v5 -> v3 / v2 and maps it for v1", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeUnavailable,
+    });
+    const unavailable = {
+      provider: "opencode",
+      available: false,
+      reason: "usage_fetch_failed",
+    };
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV5ToV3,
+      hostGetRateLimitUsageDowngradeV5ToV2,
+    ]) {
+      expect(bridge.downgradeResponse(response)).toEqual({
+        ok: true,
+        value: { ...response, providerRateLimits: unavailable },
+      });
+    }
+    expect(
+      hostGetRateLimitUsageDowngradeV5ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...response,
+        providerRateLimits: {
+          ...unavailable,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
   it("passes a Hugging Face arm through the 5.0 -> 4.0 bridge unchanged", () => {
     const result = hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(
       rateLimitUsageResponseSchemaV50.parse({
