@@ -1469,6 +1469,269 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("mutates the live region for a repeated same-millisecond trigger gain", async () => {
+      const monitorTrigger = {
+        kind: "monitor" as const,
+        title: "build watch",
+        status: "completed" as const,
+        live: false,
+        summary: "Build completed.",
+        blockId: "monitor-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [monitorTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const withTriggers = (
+        triggers: ReadonlyArray<typeof monitorTrigger>,
+      ): ChatMessageModel => ({
+        ...notificationRow,
+        segments: [{ id: "seg-resume", kind: "autonomous_resume", triggers }],
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-tied-trigger-gain-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderMessages([
+        userMsg,
+        withTriggers([
+          monitorTrigger,
+          { ...monitorTrigger, blockId: "monitor-2", title: "test watch" },
+        ]),
+      ]);
+      await settleLegendList();
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+      const firstAnnouncementNode = live?.firstElementChild;
+      expect(firstAnnouncementNode).not.toBeNull();
+
+      // A third task settles in the SAME millisecond: id, completedAt and
+      // announcement text are all unchanged, so only a fresh keyed child can
+      // make the live region emit again.
+      rerenderMessages([
+        userMsg,
+        withTriggers([
+          monitorTrigger,
+          { ...monitorTrigger, blockId: "monitor-2", title: "test watch" },
+          { ...monitorTrigger, blockId: "monitor-3", title: "lint watch" },
+        ]),
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+        expect(live?.firstElementChild).not.toBe(firstAnnouncementNode);
+      });
+    });
+
+    it("announces a still-running trigger appended to a notification as an update", async () => {
+      const monitorTrigger = {
+        kind: "monitor" as const,
+        title: "build watch",
+        status: "completed" as const,
+        live: false,
+        summary: "Build completed.",
+        blockId: "monitor-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [monitorTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-live-trigger-append-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The appended trigger's producer is STILL RUNNING (`live: true`; the
+      // card says "still running") - nothing new has settled, so the reader
+      // hears an update, not a completion.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [
+                monitorTrigger,
+                {
+                  ...monitorTrigger,
+                  blockId: "command-1",
+                  title: "dev server",
+                  live: true,
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background update.",
+        );
+      });
+    });
+
+    it("announces a notification arriving with only live triggers as an update", async () => {
+      const liveTrigger = {
+        kind: "command" as const,
+        title: "dev server",
+        status: "completed" as const,
+        live: true,
+        summary: "Server output so far.",
+        blockId: "command-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-live-only-arrival-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      rerenderMessages([
+        knownUser,
+        knownAssistant,
+        {
+          ...makeMessage(2, "assistant"),
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [liveTrigger],
+            },
+          ],
+          completedAt: 1_700_000_005_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background update.",
+        );
+      });
+    });
+
+    it("announces a live trigger settling in place as a background completion", async () => {
+      const liveTrigger = {
+        kind: "command" as const,
+        title: "test run",
+        status: "completed" as const,
+        live: true,
+        summary: "Tests running.",
+        blockId: "command-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [liveTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-live-trigger-settle-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The still-running producer settles IN PLACE: trigger count is
+      // unchanged, only `live` flips off. That flip is the completion the
+      // reader was told was still pending.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [{ ...liveTrigger, live: false }],
+            },
+          ],
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
     it("does not announce a completedAt shift when the footer state is unchanged", async () => {
       const userMsg = makeMessage(0, "user");
       const completedRow: ChatMessageModel = {

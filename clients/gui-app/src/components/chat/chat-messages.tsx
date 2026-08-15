@@ -808,6 +808,8 @@ interface AssistantCompletionObservation {
   readonly footerless: boolean;
   /** Notification-content version; see `notificationSignatureOf`. */
   readonly notificationSignature: string | null;
+  /** Settled (non-`live`) trigger count; decides completion vs update copy. */
+  readonly terminalTriggerCount: number;
 }
 
 /** What the completion announcer remembers from its previous observation. */
@@ -823,15 +825,66 @@ interface TranscriptObservation {
  * Content version of a row's autonomous-resume notification: the protocol
  * appends additional triggers to the existing divider when more monitored
  * tasks settle while the chat stays idle, so the same row can gain a new
- * background completion without any footer or id change.
+ * background completion without any footer or id change. Each trigger is
+ * encoded by its `live` state, not just counted - a still-running producer
+ * that settles flips in place (`l` → `t`) with no length change, and that
+ * transition is exactly the completion the reader is waiting to hear.
  */
 function notificationSignatureOf(message: ChatMessageModel): string | null {
   const parts: string[] = [];
   for (const segment of message.segments) {
     if (segment.kind !== "autonomous_resume") continue;
-    parts.push(`${segment.id}:${segment.triggers.length}`);
+    const states = segment.triggers
+      .map((trigger) => (trigger.live ? "l" : "t"))
+      .join("");
+    parts.push(`${segment.id}:${states}`);
   }
   return parts.length === 0 ? null : parts.join("|");
+}
+
+function terminalTriggerCountOf(message: ChatMessageModel): number {
+  let count = 0;
+  for (const segment of message.segments) {
+    if (segment.kind !== "autonomous_resume") continue;
+    for (const trigger of segment.triggers) {
+      if (!trigger.live) count += 1;
+    }
+  }
+  return count;
+}
+
+function hasLiveTrigger(message: ChatMessageModel): boolean {
+  return message.segments.some(
+    (segment) =>
+      segment.kind === "autonomous_resume" &&
+      segment.triggers.some((trigger) => trigger.live),
+  );
+}
+
+/**
+ * A footerless row's announcement mirrors what actually settled. A `live`
+ * trigger is a producer that was STILL RUNNING when the digest rendered -
+ * the visible card says so - and announcing it as a "completion" would
+ * contradict the screen. Completion copy therefore requires a settled
+ * trigger the reader has not heard yet; news that is only still-running
+ * producers is an update. A footerless row with no trigger digest at all
+ * keeps completion copy - its only announceable change is its own terminal
+ * transition.
+ */
+function turnCompletionAnnouncementText(input: {
+  readonly taskTitle: string;
+  readonly message: ChatMessageModel;
+  readonly priorTerminalTriggerCount: number;
+}): string {
+  if (input.message.showCompletionFooter !== false) {
+    return `${input.taskTitle} finished responding.`;
+  }
+  const terminalAdded =
+    terminalTriggerCountOf(input.message) > input.priorTerminalTriggerCount;
+  if (!terminalAdded && hasLiveTrigger(input.message)) {
+    return `${input.taskTitle} received a background update.`;
+  }
+  return `${input.taskTitle} received a background completion.`;
 }
 
 /**
@@ -871,10 +924,10 @@ function unknownRowIsLiveCompletion(input: {
  * Whether a known row's change is a fresh completion: `completedAt`
  * transitioning null → timestamp; a footerless notification adopted by its
  * provider turn (footer flips on, `completedAt` moves between two non-null
- * lifecycle values); or a footerless notification gaining additional
- * triggers while staying footerless. A bare `completedAt` shift with footer
- * and notification content unchanged - a canonicalized snapshot timestamp -
- * stays silent.
+ * lifecycle values); or a footerless notification's content changing - an
+ * added trigger, or a still-running trigger settling in place. A bare
+ * `completedAt` shift with footer and notification content unchanged - a
+ * canonicalized snapshot timestamp - stays silent.
  */
 function knownRowNewlyCompleted(
   prior: AssistantCompletionObservation,
@@ -2446,6 +2499,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     readonly text: string;
   } | null>(null);
   const transcriptObservationRef = useRef<TranscriptObservation | null>(null);
+  const announcementSeqRef = useRef(0);
   useLayoutEffect(() => {
     const previous = transcriptObservationRef.current;
     const assistantById = new Map<string, AssistantCompletionObservation>();
@@ -2458,6 +2512,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         completedAt: message.completedAt,
         footerless: message.showCompletionFooter === false,
         notificationSignature: notificationSignatureOf(message),
+        terminalTriggerCount: terminalTriggerCountOf(message),
       });
       if (
         message.completedAt !== null &&
@@ -2477,12 +2532,21 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (previous === null) return;
     const completedAssistant = findNewlyCompletedAssistant(previous, messages);
     if (completedAssistant !== null) {
+      // The key is a monotonic sequence, NOT row identity: two consecutive
+      // announcements can share id, completion timestamp AND text (a second
+      // trigger settling in the same millisecond), and an unchanged key
+      // would leave the live-region DOM unmutated - silent to screen
+      // readers.
+      announcementSeqRef.current += 1;
       const announcement = {
-        key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
-        text:
-          completedAssistant.showCompletionFooter === false
-            ? `${taskTitle} received a background completion.`
-            : `${taskTitle} finished responding.`,
+        key: String(announcementSeqRef.current),
+        text: turnCompletionAnnouncementText({
+          taskTitle,
+          message: completedAssistant,
+          priorTerminalTriggerCount:
+            previous.assistantById.get(completedAssistant.id)
+              ?.terminalTriggerCount ?? 0,
+        }),
       };
       // Decision #10/#16: turn completion below the fold stays anchored - no
       // auto-reveal. The pill flips to "New reply" instead, unless the
