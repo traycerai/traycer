@@ -169,6 +169,24 @@ describe("<ChatUsageDialog />", () => {
     expect(usageSummaryCallCount.current).toBeGreaterThan(0);
   });
 
+  it("shows the layout skeleton, not a spinner, while the summary loads", async () => {
+    renderWithClient();
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+
+    // Synchronously after opening the query has not resolved yet.
+    expect(screen.getByTestId("usage-dialog-skeleton")).toBeTruthy();
+    expect(screen.queryByText("Loading usage…")).toBeNull();
+
+    await screen.findByTestId("usage-cost-figure");
+    expect(screen.queryByTestId("usage-dialog-skeleton")).toBeNull();
+  });
+
   it("opens on a store target and renders the chat's headline + title", async () => {
     renderWithClient();
     act(() => {
