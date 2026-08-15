@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   useIsMutating,
   useMutation,
@@ -198,13 +198,25 @@ function CooperativeFirstRestartFlow(
   // Same durable read `use-host-options` documents: the directory keeps
   // presenting this machine's id as a `kind: "local"` entry while the host is
   // down; `getLocalEntry()` is only the faster path to the same id.
-  const localHostId = useMemo(() => {
-    const fromDirectory = (directoryQuery.data ?? []).find(
-      (entry) => entry.kind === "local",
-    );
-    if (fromDirectory !== undefined) return fromDirectory.hostId;
-    return binding?.directory.getLocalEntry()?.hostId ?? null;
-  }, [directoryQuery.data, binding]);
+  //
+  // `null` here is SETTLED, not "still loading" - which is what makes forcing
+  // on it legitimate, unlike the capability read below. The ordering that
+  // guarantees it: `IRunnerHost.onLocalHostChange` fires synchronously on
+  // subscribe with the current snapshot (or `null`), `HostDirectoryService`
+  // assigns `localEntry` in that callback while installing the subscription
+  // inside `start()`, and the runtime provider awaits `directory.start()`
+  // before it publishes the binding this component renders under. So a real
+  // snapshot has already been answered by our first render, and an unresolved
+  // query is not a window we can observe. If that contract ever turns async,
+  // this read silently becomes "unknown" and the force path below turns back
+  // into the silent kill this flow exists to remove - gate it then.
+  const localDirectoryEntry = (directoryQuery.data ?? []).find(
+    (entry) => entry.kind === "local",
+  );
+  const localHostId =
+    localDirectoryEntry?.hostId ??
+    binding?.directory.getLocalEntry()?.hostId ??
+    null;
   const client = useHostClientForHostId(localHostId);
   // The TRI-STATE read, deliberately not the `useHostSupportsMethod` boolean:
   // that form collapses "no handshake with this host has completed yet" into
