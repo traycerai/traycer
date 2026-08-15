@@ -44,7 +44,10 @@ interface Harness {
   openMock: Mock;
   isUnreadMock: Mock<(args: { artifactId: string }) => boolean>;
   artifactsById: Record<string, { updatedAt: number }>;
-  /** Drives the >= ARTIFACT_SEARCH_MIN_COUNT gate on the search affordance. */
+  /**
+   * The Epic's artifact ids. No longer gates the search affordance - the count
+   * gate is gone - but the projection mock still has to answer `allIds`.
+   */
   artifactIds: ReadonlyArray<string>;
 }
 
@@ -114,7 +117,6 @@ import {
   ArtifactPanelSearchShell,
   ArtifactSearchBox,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
-import { ARTIFACT_SEARCH_MIN_COUNT } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import {
   panelHeaderSearchSurfaceKey,
   usePanelHeaderSearchStore,
@@ -798,20 +800,11 @@ describe("ArtifactPanelSearchShell", () => {
     return <div data-testid={testId}>artifact tree</div>;
   }
 
-  /** Enough artifacts that the search affordance is available. */
-  function withSearchableArtifactCount() {
-    harness.artifactIds = Array.from(
-      { length: ARTIFACT_SEARCH_MIN_COUNT },
-      (_unused, index) => `art-${index}`,
-    );
-  }
-
   function renderShell(args: {
     readonly searchOpen: boolean;
     readonly tabId: string;
     readonly epicId: string;
   }) {
-    withSearchableArtifactCount();
     if (args.searchOpen) {
       openArtifactsSearch(args.tabId, "");
     }
@@ -855,11 +848,11 @@ describe("ArtifactPanelSearchShell", () => {
     expect(screen.getByLabelText("Search artifacts")).toBeTruthy();
   });
 
-  it("ignores type-to-filter below the artifact-count threshold", () => {
-    harness.artifactIds = Array.from(
-      { length: ARTIFACT_SEARCH_MIN_COUNT - 1 },
-      (_unused, index) => `art-${index}`,
-    );
+  // Regression: search used to be gated on the Epic holding >= 10 artifacts,
+  // which silently removed both this path and the header menu item from every
+  // smaller Epic. There is no threshold any more - a one-artifact Epic searches.
+  it("enters search mode however few artifacts the Epic holds", () => {
+    harness.artifactIds = ["art-0"];
     render(
       <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
         {defaultTreeStub("tree-stub")}
@@ -868,7 +861,8 @@ describe("ArtifactPanelSearchShell", () => {
     fireEvent.keyDown(screen.getByTestId("epic-artifact-tree-region"), {
       key: "a",
     });
-    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(true);
+    expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("a");
   });
 
   it("ignores modified keys so shortcuts still reach their handlers", () => {
@@ -1042,10 +1036,6 @@ describe("ArtifactPanelSearchShell dual-surface isolation", () => {
     vi.useFakeTimers();
     harness.result = successResult(
       ready([hit({ artifactId: "a1", title: "Shared hit" })], false),
-    );
-    harness.artifactIds = Array.from(
-      { length: ARTIFACT_SEARCH_MIN_COUNT },
-      (_unused, index) => `art-${index}`,
     );
     harness.epicNodeRef = { id: "a1", type: "ticket" };
   });
