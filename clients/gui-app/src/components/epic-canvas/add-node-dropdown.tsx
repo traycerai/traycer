@@ -44,7 +44,8 @@ import {
   type HostWorkspaceControlsHostScope,
 } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
@@ -286,13 +287,20 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     tuiAgentPending,
     workspaceSeed,
   } = props;
+  // The host the agent launches on - `hostScope`'s fixed host when a row
+  // pins one, else `null` = the app-wide default the active-scope host list
+  // rebinds. Resolved through the SAME primitive the picker below applies to
+  // its `runTargetHostId`, so the toolbar store's catalog, the picker and the
+  // saved-args `providers.list` read below can never disagree on the host,
+  // and none of them can drift onto another host than the workspace controls
+  // create on.
+  const launchHostId = hostScope.kind === "fixed" ? hostScope.hostId : null;
+  const launchHostClient = useHostClientForHostId(launchHostId);
   // No seed here - nothing to validate.
-  const toolbarStore = useComposerToolbarStore(
-    null,
-    { kind: "none" },
-    null,
-    true,
-  );
+  const toolbarStore = useComposerToolbarStore(null, { kind: "none" }, null, {
+    hostClient: launchHostClient,
+    tuiOnly: true,
+  });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
   const reasoning = useStore(toolbarStore, (state) => state.reasoning);
@@ -303,7 +311,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         ?.find((harness) => harness.id === state.selection.harnessId)
         ?.modes.includes("tui") ?? false,
   );
-  const providersQuery = useProvidersList({
+  const providersQuery = useProvidersListForClient(launchHostClient, {
     enabled: true,
     subscribed: true,
   });
@@ -398,11 +406,12 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             lockedHarnessId={null}
             disabled={tuiAgentPending}
             registerActivation={false}
-            // Adding a brand-new node has no existing tab to bind to yet -
-            // the app-wide default host is the correct scope, same as this
-            // dropdown's own `useProvidersList()` read below.
-            createProfileHostId={null}
-            runTargetHostId={null}
+            // The launch host (see `launchHostId` above): a row-pinned fixed
+            // host, or `null` = the app-wide default for a brand-new node
+            // with no tab to bind to yet - the same scope as this submenu's
+            // own `providers.list` read.
+            createProfileHostId={launchHostId}
+            runTargetHostId={launchHostId}
             profileAdmission={null}
           />
         </div>

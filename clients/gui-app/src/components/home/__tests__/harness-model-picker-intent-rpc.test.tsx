@@ -87,8 +87,19 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 
+// `runTargetHostId` is always `null` in this suite's fixtures (see
+// `renderPickerWithFixture`), so this mirrors the real hook's `null` branch
+// exactly: fall back to the app-wide default host's client
+// (`hostBindingMock.current?.hostClient`, the same real `HostClient` over a
+// `MockHostMessenger` the suite's RPC-count assertions depend on) rather than
+// a bare sentinel string. The picker now threads this client straight into
+// `useHostQuery` (via the REAL, unmocked `…ForClient` catalog hooks - see the
+// file header), which calls `client?.getActiveHostId()` - a plain string
+// lacks that method and throws, which is exactly what regressed every test
+// in this file before this fix.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({

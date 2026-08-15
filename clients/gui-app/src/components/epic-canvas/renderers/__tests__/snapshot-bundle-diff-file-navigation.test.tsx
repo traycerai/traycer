@@ -94,6 +94,7 @@ vi.mock(
         notifySectionMounted: testState.notifySectionMounted,
         registerCoverageState: vi.fn(),
         registerLoadedPatch: testState.registerLoadedPatch,
+        unregisterLoadedPatch: vi.fn(),
       }),
     };
   },

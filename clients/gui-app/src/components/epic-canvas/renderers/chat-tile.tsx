@@ -126,7 +126,7 @@ import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
-  useGuiHarnessCatalog,
+  useGuiHarnessCatalogForClient,
   type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
@@ -1047,6 +1047,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 tabHostId={view.tabHostId}
                 workspaceRoots={view.linkResolutionRoots}
                 messages={view.messages}
+                baselineEpoch={view.transcriptBaselineEpoch}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
                 surfaceVisible={view.surfaceVisible}
@@ -1212,17 +1213,28 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ),
   );
   const collaborators = useCachedCollaborators(currentEpicId);
-  // Label-only, cache-only projection: the focused composer's toolbar and the
-  // app-wide `HarnessCatalogPrefetcher` own the fetch; this reads the same
-  // host-keyed cache (never fetches) so ANY visible transcript — including a
-  // restored terminal-focused split with an inactive chat and no live catalog
-  // publisher — renders friendly model/reasoning labels immediately, and a
-  // host/user switch re-keys the query and swaps labels. Detaches when hidden.
-  const modelCatalog = useGuiHarnessCatalog(null, {
-    enabled: false,
-    subscribed: surfaceVisible,
-  });
-  const displayCatalog = modelCatalog.harnesses;
+  // Label-only, cache-only projection: this tile's own composer (which fetches
+  // the TAB host's catalog) owns the fetch; this reads that host-keyed cache
+  // (never fetches) so ANY visible transcript — including a restored
+  // terminal-focused split with an inactive chat and no live catalog publisher
+  // — renders friendly model/reasoning labels immediately, and a host/user
+  // switch re-keys the queries and swaps labels. Detaches when hidden.
+  //
+  // ONE slot, the tab host's - never layered over the default host's. This
+  // transcript describes turns that ran on the TAB host, so a slug that host
+  // does not advertise must degrade to the raw slug rather than borrow a label
+  // (or a reasoning-effort label, which is version-specific) from a host that
+  // never served the turn. On a default-host tab this is the slot the
+  // app-load prefetcher already filled, so nothing changes there; on a
+  // remote-host tab the labels appear once anything warms that host's catalog
+  // — opening this tile's own composer picker does exactly that.
+  const tabHostCatalogClient = useTabHostClient();
+  const tabModelCatalog = useGuiHarnessCatalogForClient(
+    tabHostCatalogClient,
+    null,
+    { enabled: false, subscribed: surfaceVisible },
+  );
+  const displayCatalog = tabModelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(
     () =>
       new Map(
@@ -1256,6 +1268,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       connectionStatus: s.connectionStatus,
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
+      transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       chat: s.chat,
       access: s.access,
       messages: s.messages,
@@ -2354,6 +2367,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     linkResolutionRoots,
     currentEpicId,
     snapshotLoaded: state.snapshotLoaded,
+    transcriptBaselineEpoch: state.transcriptBaselineEpoch,
     fatalClose: state.fatalClose,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
@@ -2400,6 +2414,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /** Which connection's snapshot established `messages`; see `ChatMessages`. */
+  readonly baselineEpoch: number;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
@@ -2510,6 +2526,7 @@ function ChatSessionMessagesSurface(
               epicId={props.epicId}
               hostId={props.tabHostId}
               messages={props.messages}
+              baselineEpoch={props.baselineEpoch}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}

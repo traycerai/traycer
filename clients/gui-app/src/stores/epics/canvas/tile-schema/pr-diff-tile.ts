@@ -12,8 +12,8 @@ import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 import { isPersistedPrNumber } from "./pr-number";
 import {
-  parseDiffTileViewState,
-  serializeDiffTileViewState,
+  parsePrDiffTileViewState,
+  serializePrDiffTileViewState,
 } from "./diff-tile-view";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,7 +33,7 @@ function parsePrDiffTileRef(value: unknown): PrDiffTileRef | null {
   ) {
     return null;
   }
-  const view = parseDiffTileViewState(value.view);
+  const view = parsePrDiffTileViewState(value.view);
   if (view === null) return null;
   const githubHost = value.githubHost;
   const owner = value.owner;
@@ -70,7 +70,7 @@ function serializePrDiffTileRef(ref: PrDiffTileRef): DesktopJsonValue {
     owner: ref.owner,
     repo: ref.repo,
     prNumber: ref.prNumber,
-    view: serializeDiffTileViewState(ref.view),
+    view: serializePrDiffTileViewState(ref.view),
   };
 }
 

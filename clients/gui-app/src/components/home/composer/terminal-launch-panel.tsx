@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { TUI_HARNESS_ID_TO_PROVIDER_ID } from "@traycer/protocol/host/provider-schemas";
@@ -35,6 +36,13 @@ interface TerminalLaunchPanelProps {
    */
   readonly disabledHint: string | null;
   /**
+   * The host the terminal agent launches on: the picker's harnesses / models
+   * / profiles and this panel's own saved-args read (`providers.list`) all
+   * resolve against it. `null` follows the app-wide default (the landing
+   * composer); the new-conversation modal passes its pinned host.
+   */
+  readonly hostId: string | null;
+  /**
    * Fires on Start with the fully-assembled launch (harness/model/effort/agent
    * mode + CLI args). The panel owns assembly so the caller only gates the
    * workspace and dispatches.
@@ -51,7 +59,7 @@ interface TerminalLaunchPanelProps {
 // the input box keeps a stable height when switching modes. The text editor is
 // intentionally absent - terminal agents launch empty.
 function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
-  const { store, pending, disabledHint, onStart } = props;
+  const { store, pending, disabledHint, hostId, onStart } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const reasoning = useStore(store, (s) => s.reasoning);
@@ -72,7 +80,11 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   // marks the field `touched` (a per-launch override); leaving it untouched
   // forwards `null` so the host resolves the current saved default itself -
   // which also avoids sending a stale "" before `providers.list` has loaded.
-  const providersQuery = useProvidersList({
+  // Read from the launch host - the same host the picker below offers
+  // harnesses/profiles from - so the pre-filled args are the ones that host's
+  // provider settings actually hold.
+  const launchHostClient = useHostClientForHostId(hostId);
+  const providersQuery = useProvidersListForClient(launchHostClient, {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
@@ -164,11 +176,11 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           lockedHarnessId={null}
           disabled={pending}
           registerActivation
-          // Launching from the landing composer has no existing tab to bind
-          // to yet - the app-wide default host is correct, same as this
-          // panel's own `useProvidersList()` read above.
-          createProfileHostId={null}
-          runTargetHostId={null}
+          // The launch host - same scope as this panel's own `providers.list`
+          // read above (`null` = the app-wide default, for the landing
+          // composer, which has no tab to bind to yet).
+          createProfileHostId={hostId}
+          runTargetHostId={hostId}
           profileAdmission={null}
         />
         <Input
