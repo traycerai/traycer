@@ -261,6 +261,10 @@ export function publishedChatSessionState(
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
     snapshotLoaded: true,
+    // A published copy is complete and frozen: this stands in for the
+    // snapshot that established it, so the transcript is absorbed as
+    // baseline history and nothing in it is ever announced as live.
+    transcriptBaselineEpoch: 0,
     chat: {
       parentId: null,
       id: input.chatId,
