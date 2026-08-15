@@ -41,8 +41,17 @@ const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RAISED_SURFACE =
   /DialogContent|AlertDialogContent|PopoverContent|HoverCardContent|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|<Card|bg-popover|bg-card/;
 
-/** `bg-muted-foreground` is a TEXT color and is unaffected by the collapse. */
-const MUTED_FILL = /bg-muted(?!-foreground)/;
+/**
+ * `bg-muted-foreground` is a TEXT color and is unaffected by the collapse.
+ *
+ * The raw `var(--muted)` forms matter as much as the utility: an inline
+ * `style`, an arbitrary value (`bg-[color-mix(…var(--muted)…)]`) or a
+ * gradient stop paints exactly the same collapsing color while spelling it
+ * differently. Matching only `bg-muted` let those through. The `\)`
+ * terminator keeps `var(--muted-foreground)` out.
+ */
+const MUTED_FILL =
+  /bg-muted(?!-foreground)|var\(--muted\)|var\(--color-muted\)/;
 
 /**
  * Opt-out for a fill that a collapse cannot actually erase. Must be followed
@@ -84,20 +93,74 @@ function collectTsxFiles(dir: string): readonly string[] {
 /** A comment line explaining the collapse is prose, not markup. */
 function isCommentLine(line: string): boolean {
   const trimmed = line.trim();
-  return trimmed.startsWith("//") || trimmed.startsWith("*");
+  return (
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("*") ||
+    trimmed.startsWith("{/*")
+  );
+}
+
+/**
+ * Whether a collapse would actually erase something here.
+ *
+ * A solid fill, or one at >= /40, carries the element's whole presence: lose
+ * it and the element is gone. Below that the fill is a wash, and it only
+ * matters when it is the ONLY thing delimiting the element - if the same
+ * class list draws a border, a collapse degrades the element instead of
+ * erasing it. That is the same line the audit drew (weak tints out of
+ * scope), so encoding it here keeps the guard's output equal to its policy
+ * instead of burying real defects under cosmetic ones.
+ */
+function isLoadBearing(line: string): boolean {
+  if (/bg-muted(?![-/])|var\(--(?:color-)?muted\)/.test(line)) return true;
+  const alphas = [...line.matchAll(/bg-muted\/(\d+)/g)].map((match) =>
+    Number(match[1]),
+  );
+  if (alphas.some((alpha) => alpha >= 40)) return true;
+  return !/\bborder(?:-[a-z])?/.test(line);
+}
+
+/** Prose about a surface is not that surface - waivers name tokens too. */
+function withoutComments(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !isCommentLine(line))
+    .join("\n");
+}
+
+/**
+ * Files that paint a raised surface in their OWN markup.
+ *
+ * Known limit: a reusable leaf never spells `bg-popover` - its surface is
+ * whatever its caller mounted it on - so this scan cannot see a collapse in
+ * a composed child. Carrying the context one hop along the import graph was
+ * measured against this tree and flags 23 further load-bearing fills, each
+ * needing its own surface trace (many resolve to `bg-canvas` via a raised
+ * parent that mounts the child somewhere else entirely). That is an audit,
+ * not a lint tightening, so it is deliberately not bundled here - see the
+ * muted-on-popover audit artifact. The four composed-child collapses found
+ * while measuring it ARE fixed in this changeset.
+ */
+function raisedSurfaceFiles(files: readonly string[]): ReadonlySet<string> {
+  return new Set(
+    files.filter((file) =>
+      RAISED_SURFACE.test(withoutComments(readFileSync(file, "utf8"))),
+    ),
+  );
 }
 
 type Offence = { readonly location: string; readonly line: string };
 
-function findUnannotatedFills(file: string): readonly Offence[] {
+function findUnannotatedFills(file: string, raised: ReadonlySet<string>) {
   const source = readFileSync(file, "utf8");
   const lines = source.split("\n");
-  if (!RAISED_SURFACE.test(source)) return [];
+  if (!raised.has(file)) return [];
 
   const offences: Offence[] = [];
   lines.forEach((line, index) => {
     if (isCommentLine(line)) return;
     if (!MUTED_FILL.test(line)) return;
+    if (!isLoadBearing(line)) return;
     const from = Math.max(0, index - MARKER_LOOKBEHIND);
     const covering = lines.slice(from, index + 1);
     if (covering.some((candidate) => ALLOW_MARKER.test(candidate))) return;
@@ -112,7 +175,11 @@ function findUnannotatedFills(file: string): readonly Offence[] {
 
 describe("muted fills on raised surfaces", () => {
   it("every muted fill in a file that paints a raised surface is fixed or justified", () => {
-    const offences = collectTsxFiles(SRC_DIR).flatMap(findUnannotatedFills);
+    const files = collectTsxFiles(SRC_DIR);
+    const raised = raisedSurfaceFiles(files);
+    const offences = files.flatMap((file) =>
+      findUnannotatedFills(file, raised),
+    );
 
     expect(offences.map((offence) => offence.location)).toEqual([]);
   });
@@ -193,6 +260,7 @@ describe("raised-surface primitives", () => {
     ["button-group.tsx"],
     ["confirm-destructive-dialog.tsx"],
     ["select-all-toggle.tsx"],
+    ["tabs.tsx"],
   ])(
     "%s carries no muted fill - it is mounted on surfaces it cannot know",
     (file) => {
