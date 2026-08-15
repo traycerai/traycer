@@ -138,8 +138,18 @@ export function WorktreeOwnerSettingsHeader(props: {
     subscribed: hasSubject,
     modelsFetch: "cached-only",
   });
+  // Gated on the subject's availability, not just `hasSubject`: the tuple is
+  // persisted history, so it can name a harness the owner's host has since
+  // disabled or lost - and an availability-blind warmup would hit that
+  // provider's `listModels` on every card open (the fan-out and the picker
+  // both fetch available harnesses only). Until the harness list resolves,
+  // availability is unknown and the warmup simply waits; an unavailable
+  // subject keeps the documented raw-slug fallback.
+  const subjectAvailable =
+    catalog.harnesses.find((harness) => harness.id === subjectHarnessId)
+      ?.available === true;
   useGuiHarnessModelsWarmup(hostClient, subjectHarnessId, {
-    enabled: hasSubject,
+    enabled: hasSubject && subjectAvailable,
     subscribed: hasSubject,
   });
 

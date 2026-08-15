@@ -290,16 +290,25 @@ export function useGuiHarnessModelsQueryForClient(
  * owner header labeling the tuple its owner runs), so that subject still
  * resolves on a cold host at the cost of one provider - never the whole rail.
  *
+ * Callers gate `enabled` on the subject's AVAILABILITY as well as their own
+ * activity (mirroring the picker's fetch gates and the fan-out, which only
+ * ever fetched available harnesses): a subject persisted by a historical
+ * chat/TUI agent can name a harness that is now disabled or unavailable, and
+ * an availability-blind warmup would hit that provider's `listModels` - and
+ * retry the failure on every later mount, since an errored query refetches on
+ * the next enabled mount.
+ *
  * `harnessId === null` (no subject yet) mounts no query at all - deliberately
- * not a disabled observer on a junk `null`-keyed slot. Same cache-only
- * contract as `useGuiHarnessModelsQueryForClient`: a warm slot is never
- * re-pulled, and the last verified list is never garbage-collected.
+ * not a disabled observer on a junk `null`-keyed slot; the result is then an
+ * empty array. Same cache-only contract as
+ * `useGuiHarnessModelsQueryForClient`: a warm slot is never re-pulled, and
+ * the last verified list is never garbage-collected.
  */
 export function useGuiHarnessModelsWarmup(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId | null,
   activity: QueryActivityOptions,
-): void {
+): Array<UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>> {
   const requests = useMemo(() => {
     if (harnessId === null) return EMPTY_GUI_MODEL_REQUESTS;
     return [
@@ -309,7 +318,7 @@ export function useGuiHarnessModelsWarmup(
       },
     ];
   }, [harnessId]);
-  useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
+  return useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
     cacheKeyIdentity: undefined,
     requests,

@@ -59,6 +59,9 @@ const scopedReads = vi.hoisted(() => ({
     readonly enabled: boolean;
   }>,
 }));
+/** Availability of the fixture's one harness, so tests can drive the subject
+ *  warmup's availability gate (a tombstoned/disabled subject must not fetch). */
+const catalogAvailability = vi.hoisted(() => ({ subjectAvailable: true }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () =>
@@ -121,6 +124,9 @@ const catalogHarnesses = vi.hoisted(() => () => [
   {
     id: "claude",
     label: "Claude Code",
+    // The subject warmup gates on this flag (an availability-blind warmup
+    // would hit a disabled provider's listModels on every card open).
+    available: catalogAvailability.subjectAvailable,
     models: [
       {
         harnessId: "claude",
@@ -292,6 +298,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     scopedReads.catalogClients = [];
     scopedReads.providersClients = [];
     scopedReads.warmupCalls = [];
+    catalogAvailability.subjectAvailable = true;
   });
 
   it("warms exactly the subject harness's models on the owner's host - the card's only permitted model fetch", () => {
@@ -314,6 +321,25 @@ describe("WorktreeOwnerSettingsHeader", () => {
       expect(call.client).toBe(ownerClient);
       expect(call.harnessId).toBe("claude");
       expect(call.enabled).toBe(true);
+    }
+  });
+
+  it("keeps the warmup disabled while the subject harness is unavailable - a tombstoned subject must not hit its provider's listModels", () => {
+    // The tuple is persisted history: it can name a harness the owner's host
+    // has since disabled or lost. `hasSubject` is still true (the card
+    // renders, with the raw-slug fallback), so availability is the ONLY thing
+    // standing between every card open and a doomed listModels attempt.
+    catalogAvailability.subjectAvailable = false;
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    expect(scopedReads.warmupCalls.length).toBeGreaterThan(0);
+    for (const call of scopedReads.warmupCalls) {
+      expect(call.enabled).toBe(false);
     }
   });
 
@@ -569,6 +595,7 @@ describe("chat settings sourced from the host", () => {
     scopedReads.catalogClients = [];
     scopedReads.providersClients = [];
     scopedReads.warmupCalls = [];
+    catalogAvailability.subjectAvailable = true;
   });
 
   function renderRegistryOnlyChat(): void {
