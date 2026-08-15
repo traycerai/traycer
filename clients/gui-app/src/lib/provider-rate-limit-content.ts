@@ -119,9 +119,9 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
 > = {
   cli_not_found: "the CLI isn't installed",
   unsupported_provider: "this provider isn't supported",
-  invalid_response: "the CLI returned an unexpected response",
+  invalid_response: "the provider returned an unexpected response",
   timeout: "the request timed out",
-  connection_failed: "couldn't connect to the CLI",
+  connection_failed: "couldn't connect to the provider",
   sdk_incompatible: "this SDK version doesn't support usage limits",
   rate_limits_not_available: "not available for this account",
   insufficient_permissions:
@@ -160,6 +160,7 @@ export type PopoverProviderRateLimitState =
   | { readonly kind: "error" }
   | {
       readonly kind: "unavailable";
+      readonly provider: ProviderRateLimits["provider"];
       readonly reason: RateLimitUnavailableReason;
     }
   | {
@@ -208,7 +209,11 @@ export function resolvePopoverProviderRateLimitState(
     // friends), or a transient reason with no retained `lastGood` yet -
     // either way `resolveRetainedProviderRateLimits` already decided there's
     // nothing to show dimmed, so this replaces the picture entirely.
-    return { kind: "unavailable", reason: data.reason };
+    return {
+      kind: "unavailable",
+      provider: data.provider,
+      reason: data.reason,
+    };
   }
   // A last-known-good snapshot is present, either fresh (`data` came straight
   // from `envelope.latest`) or retained across a transient failure (`data`
@@ -271,6 +276,8 @@ export function resolveProviderPlanLabel(
     // intra-word capital ("Supergrok").
     case "grok":
       return data.subscriptionTier;
+    case "opencode":
+      return "Go";
     // None of the credit providers report a tier - Hugging Face's billing-usage
     // endpoint carries no plan field either - so all three render no chip.
     case "openrouter":

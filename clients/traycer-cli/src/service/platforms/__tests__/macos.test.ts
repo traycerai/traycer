@@ -47,14 +47,19 @@ const MOCKS = vi.hoisted(() => ({
   cliLoggerWarn: vi.fn(),
   cliLoggerInfo: vi.fn(),
   requestCooperativeShutdown: vi.fn(),
+  forceStopHostProcess: vi.fn(),
 }));
 
-// The cooperative-shutdown RPC flow has its own unit suite
-// (`desktop-agent-shutdown.test.ts`); here it is a seam so the controller
-// tests pin the ROUTING (which outcome leads to which launchd calls and
-// which error) without dialing a WebSocket.
+// The cooperative-shutdown RPC flow and the forced-kill path each have their
+// own unit suite (`desktop-agent-shutdown.test.ts`); here they are a seam so
+// the controller tests pin the ROUTING (which outcome leads to which launchd
+// calls and which error) without dialing a WebSocket or signalling a real
+// pid. This is a WHOLE-MODULE factory - every export of
+// `desktop-agent-shutdown` used by `macos.ts` must be listed here, or the
+// missing one comes back `undefined` and silently breaks the caller.
 vi.mock("../desktop-agent-shutdown", () => ({
   requestCooperativeShutdown: MOCKS.requestCooperativeShutdown,
+  forceStopHostProcess: MOCKS.forceStopHostProcess,
 }));
 
 // `uninstallService` warns through the real CLI logger when it boots out an
@@ -344,6 +349,11 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // loosely-written assertions by accident.
     MOCKS.requestCooperativeShutdown.mockRejectedValue(
       new Error("requestCooperativeShutdown outcome not staged in this test"),
+    );
+    MOCKS.forceStopHostProcess.mockReset();
+    // Same discipline as the cooperative flow above, for the forced-kill seam.
+    MOCKS.forceStopHostProcess.mockRejectedValue(
+      new Error("forceStopHostProcess outcome not staged in this test"),
     );
   });
 
@@ -1028,21 +1038,21 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     const runner: ProcessRunner = async () => buildSuccessResult();
     const controller = createMacosController(runner);
 
-    const stopping = controller.stop(label);
+    const stopping = controller.stop(label, { force: false });
     await vi.advanceTimersByTimeAsync(300);
 
     await expect(stopping).resolves.toBeUndefined();
     expect(MOCKS.isProcessAlive).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects when a stopped host remains alive through the shutdown timeout", async () => {
+  it("rejects when a stopped host remains alive through the shutdown timeout, naming --force as the escalation path", async () => {
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(true);
     const runner: ProcessRunner = async () => buildSuccessResult();
     const controller = createMacosController(runner);
 
-    const stopping = controller.stop(label);
+    const stopping = controller.stop(label, { force: false });
     const result = expect(stopping).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining("stop did not take effect"),
@@ -1051,6 +1061,137 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await vi.runAllTimersAsync();
 
     await result;
+    // Without --force this is a dead end unless the message names the way
+    // out - never escalates to SIGKILL on its own. Re-assert against the
+    // SAME already-settled promise (not a fresh call) - a second `stop()`
+    // would need its own ~32s fake-timer advance to time out too.
+    await expect(stopping).rejects.toMatchObject({
+      message: expect.stringContaining("Re-run with --force"),
+    });
+  });
+
+  // CLI-owned `stop --force` goes straight to the child-kill engine
+  // (`forceStopHostProcess`) from the OUTSET - no launchd TERM relay first,
+  // no wait, no launchd kill of ANY kind, KILL or otherwise. Round 5 had
+  // force escalate ONLY after outliving the plain SIGTERM's wait (stacking
+  // a second full exit grace on a wedged host); round 6 removed that double
+  // grace entirely, so these cases no longer need fake timers - the force
+  // path never waits inside `stopService` at all. `launchctl kill KILL` is
+  // still never used at the job: the job's service process is the
+  // `host start` SUPERVISOR, and SIGKILL is untrappable -
+  // `KeepAlive{Crashed:true}` would respawn a replacement that reads the
+  // on-disk stop intent as already-served and starts a FRESH host, undoing
+  // the stop. Escalating against the identity-verified HOST CHILD instead
+  // leaves the supervisor alive to consume the intent and exit cleanly, so
+  // the job stays down. Reuses the exact `MOCKS.forceStopHostProcess`
+  // stubbing pattern the Desktop-managed force tests below already
+  // establish - same seam, same outcome union, different caller.
+  describe("CLI-owned stop --force (straight to forceStopHostProcess, no launchd kill of any kind)", () => {
+    function stageForceStop(): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    it("goes straight to forceStopHostProcess with operation 'stop' - no TERM, no KILL, no wait on pid.json at all", async () => {
+      const { calls, controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "stop",
+      );
+      // No launchctl kill of any kind - neither the old TERM relay nor a
+      // KILL at the job - ever happens on the force path now.
+      const launchctlKillCalls = calls.filter(
+        (call) => call.command === "launchctl" && call.args[0] === "kill",
+      );
+      expect(launchctlKillCalls).toEqual([]);
+      // The instance-matched pid.json purge lives entirely inside
+      // `forceStopHostProcess` (mocked here) - `stopService` itself never
+      // reads pid.json on the force path.
+      expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("resolves when forceStopHostProcess reports no-host (the pid was already gone)", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the missing endpoint when forceStopHostProcess reports no-metadata", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("no host endpoint is published"),
+      });
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not verify"),
+      });
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("the stop did not take effect."),
+      });
+    });
+
+    it("carries operation 'restart' through stopForRestart's force path, and a terminal outcome's message names 'host restart --force'", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("host restart --force"),
+      });
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "restart",
+      );
+    });
   });
 
   it("forces a recycle on the CLI-owned restart, because the supervisor outlives the host pid it waited on", async () => {
@@ -1074,7 +1215,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     const runner: ProcessRunner = async () => buildSuccessResult();
     const controller = createMacosController(runner);
 
-    await expect(controller.stopForRestart(label)).resolves.toEqual({
+    await expect(
+      controller.stopForRestart(label, { force: false }),
+    ).resolves.toEqual({
       forcedRecycle: true,
     });
   });
@@ -1485,7 +1628,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
-      await expect(controller.stop(label)).resolves.toBeUndefined();
+      await expect(
+        controller.stop(label, { force: false }),
+      ).resolves.toBeUndefined();
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
         "stop",
@@ -1494,15 +1639,85 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     });
 
-    it("stop surfaces a busy denial instead of escalating over live work", async () => {
+    it("stop surfaces a busy denial instead of escalating over live work, and names --force as the escape hatch", async () => {
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
 
-      await expect(controller.stop(label)).rejects.toMatchObject({
+      await expect(
+        controller.stop(label, { force: false }),
+      ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_BUSY,
         message: expect.stringContaining("work in progress"),
       });
+      // The denial is a dead end without knowing the escape hatch exists -
+      // the message names it rather than leaving the user to find `--force`
+      // in `--help`.
+      await expect(
+        controller.stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("--force"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    });
+
+    it("stop with --force kills the host pid directly and never dials the cooperative-shutdown RPC", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "stop",
+      );
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      // Only the advisory ownership probe ran - force mutates no launchd
+      // registration and issues no lifecycle RPC.
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stop with --force resolves even when the pid was already gone", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("stop with --force surfaces a control-failed error when the pid survives SIGKILL", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "hung", pid: 4242 });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("survived SIGKILL"),
+      });
+    });
+
+    it("stop with --force surfaces a control-failed error when the pid's identity could not be verified", async () => {
+      // `forceStopHostProcess` itself refuses to signal a pid it cannot
+      // prove is still the host (a recycled-pid impostor risk) - this pins
+      // that the macOS routing surfaces that refusal as an honest error
+      // rather than silently reporting success or crashing on an unhandled
+      // outcome variant.
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not verify"),
+      });
     });
 
     it("stop names the takeover escape hatch when the host RPC is unreachable", async () => {
@@ -1513,7 +1728,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
 
       const rejection: unknown = await controller
-        .stop(label)
+        .stop(label, { force: false })
         .then(() => null)
         .catch((error: unknown) => error);
       expect(rejection).toMatchObject({
@@ -1602,13 +1817,17 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         cause: "dial timeout",
       });
 
-      await expect(controller.stopForRestart(label)).resolves.toEqual({
+      await expect(
+        controller.stopForRestart(label, { force: false }),
+      ).resolves.toEqual({
         forcedRecycle: true,
       });
       // Contrast, on the identical staged outcome: `stop` is terminal here.
       // If this ever stops throwing, the two are the same operation and the
       // finding this row exists for has been re-introduced by convergence.
-      await expect(controller.stop(label)).rejects.toMatchObject({
+      await expect(
+        controller.stop(label, { force: false }),
+      ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       });
       // Neither half mutates launchd - only the advisory ownership probe.
@@ -1625,7 +1844,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "no-metadata",
       });
 
-      await expect(controller.stop(label)).rejects.toMatchObject({
+      await expect(
+        controller.stop(label, { force: false }),
+      ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringContaining("cannot be asked to stand down"),
       });
@@ -1638,7 +1859,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         kind: "no-metadata",
       });
 
-      await expect(controller.stopForRestart(label)).resolves.toEqual({
+      await expect(
+        controller.stopForRestart(label, { force: false }),
+      ).resolves.toEqual({
         forcedRecycle: true,
       });
     });
@@ -1647,7 +1870,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
-      await expect(controller.stopForRestart(label)).resolves.toEqual({
+      await expect(
+        controller.stopForRestart(label, { force: false }),
+      ).resolves.toEqual({
         forcedRecycle: false,
       });
     });
@@ -1656,10 +1881,44 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
 
-      await expect(controller.stopForRestart(label)).rejects.toMatchObject({
+      await expect(
+        controller.stopForRestart(label, { force: false }),
+      ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_BUSY,
       });
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stopForRestart with --force kills the pid directly, never dials the cooperative RPC, and always reports forcedRecycle", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).resolves.toEqual({ forcedRecycle: true });
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith(
+        label.environment,
+        "restart",
+      );
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      // Every force outcome recycles the job on relaunch - the kill (or the
+      // attempt) already happened, so a plain kickstart could still no-op
+      // against a supervisor mid-teardown.
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stopForRestart with --force never throws over live work - it kills the pid instead", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      // Busy is a cooperative-flow outcome; force never dials that RPC at
+      // all, so staging `forceStopHostProcess` proves the busy gate was
+      // skipped rather than merely unreached by accident.
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).resolves.toEqual({ forcedRecycle: true });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
     });
 
     it("relaunchAfterRestart recycles the agent job when the stop half could not ask the host to exit", async () => {
@@ -2032,7 +2291,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
 
     for (const [op, expectedSecondCall] of [
-      [() => controller.stop(label), "kill"],
+      [() => controller.stop(label, { force: false }), "kill"],
       [() => controller.start(label), "kickstart"],
       [() => controller.restart(label), "kickstart"],
     ] as const) {

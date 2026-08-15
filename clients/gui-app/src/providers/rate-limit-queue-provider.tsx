@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   configureRateLimitQueue,
@@ -23,7 +24,7 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
 
 /**
  * The long-lived app-shell owner of the rate-limit data layer (no rendered
- * output). It does two things for the lifetime of the window:
+ * output). It owns the following for the lifetime of the window:
  *
  * 1. Binds the `ephemeralProcess` serial queue to the default host
  *    (`configureRateLimitQueue`), re-binding on host/client swap and unbinding
@@ -35,6 +36,8 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  *    `ephemeralProcess` provider set changes, so the header glyph/popover can
  *    recover from a failed first read without waiting for a transient surface
  *    mount.
+ * 3. Keeps OpenCode's HTTP-lane turn refresh mounted even while its popover and
+ *    Settings surfaces are closed.
  *
  * The timer PAUSES on `document.visibilityState === "hidden"` (window truly
  * minimized/backgrounded) and resumes when the window is shown again - matching
@@ -52,6 +55,11 @@ export function RateLimitQueueProvider(): null {
   const client = useHostClient();
   const queryClient = useQueryClient();
   const configuredProviders = useConfiguredRateLimitProviders();
+  useRefreshProviderRateLimitsOnTurn(
+    "opencode",
+    null,
+    configuredProviders.some(({ providerId }) => providerId === "opencode"),
+  );
 
   // Bind the queue to the default host. Re-runs on host/client swap; the
   // cleanup + `null` branch clears the binding on host loss (`hostId` flips to

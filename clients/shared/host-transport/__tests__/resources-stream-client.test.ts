@@ -21,6 +21,7 @@ import { WsStreamClient } from "../ws-stream-client";
 import {
   ResourcesStreamClient,
   type ResourcesProjectionPayload,
+  type ResourcesScopeSupport,
   type ResourcesStreamCallbacks,
 } from "../resources-stream-client";
 
@@ -49,6 +50,10 @@ class StubStreamWebSocket implements StreamWebSocketLike {
 
   fireText(data: unknown): void {
     this.onmessage?.({ type: "text", data: JSON.stringify(data) });
+  }
+
+  fireClose(code: number, reason: string, wasClean: boolean): void {
+    this.onclose?.({ code, reason, wasClean });
   }
 }
 
@@ -99,15 +104,69 @@ function makeWsStreamClient(
   });
 }
 
-function completeHandshake(socket: StubStreamWebSocket): void {
+/**
+ * Acks the open with the client's own manifest echoed back, except that
+ * `resources.subscribe` is pinned to `resourcesVersion` when one is given -
+ * which is how a host too old to carry a global projection is expressed, since
+ * the negotiated version IS the whole signal.
+ */
+function respondToOpen(
+  socket: StubStreamWebSocket,
+  resourcesVersion: { readonly major: number; readonly minor: number } | null,
+): void {
   socket.fireOpen();
   const openParsed = JSON.parse(socket.textSent[0]) as {
     readonly manifest: Record<string, { major: number; minor: number }>;
   };
   socket.fireText({
     kind: "openAck",
-    manifest: openParsed.manifest,
+    manifest:
+      resourcesVersion === null
+        ? openParsed.manifest
+        : { ...openParsed.manifest, "resources.subscribe": resourcesVersion },
   });
+}
+
+function completeHandshake(socket: StubStreamWebSocket): void {
+  respondToOpen(socket, null);
+}
+
+function completeHandshakeAt(
+  socket: StubStreamWebSocket,
+  resourcesVersion: { readonly major: number; readonly minor: number },
+): void {
+  respondToOpen(socket, resourcesVersion);
+}
+
+/**
+ * Records every scope verdict the client publishes, newest last — plus one
+ * ORDERED log interleaving verdicts with connection statuses, because the
+ * client documents that it publishes the verdict first and a consumer reacting
+ * to `closed` depends on it. Recording only the verdicts would let a swap of
+ * those two calls pass every test here.
+ */
+function trackScopeSupport(): {
+  readonly callbacks: ResourcesStreamCallbacks;
+  readonly verdicts: ResourcesScopeSupport[];
+  readonly events: string[];
+} {
+  const verdicts: ResourcesScopeSupport[] = [];
+  const events: string[] = [];
+  return {
+    verdicts,
+    events,
+    callbacks: {
+      onSnapshot: () => undefined,
+      onUpdate: () => undefined,
+      onConnectionStatus: (status) => {
+        events.push(`status:${status}`);
+      },
+      onScopeSupport: (support) => {
+        events.push(`support:${support}`);
+        verdicts.push(support);
+      },
+    },
+  };
 }
 
 function parseText(raw: string): Record<string, unknown> {
@@ -207,6 +266,7 @@ describe("ResourcesStreamClient", () => {
       onSnapshot: (p) => snapshots.push(p),
       onUpdate: (p) => updates.push(p),
       onConnectionStatus: () => undefined,
+      onScopeSupport: () => undefined,
     };
 
     const client = new ResourcesStreamClient({
@@ -276,6 +336,7 @@ describe("ResourcesStreamClient", () => {
         onSnapshot: (p) => snapshots.push(p),
         onUpdate: () => {},
         onConnectionStatus: () => {},
+        onScopeSupport: () => {},
       },
     });
     completeHandshake(sockets[0]);
@@ -311,6 +372,7 @@ describe("ResourcesStreamClient", () => {
         onSnapshot: (p) => snapshots.push(p),
         onUpdate: () => {},
         onConnectionStatus: () => {},
+        onScopeSupport: () => {},
       },
     });
     completeHandshake(sockets[0]);
@@ -359,6 +421,7 @@ describe("ResourcesStreamClient", () => {
         onSnapshot: (p) => snapshots.push(p),
         onUpdate: () => {},
         onConnectionStatus: () => {},
+        onScopeSupport: () => {},
       },
     });
     completeHandshake(sockets[0]);
@@ -394,6 +457,7 @@ describe("ResourcesStreamClient", () => {
         onSnapshot: (p) => snapshots.push(p),
         onUpdate: (p) => updates.push(p),
         onConnectionStatus: () => undefined,
+        onScopeSupport: () => undefined,
       },
     });
     completeHandshake(sockets[0]);
@@ -408,6 +472,178 @@ describe("ResourcesStreamClient", () => {
 
     expect(snapshots).toHaveLength(0);
     expect(updates).toHaveLength(0);
+
+    client.close();
+  });
+});
+
+/**
+ * The scope verdict is what lets a surface say "this host cannot report its
+ * processes" instead of waiting forever on a stream that will never carry one.
+ * These cover it on the LOCAL transport because that is what this suite can
+ * drive end to end - but every signal it reads (the session's own negotiated
+ * version, and a terminal incompatible close) is `IStreamSession` surface that
+ * `LogicalStream` implements identically, which is the entire point: the
+ * client-wide capability cache the old pre-check read is the one thing a remote
+ * session does NOT have.
+ */
+describe("ResourcesStreamClient scope support", () => {
+  it("clears a global scope on a host that negotiates a global-capable version", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    completeHandshake(sockets[0]);
+
+    expect(verdicts).toEqual(["supported"]);
+
+    client.close();
+  });
+
+  // The case that has no other tell. An `@1.0` host does not reject a global
+  // probe - the `@1.1` request keeps `epicId` on the wire so the downgrade
+  // succeeds - so it accepts, reads only `epicId`, and answers about an epic
+  // called `__global__` that does not exist. No error, no close, one empty
+  // projection, silence. Asserting the subscribe actually WENT OUT at `@1.0`
+  // with the scope field stripped is what proves the verdict came from the
+  // negotiation rather than from a failure that never happened.
+  it("convicts a host whose global probe silently downgraded to @1.0", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 0 });
+
+    expect(parseText(sockets[0].textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "resources.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "__global__" },
+    });
+    expect(sockets[0].closed).toBeNull();
+    expect(verdicts).toEqual(["unsupported"]);
+
+    client.close();
+  });
+
+  // Same host, same negotiation, opposite verdict: `@1.0` serves a per-epic
+  // subscription perfectly well, and that fallback is genuinely this machine's
+  // own data. A verdict that keyed on the version alone would blank it.
+  it("clears an epic scope on that same @1.0 host", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks,
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 0 });
+
+    expect(verdicts).toEqual(["supported"]);
+
+    client.close();
+  });
+
+  // The other half: a host that does not advertise a bridgeable method at all
+  // never negotiates a version to judge, and fails the mirror check instead.
+  // This is the close a REMOTE session produces for the same host.
+  it("convicts a host whose method cannot be bridged at all", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    // No cross-major stream bridge exists, so the mirror check fails and the
+    // client goes terminal with INCOMPATIBLE before any subscribe is sent.
+    completeHandshakeAt(sockets[0], { major: 2, minor: 0 });
+
+    expect(verdicts).toEqual(["unsupported"]);
+
+    client.close();
+  });
+
+  // Every fatal arrives through the one channel, and most of them say nothing
+  // about capability. Reading this one as incompatibility would accuse a host
+  // that is merely unauthorized of being too old - permanently, since nothing
+  // reconnects after a terminal close to correct it.
+  it("does not read a non-capability fatal as incompatibility", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    completeHandshake(sockets[0]);
+    expect(verdicts).toEqual(["supported"]);
+
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(verdicts).toEqual(["supported"]);
+
+    client.close();
+  });
+
+  // The client documents this ordering as load-bearing: a consumer reacting to
+  // the `closed` transition has to already see WHY, rather than reading the
+  // verdict from the previous round. Nothing but this asserts it.
+  it("publishes the verdict before the status it was derived from", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, events } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    // Terminal INCOMPATIBLE: the transition that carries both a status and the
+    // verdict explaining it, which is exactly where the order can be observed.
+    completeHandshakeAt(sockets[0], { major: 2, minor: 0 });
+
+    expect(events).toEqual(["support:unsupported", "status:closed"]);
+
+    client.close();
+  });
+
+  // A verdict belongs to the connection that produced it. A reconnect may reach
+  // a NEW host incarnation - an upgrade is exactly how one stops being too old -
+  // so capability has to be re-probed, never remembered across the gap.
+  it("drops the verdict when the connection that negotiated it goes away", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, verdicts } = trackScopeSupport();
+
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "global" },
+      callbacks,
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 0 });
+    expect(verdicts).toEqual(["unsupported"]);
+
+    sockets[0].fireClose(1006, "connection lost", false);
+
+    expect(verdicts).toEqual(["unsupported", "unknown"]);
 
     client.close();
   });

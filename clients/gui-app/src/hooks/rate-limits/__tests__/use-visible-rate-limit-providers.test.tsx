@@ -323,4 +323,69 @@ describe("useVisibleRateLimitProviders", () => {
     ]);
     expect(configured.result.current).toEqual([]);
   });
+
+  it("hides OpenCode when the latest snapshot is rate_limits_not_available", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "opencode",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+    mocks.results.set("opencode", {
+      data: {
+        latest: {
+          provider: "opencode",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: NOW,
+      },
+      isError: false,
+    });
+
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+
+    expect(result.current).toEqual([]);
+  });
+
+  it("keeps OpenCode visible for insufficient_permissions", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "opencode",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+    mocks.results.set("opencode", {
+      data: {
+        latest: {
+          provider: "opencode",
+          available: false,
+          reason: "insufficient_permissions",
+        },
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: NOW,
+      },
+      isError: false,
+    });
+
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+
+    expect(result.current).toEqual([
+      {
+        providerId: "opencode",
+        lane: "httpFetch",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ]);
+  });
 });

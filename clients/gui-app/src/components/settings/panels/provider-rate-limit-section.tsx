@@ -18,11 +18,13 @@ export function ProviderRateLimitForProvider({
   profileId,
   usageUpdatedAt,
   fetchEligible,
+  onOpenModelProviders,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
   readonly fetchEligible: boolean;
+  readonly onOpenModelProviders?: () => void;
 }): ReactNode {
   if (!isRateLimitCapableProvider(providerId)) return null;
   return (
@@ -31,6 +33,7 @@ export function ProviderRateLimitForProvider({
       profileId={profileId}
       usageUpdatedAt={usageUpdatedAt}
       fetchEligible={fetchEligible}
+      onOpenModelProviders={onOpenModelProviders ?? null}
     />
   );
 }
@@ -169,6 +172,7 @@ function EmbeddedProviderRateLimitSettingsCard({
           profileId,
           true,
         )}
+        openModelProvidersAction={null}
       />
     </div>
   );
@@ -179,11 +183,13 @@ function ProviderRateLimitSettingsCard({
   profileId,
   usageUpdatedAt,
   fetchEligible,
+  onOpenModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
   readonly fetchEligible: boolean;
+  readonly onOpenModelProviders: (() => void) | null;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(
     providerId,
@@ -227,6 +233,7 @@ function ProviderRateLimitSettingsCard({
           profileId,
           true,
         )}
+        openModelProvidersAction={onOpenModelProviders}
       />
     </div>
   );

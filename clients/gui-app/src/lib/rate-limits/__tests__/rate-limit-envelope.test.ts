@@ -169,6 +169,120 @@ describe("buildProviderRateLimitEnvelope", () => {
     });
   });
 
+  it("retains OpenCode last-good only when a transient carries the same generation", () => {
+    const openCodeGood: ProviderRateLimits = {
+      provider: "opencode",
+      available: true,
+      credentialGeneration: "gen-a",
+      fiveHour: {
+        status: "ok",
+        usedPercent: 10,
+        resetsAt: 2_000,
+        durationMinutes: 300,
+      },
+      weekly: {
+        status: "ok",
+        usedPercent: 20,
+        resetsAt: 2_000,
+        durationMinutes: 10_080,
+      },
+      monthly: {
+        status: "ok",
+        usedPercent: 30,
+        resetsAt: 2_000,
+        durationMinutes: null,
+      },
+    };
+    const previous: ProviderRateLimitEnvelope = {
+      latest: openCodeGood,
+      lastGood: openCodeGood,
+      lastGoodAt: 1_000,
+      lastFailureAt: null,
+    };
+    const sameGeneration: ProviderRateLimits = {
+      provider: "opencode",
+      available: false,
+      reason: "usage_fetch_failed",
+      credentialGeneration: "gen-a",
+    };
+    expect(
+      buildProviderRateLimitEnvelope(previous, response(sameGeneration), 2_000),
+    ).toEqual({
+      latest: sameGeneration,
+      lastGood: openCodeGood,
+      lastGoodAt: 1_000,
+      lastFailureAt: 2_000,
+    });
+  });
+
+  it("clears OpenCode last-good when the transient generation differs or is missing", () => {
+    const openCodeGood: ProviderRateLimits = {
+      provider: "opencode",
+      available: true,
+      credentialGeneration: "gen-a",
+      fiveHour: {
+        status: "ok",
+        usedPercent: 10,
+        resetsAt: 2_000,
+        durationMinutes: 300,
+      },
+      weekly: {
+        status: "ok",
+        usedPercent: 20,
+        resetsAt: 2_000,
+        durationMinutes: 10_080,
+      },
+      monthly: {
+        status: "ok",
+        usedPercent: 30,
+        resetsAt: 2_000,
+        durationMinutes: null,
+      },
+    };
+    const previous: ProviderRateLimitEnvelope = {
+      latest: openCodeGood,
+      lastGood: openCodeGood,
+      lastGoodAt: 1_000,
+      lastFailureAt: null,
+    };
+    const differentGeneration: ProviderRateLimits = {
+      provider: "opencode",
+      available: false,
+      reason: "timeout",
+      credentialGeneration: "gen-b",
+    };
+    expect(
+      buildProviderRateLimitEnvelope(
+        previous,
+        response(differentGeneration),
+        2_000,
+      ),
+    ).toEqual({
+      latest: differentGeneration,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: 2_000,
+    });
+
+    const missingGeneration: ProviderRateLimits = {
+      provider: "opencode",
+      available: false,
+      reason: "connection_failed",
+    };
+    expect(
+      buildProviderRateLimitEnvelope(
+        previous,
+        response(missingGeneration),
+        3_000,
+      ),
+    ).toEqual({
+      latest: missingGeneration,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: 3_000,
+    });
+  });
+
   it("an authoritative reason (rate_limits_not_available) replaces the picture entirely, clearing any retained lastGood", () => {
     const previous: ProviderRateLimitEnvelope = {
       latest: GOOD,

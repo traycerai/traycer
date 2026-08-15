@@ -81,7 +81,7 @@ import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
 import { hostStatusCommand } from "./commands/host-status";
-import { hostStopCommand } from "./commands/host-stop";
+import { buildHostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
 import { buildHostUpdateCommand } from "./commands/host-update";
 import { buildLoginCommand } from "./commands/login";
@@ -566,16 +566,30 @@ function registerHostCommands(program: Command): void {
           "--if-idle",
           "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before stop",
         ).hideHelp(),
+      )
+      .option(
+        "--force",
+        "Restart even if the host has work in progress: skip the cooperative shutdown claim and kill the host process. Running terminal sessions and in-flight agent work are killed.",
       ),
     (opts) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
+        force: opts.force === true,
       }),
   );
 
   withRunner(
-    host.command("stop").description("Stop the host service"),
-    () => hostStopCommand,
+    host
+      .command("stop")
+      .description("Stop the host service")
+      .option(
+        "--force",
+        "Stop even if the host has work in progress: skip the cooperative shutdown claim and kill the host process (SIGTERM, then SIGKILL after the exit grace). Running terminal sessions and in-flight agent work are killed.",
+      ),
+    (opts) =>
+      buildHostStopCommand({
+        force: opts.force === true,
+      }),
   );
 
   registerServiceCommands(host);
