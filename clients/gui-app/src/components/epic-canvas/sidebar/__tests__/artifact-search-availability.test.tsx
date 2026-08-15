@@ -79,11 +79,11 @@ function deleteArtifact(doc: Y.Doc, artifactId: string): void {
 /** Renders the gate's answer, so a re-render is observable as text. */
 function AvailabilityProbe() {
   const available = useArtifactSearchAvailable();
-  return <span data-testid="available">{available ? "yes" : "no"}</span>;
+  return <span role="status">{available ? "yes" : "no"}</span>;
 }
 
 function availability(): string {
-  return screen.getByTestId("available").textContent;
+  return screen.getByRole("status").textContent;
 }
 
 describe("useArtifactSearchAvailable against a real Epic store", () => {
