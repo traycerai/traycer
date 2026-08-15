@@ -805,6 +805,9 @@ describe("ArtifactPanelSearchShell", () => {
     readonly tabId: string;
     readonly epicId: string;
   }) {
+    // Search is withheld only from an Epic with NO artifacts, so the default
+    // for these tests is the ordinary case: at least one.
+    if (harness.artifactIds.length === 0) harness.artifactIds = ["art-0"];
     if (args.searchOpen) {
       openArtifactsSearch(args.tabId, "");
     }
@@ -848,10 +851,10 @@ describe("ArtifactPanelSearchShell", () => {
     expect(screen.getByLabelText("Search artifacts")).toBeTruthy();
   });
 
-  // Regression: search used to be gated on the Epic holding >= 10 artifacts,
-  // which silently removed both this path and the header menu item from every
-  // smaller Epic. There is no threshold any more - a one-artifact Epic searches.
-  it("enters search mode however few artifacts the Epic holds", () => {
+  // Regression: search was once gated on the Epic holding >= 10 artifacts,
+  // which silently removed both this path and the header menu item from most
+  // Epics. The only threshold now is emptiness - a ONE-artifact Epic searches.
+  it("enters search mode on an Epic holding a single artifact", () => {
     harness.artifactIds = ["art-0"];
     render(
       <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
@@ -863,6 +866,22 @@ describe("ArtifactPanelSearchShell", () => {
     });
     expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(true);
     expect(searchQueryInStore(DEFAULT_TAB_ID)).toBe("a");
+  });
+
+  // The other half of that boundary: an Epic with nothing to match offers no
+  // way in, so typing at its "No artifacts yet." tree cannot open a search
+  // whose header item is not there either.
+  it("ignores type-to-filter on an Epic with no artifacts", () => {
+    harness.artifactIds = [];
+    render(
+      <ShellHarness epicId={DEFAULT_EPIC_ID} tabId={DEFAULT_TAB_ID}>
+        {defaultTreeStub("tree-stub")}
+      </ShellHarness>,
+    );
+    fireEvent.keyDown(screen.getByTestId("epic-artifact-tree-region"), {
+      key: "a",
+    });
+    expect(searchOpenInStore(DEFAULT_TAB_ID)).toBe(false);
   });
 
   it("ignores modified keys so shortcuts still reach their handlers", () => {
