@@ -106,6 +106,19 @@ function isCommentLine(line: string): boolean {
 }
 
 /**
+ * A fill behind a state prefix (`hover:`, `aria-expanded:`, `data-[…]:`).
+ * For these the fill IS the entire state change, so the border test below
+ * does not apply: a static border is drawn in both states and can signal
+ * neither. Only another utility under a state prefix - a text-colour swing,
+ * a ring - survives the collapse. Approximate by design: it does not check
+ * that the two prefixes match, which keeps a `focus-visible:ring` from
+ * excusing a `hover:` fill only by luck of them usually appearing together.
+ */
+const STATE_MUTED_FILL = /[a-z-]+(?:\[[^\]]*\])?:bg-muted/;
+const STATE_OTHER_CHANNEL =
+  /[a-z-]+(?:\[[^\]]*\])?:(?:text|border|ring|shadow|outline|opacity)-/;
+
+/**
  * Whether a collapse would actually erase something here.
  *
  * A solid fill, or one at >= /40, carries the element's whole presence: lose
@@ -117,6 +130,7 @@ function isCommentLine(line: string): boolean {
  * instead of burying real defects under cosmetic ones.
  */
 function isLoadBearing(line: string): boolean {
+  if (STATE_MUTED_FILL.test(line)) return !STATE_OTHER_CHANNEL.test(line);
   if (/bg-muted(?![-/])|var\(--(?:color-)?muted\)/.test(line)) return true;
   const alphas = [...line.matchAll(/bg-muted\/(\d+)/g)].map((match) =>
     Number(match[1]),
