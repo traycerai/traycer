@@ -547,13 +547,14 @@ export interface ChatMessageStoppedInfo {
   readonly stoppedAt: number;
   readonly reason: string | null;
   /**
-   * Whether the TURN (not necessarily this specific row) produced any
-   * visible output before it was stopped. A split turn's stamped row is
-   * sometimes a content-less boundary marker synthesized after a trailing
-   * steer bubble - its own `segments` are empty even though an earlier row
-   * in the same turn has real content. `false` drives "Stopped before
-   * responding" (the turn truly never produced anything); `true` drives the
-   * full "Stopped · Nm Xs" footer even on a row with no segments of its own.
+   * Whether the TURN (not necessarily this specific row) produced response
+   * output before it was stopped. An `autonomous_resume` divider is a turn
+   * boundary, not a response. A split turn's stamped row is sometimes a
+   * content-less boundary marker synthesized after a trailing steer bubble -
+   * its own `segments` are empty even though an earlier row in the same turn
+   * has real content. `false` drives "Stopped before responding"; `true`
+   * drives the full "Stopped · Nm Xs" footer even on a row with no segments
+   * of its own.
    */
   readonly turnHadOutput: boolean;
   /**
@@ -581,9 +582,30 @@ export interface ChatMessage {
   settings: ChatRunSettings | null;
   createdAt: number;
   /**
+   * Wall-clock start used by the assistant elapsed timer. Defaults to
+   * `createdAt`; differs when a persisted notification is adopted by a later
+   * provider run but must keep its original transcript position.
+   */
+  elapsedStartedAt?: number;
+  /**
+   * Whether every assistant segment in this completed turn is an
+   * `autonomous_resume` divider. Stamped only on the turn's final assistant
+   * row; `undefined` on live and non-final rows.
+   */
+  turnHasOnlyAutonomousResumeSegments?: boolean;
+  /**
+   * Whether this completed row should render the elapsed footer. `false` for
+   * a background-completion notification that no provider turn adopted; its
+   * non-null `completedAt` still records terminal state for transcript
+   * consumers.
+   */
+  showCompletionFooter?: boolean;
+  /**
    * Wall-clock time the assistant turn finished, in ms. Non-null only for
-   * completed assistant rows (drives the "Worked for Nm Xs" footer). Always
-   * `null` for user rows, pending rows, and in-progress assistant turns.
+   * completed assistant rows. It records terminal state; the optional
+   * `showCompletionFooter` flag controls whether that state also renders a
+   * "Worked for Nm Xs" footer. Always `null` for user rows, pending rows, and
+   * in-progress assistant turns.
    */
   completedAt: number | null;
   /** See `ChatMessageStoppedInfo`. */

@@ -4302,7 +4302,7 @@ describe("useRenderedMessages turn.stopped", () => {
   function terminalEvent(input: {
     readonly type: Extract<
       ChatEvent["type"],
-      "turn.stopped" | "turn.interrupted" | "turn.completed"
+      "turn.started" | "turn.stopped" | "turn.interrupted" | "turn.completed"
     >;
     readonly timestamp: number;
     readonly turnId: string | null;
@@ -4432,6 +4432,639 @@ describe("useRenderedMessages turn.stopped", () => {
     const row = result.current.find((message) => message.role === "assistant");
     expect(row?.completedAt).toBe(15_000);
     expect(row?.stopped).toBeNull();
+  });
+
+  it("uses lifecycle timing after an autonomous-resume notification is adopted", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+    const interveningUser = userMessageAt("m2", 12_500);
+
+    const driver = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, interveningUser],
+    });
+
+    const notificationRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(notificationRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(notificationRow).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(notificationRow?.elapsedStartedAt).toBeUndefined();
+
+    driver.patch({
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const resumedRow = driver.result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(resumedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+    expect(
+      driver.result.current.findIndex(
+        (message) => message.id === resumedRow?.id,
+      ),
+    ).toBeLessThan(
+      driver.result.current.findIndex((message) => message.id === "m2"),
+    );
+  });
+
+  it("keeps an adopted start without a terminal event footerless", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A fatal connection close clears the active turn while the provider may
+    // still be running: turn.started exists, its terminal event does not. A
+    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    // The live timer still seeds from the provider start.
+    expect(row?.elapsedStartedAt).toBe(13_000);
+  });
+
+  it("keeps lifecycle timing after the adopted resume produces output", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        textBlock("block-1", 14_000, "Resumed answer"),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    // The first response block must not switch the turn back to the
+    // pre-resume persisted start - the elapsed interval stays the provider
+    // window.
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: false,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("measures a steered continuation from the resumed attempt's start", () => {
+    const steeredUser = userMessageAt("m2", 12_500);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", "m2", 12_500),
+      ],
+    };
+
+    // Safe-point steering continuations reuse the turnId, so the turn can
+    // carry a pre-steer turn.started. The resumed attempt is the LATEST
+    // window; collapsing starts to their minimum would stretch the silent
+    // resume's elapsed across both attempts.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("scopes pause accounting to the resumed attempt's window", () => {
+    const approvalEvent = (
+      type: "approval.requested" | "approval.resolved",
+      approvalId: string,
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId: `event:${type}:${approvalId}:${timestamp}`,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: "turn-resume",
+      messageId: "m1",
+      queueItemId: null,
+      approvalId,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // Attempt 1 pauses 8.5s → 9s; the resumed attempt (13s → 15s) pauses
+    // 13.5s → 14s. Only the in-window wait may subtract from the resumed
+    // attempt's duration.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-1", 8_500),
+        approvalEvent("approval.resolved", "appr-1", 9_000),
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        approvalEvent("approval.requested", "appr-2", 13_500),
+        approvalEvent("approval.resolved", "appr-2", 14_000),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      elapsedStartedAt: 13_000,
+      completedAt: 15_000,
+    });
+    expect(row?.pausedDurationMs).toBe(500);
+  });
+
+  it("ignores a completed attempt window that predates the resume divider", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The reused turnId completed an attempt BEFORE the notification was
+    // persisted, and the provider never started again. That window predates
+    // the divider it would prove adopted - the row must stay a footerless
+    // notification instead of rendering "Resumed · no response" with the
+    // stale window's timing.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 9_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("adopts a window whose start ties the resume divider timestamp", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // The host stamps the divider before launching the adopting provider
+    // turn, so a same-millisecond `turn.started` is the resumed attempt, not
+    // pre-resume history.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 12_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 12_000,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
+  });
+
+  it("does not seed the live timer from a pre-resume start without a terminal", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    // A stale open window from before the notification (a connection close
+    // never delivered the terminal event) must not adopt the live timer -
+    // unlike a start AFTER the divider, which legitimately seeds it.
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 8_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("keeps an autonomous-resume notification terminal but footerless when only an end event exists", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.interrupted",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "The background continuation ended before producing output.",
+          severity: "info",
+          metadata: {
+            reason:
+              "The background continuation ended before producing output.",
+            code: "AUTONOMOUS_RESUME_LOST",
+            recoverable: true,
+          },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      showCompletionFooter: false,
+      completedAt: 12_000,
+    });
+    expect(row?.elapsedStartedAt).toBeUndefined();
+  });
+
+  it("retains a stopped boundary on an autonomous-resume notification without a start event", () => {
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      createdAt: 10_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      completedAt: 15_000,
+      stopped: {
+        stoppedAt: 15_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: false,
+      },
+    });
+  });
+
+  it("checks every assistant slice before classifying an autonomous resume as silent", () => {
+    const steeredUser = userMessageAt("m2", 12_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        textBlock("block-1", 11_000, "Earlier response"),
+        steerBlock("steer-1", steeredUser.messageId, 12_000),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 14_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 10_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    const completedRow = assistantRows.find(
+      (message) => message.completedAt !== null,
+    );
+    expect(completedRow?.segments.map((segment) => segment.kind)).toEqual([
+      "autonomous_resume",
+    ]);
+    expect(completedRow?.turnHasOnlyAutonomousResumeSegments).toBe(false);
+  });
+
+  it("uses lifecycle timing for a silent autonomous resume that contains a steer", () => {
+    const steeredUser = userMessageAt("m2", 14_000);
+    const assistant = {
+      ...assistantMessage("turn-resume", 10_000),
+      timestamp: 14_000,
+      blocks: [
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-1",
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+        steerBlock("steer-1", steeredUser.messageId, 14_000),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+      events: [
+        terminalEvent({
+          type: "turn.started",
+          timestamp: 13_000,
+          turnId: "turn-resume",
+          message: null,
+          severity: "info",
+          metadata: null,
+        }),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId: "turn-resume",
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ],
+    });
+
+    const completedRow = result.current.find(
+      (message) => message.role === "assistant" && message.completedAt !== null,
+    );
+    expect(completedRow).toMatchObject({
+      createdAt: 10_000,
+      elapsedStartedAt: 13_000,
+      turnHasOnlyAutonomousResumeSegments: true,
+      showCompletionFooter: true,
+      completedAt: 15_000,
+    });
   });
 
   it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {

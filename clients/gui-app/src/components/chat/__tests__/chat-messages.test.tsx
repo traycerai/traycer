@@ -1146,6 +1146,683 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces a footerless background completion appended while the chat is idle", async () => {
+      const userMsg = makeMessage(0, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg],
+        scrollStateKey: "aria-background-complete-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The projector inserts a notification-only autonomous-resume row that
+      // is born terminal - non-null `completedAt`, footer suppressed - with
+      // no pending assistant row preceding it (see
+      // `renderPersistedAssistantMessageTurn`). There is no null → timestamp
+      // transition to observe; the row's arrival is its completion.
+      rerenderMessages([
+        userMsg,
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("announces when a terminal notification row is adopted by its provider turn", async () => {
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-adopted-resume-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Reconnect/batched snapshot: the matching turn.started and terminal
+      // events arrive together, so the row keeps its id, stays terminal, and
+      // completion surfaces as the footer flipping on while `completedAt`
+      // moves between two non-null values.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          completedAt: 1_700_000_005_000,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
+    it("does not announce a footerless row backfilled behind known messages", async () => {
+      const knownUser = makeMessage(2, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-backfill-history-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Reconnect/backfill hydrates an OLDER footerless notification into a
+      // transcript that mounted partial. It does not extend the transcript
+      // past the known messages, so it is history, not news.
+      rerenderMessages([
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_699_999_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+        knownUser,
+        knownAssistant,
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("announces a turn that arrives whole past every known message", async () => {
+      const userMsg = makeMessage(0, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg],
+        scrollStateKey: "aria-arrived-whole-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // A batched snapshot can deliver the notification and its adopting
+      // provider turn together: a new id, already terminal, footer already
+      // on. Extending the tail past every known message makes it news.
+      rerenderMessages([
+        userMsg,
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_700_000_005_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
+    it("announces a live background completion inserted before known rows", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(5, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const laterUser = makeMessage(6, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant, laterUser],
+        scrollStateKey: "aria-mid-insert-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // A background task from an EARLIER turn settles late: the projector
+      // anchors the new notification at its turn's original transcript
+      // position - before rows the reader has already seen - but its
+      // completion is newer than everything observed. Position must not
+      // classify it as hydration.
+      rerenderMessages([
+        knownUser,
+        {
+          ...makeMessage(2, "assistant"),
+          completedAt: 1_700_000_010_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+        knownAssistant,
+        laterUser,
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("announces a tied-timestamp completion appended past known rows", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-tied-completion-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Wall-clock completion stamps are not unique: a background task can
+      // settle in the same millisecond as the previously newest completion.
+      // A tie counts as live regardless of where the row sorts.
+      rerenderMessages([
+        knownUser,
+        knownAssistant,
+        {
+          ...makeMessage(2, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("announces a tied-timestamp completion inserted before known rows", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(5, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const laterUser = makeMessage(6, "user");
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant, laterUser],
+        scrollStateKey: "aria-tied-mid-insert-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The intersection of the two hard cases: an earlier turn's task
+      // settles in the same millisecond as the newest observed completion,
+      // and its preserved anchor inserts the notification BEFORE known
+      // rows. Neither recency nor position can rank it - the tie itself is
+      // the live-arrival evidence.
+      rerenderMessages([
+        knownUser,
+        {
+          ...makeMessage(2, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+        knownAssistant,
+        laterUser,
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("does not announce history hydrated after an empty first observation", async () => {
+      const { rerenderMessages } = renderChatMessages({
+        messages: [],
+        scrollStateKey: "aria-empty-baseline-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Mounting raced hydration: the first observation saw an empty
+      // transcript, so no known row anchors the positional frame and no
+      // completion anchors the recency frame. The hydrated snapshot is
+      // history, not a live tail.
+      rerenderMessages([
+        makeMessage(0, "user"),
+        {
+          ...makeMessage(1, "assistant"),
+          completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: true,
+        },
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("announces additional triggers gained by an existing notification", async () => {
+      const monitorTrigger = {
+        kind: "monitor" as const,
+        title: "build watch",
+        status: "completed" as const,
+        live: false,
+        summary: "Build completed.",
+        blockId: "monitor-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [monitorTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-added-trigger-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Another monitored task settles while the divider is already present:
+      // the protocol appends a trigger to the existing block, so the row
+      // keeps its id, stays footerless, and only its content and non-null
+      // timestamp change.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [
+                monitorTrigger,
+                {
+                  ...monitorTrigger,
+                  blockId: "monitor-2",
+                  title: "test watch",
+                },
+              ],
+            },
+          ],
+          completedAt: 1_700_000_004_000,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("mutates the live region for a repeated same-millisecond trigger gain", async () => {
+      const monitorTrigger = {
+        kind: "monitor" as const,
+        title: "build watch",
+        status: "completed" as const,
+        live: false,
+        summary: "Build completed.",
+        blockId: "monitor-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [monitorTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const withTriggers = (
+        triggers: ReadonlyArray<typeof monitorTrigger>,
+      ): ChatMessageModel => ({
+        ...notificationRow,
+        segments: [{ id: "seg-resume", kind: "autonomous_resume", triggers }],
+      });
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-tied-trigger-gain-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderMessages([
+        userMsg,
+        withTriggers([
+          monitorTrigger,
+          { ...monitorTrigger, blockId: "monitor-2", title: "test watch" },
+        ]),
+      ]);
+      await settleLegendList();
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+      const firstAnnouncementNode = live?.firstElementChild;
+      expect(firstAnnouncementNode).not.toBeNull();
+
+      // A third task settles in the SAME millisecond: id, completedAt and
+      // announcement text are all unchanged, so only a fresh keyed child can
+      // make the live region emit again.
+      rerenderMessages([
+        userMsg,
+        withTriggers([
+          monitorTrigger,
+          { ...monitorTrigger, blockId: "monitor-2", title: "test watch" },
+          { ...monitorTrigger, blockId: "monitor-3", title: "lint watch" },
+        ]),
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+        expect(live?.firstElementChild).not.toBe(firstAnnouncementNode);
+      });
+    });
+
+    it("announces a still-running trigger appended to a notification as an update", async () => {
+      const monitorTrigger = {
+        kind: "monitor" as const,
+        title: "build watch",
+        status: "completed" as const,
+        live: false,
+        summary: "Build completed.",
+        blockId: "monitor-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [monitorTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-live-trigger-append-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The appended trigger's producer is STILL RUNNING (`live: true`; the
+      // card says "still running") - nothing new has settled, so the reader
+      // hears an update, not a completion.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [
+                monitorTrigger,
+                {
+                  ...monitorTrigger,
+                  blockId: "command-1",
+                  title: "dev server",
+                  live: true,
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background update.",
+        );
+      });
+    });
+
+    it("announces a notification arriving with only live triggers as an update", async () => {
+      const liveTrigger = {
+        kind: "command" as const,
+        title: "dev server",
+        status: "completed" as const,
+        live: true,
+        summary: "Server output so far.",
+        blockId: "command-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        scrollStateKey: "aria-live-only-arrival-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      rerenderMessages([
+        knownUser,
+        knownAssistant,
+        {
+          ...makeMessage(2, "assistant"),
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [liveTrigger],
+            },
+          ],
+          completedAt: 1_700_000_005_000,
+          stopped: null,
+          runState: null,
+          showCompletionFooter: false,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background update.",
+        );
+      });
+    });
+
+    it("announces a live trigger settling in place as a background completion", async () => {
+      const liveTrigger = {
+        kind: "command" as const,
+        title: "test run",
+        status: "completed" as const,
+        live: true,
+        summary: "Tests running.",
+        blockId: "command-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+      };
+      const userMsg = makeMessage(0, "user");
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        segments: [
+          {
+            id: "seg-resume",
+            kind: "autonomous_resume",
+            triggers: [liveTrigger],
+          },
+        ],
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, notificationRow],
+        scrollStateKey: "aria-live-trigger-settle-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The still-running producer settles IN PLACE: trigger count is
+      // unchanged, only `live` flips off. That flip is the completion the
+      // reader was told was still pending.
+      rerenderMessages([
+        userMsg,
+        {
+          ...notificationRow,
+          segments: [
+            {
+              id: "seg-resume",
+              kind: "autonomous_resume",
+              triggers: [{ ...liveTrigger, live: false }],
+            },
+          ],
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("does not announce a completedAt shift when the footer state is unchanged", async () => {
+      const userMsg = makeMessage(0, "user");
+      const completedRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, completedRow],
+        scrollStateKey: "aria-canonicalized-timestamp-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // A canonicalized snapshot timestamp re-stamps `completedAt` on an
+      // already-completed row; nothing newly finished, so nothing announces.
+      rerenderMessages([
+        userMsg,
+        { ...completedRow, completedAt: 1_700_000_000_500 },
+      ]);
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("does not announce a footerless history row present at mount", async () => {
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      renderChatMessages({
+        messages: [makeMessage(0, "user"), notificationRow],
+        scrollStateKey: "aria-footerless-history",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      expect(
+        document.querySelector('[aria-live="polite"]')?.textContent ?? "",
+      ).toBe("");
+    });
+
     it("announces when a pending live row is replaced by its completed persisted row", async () => {
       const userMsg = makeMessage(0, "user");
       const pendingAssistant: ChatMessageModel = {
