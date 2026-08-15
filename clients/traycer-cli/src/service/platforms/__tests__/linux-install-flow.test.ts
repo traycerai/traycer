@@ -17,45 +17,19 @@ import { ProcessRunError, type RunResult } from "../../process-runner";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { fileExists } from "../../install-binary";
 
-// `stop --force`'s confirmed-stop paths purge pid.json on the host's
-// behalf (a SIGKILLed/SIGTERMed-but-unconfirmed host cannot run its own
-// shutdown cleanup) - stub the removal the same way `macos.test.ts` /
-// `desktop-agent-shutdown.test.ts` stub the identical export, so this
-// suite never touches a real path. The purge is now gated on the PUBLISHED
-// process being provably gone too (a down unit proves nothing about a
-// manually started/orphaned host that owns pid.json outside the unit), so
-// `readHostPidMetadata`/`isProcessAlive`/`getPublishedProcessIdentityVerdict`
-// need the same stubbing `desktop-agent-shutdown.test.ts` already
-// establishes for the identical gate - reused here verbatim.
+// `stop --force`'s confirmed-settle branches finish with the SAME
+// child-kill engine the macOS force paths use (`forceStopHostProcess`) -
+// the local purge helper is gone, along with its own pid.json read/verdict
+// gating. Stub the engine exactly the way `macos.test.ts` already stubs
+// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only
+// `forceStopHostProcess` from this module, so that is the only export this
+// suite needs to supply).
 const MOCKS = vi.hoisted(() => ({
-  removeHostPidMetadata: vi.fn(),
-  readHostPidMetadata: vi.fn(),
-  isProcessAlive: vi.fn(),
-  getPublishedProcessIdentityVerdict: vi.fn(),
+  forceStopHostProcess: vi.fn(),
 }));
-vi.mock("../../../host/pid-metadata", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../host/pid-metadata")>();
-  return {
-    ...actual,
-    removeHostPidMetadata: MOCKS.removeHostPidMetadata,
-    readHostPidMetadata: MOCKS.readHostPidMetadata,
-  };
-});
-vi.mock("../../../store/cli-lock", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../store/cli-lock")>();
-  return { ...actual, isProcessAlive: MOCKS.isProcessAlive };
-});
-vi.mock("../../../store/process-identity", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../store/process-identity")>();
-  return {
-    ...actual,
-    getPublishedProcessIdentityVerdict:
-      MOCKS.getPublishedProcessIdentityVerdict,
-  };
-});
+vi.mock("../desktop-agent-shutdown", () => ({
+  forceStopHostProcess: MOCKS.forceStopHostProcess,
+}));
 
 /**
  * The systemd install FLOW - as opposed to the emitted artifact, which
@@ -96,20 +70,6 @@ const label: ServiceLabel = {
 };
 
 const unitFile = (): string => serviceManifestPath(label);
-
-// Round-3's fixture-hermeticity rule applies here too: `processStartIdentity`
-// is explicitly `null`, never omitted - an omitted field reads as
-// `undefined`, which is NOT `null`, and would silently route every test
-// through the wrong purge-gate branch (the identity-verdict path instead of
-// the legacy liveness fallback).
-const FORCE_STOP_PID_METADATA = {
-  pid: 4242,
-  hostId: "test-host",
-  version: "1.2.3",
-  websocketUrl: "ws://127.0.0.1:1234/rpc",
-  startedAt: "2026-07-12T00:00:00.000Z",
-  processStartIdentity: null,
-};
 
 interface RecordedCall {
   readonly command: string;
@@ -302,18 +262,15 @@ describe("linux service install flow", () => {
 // the identical wait shape.
 describe("linux service stop --force", () => {
   beforeEach(() => {
-    MOCKS.removeHostPidMetadata.mockReset();
-    MOCKS.readHostPidMetadata.mockReset();
-    MOCKS.isProcessAlive.mockReset();
-    MOCKS.getPublishedProcessIdentityVerdict.mockReset();
-    // Default fixture: a pre-identity pid.json (the legacy liveness-gate
-    // fallback) naming a process already confirmed dead - the shape every
-    // pre-existing purge-positive test in this file expects, so a test that
-    // does not override the fixture keeps exercising the same purge path it
-    // always has. Tests targeting the identity-verdict gate specifically
-    // override both mocks below.
-    MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(false);
+    MOCKS.forceStopHostProcess.mockReset();
+    // Default outcome: no-metadata, which is SUCCESS on this finisher (the
+    // unit teardown already ran with positive confirmation, and an absent
+    // record is the normal trace of a host that exited gracefully and
+    // unlinked its own file - unlike the macOS ENTRY paths, where
+    // no-metadata is a failure). Every pre-existing force-success test below
+    // keeps passing through the finisher unchanged without staging its own
+    // outcome; tests targeting outcome mapping specifically override this.
+    MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
   });
 
   afterEach(() => {
@@ -350,10 +307,10 @@ describe("linux service stop --force", () => {
       "stop",
       "ai.traycer.host.dev.service",
     ]);
-    // A CONFIRMED inactive unit purges the stale pid.json on the host's
-    // behalf - the host's own shutdown handler may not have run (or
-    // finished) in time to unlink it itself.
-    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    // A CONFIRMED inactive unit hands off to the child-kill engine, which
+    // finishes the stop (and its own instance-matched purge) on the
+    // published host's behalf.
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
   it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, cancels any scheduled auto-restart BEFORE the second poll, then settles and succeeds", async () => {
@@ -422,8 +379,9 @@ describe("linux service stop --force", () => {
     // Exactly two `stop` verbs total: the initial one and the post-kill
     // cancel - never a third.
     expect(verbs.filter((v) => v === "stop")).toHaveLength(2);
-    // Purged on the SIGKILL-confirmed path too - same as the SIGTERM one.
-    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    // The finisher runs on the SIGKILL-confirmed path too - same as the
+    // SIGTERM one.
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
   it("is still 'active' after the SIGKILL grace too - SERVICE_CONTROL_FAILED, never a false success", async () => {
@@ -459,9 +417,9 @@ describe("linux service stop --force", () => {
     const killIndex = verbs.indexOf("kill");
     expect(killIndex).toBeGreaterThan(0);
     expect(verbs[killIndex + 1]).toBe("stop");
-    // Never confirmed, so nothing is purged - deleting a live host's
-    // published endpoint would orphan it.
-    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    // Never confirmed, so the throw happens BEFORE the finisher - the
+    // child-kill engine is never even asked about the published host.
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
   it("'activating' does NOT count as settled - it drives the SIGKILL escalation exactly like 'active' does", async () => {
@@ -496,7 +454,7 @@ describe("linux service stop --force", () => {
     // pre-kill state was 'activating' rather than 'active'.
     const killIndex = verbs.indexOf("kill");
     expect(verbs[killIndex + 1]).toBe("stop");
-    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
   it("a probe that throws (systemd unreachable) reads as NOT settled, not as a false success", async () => {
@@ -526,7 +484,7 @@ describe("linux service stop --force", () => {
     const killIndex = verbs.indexOf("kill");
     expect(killIndex).toBeGreaterThan(0);
     expect(verbs[killIndex + 1]).toBe("stop");
-    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
   // Codex's exact scenario: `tolerateNonZeroExit: true` means a probe that
@@ -565,7 +523,7 @@ describe("linux service stop --force", () => {
     const killIndex = verbs.indexOf("kill");
     expect(killIndex).toBeGreaterThan(0);
     expect(verbs[killIndex + 1]).toBe("stop");
-    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
   it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
@@ -591,7 +549,7 @@ describe("linux service stop --force", () => {
       "stop",
       "is-active",
     ]);
-    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
   it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
@@ -613,7 +571,7 @@ describe("linux service stop --force", () => {
       "stop",
       "is-active",
     ]);
-    expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
   });
 
   it("without --force, a stop never probes is-active or escalates to kill - today's semantics, pinned", async () => {
@@ -622,8 +580,9 @@ describe("linux service stop --force", () => {
     await createLinuxController(runner).stop(label, { force: false });
 
     expect(calls.map(verbOf)).toEqual(["stop"]);
-    // Non-force never confirms the stop, so it never purges either.
-    expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+    // Non-force never confirms the stop, so the finisher is never reached
+    // either.
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
   // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
@@ -686,10 +645,10 @@ describe("linux service stop --force", () => {
       expect(verbs.slice(3, killIndex).length).toBeGreaterThan(0);
       expect(verbs[killIndex + 1]).toBe("stop");
       expect(verbs[killIndex + 2]).toBe("is-active");
-      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
     });
 
-    it("if nothing ever settles after the kill either, SERVICE_CONTROL_FAILED - never a false success", async () => {
+    it("if nothing ever settles after the kill either, SERVICE_CONTROL_FAILED - never a false success, and the finisher is never reached", async () => {
       vi.useFakeTimers();
       let stopCount = 0;
       const runner: ProcessRunner = async (command, args) => {
@@ -719,142 +678,96 @@ describe("linux service stop --force", () => {
       await vi.advanceTimersByTimeAsync(30_000);
 
       await assertion;
-      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+      // The unit never settled, so the throw happens BEFORE the finisher -
+      // the child-kill engine is never even asked about the published host.
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
     });
   });
 
-  // Purge gated on the PUBLISHED process being provably gone, not just on
-  // the unit being confirmed down: a down unit says nothing about a
-  // manually started or orphaned host that owns this environment's
-  // pid.json OUTSIDE the unit - unlinking would leave that live host
-  // serving but undiscoverable. Mirrors `desktop-agent-shutdown.test.ts`'s
-  // identical gate one to one.
-  describe("purge gated on published-process death, not unit state alone", () => {
-    it("keeps pid.json when the identity verdict says the occupant is still 'current' - the unit is confirmed down, but stop still succeeds without purging", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        ...FORCE_STOP_PID_METADATA,
-        processStartIdentity: "linux:1699999999.123456",
+  // Outcome mapping: once the unit is CONFIRMED down,
+  // `finishForcedStopForPublishedHost` hands off to the SAME child-kill
+  // engine the macOS force paths use (`forceStopHostProcess`, mocked here
+  // exactly the way `macos.test.ts` mocks it). A confirmed-down unit is
+  // only HALF of what `--force` promises - a live host running OUTSIDE the
+  // unit (started manually, or orphaned by a corrupted teardown) still gets
+  // SIGTERM->SIGKILLed by the engine, and the engine's own instance-matched
+  // purge replaces the local gate entirely.
+  describe("forced-stop finisher: outcome mapping through forceStopHostProcess", () => {
+    function settledRunner(): ProcessRunner {
+      return async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+    }
+
+    it("resolves when forceStopHostProcess reports 'stopped' - an orphan host running outside the unit got SIGTERM/SIGKILLed", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+    });
+
+    it("resolves when forceStopHostProcess reports 'no-host' (the published pid was already gone)", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
       });
-      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
 
       await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledWith(
-        4242,
-        "linux:1699999999.123456",
-      );
-      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
-      // The identity-carrying path bypasses the legacy liveness gate
-      // entirely - it must not run a second, contradictory check.
-      expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
-    });
-
-    it("keeps pid.json when the identity verdict is 'indeterminate' - an unverifiable occupant is not evidence of anything, so its record stays too", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        ...FORCE_STOP_PID_METADATA,
-        processStartIdentity: "linux:1699999999.123456",
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("cannot be verified"),
       });
-      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
-        "indeterminate",
-      );
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
-
       await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
-    });
-
-    it("purges when the identity verdict proves the published process is gone ('dead')", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        ...FORCE_STOP_PID_METADATA,
-        processStartIdentity: "linux:1699999999.123456",
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("host stop --force"),
       });
-      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("dead");
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
-
-      await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
     });
 
-    it("purges when the identity verdict proves a recycled pid ('mismatch')", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        ...FORCE_STOP_PID_METADATA,
-        processStartIdentity: "linux:1699999999.123456",
+    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
       });
-      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
 
       await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("survived SIGKILL"),
+      });
     });
 
-    it("null-identity fallback: purges when the legacy liveness check proves the pid dead", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
-      MOCKS.isProcessAlive.mockReturnValue(false);
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
+    it("carries operation 'restart' through stopForRestart's force path, and a terminal outcome's message names 'host restart --force'", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
 
       await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.isProcessAlive).toHaveBeenCalledWith(4242);
-      expect(MOCKS.removeHostPidMetadata).toHaveBeenCalledWith("dev");
-      // The null-identity fallback skips the verdict call entirely - a
-      // pre-identity pid.json never reaches it.
-      expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
-    });
-
-    it("null-identity fallback: keeps pid.json when the legacy liveness check finds the pid still alive - a manually started/orphaned host outside the unit keeps its record", async () => {
-      MOCKS.readHostPidMetadata.mockResolvedValue(FORCE_STOP_PID_METADATA);
-      MOCKS.isProcessAlive.mockReturnValue(true);
-      const runner: ProcessRunner = async (command, args) => {
-        if (command === "systemctl" && args[1] === "is-active") {
-          return { stdout: "inactive", stderr: "", exitCode: 3 };
-        }
-        return ok();
-      };
-
-      await expect(
-        createLinuxController(runner).stop(label, { force: true }),
-      ).resolves.toBeUndefined();
-
-      expect(MOCKS.removeHostPidMetadata).not.toHaveBeenCalled();
+        createLinuxController(settledRunner()).stopForRestart(label, {
+          force: true,
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("host restart --force"),
+      });
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "restart");
     });
   });
 });

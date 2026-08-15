@@ -1,12 +1,9 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
-import {
-  readHostPidMetadata,
-  removeHostPidMetadata,
-} from "../../host/pid-metadata";
+import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
-import { getPublishedProcessIdentityVerdict } from "../../store/process-identity";
+import { forceStopHostProcess } from "./desktop-agent-shutdown";
 import type { CliInvocation } from "../cli-binary";
 import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -45,7 +42,7 @@ export function createLinuxController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
-    stop: (label, options) => stopService(label, run, options.force),
+    stop: (label, options) => stopService(label, run, options.force, "stop"),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
     // There is no Desktop/SMAppService split on Linux, so the restart halves
@@ -54,7 +51,7 @@ export function createLinuxController(
     // platform. `forcedRecycle` is never set: `stopService` is a real
     // systemd stop, so the unit is genuinely down before the start.
     stopForRestart: async (label, options) => {
-      await stopService(label, run, options.force);
+      await stopService(label, run, options.force, "restart");
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) => startService(label, run),
@@ -247,6 +244,7 @@ async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   force: boolean,
+  operation: "stop" | "restart",
 ): Promise<void> {
   await run("systemctl", ["--user", "stop", unitName(label)], {
     env: undefined,
@@ -273,7 +271,7 @@ async function stopService(
     // unconfirmed cancel falls through to the SIGKILL escalation instead of
     // reporting a stop it cannot prove.
     if (await waitForUnitInactive(label, run, FORCE_STOP_CONFIRM_GRACE_MS)) {
-      await purgePidMetadataAfterConfirmedStop(label);
+      await finishForcedStopForPublishedHost(label, operation);
       return;
     }
   }
@@ -296,7 +294,7 @@ async function stopService(
   // state settle at inactive/failed.
   await cancelScheduledAutoRestart(label, run);
   if (await waitForUnitInactive(label, run, FORCE_STOP_SIGKILL_GRACE_MS)) {
-    await purgePidMetadataAfterConfirmedStop(label);
+    await finishForcedStopForPublishedHost(label, operation);
     return;
   }
   throw cliError({
@@ -332,40 +330,48 @@ async function cancelScheduledAutoRestart(
   }
 }
 
-// A SIGKILLed host cannot run its own shutdown cleanup, so the stale
-// pid.json record survives the process - and the Desktop health monitor
-// reads "metadata present + endpoint dead" as a crash and starts recovery,
-// undoing the stop the user just forced. Two gates, both required:
+// The confirmed-down unit is only HALF of what `--force` promises: pid.json
+// can name a live host running OUTSIDE the unit (started manually, or
+// orphaned by a corrupted teardown), and `is-active` says nothing about it.
+// Silently succeeding would leave that host serving - and a
+// `restart --force` would then start the unit BESIDE it, manufacturing the
+// dual-host state the rest of this codebase actively fights. Finish with
+// the same child-kill engine the macOS force paths use: it re-reads
+// pid.json, identity-gates every signal, SIGTERM→SIGKILLs a live occupant,
+// and purges the record only on an exact instance match - so the Linux
+// contract becomes the macOS contract, "unit down AND published host down,
+// or a loud failure".
 //
-// 1. The unit is CONFIRMED down (the callers' polls) - never the
-//    unconfirmed non-force return.
-// 2. The PUBLISHED process is provably gone. A down unit proves nothing
-//    about pid.json: a manually started or orphaned host running OUTSIDE
-//    the unit can own this environment's record while `is-active` reads
-//    inactive/unknown, and unlinking would leave that live host serving
-//    but undiscoverable. Same fail-closed direction as the kill gates: an
-//    occupant that cannot be verified keeps its record.
-//
-// Best-effort throughout - a failed read or unlink must not turn a real,
-// confirmed stop into a reported failure.
-async function purgePidMetadataAfterConfirmedStop(
+// Outcome mapping differs from the macOS ENTRY paths on `no-metadata`
+// deliberately: there the child engine is the whole stop, so nothing-to-kill
+// is a failure ("a booting host may not have published yet"); here the unit
+// teardown already ran with positive confirmation, and an absent record is
+// the NORMAL trace of a host that exited gracefully and unlinked its own
+// file - success, nothing further to finish.
+async function finishForcedStopForPublishedHost(
   label: ServiceLabel,
+  operation: "stop" | "restart",
 ): Promise<void> {
-  try {
-    const metadata = await readHostPidMetadata(label.environment);
-    if (metadata === null) return;
-    if (metadata.processStartIdentity !== null) {
-      const verdict = await getPublishedProcessIdentityVerdict(
-        metadata.pid,
-        metadata.processStartIdentity,
-      );
-      if (verdict !== "dead" && verdict !== "mismatch") return;
-    } else if (isProcessAlive(metadata.pid)) {
+  const outcome = await forceStopHostProcess(label.environment, operation);
+  switch (outcome.kind) {
+    case "stopped":
+    case "no-host":
+    case "no-metadata":
       return;
-    }
-    await removeHostPidMetadata(label.environment);
-  } catch {
-    // Best-effort by design; the stop itself is already confirmed.
+    case "identity-unverified":
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation} --force: the systemd unit is stopped, but pid.json names pid=${outcome.pid} and its identity cannot be verified (the pid may have been recycled), so refusing to signal it. Retry in a moment; if the host is known dead, remove the stale record via 'traycer host service uninstall' and reinstall.`,
+        details: { unit: unitName(label), pid: outcome.pid },
+        exitCode: 1,
+      });
+    case "hung":
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation} --force: the systemd unit is stopped, but the published host (pid=${outcome.pid}, running outside the unit) survived SIGKILL through the exit grace; the stop did not take effect.`,
+        details: { unit: unitName(label), pid: outcome.pid },
+        exitCode: 1,
+      });
   }
 }
 
