@@ -40,7 +40,7 @@ export function UntrustedSvgLightbox(
   if (state.status === "loading") {
     return (
       <div
-        className="size-full animate-pulse rounded-lg bg-foreground/6 motion-reduce:animate-none"
+        className="size-full animate-pulse rounded-lg bg-foreground/10 motion-reduce:animate-none"
         role="status"
         aria-label="Loading SVG"
       />

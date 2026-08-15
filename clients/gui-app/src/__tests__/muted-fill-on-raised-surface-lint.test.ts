@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -28,24 +29,38 @@ import { describe, expect, it } from "vitest";
  */
 const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Markers that this file paints a `--popover`/`--card`-valued surface. */
+/**
+ * Markers that this file paints a `--popover`/`--card`-valued surface.
+ *
+ * The PRIMITIVES matter as much as the literal utility classes: a caller
+ * that renders `<Card>`/`<CardContent>` creates a `--card` surface without
+ * ever spelling `bg-card`, so matching only the class left the single most
+ * common raised surface in the app unguarded. `<Card` covers the whole
+ * family by prefix.
+ */
 const RAISED_SURFACE =
-  /DialogContent|PopoverContent|DropdownMenuContent|SheetContent|ContextMenuContent|bg-popover|bg-card/;
+  /DialogContent|AlertDialogContent|PopoverContent|HoverCardContent|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|<Card|bg-popover|bg-card/;
 
 /** `bg-muted-foreground` is a TEXT color and is unaffected by the collapse. */
 const MUTED_FILL = /bg-muted(?!-foreground)/;
 
 /**
- * Opt-out for a fill traced to a surface that does not collapse. Must be
- * followed by a reason naming that surface, e.g.
- * `// muted-fill-ok: canvas-scoped tile chrome, --canvas never collapses`.
+ * Opt-out for a fill that a collapse cannot actually erase. Must be followed
+ * by a reason, which is one of exactly two claims:
+ *
+ * 1. The surface does not collapse - `bg-canvas`, or inside
+ *    `.canvas-token-scope` where `--background` remaps to `--canvas`.
+ * 2. The fill is not load-bearing - an explicit border delimits the element,
+ *    or an interaction state has a second channel (a text-color swing,
+ *    `line-through`), so a collapse degrades it instead of erasing it.
  *
  * Mind the comment form. In JSX CHILDREN position a `//` line is not a
  * comment at all - it is a text node, so it renders to the user and gives
  * any `asChild` ancestor a second child ("failed to slot onto its
- * children"). `tsc` accepts it either way, so only a render test catches
- * it. Use `{@literal {}/* … *}` there and `//` everywhere else (attribute
- * position, and expression position after `return (`, `= (` or a ternary).
+ * children"). `tsc` accepts it either way, so only a render test catches it -
+ * which is why {@link ALLOW_MARKER} annotations are parsed below rather than
+ * trusted. Prefer attribute position (inside the opening tag), which is a
+ * real comment in every context; `{@literal {}/* … *}` also works in children.
  */
 const ALLOW_MARKER = /muted-fill-ok:\s*\S/;
 
@@ -118,6 +133,44 @@ describe("muted fills on raised surfaces", () => {
     });
 
     expect(stale).toEqual([]);
+  });
+
+  /**
+   * The annotations are prose about markup, so a malformed one is invisible
+   * to `tsc` and silently becomes markup itself. Parsing is the only way to
+   * tell the two apart: if the marker text lands in a `JsxText` node, the
+   * "comment" is a rendered text node - it leaks internal notes into labels
+   * ("Agents // muted-fill-ok: ...") and breaks any `asChild` ancestor by
+   * handing Radix's Slot a second child. Five shipped that way before this
+   * check existed.
+   */
+  it("no annotation parses as JSX text instead of a comment", () => {
+    const rendered = collectTsxFiles(SRC_DIR).flatMap((file) => {
+      const source = readFileSync(file, "utf8");
+      if (!ALLOW_MARKER.test(source)) return [];
+      const parsed = ts.createSourceFile(
+        file,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TSX,
+      );
+      const relative = path.relative(SRC_DIR, file).split(path.sep).join("/");
+      const leaks: string[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isJsxText(node) && ALLOW_MARKER.test(node.getText())) {
+          const { line } = parsed.getLineAndCharacterOfPosition(
+            node.getStart(),
+          );
+          leaks.push(`${relative}:${String(line + 1)}`);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(parsed);
+      return leaks;
+    });
+
+    expect(rendered).toEqual([]);
   });
 });
 

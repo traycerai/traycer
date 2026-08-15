@@ -74,7 +74,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
             >
               {src === null ? (
                 <div
-                  className="size-full animate-pulse bg-foreground/6"
+                  className="size-full animate-pulse bg-foreground/10"
                   aria-hidden
                 />
               ) : (
@@ -126,7 +126,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         <DialogTitle className="sr-only">{label.title}</DialogTitle>
         {src === null ? (
           <div
-            className="aspect-video w-full animate-pulse rounded-md bg-foreground/6"
+            className="aspect-video w-full animate-pulse rounded-md bg-foreground/10"
             aria-hidden
           />
         ) : (

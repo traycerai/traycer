@@ -144,7 +144,7 @@ function ImageAttachmentThumb({
   if (image.status === "loading") {
     dialogBody = (
       <div
-        className="aspect-video w-full animate-pulse rounded-lg bg-foreground/6"
+        className="aspect-video w-full animate-pulse rounded-lg bg-foreground/10"
         aria-hidden
       />
     );

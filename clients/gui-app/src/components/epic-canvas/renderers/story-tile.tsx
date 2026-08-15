@@ -77,8 +77,8 @@ function StatusPill(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor;
-        --canvas never equals --muted
+        {/* muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor;
+            --canvas never equals --muted */}
         <span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground opacity-50">
           <span className={cn("size-2 rounded-full", current.dotClass)} />
           {current.label}

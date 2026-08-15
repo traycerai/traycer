@@ -1162,8 +1162,9 @@ function TerminalAgentHeaderControls(props: {
             data-testid="tui-agent-subagents-trigger"
           >
             <Users aria-hidden className="size-3.5" />
-            Agents // muted-fill-ok: chip on TerminalAgentTileShell bg-canvas;
-            --canvas never equals --muted
+            Agents
+            {/* muted-fill-ok: chip on TerminalAgentTileShell bg-canvas;
+                --canvas never equals --muted */}
             <span className="rounded bg-muted px-1 text-ui-xs">
               {runningCount}
             </span>

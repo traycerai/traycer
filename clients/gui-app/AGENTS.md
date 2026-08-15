@@ -59,6 +59,15 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
   solid fill or an interaction state, `/10` for a skeleton, `/6 · /5 · /3`
   descending for tints. `bg-muted` stays fine for zones on `bg-background` /
   `bg-canvas`, and `bg-muted-foreground` (a text color) is unaffected.
+  The rule is about the RENDERED fill, not the utility class, so it binds in
+  raw CSS too: `var(--muted)` in a `@keyframes` frame or behind a custom
+  property collapses identically and no class-level sweep can see it. Watch
+  terminal frames especially — an `animation: … both` frame is not a hand-off
+  back to the class, it is the element's permanent background from then on.
+  `src/__tests__/muted-fill-on-raised-surface-lint.test.ts` guards the `.tsx`
+  half and takes a per-line `// muted-fill-ok: <reason>` waiver for a fill a
+  collapse cannot erase — the surface does not collapse (`bg-canvas`), or an
+  explicit border or a second state channel survives it.
 - No `key={x ?? fallback}` when `undefined` already remounts correctly.
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.

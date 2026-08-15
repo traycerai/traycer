@@ -119,8 +119,8 @@ export function ChatAccumulatedChangesPanel(
         data-testid="accumulated-changes-panel"
       >
         <div className="flex items-stretch">
-          // muted-fill-ok: trigger inside the canvas-surface panel above;
-          --canvas never equals --muted
+          {/* muted-fill-ok: trigger inside the canvas-surface panel above;
+              --canvas never equals --muted */}
           <CollapsibleTrigger className="group/acc flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
             <ChevronDown
               aria-hidden

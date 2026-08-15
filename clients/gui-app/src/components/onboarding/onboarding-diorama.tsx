@@ -1136,8 +1136,8 @@ function ChatPane(props: {
         <div className="ml-auto max-w-[88%] rounded-lg rounded-br-sm bg-primary px-2.5 py-1.5 text-ui-xs text-primary-foreground">
           {userCopy}
         </div>
-        // muted-fill-ok: decorative diorama bubble on a literal bg-canvas pane;
-        --canvas never equals --muted
+        {/* muted-fill-ok: decorative diorama bubble on a literal bg-canvas
+            pane; --canvas never equals --muted */}
         <div className="mr-auto flex w-[82%] max-w-[88%] flex-col gap-1.5 rounded-lg rounded-bl-sm bg-muted px-2.5 py-2">
           <span className="h-1.5 w-full rounded-full bg-foreground/15" />
           <span className="h-1.5 w-4/5 rounded-full bg-foreground/15" />

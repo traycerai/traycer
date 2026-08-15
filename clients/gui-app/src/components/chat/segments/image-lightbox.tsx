@@ -99,7 +99,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             <div className="h-[min(88vh,52rem)] w-full">
               <Suspense
                 fallback={
-                  <div className="size-full animate-pulse bg-foreground/6 motion-reduce:animate-none" />
+                  <div className="size-full animate-pulse bg-foreground/10 motion-reduce:animate-none" />
                 }
               >
                 <UntrustedSvgLightbox src={props.src} alt={alt} />
