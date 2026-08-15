@@ -11,7 +11,7 @@ import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
-import { EpicBackupStatusIndicator } from "../epic-backup-status-indicator";
+import { useEpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
 
 const EPIC_ID = "epic-a";
 const MINUTE_MS = 60_000;
@@ -38,15 +38,22 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({ isReady: mocks.ready }),
 }));
-// Only the relative FORMATTER is pinned. `useSampledNow` stays real, because
-// the active/idle classification is a comparison against it and a stub would
-// make every recency assertion below vacuous.
+// Pin only the copy formatter. `useSampledNow` remains real because the
+// active/idle classification must still compare against the live clock.
 vi.mock("@/lib/relative-time", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relative-time")>()),
-  useRelativeTimestamp: () => "5m ago",
+  formatRelativeTimestamp: () => "5m ago",
 }));
+function EpicBackupStatusIndicator(props: { readonly epicId: string }) {
+  const status = useEpicChatBackupStatus(props.epicId);
+  return status === null ? null : (
+    <div role="status" data-severity={status.severity}>
+      {status.tooltip}
+    </div>
+  );
+}
 
-describe("<EpicBackupStatusIndicator />", () => {
+describe("useEpicChatBackupStatus", () => {
   beforeEach(() => {
     mocks.data = undefined;
     mocks.ready = true;
@@ -95,7 +102,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
     expect(screen.getByRole("status").textContent).toContain(
-      "Backup paused on a fork decision",
+      "Chat backup paused on a fork decision",
     );
     expect(screen.getByRole("status").textContent).toContain(
       "1 chat not backed up",
@@ -114,7 +121,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
     expect(screen.getByRole("status").textContent).toBe(
-      "Backup paused by plan",
+      "Chat backup paused by plan",
     );
   });
 
@@ -148,7 +155,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
     expect(screen.getByRole("status").textContent).toBe(
-      "Backup paused on a fork decision",
+      "Chat backup paused on a fork decision",
     );
   });
 
@@ -169,7 +176,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     };
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
-    expect(screen.getByRole("status").textContent).toBe("Backup failing");
+    expect(screen.getByRole("status").textContent).toBe("Chat backup failing");
   });
 
   it("does not duplicate the app's offline state", () => {
@@ -205,7 +212,7 @@ describe("<EpicBackupStatusIndicator />", () => {
 
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
-    expect(screen.getByRole("status").textContent).toBe("Backing up…");
+    expect(screen.getByRole("status").textContent).toBe("Backing up chats");
     expect(screen.getByRole("status").textContent).not.toContain(
       "not backed up",
     );
@@ -222,7 +229,7 @@ describe("<EpicBackupStatusIndicator />", () => {
 
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
-    expect(screen.getByRole("status").textContent).toBe("Backing up…");
+    expect(screen.getByRole("status").textContent).toBe("Backing up chats");
   });
 
   it("alarms once a behind chat has been idle past the threshold", () => {
@@ -290,7 +297,9 @@ describe("<EpicBackupStatusIndicator />", () => {
 
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
-    expect(screen.getByRole("status").textContent).toContain("Backup failing");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Chat backup failing",
+    );
     expect(screen.getByRole("status").textContent).toContain(
       "1 chat not backed up",
     );
@@ -311,7 +320,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     render(<EpicBackupStatusIndicator epicId={EPIC_ID} />);
 
     expect(screen.getByRole("status").textContent).toBe(
-      "Backup stopped: chat too large",
+      "Chat backup stopped: chat too large",
     );
   });
 });
