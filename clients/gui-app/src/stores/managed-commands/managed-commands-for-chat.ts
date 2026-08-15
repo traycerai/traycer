@@ -114,28 +114,35 @@ export function useManagedCommandsConnectionStatus(
 }
 
 /**
- * One command by id, found across the epic's live chat sessions - the output
- * window's tab title, which holds a command pointer and no chat id.
+ * One command by id, found across the live chat sessions of ONE host in this
+ * epic - what an output window's tab title and glyph read, holding a command
+ * pointer and no chat id.
  *
- * A command id is unique within an epic, so the scan cannot be ambiguous; it is
- * a scan rather than an index because an epic's live sessions are a handful and
- * the alternative is a second source of truth to keep in step. `null` when the
- * owning chat has no live session (never opened this window's chat, or its
- * session went idle), which is the window's pre-hydration state - the tab falls
- * back to its persisted name until the chat is opened.
+ * Scoped to the tile's bound host, not the epic: a cross-host clone carries the
+ * source transcript's command ids, so an epic-wide scan would let a tab bound
+ * to the clone host wear the source shell's live name and monitor glyph for a
+ * shell that host does not own. Within one host the id is unambiguous, and it
+ * stays a scan rather than an index because a host's live sessions are a
+ * handful and the alternative is a second source of truth to keep in step.
+ *
+ * `null` when the owning chat has no live session on that host (never opened,
+ * or gone idle), which is the window's pre-hydration state - the tab falls back
+ * to its persisted name until the chat is opened.
  */
-export function useManagedCommandInEpic(
-  epicId: string,
-  commandId: string,
-): ManagedCommand | null {
+export function useManagedCommandOnHost(args: {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly commandId: string;
+}): ManagedCommand | null {
+  const { epicId, hostId, commandId } = args;
   const subscribe = useCallback(
     (onChange: () => void) =>
-      subscribeEpicManagedCommands(epicId, commandId, onChange),
-    [epicId, commandId],
+      subscribeHostManagedCommands(epicId, hostId, commandId, onChange),
+    [epicId, hostId, commandId],
   );
   const getSnapshot = useCallback(
-    () => findManagedCommandInEpic(epicId, commandId),
-    [epicId, commandId],
+    () => findManagedCommandOnHost(epicId, hostId, commandId),
+    [epicId, hostId, commandId],
   );
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
@@ -144,11 +151,11 @@ export function useManagedCommandInEpic(
  * Whether a shell still exists, as far as this card can honestly tell.
  *
  * Read from the OWNER's session alone - the chat the transcript belongs to, on
- * the host that transcript is bound to - never from the epic-wide scan
- * `useManagedCommandInEpic` does. A clone carries the source transcript's
- * blocks, so an epic-wide scan would find the SOURCE host's shell and let a
- * clone's card pulse it as live while its door opened a tile on a host that
- * cannot own it. Presence is a per-host fact, like every other tab-bound one.
+ * the host that transcript is bound to. A clone carries the source
+ * transcript's blocks, so a lookup by command id alone would find the SOURCE
+ * host's shell and let a clone's card pulse it as live while its door opened a
+ * tile on a host that cannot own it. Presence is a per-host fact, like every
+ * other tab-bound one.
  *
  * Absence is only a verdict once the owner's snapshot has landed: that is the
  * moment its command set is the host's word rather than a placeholder. An open
@@ -196,13 +203,13 @@ export function useManagedCommandPresence(args: {
  * the array - and the record inside it - keeps its identity until a new frame
  * replaces it. That is what lets `useSyncExternalStore` read this directly.
  */
-function findManagedCommandInEpic(
+function findManagedCommandOnHost(
   epicId: string,
+  hostId: string,
   commandId: string,
 ): ManagedCommand | null {
   if (commandId.length === 0) return null;
-  for (const handle of getChatSessionRegistry().listHandles()) {
-    if (handle.epicId !== epicId) continue;
+  for (const handle of hostHandles(epicId, hostId)) {
     const found = handle.store
       .getState()
       .managedCommands.find((command) => command.id === commandId);
@@ -211,13 +218,23 @@ function findManagedCommandInEpic(
   return null;
 }
 
+/** This epic's live chat sessions on ONE host - never another host's. */
+function hostHandles(
+  epicId: string,
+  hostId: string,
+): readonly ChatSessionStoreHandle[] {
+  if (hostId.length === 0) return [];
+  return getChatSessionRegistry().listHandlesForHost(epicId, hostId);
+}
+
 /**
  * The registry is read at call time, never as a module constant: this module is
  * reached from `epic-selectors`, which the registry itself imports, so a
  * top-level read would run inside that import cycle before it exists.
  */
-function subscribeEpicManagedCommands(
+function subscribeHostManagedCommands(
   epicId: string,
+  hostId: string,
   commandId: string,
   onChange: () => void,
 ): () => void {
@@ -226,9 +243,7 @@ function subscribeEpicManagedCommands(
 
   const resync = (): void => {
     reconcileStoreSubscriptions(
-      getChatSessionRegistry()
-        .listHandles()
-        .filter((handle) => handle.epicId === epicId),
+      hostHandles(epicId, hostId),
       handleSubs,
       (handle) =>
         handle.store.subscribe((state, previousState) => {

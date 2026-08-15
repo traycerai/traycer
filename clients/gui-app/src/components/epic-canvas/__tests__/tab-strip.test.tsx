@@ -516,4 +516,45 @@ describe("<TabStrip /> shell output tabs", () => {
     renderShellTab(null);
     expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
   });
+
+  it("ignores a same-id shell living on another host", () => {
+    // A cross-host clone keeps the source transcript's command ids. The tab is
+    // bound to its own host for life, so a watching shell of the same id over
+    // on the source host must not lend this tab its glyph - the tab cannot
+    // open that shell's output at all.
+    const session = installManagedCommandChatSession({
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      hostId: "host-source",
+    });
+    session.setCommands([
+      managedCommandSchema.parse({
+        id: "cmd-1",
+        monitoring: true,
+        description: "deploy watcher",
+        command: "tail -f deploy.log",
+        cwd: "/work/repo",
+        cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+        status: { state: "running", pid: 41, startedAtMs: 1 },
+        chatId: CHAT_ID,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      }),
+    ]);
+    renderTabStripForTab(
+      makeManagedCommandOutputTileRef({ commandId: "cmd-1", hostId: HOST_ID }),
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+    );
+
+    expect(document.querySelector("[data-monitor-icon='on']")).toBeNull();
+    expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
+    // ...and the title stays the tile's own name rather than the other host's
+    // shell: the glyph and the name read the same lookup.
+    expect(screen.queryByText("Monitor · deploy watcher")).toBeNull();
+  });
 });

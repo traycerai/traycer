@@ -67,7 +67,7 @@ import {
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -527,6 +527,7 @@ function TabItem(props: TabItemProps) {
       id: tab.id,
       name: tab.name,
       type: tab.type,
+      hostId: "hostId" in tab ? tab.hostId : null,
     },
     epicId,
     terminalHostClient,
@@ -1006,10 +1007,13 @@ function TabIcon(props: {
   // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
   // glyph and the name in one tab can never disagree about whether the shell is
   // watching. Unconditional for hook order; an empty id resolves to null.
-  const managedCommand = useManagedCommandInEpic(
-    props.epicId,
-    isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
-  );
+  const managedCommand = useManagedCommandOnHost({
+    epicId: props.epicId,
+    // Scoped to the tab's own bound host: a clone's tab must never wear the
+    // source host's shell (same rule the card's presence follows).
+    hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
+    commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
+  });
   if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }

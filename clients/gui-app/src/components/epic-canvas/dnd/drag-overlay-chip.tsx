@@ -15,7 +15,7 @@ import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
@@ -216,7 +216,11 @@ function ManagedCommandOutputTileDragOverlay(props: {
   readonly node: ManagedCommandOutputTileRef;
   readonly epicId: string;
 }) {
-  const command = useManagedCommandInEpic(props.epicId, props.node.id);
+  const command = useManagedCommandOnHost({
+    epicId: props.epicId,
+    hostId: props.node.hostId,
+    commandId: props.node.id,
+  });
   return (
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <ManagedCommandMonitorIcon
