@@ -429,6 +429,11 @@ interface TabItemProps {
 // Ticket 12's chat cost line: the tab's own overflow (this context menu),
 // never the header. `null` for every non-chat tab kind and for a chat whose
 // host hasn't negotiated `host.usage.summary` - "unsupported chats show
+/** The tab's bound host, for the tile kinds that have one. */
+function tabHostId(tab: EpicCanvasTileRef): string | null {
+  return "hostId" in tab ? tab.hostId : null;
+}
+
 // nothing" applied to the menu item itself rather than opening a dialog that
 // would then show a capability notice. Extracted out of `TabItem` to keep
 // that component's branching under the complexity budget.
@@ -436,8 +441,7 @@ function useChatUsageMenuHandler(
   tab: EpicCanvasTileRef,
   chatTitle: string,
 ): (() => void) | null {
-  const usageChatHostId =
-    tab.type === "chat" && "hostId" in tab ? tab.hostId : null;
+  const usageChatHostId = tab.type === "chat" ? tabHostId(tab) : null;
   const usageSupported = useUsageSummarySupported(usageChatHostId);
   const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
   return useMemo(() => {
@@ -519,7 +523,7 @@ function TabItem(props: TabItemProps) {
   // null everywhere, keeping their terminal.list observer disabled.
   const isTerminalTab = tab.type === "terminal";
   const resolvedHostClient = useHostClientForHostId(
-    isTerminalTab && "hostId" in tab ? tab.hostId : null,
+    isTerminalTab ? tabHostId(tab) : null,
   );
   const terminalHostClient = isTerminalTab ? resolvedHostClient : null;
   const displayTitle = useEpicTabDisplayTitle(
@@ -527,7 +531,7 @@ function TabItem(props: TabItemProps) {
       id: tab.id,
       name: tab.name,
       type: tab.type,
-      hostId: "hostId" in tab ? tab.hostId : null,
+      hostId: tabHostId(tab),
     },
     epicId,
     terminalHostClient,

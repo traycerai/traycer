@@ -203,6 +203,9 @@ export interface PaneTabLocation {
  * hash), so dedup is plain id equality across all kinds. Used by global
  * dedup - opening content already present anywhere focuses that tab instead
  * of cloning.
+ *
+ * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
+ * host (a chat, a shell) are unique per host, not globally.
  */
 export function findPaneTabByContentId(
   state: EpicCanvasState,
@@ -215,6 +218,38 @@ export function findPaneTabByContentId(
       if (ref !== undefined && ref.id === contentId) {
         return { pane, index, instanceId, ref };
       }
+    }
+  }
+  return null;
+}
+
+/** The bound host of a tile kind that has one; null for the rest. */
+function tileHostId(ref: EpicCanvasTileRef): string | null {
+  return "hostId" in ref ? ref.hostId : null;
+}
+
+/**
+ * The dedup lookup an opener uses, holding the whole ref rather than an id
+ * alone: same content id AND same bound host.
+ *
+ * Host-minted ids are unique per host, not globally - a cross-host clone
+ * carries the source's chat and shell ids verbatim - so id equality alone
+ * would let a door on host B focus host A's open tab and quietly hand back a
+ * window bound to the wrong machine. Kinds with no host (artifacts, diffs)
+ * compare null to null and dedup exactly as before.
+ */
+export function findPaneTabForRef(
+  state: EpicCanvasState,
+  node: EpicCanvasTileRef,
+): PaneTabLocation | null {
+  const hostId = tileHostId(node);
+  for (const pane of collectPanes(state.root)) {
+    for (let index = 0; index < pane.tabInstanceIds.length; index += 1) {
+      const instanceId = pane.tabInstanceIds[index];
+      const ref = state.tilesByInstanceId[instanceId];
+      if (ref === undefined) continue;
+      if (ref.id !== node.id || tileHostId(ref) !== hostId) continue;
+      return { pane, index, instanceId, ref };
     }
   }
   return null;
@@ -481,7 +516,7 @@ export function openTile(
   preferredPaneId: string | null,
 ): EpicCanvasState {
   if (state.root === null) return seedRootPane(node, preview);
-  const existing = findPaneTabByContentId(state, node.id);
+  const existing = findPaneTabForRef(state, node);
   if (existing !== null) {
     const root = replacePane(state.root, existing.pane.id, (pane) => {
       const previewTabId =
@@ -607,7 +642,7 @@ export function openTileInBackgroundTab(
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
   if (state.root === null) return state;
-  if (findPaneTabByContentId(state, node.id) !== null) return state;
+  if (findPaneTabForRef(state, node) !== null) return state;
   const target = activePaneOrFirst(state);
   if (target === null) return state;
   const root = replacePane(state.root, target.id, (pane) => ({
@@ -638,7 +673,7 @@ export function openSingletonTileInPane(
   paneId: string,
   ref: EpicCanvasTileRef,
 ): EpicCanvasState {
-  if (state.root !== null && findPaneTabByContentId(state, ref.id) !== null) {
+  if (state.root !== null && findPaneTabForRef(state, ref) !== null) {
     return openTile(state, ref, false, null);
   }
   return openTileInPane(state, paneId, ref);
@@ -1115,7 +1150,7 @@ export function dropOnTabStrip(
   if (targetPane === null) return state;
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       if (existing.pane.id === targetPaneId) {
         return reorderTabInPane(
@@ -1231,7 +1266,7 @@ export function splitPaneAtEdge(
   }
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       return splitPaneAtEdge(state, targetPaneId, position, {
         kind: "tab",
