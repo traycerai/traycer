@@ -1047,6 +1047,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 tabHostId={view.tabHostId}
                 workspaceRoots={view.linkResolutionRoots}
                 messages={view.messages}
+                baselineEpoch={view.transcriptBaselineEpoch}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
                 surfaceVisible={view.surfaceVisible}
@@ -1256,6 +1257,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       connectionStatus: s.connectionStatus,
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
+      transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       chat: s.chat,
       access: s.access,
       messages: s.messages,
@@ -2354,6 +2356,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     linkResolutionRoots,
     currentEpicId,
     snapshotLoaded: state.snapshotLoaded,
+    transcriptBaselineEpoch: state.transcriptBaselineEpoch,
     fatalClose: state.fatalClose,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
@@ -2400,6 +2403,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /** Which connection's snapshot established `messages`; see `ChatMessages`. */
+  readonly baselineEpoch: number;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
@@ -2510,6 +2515,7 @@ function ChatSessionMessagesSurface(
               epicId={props.epicId}
               hostId={props.tabHostId}
               messages={props.messages}
+              baselineEpoch={props.baselineEpoch}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}

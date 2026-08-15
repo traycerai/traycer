@@ -53,6 +53,7 @@ import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   makeAssistantMessage,
@@ -681,10 +682,15 @@ interface RenderChatMessagesOptions {
    * would already hold.
    */
   readonly freshOpen?: boolean;
+  /** `ChatSessionState.transcriptBaselineEpoch`; see `ChatMessages`. */
+  readonly baselineEpoch?: number;
 }
 
 interface ChatMessagesRenderState {
   messages: ReadonlyArray<ChatMessageModel>;
+  baselineEpoch: number;
+  /** Mutable: a chat is auto-titled after its first turn and can be renamed. */
+  taskTitle: string;
   systemOverlayActive: boolean;
   scrollRequest: ChatMessageScrollRequest | null;
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
@@ -735,6 +741,11 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
 
   const state: ChatMessagesRenderState = {
     messages: options.messages,
+    // Default 0: these rows arrived on a hydrated connection, which is what
+    // every non-announcement test wants. The announcement suite drives this
+    // explicitly to model mount hydration and reconnect backfill.
+    baselineEpoch: options.baselineEpoch ?? 0,
+    taskTitle: options.taskTitle ?? "Test chat",
     systemOverlayActive: options.systemOverlayActive ?? false,
     scrollRequest: options.scrollRequest ?? null,
     backgroundItems: options.backgroundItems,
@@ -776,11 +787,12 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
         style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
       >
         <ChatMessages
-          taskTitle={options.taskTitle ?? "Test chat"}
+          taskTitle={state.taskTitle}
           taskId={taskId}
           epicId={epicId}
           hostId={null}
           messages={state.messages}
+          baselineEpoch={state.baselineEpoch}
           backgroundItems={state.backgroundItems}
           getMessageActions={() => null}
           nextStepActions={null}
@@ -1218,7 +1230,7 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
-    it("does not announce a footerless row backfilled behind known messages", async () => {
+    it("does not announce rows a reconnect backfilled into the transcript", async () => {
       const knownUser = makeMessage(2, "user");
       const knownAssistant: ChatMessageModel = {
         ...makeMessage(3, "assistant"),
@@ -1226,8 +1238,9 @@ describe("ChatMessages scroll policy", () => {
         stopped: null,
         runState: null,
       };
-      const { rerenderMessages } = renderChatMessages({
+      const { rerenderWith } = renderChatMessages({
         messages: [knownUser, knownAssistant],
+        baselineEpoch: 0,
         scrollStateKey: "aria-backfill-history-key",
         taskTitle: "Build plan",
       });
@@ -1235,20 +1248,32 @@ describe("ChatMessages scroll policy", () => {
 
       const live = document.querySelector('[aria-live="polite"]');
       expect(live?.textContent ?? "").toBe("");
-      // Reconnect/backfill hydrates an OLDER footerless notification into a
-      // transcript that mounted partial. It does not extend the transcript
-      // past the known messages, so it is history, not news.
-      rerenderMessages([
-        {
-          ...makeMessage(1, "assistant"),
-          completedAt: 1_699_999_000_000,
-          stopped: null,
-          runState: null,
-          showCompletionFooter: false,
-        },
-        knownUser,
-        knownAssistant,
-      ]);
+      // A reconnect's authoritative snapshot re-establishes the transcript on
+      // a NEW connection (the epoch advances) and can carry rows written
+      // while this client was away. Everything it delivers is history by
+      // construction - it re-baselines instead of announcing, no matter how
+      // the rows sort or when they completed.
+      rerenderWith({
+        baselineEpoch: 1,
+        messages: [
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_699_999_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: false,
+          },
+          knownUser,
+          knownAssistant,
+          {
+            ...makeMessage(4, "assistant"),
+            completedAt: 1_700_000_009_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: false,
+          },
+        ],
+      });
       await settleLegendList();
 
       expect(live?.textContent ?? "").toBe("");
@@ -1329,47 +1354,7 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
-    it("announces a tied-timestamp completion appended past known rows", async () => {
-      const knownUser = makeMessage(0, "user");
-      const knownAssistant: ChatMessageModel = {
-        ...makeMessage(1, "assistant"),
-        completedAt: 1_700_000_000_000,
-        stopped: null,
-        runState: null,
-      };
-      const { rerenderMessages } = renderChatMessages({
-        messages: [knownUser, knownAssistant],
-        scrollStateKey: "aria-tied-completion-key",
-        taskTitle: "Build plan",
-      });
-      await settleLegendList();
-
-      const live = document.querySelector('[aria-live="polite"]');
-      expect(live?.textContent ?? "").toBe("");
-      // Wall-clock completion stamps are not unique: a background task can
-      // settle in the same millisecond as the previously newest completion.
-      // A tie counts as live regardless of where the row sorts.
-      rerenderMessages([
-        knownUser,
-        knownAssistant,
-        {
-          ...makeMessage(2, "assistant"),
-          completedAt: 1_700_000_000_000,
-          stopped: null,
-          runState: null,
-          showCompletionFooter: false,
-        },
-      ]);
-      await settleLegendList();
-
-      await waitFor(() => {
-        expect(live?.textContent).toBe(
-          "Build plan received a background completion.",
-        );
-      });
-    });
-
-    it("announces a tied-timestamp completion inserted before known rows", async () => {
+    it("announces a live completion older and earlier than every known row", async () => {
       const knownUser = makeMessage(0, "user");
       const knownAssistant: ChatMessageModel = {
         ...makeMessage(5, "assistant"),
@@ -1380,23 +1365,23 @@ describe("ChatMessages scroll policy", () => {
       const laterUser = makeMessage(6, "user");
       const { rerenderMessages } = renderChatMessages({
         messages: [knownUser, knownAssistant, laterUser],
-        scrollStateKey: "aria-tied-mid-insert-key",
+        scrollStateKey: "aria-live-anchored-insert-key",
         taskTitle: "Build plan",
       });
       await settleLegendList();
 
       const live = document.querySelector('[aria-live="polite"]');
       expect(live?.textContent ?? "").toBe("");
-      // The intersection of the two hard cases: an earlier turn's task
-      // settles in the same millisecond as the newest observed completion,
-      // and its preserved anchor inserts the notification BEFORE known
-      // rows. Neither recency nor position can rank it - the tie itself is
-      // the live-arrival evidence.
+      // The worst case for shape-based inference, and now a non-case: the
+      // notification is anchored at its own turn's position (BEFORE rows the
+      // reader has seen) and carries an OLDER completion stamp than the
+      // newest known one. Neither position nor recency could call this live -
+      // but the connection never re-baselined, so it is news by construction.
       rerenderMessages([
         knownUser,
         {
           ...makeMessage(2, "assistant"),
-          completedAt: 1_700_000_000_000,
+          completedAt: 1_699_999_000_000,
           stopped: null,
           runState: null,
           showCompletionFooter: false,
@@ -1413,9 +1398,168 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
-    it("does not announce history hydrated after an empty first observation", async () => {
-      const { rerenderMessages } = renderChatMessages({
+    it("keeps an announced sentence frozen when the chat is renamed", async () => {
+      const userMsg = makeMessage(0, "user");
+      const assistantStreaming: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const assistantDone: ChatMessageModel = {
+        ...assistantStreaming,
+        completedAt: 1_700_000_000_000,
+        runState: null,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [userMsg, assistantStreaming],
+        scrollStateKey: "aria-rename-freeze-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderWith({ messages: [userMsg, assistantDone] });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+      const announcedNode = live?.firstElementChild;
+
+      // A chat is auto-titled right after its first turn - exactly when this
+      // announcement is still mounted. Rewriting the text inside the live
+      // region would re-announce a completion that never happened, so the
+      // sentence stays as it was announced.
+      rerenderWith({ taskTitle: "Renamed plan" });
+      await settleLegendList();
+      expect(live?.textContent).toBe("Build plan finished responding.");
+      expect(live?.firstElementChild).toBe(announcedNode);
+
+      // Freezing is per announcement, not permanent: the next one speaks the
+      // title the reader now sees.
+      rerenderWith({
+        messages: [
+          userMsg,
+          assistantDone,
+          makeMessage(2, "user"),
+          {
+            ...makeMessage(3, "assistant"),
+            completedAt: 1_700_000_005_000,
+            stopped: null,
+            runState: null,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Renamed plan finished responding.");
+      });
+    });
+
+    it("announces a background completion delivered by a same-connection refresh", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        baselineEpoch: 3,
+        scrollStateKey: "aria-same-connection-refresh-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // An authoritative host-side refresh on the SAME connection carries
+      // live news, so it must not be mistaken for a re-hydration: only a new
+      // connection's epoch re-baselines. The rows arrive wholesale, exactly
+      // as a reconnect's would - the epoch is the entire difference.
+      rerenderWith({
+        baselineEpoch: 3,
+        messages: [
+          knownUser,
+          knownAssistant,
+          {
+            ...makeMessage(2, "assistant"),
+            completedAt: 1_700_000_004_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: false,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe(
+          "Build plan received a background completion.",
+        );
+      });
+    });
+
+    it("keeps announcing live completions after a reconnect re-baselines", async () => {
+      const knownUser = makeMessage(0, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const backfilled: ChatMessageModel = {
+        ...makeMessage(2, "assistant"),
+        completedAt: 1_700_000_002_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        baselineEpoch: 0,
+        scrollStateKey: "aria-post-reconnect-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderWith({
+        baselineEpoch: 1,
+        messages: [knownUser, knownAssistant, backfilled],
+      });
+      await settleLegendList();
+      expect(live?.textContent ?? "").toBe("");
+
+      // Re-baselining is a one-frame reset, not a mute: the reconnected
+      // connection keeps reporting live completions.
+      rerenderWith({
+        baselineEpoch: 1,
+        messages: [
+          knownUser,
+          knownAssistant,
+          backfilled,
+          {
+            ...makeMessage(3, "assistant"),
+            completedAt: 1_700_000_006_000,
+            stopped: null,
+            runState: null,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
+    it("does not announce the transcript that first hydration delivers", async () => {
+      const { rerenderWith } = renderChatMessages({
         messages: [],
+        baselineEpoch: NO_TRANSCRIPT_BASELINE,
         scrollStateKey: "aria-empty-baseline-key",
         taskTitle: "Build plan",
       });
@@ -1423,20 +1567,23 @@ describe("ChatMessages scroll policy", () => {
 
       const live = document.querySelector('[aria-live="polite"]');
       expect(live?.textContent ?? "").toBe("");
-      // Mounting raced hydration: the first observation saw an empty
-      // transcript, so no known row anchors the positional frame and no
-      // completion anchors the recency frame. The hydrated snapshot is
-      // history, not a live tail.
-      rerenderMessages([
-        makeMessage(0, "user"),
-        {
-          ...makeMessage(1, "assistant"),
-          completedAt: 1_700_000_000_000,
-          stopped: null,
-          runState: null,
-          showCompletionFooter: true,
-        },
-      ]);
+      // Mount raced hydration: the tile renders before the first snapshot
+      // lands, so the transcript is empty and the store still reports no
+      // baseline. The snapshot that follows IS the baseline - completed
+      // history, however recent, never announces.
+      rerenderWith({
+        baselineEpoch: 0,
+        messages: [
+          makeMessage(0, "user"),
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_700_000_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+        ],
+      });
       await settleLegendList();
 
       expect(live?.textContent ?? "").toBe("");
@@ -4009,6 +4156,7 @@ describe("ChatMessages scroll policy", () => {
             epicId="epic-1"
             hostId={null}
             messages={messages}
+            baselineEpoch={0}
             backgroundItems={undefined}
             getMessageActions={() => null}
             nextStepActions={null}
