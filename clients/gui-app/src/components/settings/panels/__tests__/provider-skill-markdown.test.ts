@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { stripSkillFrontmatter } from "@/components/settings/panels/provider-skill-markdown";
+import {
+  parseSkillMarkdown,
+  stripSkillFrontmatter,
+} from "@/components/settings/panels/provider-skill-markdown";
 
 describe("stripSkillFrontmatter", () => {
   it("removes the leading frontmatter block the dialog header already shows", () => {
@@ -36,5 +39,56 @@ describe("stripSkillFrontmatter", () => {
 
   it("yields an empty body for a skill that is frontmatter only", () => {
     expect(stripSkillFrontmatter("---\nname: x\n---\n")).toBe("");
+  });
+});
+
+describe("parseSkillMarkdown", () => {
+  it("unquotes a JSON-quoted description", () => {
+    const raw =
+      '---\nname: find-skills\ndescription: "Helps users \\"discover\\" skills."\n---\n\n# Body\n';
+    expect(parseSkillMarkdown(raw)).toEqual({
+      name: "find-skills",
+      description: 'Helps users "discover" skills.',
+      body: "# Body\n",
+    });
+  });
+
+  it("returns null name/description and the raw body when frontmatter is missing", () => {
+    const raw = "# Just a heading\n\nBody text.\n";
+    expect(parseSkillMarkdown(raw)).toEqual({
+      name: null,
+      description: null,
+      body: raw,
+    });
+  });
+
+  it("returns the body after stripSkillFrontmatter", () => {
+    const raw =
+      '---\nname: find-skills\ndescription: "Helps"\n---\n\n# When to use\n';
+    const parsed = parseSkillMarkdown(raw);
+    expect(parsed.body).toBe(stripSkillFrontmatter(raw));
+    expect(parsed.body).toBe("# When to use\n");
+    expect(parsed.body).not.toContain("description:");
+  });
+
+  it("returns a null description for YAML block-scalar markers", () => {
+    expect(
+      parseSkillMarkdown(
+        "---\nname: find-skills\ndescription: |\n  Multi\n  line\n---\n\n# Body\n",
+      ),
+    ).toEqual({
+      name: "find-skills",
+      description: null,
+      body: "# Body\n",
+    });
+    expect(
+      parseSkillMarkdown(
+        "---\nname: find-skills\ndescription: >\n  Folded\n  text\n---\n\n# Body\n",
+      ),
+    ).toEqual({
+      name: "find-skills",
+      description: null,
+      body: "# Body\n",
+    });
   });
 });

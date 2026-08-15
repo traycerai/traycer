@@ -8,6 +8,7 @@ import type {
   ProviderPlugin,
   ProviderPluginIcon,
   ProviderSkill,
+  ProviderSkillInspectCandidate,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -37,7 +38,20 @@ export type PluginIconData = { readonly icon: ProviderPluginIcon };
 /** External mutate success shapes (response-equals-state). */
 export type McpMutateData = McpListData;
 export type PluginsMutateData = PluginsListData;
-export type SkillsMutateData = SkillsListData;
+
+export type SkillsInspectData = {
+  readonly kind: "inspect";
+  readonly token: string;
+  readonly candidates: readonly ProviderSkillInspectCandidate[];
+};
+
+export type SkillsListMutateData = {
+  readonly kind: "skills";
+  readonly skills: readonly ProviderSkill[];
+};
+
+/** Inspect does not rewrite the listed set; create/import/remove do. */
+export type SkillsMutateData = SkillsInspectData | SkillsListMutateData;
 
 /** External auth result shape (unwraps `providers.mcpAuth`'s result). */
 export type McpAuthData = { readonly result: NativeAuthResult };
@@ -199,6 +213,13 @@ export function mapNativeMutateToSkillsMutate(args: {
 }): SkillsMutateData {
   const result = args.response.result;
   throwIfNativeError(result, "providers.nativeMutate");
+  if (result.kind === "skillsInspect") {
+    return {
+      kind: "inspect",
+      token: result.token,
+      candidates: result.candidates,
+    };
+  }
   if (result.kind !== "skills") {
     throw new ProviderNativeRpcError({
       code: "unsupported_action",
@@ -206,7 +227,7 @@ export function mapNativeMutateToSkillsMutate(args: {
       method: "providers.nativeMutate",
     });
   }
-  return { skills: result.skills };
+  return { kind: "skills", skills: result.skills };
 }
 
 export function mapMcpAuthResponse(args: {

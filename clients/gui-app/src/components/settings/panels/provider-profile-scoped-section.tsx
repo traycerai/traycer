@@ -217,8 +217,7 @@ export function ProviderProfileScopedSection(
               <span className="inline-flex">
                 <Button
                   type="button"
-                  size="xs"
-                  variant="outline"
+                  size="sm"
                   className="shrink-0"
                   disabled={addProfileDisabled}
                   onClick={onAddProfile}
