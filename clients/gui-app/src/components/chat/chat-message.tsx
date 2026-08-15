@@ -135,39 +135,48 @@ function renderSingleSpecialSegment(
   return null;
 }
 
-function ChatMessageImpl(props: ChatMessageProps) {
+// Assistant rows no longer carry a provider/model label above the bubble -
+// that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
+function renderAssistantMessage(props: ChatMessageProps): ReactElement {
   const { actions, backgroundToolBlockIds, message, nextStepActions } = props;
+  const assistantActions = actions?.type === "assistant" ? actions : null;
+  return (
+    <div
+      className={cn(
+        "group/message flex w-full flex-col gap-1.5",
+        messageAlignmentClass(message),
+      )}
+    >
+      <AssistantMessageBody
+        segments={message.segments}
+        backgroundToolBlockIds={backgroundToolBlockIds}
+        runState={message.runState}
+        messageId={message.id}
+        elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
+        turnHasOnlyAutonomousResumeSegments={
+          message.turnHasOnlyAutonomousResumeSegments ?? false
+        }
+        showCompletionFooter={message.showCompletionFooter ?? true}
+        pausedDurationMs={message.pausedDurationMs ?? 0}
+        pausedSinceMs={message.pausedSinceMs ?? null}
+        completedAt={message.completedAt}
+        stopped={message.stopped}
+        meta={message.assistantMeta}
+        nextStepActions={nextStepActions}
+        forkAction={assistantActions?.fork ?? null}
+      />
+    </div>
+  );
+}
+
+function ChatMessageImpl(props: ChatMessageProps) {
+  const { actions, message } = props;
   const specialSegment = renderSingleSpecialSegment(message);
   if (specialSegment !== null) {
     return specialSegment;
   }
-  // Assistant rows no longer carry a provider/model label above the bubble -
-  // that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
   if (message.role === "assistant") {
-    const assistantActions = actions?.type === "assistant" ? actions : null;
-    return (
-      <div
-        className={cn(
-          "group/message flex w-full flex-col gap-1.5",
-          messageAlignmentClass(message),
-        )}
-      >
-        <AssistantMessageBody
-          segments={message.segments}
-          backgroundToolBlockIds={backgroundToolBlockIds}
-          runState={message.runState}
-          messageId={message.id}
-          createdAt={message.createdAt}
-          pausedDurationMs={message.pausedDurationMs ?? 0}
-          pausedSinceMs={message.pausedSinceMs ?? null}
-          completedAt={message.completedAt}
-          stopped={message.stopped}
-          meta={message.assistantMeta}
-          nextStepActions={nextStepActions}
-          forkAction={assistantActions?.fork ?? null}
-        />
-      </div>
-    );
+    return renderAssistantMessage(props);
   }
 
   const senderLabel = message.senderLabel ?? ROLE_LABELS[message.role];
