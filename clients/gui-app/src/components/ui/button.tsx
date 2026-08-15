@@ -10,12 +10,22 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        // `bg-foreground/8` for the hover/expanded fills, per
+        // `ui/skeleton.tsx`: a button is mounted wherever its caller lives,
+        // and on a dialog/popover/card surface `bg-muted` is the surface's
+        // own value in every preset dark theme (and in the flat light
+        // presets), so these states used to leave no feedback at all. The
+        // `dark:*-input/*` fills stay - `--input` never collapses.
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-background hover:bg-foreground/8 hover:text-foreground aria-expanded:bg-foreground/8 aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+        // The `dark:hover:` override the muted fills carried is dropped
+        // rather than translated: it existed because `--muted` lands at a
+        // different weight per mode, which an alpha of the current theme's
+        // own foreground is symmetric across by construction.
         ghost:
-          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground dark:hover:bg-muted/50",
+          "hover:bg-foreground/8 hover:text-foreground aria-expanded:bg-foreground/8 aria-expanded:text-foreground aria-pressed:bg-foreground/8 aria-pressed:text-foreground",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",

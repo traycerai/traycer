@@ -77,7 +77,7 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
           </div>
         ) : null}
 
-        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-muted/10 px-6 py-4">
+        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
           <Button
             type="button"
             variant="ghost"

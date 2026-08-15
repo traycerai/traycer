@@ -327,7 +327,7 @@ function ManagedCommandMenuRow(props: {
   return (
     <li
       className={cn(
-        "group flex min-w-0 items-center gap-1 rounded-sm pr-1 hover:bg-muted/60",
+        "group flex min-w-0 items-center gap-1 rounded-sm pr-1 hover:bg-foreground/6",
         isDragging ? "opacity-50" : null,
       )}
     >

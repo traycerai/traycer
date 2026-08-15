@@ -48,6 +48,17 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
   for layout surfaces (icons / touch targets OK).
 - Prefer composition over editing `src/components/ui/`.
 - Spinners: `AgentSpinningDots` only — no new ad-hoc spinners.
+- **Never fill with `bg-muted` on a raised surface.** Every preset theme's
+  dark variant defines `--muted` identical to `--popover` and `--card`, and
+  the flat light presets (github, gruvbox, tokyo-night, nord, everforest)
+  collapse it into `--background` too — so a muted fill inside a dialog,
+  popover, dropdown, or card is _invisible_, and only the default light/dark
+  pair makes it look right. `--accent` never collapses but is too weak to
+  substitute (1.05–1.15 in preset darks). Use an alpha of the foreground,
+  which is surface-independent by construction: `bg-foreground/8` for a
+  solid fill or an interaction state, `/10` for a skeleton, `/6 · /5 · /3`
+  descending for tints. `bg-muted` stays fine for zones on `bg-background` /
+  `bg-canvas`, and `bg-muted-foreground` (a text color) is unaffected.
 - No `key={x ?? fallback}` when `undefined` already remounts correctly.
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.

@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export const ROLE_PILL_CLASS =
-  "rounded-md bg-muted px-2.5 py-1 text-ui-xs text-muted-foreground";
+  "rounded-md bg-foreground/8 px-2.5 py-1 text-ui-xs text-muted-foreground";
 
 export interface RoleDropdownProps {
   readonly value: PermissionRole;
@@ -117,7 +117,7 @@ export function RoleOrBadge(props: {
       onChange={props.onChange}
       disabled={props.disabled}
       isPending={props.isPending}
-      className="min-w-24 justify-between rounded-md bg-muted px-2.5 py-1 text-ui-sm text-muted-foreground"
+      className="min-w-24 justify-between rounded-md bg-foreground/8 px-2.5 py-1 text-ui-sm text-muted-foreground"
       aria-label={props.ariaLabel}
       data-testid={props.testId}
     />

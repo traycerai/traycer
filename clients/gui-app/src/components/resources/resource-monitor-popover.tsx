@@ -1413,7 +1413,7 @@ function ResourceMonitorPanel(props: {
                     <button
                       ref={sortTriggerRef}
                       type="button"
-                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
                       aria-label="Sort resource rows"
                     >
                       <ArrowDownNarrowWide className="size-3.5" />
@@ -1470,7 +1470,7 @@ function ResourceMonitorPanel(props: {
               />
             </div>
             <div
-              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
+              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
               role="progressbar"
               aria-label="Tracked RAM share"
               aria-valuenow={Math.round(memorySharePercent)}
@@ -1748,7 +1748,7 @@ function DesktopAppProcessGroupRow(props: {
   readonly usage: DesktopAppProcessGroupUsage;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-3.5 py-1 pl-7 text-muted-foreground transition-colors hover:bg-muted/40">
+    <div className="flex items-center justify-between gap-3 px-3.5 py-1 pl-7 text-muted-foreground transition-colors hover:bg-foreground/5">
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="min-w-0 truncate text-ui-xs">{props.label}</span>
       </div>
@@ -2508,8 +2508,8 @@ function OwnerTreeRow(props: {
     <div>
       <div
         className={cn(
-          "group relative flex items-center pr-3.5 transition-colors hover:bg-muted/50",
-          selected && "bg-muted/40",
+          "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
+          selected && "bg-foreground/5",
           visibleExpanded && "sticky z-10 bg-popover",
         )}
         style={{
@@ -2791,7 +2791,7 @@ function ProcessTreeRow(props: {
   const rowKey = processRowKey(process);
   const selected = selecting && actions.isSelected(rowKey);
   const rowClassName =
-    "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-muted/40";
+    "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-foreground/5";
   const rowStyle = {
     paddingLeft: `calc(1.25rem + ${props.ownerDepth + depth} * 1rem)`,
   };
@@ -2844,7 +2844,7 @@ function ProcessTreeRow(props: {
         }
         className={cn(
           rowClassName,
-          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          "outline-none focus-visible:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         )}
         style={rowStyle}
       >
@@ -2867,7 +2867,7 @@ function ProcessTreeRow(props: {
         onClick={() => props.onToggleExpand(processRowKey(process))}
         className={cn(
           rowClassName,
-          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default",
+          "outline-none focus-visible:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default",
         )}
         style={rowStyle}
       >
@@ -2880,7 +2880,7 @@ function ProcessTreeRow(props: {
       <div
         className={cn(
           "group relative flex items-center pr-3.5",
-          selected && "bg-muted/40",
+          selected && "bg-foreground/5",
           expanded && "sticky z-10 bg-popover",
         )}
         style={expanded ? { top: props.stickyTop } : undefined}

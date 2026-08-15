@@ -326,7 +326,7 @@ function PrResolvedThreadRow(props: {
           }}
           aria-expanded={false}
           data-testid="pr-detail-resolved-thread"
-          className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-foreground/3 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
         >
           <ChevronRight
             className="size-3.5 shrink-0 text-muted-foreground"
@@ -335,7 +335,7 @@ function PrResolvedThreadRow(props: {
           <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
             {anchor.label}
           </StartTruncatedText>
-          <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+          <span className="shrink-0 rounded-full border border-transparent bg-foreground/6 px-1.5 text-ui-xs text-muted-foreground">
             Resolved
           </span>
         </button>
@@ -360,7 +360,7 @@ function PrReviewThreadCard(props: {
   return (
     <div
       className={cn(
-        "min-w-0 rounded-lg border border-border/60 bg-muted/20",
+        "min-w-0 rounded-lg border border-border/60 bg-foreground/3",
         thread.isResolved && "opacity-70",
       )}
       data-testid="pr-detail-review-thread"
@@ -399,13 +399,13 @@ function PrReviewThreadCard(props: {
             sideOffset={6}
             align="center"
           >
-            <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+            <span className="shrink-0 rounded-full border border-transparent bg-foreground/6 px-1.5 text-ui-xs text-muted-foreground">
               Outdated
             </span>
           </TooltipWrapper>
         ) : null}
         {thread.isResolved ? (
-          <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+          <span className="shrink-0 rounded-full border border-transparent bg-foreground/6 px-1.5 text-ui-xs text-muted-foreground">
             Resolved
           </span>
         ) : null}
@@ -579,7 +579,7 @@ function PrSurfaceCard(props: {
         props.tone === "none" && "border-border/60",
       )}
     >
-      <div className="group/header flex min-w-0 items-center gap-2 border-b border-border/50 bg-muted/25 px-3 py-2 text-ui-xs text-muted-foreground">
+      <div className="group/header flex min-w-0 items-center gap-2 border-b border-border/50 bg-foreground/3 px-3 py-2 text-ui-xs text-muted-foreground">
         {props.header}
       </div>
       {props.children}
