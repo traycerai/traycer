@@ -92,6 +92,12 @@ default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
 `useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
 a palette with no focused composer) — never inside a composer surface.
 
+Persisted "last used" state is per-host too: `composer-run-settings-store`,
+`composer-harness-memory-store`, and `workspace-folders-store` bucket by
+`hostId` (the toolbar store carries it in `catalog.hostId`; a `null` host
+drops the write). A new read/write of any of these must pass the composer's
+target host — never the flat pre-bucket shape.
+
 **Deliberate exception — dictation.** `useDictationAvailability` /
 `useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a
 host-pinned composer. They describe the person at the keyboard, not the run:

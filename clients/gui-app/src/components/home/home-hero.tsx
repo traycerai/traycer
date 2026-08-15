@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { basenameOfPath } from "@/lib/path";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
 const PROMPT_POOL: ReadonlyArray<string> = [
   "What should we work on?",
@@ -42,7 +46,12 @@ interface HomeHeroProps {
 }
 
 export function HomeHero({ workspaceFolders }: HomeHeroProps) {
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  // The hero is a landing surface: its folder fallback follows the app-wide
+  // active host's bucket.
+  const activeHostId = useReactiveActiveHostId();
+  const globalFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  );
   const folders = workspaceFolders === null ? globalFolders : workspaceFolders;
   const profile = useAuthStore((state) => state.profile);
   const [greeting] = useState(() => timeGreeting(new Date().getHours()));

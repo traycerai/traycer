@@ -830,6 +830,10 @@ function longClaudeModels(): ReadonlyArray<ModelOption> {
   ];
 }
 
+// Constant host id every store this suite creates commits selections/memory
+// writes under, once `catalog.hostId` became a required per-host memory key.
+const TEST_HOST_ID = "host-a";
+
 function defaultSelection(): HarnessModelSelection {
   return { harnessId: "codex", modelSlug: "", profileId: null };
 }
@@ -925,9 +929,11 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
+    hostId: TEST_HOST_ID,
   });
   if (resolvedInput.storeModels !== undefined) {
     store.getState().setCatalog({
+      hostId: TEST_HOST_ID,
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
       models: resolvedInput.storeModels,
@@ -1165,7 +1171,7 @@ describe("<HarnessModelPicker />", () => {
     readonly reasoningEffort: string | null;
     readonly serviceTier: string | null;
   }): void {
-    useComposerHarnessMemoryStore.getState().record({
+    useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
       harnessId: input.harnessId,
       model: input.model,
       permissionMode: "supervised",
@@ -1185,6 +1191,7 @@ describe("<HarnessModelPicker />", () => {
   ): void {
     act(() => {
       store.getState().setCatalog({
+        hostId: TEST_HOST_ID,
         harnesses: undefined,
         modelsHarnessId,
         models,
@@ -2275,7 +2282,7 @@ describe("<HarnessModelPicker />", () => {
         auth: { ...degradedClaude.auth, status: "unauthenticated" },
       },
     ];
-    useComposerHarnessMemoryStore.getState().record({
+    useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -2305,10 +2312,13 @@ describe("<HarnessModelPicker />", () => {
     });
     expect(store.getState().reasoning).toBe("high");
     expect(
-      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveLastProfile(TEST_HOST_ID, "claude"),
     ).toBe("work-profile");
     expect(
-      useComposerHarnessMemoryStore.getState().lastProfileByHarness.codex,
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        .lastProfileByHarness.codex,
     ).not.toBe("work-profile");
   });
 
@@ -2468,7 +2478,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    useComposerHarnessMemoryStore.getState().record({
+    useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -2513,10 +2523,13 @@ describe("<HarnessModelPicker />", () => {
     });
     expect(store.getState().reasoning).toBe("high");
     expect(
-      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveLastProfile(TEST_HOST_ID, "claude"),
     ).toBe("new-profile");
     expect(
-      useComposerHarnessMemoryStore.getState().lastProfileByHarness.codex,
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        .lastProfileByHarness.codex,
     ).not.toBe("new-profile");
   });
 
@@ -3202,7 +3215,7 @@ describe("<HarnessModelPicker />", () => {
     ];
     // The provider memory contains a different model and effort. A profile-only
     // switch must preserve the current composer configuration.
-    useComposerHarnessMemoryStore.getState().record({
+    useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",

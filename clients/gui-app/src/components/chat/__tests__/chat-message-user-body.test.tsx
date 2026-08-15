@@ -13,6 +13,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   buildComposerClipboardHtml,
@@ -92,10 +93,12 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   },
 }));
 
+const TAB_HOST_ID = "host-1";
+
 function render(ui: ReactNode) {
   return rtlRender(
     <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
-      {ui}
+      <TabHostProvider hostId={TAB_HOST_ID}>{ui}</TabHostProvider>
     </ChatExpansionTestProviders>,
   );
 }
@@ -279,7 +282,7 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     composerPickerMocks.useComposerPickerItems.mockClear();
-    useWorkspaceFoldersStore.setState({ folders: [] });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
   });
 
   it("reveals the action chip for keyboard focus", () => {
@@ -443,9 +446,11 @@ describe("<UserMessageBody /> agent messages", () => {
 
     view.rerender(
       <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
-        <TooltipProvider>
-          <UserMessageBody actions={actions} message={message} />
-        </TooltipProvider>
+        <TabHostProvider hostId={TAB_HOST_ID}>
+          <TooltipProvider>
+            <UserMessageBody actions={actions} message={message} />
+          </TooltipProvider>
+        </TabHostProvider>
       </ChatExpansionTestProviders>,
     );
 
@@ -458,7 +463,15 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("uses inherited workspace roots for the inline edit skill picker", async () => {
-    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        [TAB_HOST_ID]: {
+          folders: ["/workspace/project"],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
+    });
     render(
       <TooltipProvider>
         <UserMessageBody
@@ -483,7 +496,15 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
-    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        [TAB_HOST_ID]: {
+          folders: ["/workspace/project"],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
+    });
     const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
     const baseEditing = actions.editing;
     if (baseEditing === null) throw new Error("expected editing actions");
