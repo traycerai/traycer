@@ -800,21 +800,52 @@ export type PrLocalDiffSummaryFile = z.infer<
 >;
 
 /**
+ * A byte-path sidecar token: CANONICAL standard base64 of raw path bytes.
+ *
+ * Canonicality is enforced at the schema, not just documented: clients use
+ * the token STRING as file/cache/collapse identity, so a noncanonical alias
+ * of the same bytes (`/w` for `/w==`, the url-safe alphabet, embedded
+ * whitespace, nonzero padding bits) would otherwise become a distinct
+ * identity for the same file on any peer that trusts wire validation.
+ * `btoa(atob(x)) === x` is exactly that predicate, in browser and Node
+ * alike: forgiving-base64 tolerates every alias class, so round-tripping
+ * detects each one. The host still re-validates independently - plus the
+ * checks that need the decoded bytes and the sibling field (non-UTF-8-ness,
+ * companion-path equality) - because it cannot know its caller parsed a
+ * request at all.
+ */
+export const prPathBytesTokenSchema = z
+  .string()
+  .min(1)
+  .refine(isCanonicalBase64, {
+    message: "byte-path token must be canonical base64",
+  });
+
+function isCanonicalBase64(value: string): boolean {
+  try {
+    return btoa(atob(value)) === value;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * v1.1 of one summary file: the byte-path sidecars.
  *
- * `pathBytes` / `previousPathBytes` are CANONICAL base64 of the raw path
- * bytes exactly as git reported them, non-null IFF those bytes are not valid
- * UTF-8. `path` stays what it always was - the (possibly lossy,
- * U+FFFD-bearing) UTF-8 decode, display-only - so a v1.0 reader sees exactly
- * the strings it saw before. Each rename side is derived independently: a
- * clean source beside a byte destination legitimately carries
- * `previousPathBytes: null`. Clients treat tokens as opaque: never decoded,
- * only echoed into `pr.getLocalFileDiff` and used as identity keys.
+ * `pathBytes` / `previousPathBytes` are canonical base64
+ * ({@link prPathBytesTokenSchema}) of the raw path bytes exactly as git
+ * reported them, non-null IFF those bytes are not valid UTF-8. `path` stays
+ * what it always was - the (possibly lossy, U+FFFD-bearing) UTF-8 decode,
+ * display-only - so a v1.0 reader sees exactly the strings it saw before.
+ * Each rename side is derived independently: a clean source beside a byte
+ * destination legitimately carries `previousPathBytes: null`. Clients treat
+ * tokens as opaque: never decoded, only echoed into `pr.getLocalFileDiff`
+ * and used as identity keys.
  */
 export const prLocalDiffSummaryFileV11Schema =
   prLocalDiffSummaryFileSchema.extend({
-    pathBytes: z.string().min(1).nullable(),
-    previousPathBytes: z.string().min(1).nullable(),
+    pathBytes: prPathBytesTokenSchema.nullable(),
+    previousPathBytes: prPathBytesTokenSchema.nullable(),
   });
 export type PrLocalDiffSummaryFileV11 = z.infer<
   typeof prLocalDiffSummaryFileV11Schema
@@ -939,8 +970,8 @@ export type PrGetLocalFileDiffRequest = z.infer<
  */
 export const prGetLocalFileDiffRequestV11Schema =
   prGetLocalFileDiffRequestSchema.extend({
-    pathBytes: z.string().min(1).nullable(),
-    previousPathBytes: z.string().min(1).nullable(),
+    pathBytes: prPathBytesTokenSchema.nullable(),
+    previousPathBytes: prPathBytesTokenSchema.nullable(),
   });
 export type PrGetLocalFileDiffRequestV11 = z.infer<
   typeof prGetLocalFileDiffRequestV11Schema

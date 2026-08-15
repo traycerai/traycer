@@ -1780,6 +1780,37 @@ describe("prLocalDiffSummaryFileV11Schema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects every noncanonical alias of a token at the schema, so an alias can never become a distinct identity", () => {
+    // Each decodes (forgivingly) to bytes whose canonical encoding differs:
+    // missing padding, url-safe alphabet, embedded whitespace, trailing
+    // junk, nonzero padding bits, and a plainly non-base64 string.
+    const aliases = ["/w", "_w==", " dG9rZW4=", "dG9rZW4=junk", "Yf==", "not-base64"];
+    for (const alias of aliases) {
+      expect(
+        prLocalDiffSummaryFileV11Schema.safeParse({
+          ...SUMMARY_FILE_V11_BASE_FIXTURE,
+          pathBytes: alias,
+          previousPathBytes: null,
+        }).success,
+      ).toBe(false);
+      expect(
+        prGetLocalFileDiffRequestV11Schema.safeParse({
+          ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+          pathBytes: null,
+          previousPathBytes: alias,
+        }).success,
+      ).toBe(false);
+    }
+    // The canonical spelling of the first alias's bytes IS accepted.
+    expect(
+      prLocalDiffSummaryFileV11Schema.safeParse({
+        ...SUMMARY_FILE_V11_BASE_FIXTURE,
+        pathBytes: "/w==",
+        previousPathBytes: null,
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe("prGetLocalFileDiffRequestV11Schema", () => {
