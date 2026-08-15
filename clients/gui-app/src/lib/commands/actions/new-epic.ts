@@ -10,7 +10,7 @@
  */
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { newDraftTabIntent } from "@/lib/tab-navigation/intents";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 
 export function openNewEpicIntent() {
@@ -19,9 +19,7 @@ export function openNewEpicIntent() {
   return newDraftTabIntent(
     useComposerRunSettingsStore
       .getState()
-      .getGlobalRunSettings(
-        getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
-      ),
+      .getGlobalRunSettings(activeHostIdOrNull()),
   );
 }
 

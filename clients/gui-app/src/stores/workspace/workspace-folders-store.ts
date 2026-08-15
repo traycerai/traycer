@@ -75,10 +75,17 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
       byHost: {},
       addResolvedFolders: (hostId, folders) => {
         if (hostId === null) return [];
+        // `hostId` is canonical, so a bucket only ever holds rows stamped with
+        // its own host. The picker stamps each row with its DISPATCH-time
+        // host, which a host switch landing between `pickAndPrepareFolders()`
+        // and this call can outrun - filing host A's paths under host B is the
+        // exact cross-host leak the buckets exist to prevent, so a mismatched
+        // row is dropped rather than rehomed.
+        const ownFolders = folders.filter((folder) => folder.hostId === hostId);
         const before = selectWorkspaceFoldersBucket(get(), hostId).folders;
         set((state) => {
           const bucket = selectWorkspaceFoldersBucket(state, hostId);
-          const nextBucket = mergeWorkspaceFolderInfo(bucket, folders);
+          const nextBucket = mergeWorkspaceFolderInfo(bucket, ownFolders);
           if (nextBucket === bucket) return state;
           return { byHost: { ...state.byHost, [hostId]: nextBucket } };
         });
@@ -242,12 +249,20 @@ function parsePersistedByHost(
   return Object.fromEntries(
     Object.entries(value).flatMap(([hostId, rawBucket]) => {
       if (!isRecord(rawBucket)) return [];
-      const folderInfoByPath = parsePersistedFolderInfoByPath(
-        rawBucket.folderInfoByPath,
+      // Same invariant the writer enforces, re-applied to raw JSON: a bucket
+      // keeps only rows stamped with ITS host. A hand-edited or otherwise
+      // corrupt payload therefore cannot surface one host's local paths under
+      // another host. Filtering the metadata BEFORE parsing `folders` also
+      // drops the now-ghost paths, since a path survives only while it
+      // resolves metadata.
+      const bucketFolderInfoByPath = Object.fromEntries(
+        Object.entries(
+          parsePersistedFolderInfoByPath(rawBucket.folderInfoByPath),
+        ).filter(([, info]) => info.hostId === hostId),
       );
       const folders = parsePersistedFolders(
         rawBucket.folders,
-        folderInfoByPath,
+        bucketFolderInfoByPath,
       );
       if (folders.length === 0) return [];
       return [
@@ -255,7 +270,7 @@ function parsePersistedByHost(
           hostId,
           normalizeBucket(
             folders,
-            folderInfoByPath,
+            bucketFolderInfoByPath,
             parsePersistedPrimaryPath(rawBucket.primaryPath),
           ),
         ],

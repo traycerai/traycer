@@ -41,12 +41,15 @@ const SCRIPTS = {
   },
 };
 
+// Stamped with the host the hook targets: the store files a folder only in
+// the bucket of the host it was actually prepared on, so an unstamped fixture
+// would be silently dropped and never reach the cap at all.
 function numberedFolder(index: number): WorkspaceFolderInfo {
   return {
     path: `/tmp/cap-workspace-${index}`,
     name: `cap-workspace-${index}`,
     repoIdentifier: null,
-    hostId: null,
+    hostId: TEST_HOST_ID,
   };
 }
 

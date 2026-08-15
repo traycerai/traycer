@@ -188,6 +188,62 @@ describe("composer run settings store", () => {
     );
   });
 
+  it("caps each host's epics independently - a second host never evicts the first's", () => {
+    // Host A is filled to exactly the cap, then host B is written to. A flat
+    // cap over the (epic, host) map would start evicting host A's oldest epic
+    // on B's very first write, so merely enrolling a machine would shrink
+    // every other machine's memory.
+    for (let index = 0; index < COMPOSER_RUN_SETTINGS_EPIC_CAP; index += 1) {
+      useComposerRunSettingsStore
+        .getState()
+        .setEpicRunSettings(
+          `epic-${index}`,
+          HOST_A,
+          REGULAR_RUN_SETTINGS,
+          index,
+        );
+    }
+
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings("epic-on-b", HOST_B, EPIC_RUN_SETTINGS, 1);
+
+    const entries =
+      useComposerRunSettingsStore.getState().epicRunSettingsByEpicHost;
+    expect(Object.keys(entries)).toHaveLength(
+      COMPOSER_RUN_SETTINGS_EPIC_CAP + 1,
+    );
+    // `epic-0` is host A's oldest and would be the first casualty of a shared
+    // cap; `updatedAt: 1` also makes it older than host B's write.
+    expect(entries[`epic-0 ${HOST_A}`]).toEqual({
+      settings: REGULAR_RUN_SETTINGS,
+      updatedAt: 0,
+    });
+    expect(entries[`epic-on-b ${HOST_B}`]).toEqual({
+      settings: EPIC_RUN_SETTINGS,
+      updatedAt: 1,
+    });
+
+    // Overflowing host A still evicts within host A only.
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings(
+        "epic-overflow",
+        HOST_A,
+        REGULAR_RUN_SETTINGS,
+        COMPOSER_RUN_SETTINGS_EPIC_CAP,
+      );
+
+    const after =
+      useComposerRunSettingsStore.getState().epicRunSettingsByEpicHost;
+    expect(Object.keys(after)).toHaveLength(COMPOSER_RUN_SETTINGS_EPIC_CAP + 1);
+    expect(after[`epic-0 ${HOST_A}`]).toBeUndefined();
+    expect(after[`epic-on-b ${HOST_B}`]).toEqual({
+      settings: EPIC_RUN_SETTINGS,
+      updatedAt: 1,
+    });
+  });
+
   it("clearEpicRunSettings removes only requested epic ids", () => {
     useComposerRunSettingsStore
       .getState()

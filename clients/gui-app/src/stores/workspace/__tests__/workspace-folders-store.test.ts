@@ -326,8 +326,8 @@ describe("per-host isolation", () => {
     useWorkspaceFoldersStore
       .getState()
       .addResolvedFolders(HOST_B, [
-        folderInfo("/x", HOST_A),
-        folderInfo("/y", HOST_A),
+        folderInfo("/x", HOST_B),
+        folderInfo("/y", HOST_B),
       ]);
 
     useWorkspaceFoldersStore.getState().setPrimaryFolder(HOST_A, "/b");
@@ -356,6 +356,24 @@ describe("per-host isolation", () => {
 
     expect(bucket(HOST_A).folders).toEqual(["/a"]);
     expect(bucket(HOST_A).primaryPath).toBe("/a");
+    expect(bucket(HOST_B)).toBe(EMPTY_WORKSPACE_FOLDERS_BUCKET);
+  });
+
+  it("drops a cross-stamped row instead of filing it under the target host", () => {
+    // The picker stamps each row with its DISPATCH-time host; a host switch
+    // landing between the pick and this call is the race that produces a
+    // mismatch. Host B's path must not become a row in host A's bucket.
+    const evicted = useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders(HOST_A, [
+        folderInfo("/on-a", HOST_A),
+        folderInfo("/on-b", HOST_B),
+        folderInfo("/unstamped", null),
+      ]);
+
+    expect(evicted).toEqual([]);
+    expect(bucket(HOST_A).folders).toEqual(["/on-a"]);
+    expect(bucket(HOST_A).primaryPath).toBe("/on-a");
     expect(bucket(HOST_B)).toBe(EMPTY_WORKSPACE_FOLDERS_BUCKET);
   });
 });
@@ -442,6 +460,44 @@ describe("persist merge (v2 payload validation)", () => {
     expect(bucket(HOST_A).folders).toEqual(["/a"]);
     // Host B's only folder is a ghost (no metadata) - its bucket is dropped
     // entirely rather than persisted empty.
+    expect(bucket(HOST_B)).toBe(EMPTY_WORKSPACE_FOLDERS_BUCKET);
+  });
+
+  it("drops rows whose stamp disagrees with the bucket they are filed under", async () => {
+    // A malformed/hand-edited v2 payload: host A's bucket carries a row
+    // stamped for host B and one with no stamp at all. Rehydration must not
+    // surface either through host A - a bucket only ever holds its own host's
+    // paths, however the payload got that way.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          byHost: {
+            [HOST_A]: {
+              folders: ["/on-b", "/unstamped", "/on-a"],
+              folderInfoByPath: {
+                "/on-b": folderInfo("/on-b", HOST_B),
+                "/unstamped": folderInfo("/unstamped", null),
+                "/on-a": folderInfo("/on-a", HOST_A),
+              },
+              primaryPath: "/on-b",
+            },
+          },
+        },
+      }),
+    );
+
+    await useWorkspaceFoldersStore.persist.rehydrate();
+
+    const state = bucket(HOST_A);
+    expect(state.folders).toEqual(["/on-a"]);
+    expect(state.folderInfoByPath).toEqual({
+      "/on-a": folderInfo("/on-a", HOST_A),
+    });
+    // The dropped row was also the stored primary, so primary re-resolves to
+    // the surviving folder rather than pointing at a path host A cannot serve.
+    expect(state.primaryPath).toBe("/on-a");
     expect(bucket(HOST_B)).toBe(EMPTY_WORKSPACE_FOLDERS_BUCKET);
   });
 });

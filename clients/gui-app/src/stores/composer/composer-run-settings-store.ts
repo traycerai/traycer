@@ -12,10 +12,12 @@ export interface ComposerRunSettingsEntry {
   readonly updatedAt: number;
 }
 
-// One flat LRU across every (epic, host) pair, space-separated like the
+// One flat record over every (epic, host) pair, space-separated like the
 // sibling harness-memory store's `harnessModelKey`. An epic id is a UUID and
 // never contains a space, so splitting at the FIRST space always recovers
-// the epic id - `clearEpicRunSettings` matches an epic across all hosts.
+// the epic id - `clearEpicRunSettings` matches an epic across all hosts - and
+// everything after it is the host id (see `cappedForHost`, which LRUs each
+// host's slice separately).
 function epicHostKey(epicId: string, hostId: string): string {
   return `${epicId} ${hostId}`;
 }
@@ -25,12 +27,43 @@ function epicIdOfKey(key: string): string {
   return separatorIndex === -1 ? key : key.slice(0, separatorIndex);
 }
 
+function hostIdOfKey(key: string): string | null {
+  const separatorIndex = key.indexOf(" ");
+  return separatorIndex === -1 ? null : key.slice(separatorIndex + 1);
+}
+
+/**
+ * Apply the epic cap WITHIN one host's entries. The record is flat, but the
+ * cap has always meant "how many epics one host remembers": capping the flat
+ * (epic, host) map instead would divide each host's memory by the number of
+ * hosts, so merely enrolling a second host would start evicting the first
+ * host's epics. Only the written host's slice is trimmed, so the total is
+ * bounded by cap x hosts - hosts are enrolled machines, a handful at most.
+ */
+function cappedForHost(
+  entries: Record<string, ComposerRunSettingsEntry>,
+  hostId: string,
+): Record<string, ComposerRunSettingsEntry> {
+  const hostEntries = Object.fromEntries(
+    Object.entries(entries).filter(([key]) => hostIdOfKey(key) === hostId),
+  );
+  if (Object.keys(hostEntries).length <= COMPOSER_RUN_SETTINGS_EPIC_CAP) {
+    return entries;
+  }
+  const kept = cappedByUpdatedAt(hostEntries, COMPOSER_RUN_SETTINGS_EPIC_CAP);
+  return Object.fromEntries(
+    Object.entries(entries).filter(
+      ([key]) => hostIdOfKey(key) !== hostId || Object.hasOwn(kept, key),
+    ),
+  );
+}
+
 interface ComposerRunSettingsStore {
   // hostId -> the last settings any composer ran with ON THAT HOST. Hosts have
   // different harness/model/profile catalogs, so a cross-host read would seed
   // state the target host may not even be able to serve.
   globalLastRunSettingsByHostId: Record<string, ChatRunSettings>;
-  // `${epicId} ${hostId}` -> that pair's last-run entry, LRU-capped.
+  // `${epicId} ${hostId}` -> that pair's last-run entry, LRU-capped per host.
   epicRunSettingsByEpicHost: Record<string, ComposerRunSettingsEntry>;
   // Frozen pre-host-scoping (v1) data, kept as a read-only fallback so the
   // common single-host install keeps its remembered settings across the
@@ -207,7 +240,7 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
         // sorts on, so even re-selecting the same settings must refresh it; a
         // just-touched epic must not be evicted as "least recently used".
         set((state) => ({
-          epicRunSettingsByEpicHost: cappedByUpdatedAt(
+          epicRunSettingsByEpicHost: cappedForHost(
             {
               ...state.epicRunSettingsByEpicHost,
               [epicHostKey(epicId, hostId)]: {
@@ -215,7 +248,7 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
                 updatedAt,
               },
             },
-            COMPOSER_RUN_SETTINGS_EPIC_CAP,
+            hostId,
           ),
         }));
       },

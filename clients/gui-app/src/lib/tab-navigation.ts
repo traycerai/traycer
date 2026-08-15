@@ -27,7 +27,7 @@ import {
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
@@ -1518,9 +1518,7 @@ export class TabNavigationController {
       // seed it from that host's last-run bucket.
       settings: useComposerRunSettingsStore
         .getState()
-        .getGlobalRunSettings(
-          getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
-        ),
+        .getGlobalRunSettings(activeHostIdOrNull()),
       create: true,
     });
     if (activation === null || activation.ref.kind !== "draft") {

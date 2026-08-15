@@ -137,7 +137,9 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     },
     onSettingsChange: null,
     tuiOnly: composerMode === "terminal",
-    hostId: "host-a",
+    // Same host the body renders with: production never splits these two, and
+    // a split fixture would hide a broken host hand-off to the toolbar.
+    hostId,
   });
 
   return render(
