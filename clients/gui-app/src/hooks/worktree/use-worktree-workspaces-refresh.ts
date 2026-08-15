@@ -92,7 +92,7 @@ export function useWorktreeWorkspacesRefresh(args: {
    * into a key no observer reads and the screen would never move.
    */
   readonly workspacePaths: ReadonlyArray<string>;
-  /** The summaries currently on screen, for the "Checked …" stamp. */
+  /** The summaries currently on screen, for the snapshot-age stamp. */
   readonly summaries: ReadonlyArray<WorktreeWorkspaceSummaryV15>;
 }): WorktreeWorkspacesRefresh {
   const queryClient = useQueryClient();
