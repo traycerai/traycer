@@ -968,6 +968,7 @@ function ProviderDetail({
                 profileTab={profileTab}
                 apiKeyDraft={apiKeyDraft}
                 onApiKeyDraftChange={setApiKeyDraft}
+                onActiveTabChange={onActiveTabChange}
               />
             </TabsContent>
           ))}
@@ -1018,6 +1019,7 @@ function ProviderTabBody({
   profileTab,
   apiKeyDraft,
   onApiKeyDraftChange,
+  onActiveTabChange,
 }: {
   readonly tab: ProviderTabKey;
   readonly state: ProviderCliState;
@@ -1026,6 +1028,7 @@ function ProviderTabBody({
   readonly profileTab: ProviderProfileTabProps;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
+  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
 }): ReactNode {
   switch (tab) {
     case "general":
@@ -1091,6 +1094,7 @@ function ProviderTabBody({
               profileId={null}
               usageUpdatedAt={null}
               fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+              onOpenModelProviders={() => onActiveTabChange("modelProviders")}
             />
           ) : null}
         </div>

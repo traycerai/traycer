@@ -139,4 +139,66 @@ describe("classifyProviderRateLimits", () => {
       ),
     ).toBe("unknown");
   });
+
+  it("treats an OpenCode rate-limited window as limited even at a low percent", () => {
+    expect(
+      classifyProviderRateLimits(
+        {
+          provider: "opencode",
+          available: true,
+          credentialGeneration: "gen-1",
+          fiveHour: {
+            status: "rate-limited",
+            usedPercent: 12,
+            resetsAt: NOW + 1,
+            durationMinutes: 300,
+          },
+          weekly: {
+            status: "ok",
+            usedPercent: 8,
+            resetsAt: NOW + 1,
+            durationMinutes: 10_080,
+          },
+          monthly: {
+            status: "ok",
+            usedPercent: 4,
+            resetsAt: NOW + 1,
+            durationMinutes: null,
+          },
+        },
+        NOW,
+      ),
+    ).toBe("limited");
+  });
+
+  it("does not treat an expired OpenCode rate-limited window as limited", () => {
+    expect(
+      classifyProviderRateLimits(
+        {
+          provider: "opencode",
+          available: true,
+          credentialGeneration: "gen-1",
+          fiveHour: {
+            status: "rate-limited",
+            usedPercent: 12,
+            resetsAt: NOW - 1,
+            durationMinutes: 300,
+          },
+          weekly: {
+            status: "ok",
+            usedPercent: 8,
+            resetsAt: NOW - 1,
+            durationMinutes: 10_080,
+          },
+          monthly: {
+            status: "ok",
+            usedPercent: 4,
+            resetsAt: NOW - 1,
+            durationMinutes: null,
+          },
+        },
+        NOW,
+      ),
+    ).toBe("unknown");
+  });
 });

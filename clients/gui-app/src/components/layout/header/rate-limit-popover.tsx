@@ -31,6 +31,7 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { OpenModelProvidersButton } from "@/components/settings/panels/opencode-go-actions";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
@@ -111,6 +112,7 @@ import {
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -764,6 +766,15 @@ function RateLimitPopoverScopedBody({
   );
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
+  const { openSettings } = useSystemTabModalActions();
+  const openOpenCodeModelProviders = useCallback((): void => {
+    onClose();
+    const focus = useProvidersFocusStore.getState();
+    focus.setFocusHarnessId("opencode");
+    focus.setFocusTab("modelProviders");
+    carryUsageHostIntoSettingsScope(displayedHostId);
+    openSettings({ section: "providers", resetToGeneral: false });
+  }, [displayedHostId, onClose, openSettings]);
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
@@ -844,12 +855,14 @@ function RateLimitPopoverScopedBody({
               railTabs={railTabs}
               providers={providers}
               profileSelection={profileSelection}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
             />
           ) : (
             <RateLimitDetailPane
               tab={resolvedTab}
               providers={providers}
               profileSelection={profileSelection}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
             />
           )}
         </div>
@@ -986,10 +999,12 @@ function RateLimitDetailPane({
   tab,
   providers,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly tab: Exclude<RateLimitPopoverTab, "overview">;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   return tab === "traycer" ? (
     <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
@@ -1001,6 +1016,7 @@ function RateLimitDetailPane({
       variant="popover-detail"
       onReady={null}
       profileSelection={profileSelection}
+      openOpenCodeModelProviders={openOpenCodeModelProviders}
     />
   );
 }
@@ -1157,10 +1173,12 @@ function RateLimitOverview({
   railTabs,
   providers,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   const [readyKeys, setReadyKeys] = useState<ReadonlySet<string>>(new Set());
   const markReady = useCallback((key: string) => {
@@ -1209,6 +1227,7 @@ function RateLimitOverview({
                 variant="popover-overview"
                 onReady={onReady}
                 profileSelection={profileSelection}
+                openOpenCodeModelProviders={openOpenCodeModelProviders}
               />
             )}
           </div>
@@ -1459,6 +1478,7 @@ function RateLimitProviderBlock({
   variant,
   onReady,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
@@ -1466,6 +1486,7 @@ function RateLimitProviderBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   if (profiles.length > 0) {
     return (
@@ -1476,6 +1497,7 @@ function RateLimitProviderBlock({
         variant={variant}
         onReady={onReady}
         profileSelection={profileSelection}
+        openOpenCodeModelProviders={openOpenCodeModelProviders}
       />
     );
   }
@@ -1486,6 +1508,7 @@ function RateLimitProviderBlock({
       fetchEligible={fetchEligibility.ambient}
       variant={variant}
       onReady={onReady}
+      openOpenCodeModelProviders={openOpenCodeModelProviders}
     />
   );
 }
@@ -1495,11 +1518,13 @@ function SingleProfileRateLimitProviderBlock({
   fetchEligible,
   variant,
   onReady,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly fetchEligible: boolean;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   // Single source of truth for this provider's refresh action + spinner state
@@ -1595,7 +1620,12 @@ function SingleProfileRateLimitProviderBlock({
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
+      <RateLimitProviderBody
+        state={state}
+        variant={variant}
+        profileId={null}
+        openModelProvidersAction={openOpenCodeModelProviders}
+      />
     </div>
   );
 }
@@ -1607,6 +1637,7 @@ function ProfileRateLimitProviderBlock({
   variant,
   onReady,
   profileSelection,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
@@ -1614,6 +1645,7 @@ function ProfileRateLimitProviderBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
@@ -1740,6 +1772,7 @@ function ProfileRateLimitProviderBlock({
               active={activeProfileId === target.profileId}
               variant={variant}
               query={queries[index]}
+              openOpenCodeModelProviders={openOpenCodeModelProviders}
             />
           );
         })}
@@ -1790,6 +1823,7 @@ function RateLimitProviderProfileRow({
   active,
   variant,
   query,
+  openOpenCodeModelProviders,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
@@ -1797,6 +1831,7 @@ function RateLimitProviderProfileRow({
   readonly fetchEligible: boolean;
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
+  readonly openOpenCodeModelProviders: () => void;
   readonly query: {
     readonly isPending: boolean;
     readonly isFetching: boolean;
@@ -1871,6 +1906,7 @@ function RateLimitProviderProfileRow({
         state={state}
         variant={variant}
         profileId={profileId}
+        openModelProvidersAction={openOpenCodeModelProviders}
       />
     </div>
   );
@@ -1982,10 +2018,12 @@ function RateLimitProviderBody({
   state,
   variant,
   profileId,
+  openModelProvidersAction,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
   readonly profileId: string | null;
+  readonly openModelProvidersAction: () => void;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
@@ -2004,15 +2042,21 @@ function RateLimitProviderBody({
       );
     case "unavailable":
       return (
-        <RateLimitErrorMessage
-          message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
-          reportContext={createReportIssueContext({
-            title: "Usage limits unavailable",
-            message: null,
-            code: null,
-            source: "Usage limits",
-          })}
-        />
+        <div className="flex flex-col items-start gap-1.5">
+          <RateLimitErrorMessage
+            message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
+            reportContext={createReportIssueContext({
+              title: "Usage limits unavailable",
+              message: null,
+              code: null,
+              source: "Usage limits",
+            })}
+          />
+          {state.provider === "opencode" &&
+          state.reason === "insufficient_permissions" ? (
+            <OpenModelProvidersButton onClick={openModelProvidersAction} />
+          ) : null}
+        </div>
       );
     case "ready":
       // Degraded (stale, latest poll failed): dim the reading in place rather
@@ -2365,7 +2409,7 @@ function RateLimitZeroState({
   return (
     <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
-        Connect Claude Code or Codex to see usage here.
+        Connect a supported provider to see usage here.
       </p>
       <button
         type="button"
