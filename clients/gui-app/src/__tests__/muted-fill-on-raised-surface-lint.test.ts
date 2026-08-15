@@ -37,9 +37,14 @@ const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  * ever spelling `bg-card`, so matching only the class left the single most
  * common raised surface in the app unguarded. `<Card` covers the whole
  * family by prefix.
+ *
+ * `SettingsPanelShell` and `SettingsGroup` are named for the same reason
+ * one level further out: both paint `bg-card/40` themselves, so a panel
+ * that renders one is standing on a card without ever spelling it. Nearly
+ * every settings surface in the app is one of those two.
  */
 const RAISED_SURFACE =
-  /DialogContent|AlertDialogContent|PopoverContent|HoverCardContent|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|<Card|bg-popover|bg-card/;
+  /DialogContent|AlertDialogContent|PopoverContent|HoverCardContent|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|SettingsPanelShell|SettingsGroup|<Card|bg-popover|bg-card/;
 
 /**
  * `bg-muted-foreground` is a TEXT color and is unaffected by the collapse.
