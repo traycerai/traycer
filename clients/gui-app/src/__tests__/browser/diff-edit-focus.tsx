@@ -218,9 +218,8 @@ export function DiffEditFocusFixture() {
       requestAnimationFrame(() => {
         if (cancelled) return;
         const host = document.querySelector("diffs-container");
-        const editable = host?.shadowRoot?.querySelector(
-          '[contenteditable="true"]',
-        );
+        const editable =
+          host?.shadowRoot?.querySelector('[contenteditable="true"]') ?? null;
         const state = testStateRef.current;
         if (
           state !== null &&

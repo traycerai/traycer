@@ -17,7 +17,8 @@ const fixtureUrlPath = "/src/__tests__/browser/diff-edit-focus.html";
 const chromePath = await findChrome();
 const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-diff-edit-"));
 const vitePort = await freePort();
-const devtoolsPort = await freePort();
+let devtoolsPort = await freePort();
+while (devtoolsPort === vitePort) devtoolsPort = await freePort();
 let chrome;
 let client;
 let viteProcess;
@@ -362,9 +363,20 @@ async function connectCdp(url) {
     const socket = new WebSocket(url);
     const pending = new Map();
     let nextId = 0;
+    const connectTimer = setTimeout(() => {
+      socket.close();
+      reject(new Error("Timed out connecting to the CDP socket"));
+    }, 15_000);
     socket.addEventListener("error", () =>
       reject(new Error("CDP socket failed")),
     );
+    socket.addEventListener("close", () => {
+      clearTimeout(connectTimer);
+      const failure = new Error("CDP socket closed before the request settled");
+      for (const request of pending.values()) request.reject(failure);
+      pending.clear();
+      reject(failure);
+    });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (typeof message.id !== "number") return;
@@ -375,6 +387,7 @@ async function connectCdp(url) {
       else request.reject(new Error(message.error.message));
     });
     socket.addEventListener("open", () => {
+      clearTimeout(connectTimer);
       resolve({
         send(method, params = {}) {
           return new Promise((requestResolve, requestReject) => {

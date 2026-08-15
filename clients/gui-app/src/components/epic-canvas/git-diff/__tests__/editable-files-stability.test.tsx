@@ -532,6 +532,14 @@ describe("useGitDiffEditing editableFiles stability", () => {
     });
 
     vi.useFakeTimers();
+    // Emulate a retry callback already queued while identity supersession
+    // races its cleanup, so the callback's own identity guard is exercised.
+    const clearTimeoutSpy = vi
+      .spyOn(window, "clearTimeout")
+      .mockImplementation(() => undefined);
+    onTestFinished(() => {
+      clearTimeoutSpy.mockRestore();
+    });
     failNext = true;
     comparisonIdentity = "cmp-A";
     act(() => {

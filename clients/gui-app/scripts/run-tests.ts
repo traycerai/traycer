@@ -100,7 +100,12 @@ function readShardValue(args: string[]): string | undefined {
 
 const shard = readShardValue(testArgs);
 const runsFirstShard = shard === undefined || shard.split("/", 1)[0] === "1";
-const runsWholeSuite = shard !== undefined || testArgs.length === 0;
+const shardValueArgs = new Set<string>(
+  shard !== undefined && testArgs.includes("--shard") ? [shard] : [],
+);
+const runsWholeSuite = !testArgs.some(
+  (arg) => !arg.startsWith("-") && !shardValueArgs.has(arg),
+);
 const runsDiffEditBrowser =
   runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
