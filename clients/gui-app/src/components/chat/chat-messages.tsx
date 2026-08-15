@@ -802,6 +802,44 @@ function resolvePendingMeasuredFreeRestore(
   };
 }
 
+/**
+ * A turn-completion announcement fires for three arrivals, all judged against
+ * the previous observation: a known row's `completedAt` transitioning null →
+ * timestamp, an incomplete row replaced by a completed row under a new id
+ * (live → persisted swap), and a footerless background-completion row that
+ * first appears already terminal — the projector emits notification-only
+ * autonomous resumes with `completedAt` pre-set (see
+ * `renderPersistedAssistantMessageTurn`), so there is no null → timestamp
+ * transition to observe for them.
+ */
+function findNewlyCompletedAssistant(
+  previous: ReadonlyMap<string, number | null>,
+  current: ReadonlyMap<string, number | null>,
+  messages: ReadonlyArray<ChatMessageModel>,
+): ChatMessageModel | null {
+  const replacedIncompleteAssistant = [...previous].some(
+    ([id, completedAt]) => completedAt === null && !current.has(id),
+  );
+  let completedAssistant: ChatMessageModel | null = null;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    if (message.completedAt === null || message.stopped !== null) continue;
+    const isNewRow = !previous.has(message.id);
+    const newlyCompleted = previous.get(message.id) === null;
+    const replacesIncompleteRow = replacedIncompleteAssistant && isNewRow;
+    const appendedBackgroundCompletion =
+      isNewRow && message.showCompletionFooter === false;
+    if (
+      newlyCompleted ||
+      replacesIncompleteRow ||
+      appendedBackgroundCompletion
+    ) {
+      completedAssistant = message;
+    }
+  }
+  return completedAssistant;
+}
+
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
@@ -2326,9 +2364,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     readonly key: string;
     readonly text: string;
   } | null>(null);
-  const assistantCompletionByIdRef = useRef<ReadonlyMap<string, number | null>>(
-    new Map(),
-  );
+  const assistantCompletionByIdRef = useRef<ReadonlyMap<
+    string,
+    number | null
+  > | null>(null);
   useLayoutEffect(() => {
     const previous = assistantCompletionByIdRef.current;
     const current = new Map<string, number | null>();
@@ -2336,22 +2375,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (message.role !== "assistant") continue;
       current.set(message.id, message.completedAt);
     }
-    const replacedIncompleteAssistant = [...previous].some(
-      ([id, completedAt]) => completedAt === null && !current.has(id),
-    );
-    let completedAssistant: ChatMessageModel | null = null;
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      if (
-        (previous.get(message.id) === null ||
-          (replacedIncompleteAssistant && !previous.has(message.id))) &&
-        message.completedAt !== null &&
-        !message.stopped
-      ) {
-        completedAssistant = message;
-      }
-    }
     assistantCompletionByIdRef.current = current;
+    // The first observation only records the baseline: transcript history
+    // present at mount must never announce, including footerless rows that
+    // are born terminal.
+    if (previous === null) return;
+    const completedAssistant = findNewlyCompletedAssistant(
+      previous,
+      current,
+      messages,
+    );
     if (completedAssistant !== null) {
       const announcement = {
         key: `${completedAssistant.id}:${completedAssistant.completedAt}`,

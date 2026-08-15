@@ -146,6 +146,10 @@ export function AssistantMessageBody({
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
   const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
+  const showElapsedFooter =
+    !stoppedBeforeResponding &&
+    showCompletionFooter &&
+    shouldShowElapsedFooter(runState, completedAt, segments, stopped);
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -245,10 +249,8 @@ export function AssistantMessageBody({
           meta={meta}
         />
       ) : null}
-      {stoppedBeforeResponding ? (
-        <StoppedBeforeResponding />
-      ) : showCompletionFooter &&
-        shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
+      {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
+      {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
           createdAt={elapsedStartedAt}

@@ -1146,27 +1146,29 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
-    it("announces a footerless background completion without calling it a response", async () => {
+    it("announces a footerless background completion appended while the chat is idle", async () => {
       const userMsg = makeMessage(0, "user");
-      const assistantPending: ChatMessageModel = {
-        ...makeMessage(1, "assistant"),
-        completedAt: null,
-        stopped: null,
-        runState: null,
-      };
       const { rerenderMessages } = renderChatMessages({
-        messages: [userMsg, assistantPending],
+        messages: [userMsg],
         scrollStateKey: "aria-background-complete-key",
         taskTitle: "Build plan",
       });
       await settleLegendList();
 
       const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // The projector inserts a notification-only autonomous-resume row that
+      // is born terminal - non-null `completedAt`, footer suppressed - with
+      // no pending assistant row preceding it (see
+      // `renderPersistedAssistantMessageTurn`). There is no null → timestamp
+      // transition to observe; the row's arrival is its completion.
       rerenderMessages([
         userMsg,
         {
-          ...assistantPending,
+          ...makeMessage(1, "assistant"),
           completedAt: 1_700_000_000_000,
+          stopped: null,
+          runState: null,
           showCompletionFooter: false,
         },
       ]);
@@ -1177,6 +1179,26 @@ describe("ChatMessages scroll policy", () => {
           "Build plan received a background completion.",
         );
       });
+    });
+
+    it("does not announce a footerless history row present at mount", async () => {
+      const notificationRow: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+        showCompletionFooter: false,
+      };
+      renderChatMessages({
+        messages: [makeMessage(0, "user"), notificationRow],
+        scrollStateKey: "aria-footerless-history",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      expect(
+        document.querySelector('[aria-live="polite"]')?.textContent ?? "",
+      ).toBe("");
     });
 
     it("announces when a pending live row is replaced by its completed persisted row", async () => {
