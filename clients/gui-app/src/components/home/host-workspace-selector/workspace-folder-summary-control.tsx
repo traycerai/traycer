@@ -491,7 +491,7 @@ function WorkspaceCheckedAtText(props: {
       className="text-ui-xs whitespace-nowrap text-muted-foreground"
       data-testid="workspace-folders-checked-at"
     >
-      Checked {relative}
+      Workspace snapshot · {relative}
     </span>
   );
 }
