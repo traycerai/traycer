@@ -13,7 +13,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { useMcpPendingAuthStore } from "@/stores/settings/mcp-pending-auth-store";
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 
 /**
  * Mirrors what `useProvidersMcpList` really returns — in particular `data` is
@@ -423,13 +426,18 @@ describe("<ProviderMcpTab />", () => {
     folderActionMocks.pickAndPrepareFolders.mockResolvedValue(null);
     folderActionMocks.isPreparing = false;
     useWorkspaceFoldersStore.setState({
-      folders: ["/Users/dev/app"],
-      folderInfoByPath: {
-        "/Users/dev/app": {
-          path: "/Users/dev/app",
-          name: "app",
-          repoIdentifier: null,
-          hostId: "host-1",
+      byHost: {
+        "host-1": {
+          folders: ["/Users/dev/app"],
+          folderInfoByPath: {
+            "/Users/dev/app": {
+              path: "/Users/dev/app",
+              name: "app",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+          },
+          primaryPath: null,
         },
       },
     });
@@ -556,19 +564,24 @@ describe("<ProviderMcpTab />", () => {
 
   it("shows multi-workspace picker and selects second folder", () => {
     useWorkspaceFoldersStore.setState({
-      folders: ["/Users/dev/app", "/Users/dev/other"],
-      folderInfoByPath: {
-        "/Users/dev/app": {
-          path: "/Users/dev/app",
-          name: "app",
-          repoIdentifier: null,
-          hostId: "host-1",
-        },
-        "/Users/dev/other": {
-          path: "/Users/dev/other",
-          name: "other",
-          repoIdentifier: null,
-          hostId: "host-1",
+      byHost: {
+        "host-1": {
+          folders: ["/Users/dev/app", "/Users/dev/other"],
+          folderInfoByPath: {
+            "/Users/dev/app": {
+              path: "/Users/dev/app",
+              name: "app",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+            "/Users/dev/other": {
+              path: "/Users/dev/other",
+              name: "other",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+          },
+          primaryPath: null,
         },
       },
     });
@@ -594,8 +607,13 @@ describe("<ProviderMcpTab />", () => {
 
   it("offers no project destination when this host has zero workspaces", () => {
     useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
+      byHost: {
+        "host-1": {
+          folders: [],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
     });
     resolvedWorkspaceMocks.folders = [];
     renderTab(FULL_CAPS, "codex");
@@ -618,7 +636,11 @@ describe("<ProviderMcpTab />", () => {
   });
 
   it("adds a workspace from the picker and selects it, with zero workspaces to start", async () => {
-    useWorkspaceFoldersStore.setState({ folders: [], folderInfoByPath: {} });
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        "host-1": { folders: [], folderInfoByPath: {}, primaryPath: null },
+      },
+    });
     resolvedWorkspaceMocks.folders = [];
     folderActionMocks.pickAndPrepareFolders.mockResolvedValue({
       folders: [
@@ -661,7 +683,11 @@ describe("<ProviderMcpTab />", () => {
     // "Add a workspace folder…" - lives INSIDE the popover. Disabling the
     // trigger in that state sealed the user in with no route to a usable
     // config, which is the exact hole the add action was introduced to close.
-    useWorkspaceFoldersStore.setState({ folders: [], folderInfoByPath: {} });
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        "host-1": { folders: [], folderInfoByPath: {}, primaryPath: null },
+      },
+    });
     resolvedWorkspaceMocks.folders = [];
     renderTab(PROJECT_ONLY_CAPS, "codex");
 
@@ -703,13 +729,18 @@ describe("<ProviderMcpTab />", () => {
       // and any add or remove - at the PARENT repo's `.mcp.json`, a different
       // file in a different repo.
       useWorkspaceFoldersStore.setState({
-        folders: ["/Users/dev/app"],
-        folderInfoByPath: {
-          "/Users/dev/app": {
-            path: "/Users/dev/app",
-            name: "app",
-            repoIdentifier: null,
-            hostId: "host-1",
+        byHost: {
+          "host-1": {
+            folders: ["/Users/dev/app"],
+            folderInfoByPath: {
+              "/Users/dev/app": {
+                path: "/Users/dev/app",
+                name: "app",
+                repoIdentifier: null,
+                hostId: "host-1",
+              },
+            },
+            primaryPath: null,
           },
         },
       });
@@ -763,7 +794,11 @@ describe("<ProviderMcpTab />", () => {
     // names a different host than the active one ("host-1" everywhere in this
     // file) - with both the same, a re-read would produce an identical store
     // and the assertion would hold for the wrong reason.
-    useWorkspaceFoldersStore.setState({ folders: [], folderInfoByPath: {} });
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        "host-1": { folders: [], folderInfoByPath: {}, primaryPath: null },
+      },
+    });
     resolvedWorkspaceMocks.folders = [];
     folderActionMocks.pickAndPrepareFolders.mockResolvedValue({
       folders: [
@@ -781,15 +816,17 @@ describe("<ProviderMcpTab />", () => {
 
     await vi.waitFor(() => {
       expect(
-        useWorkspaceFoldersStore.getState().folderInfoByPath[
-          "/Users/dev/on-host-2"
-        ],
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          "host-2",
+        ).folderInfoByPath["/Users/dev/on-host-2"],
       ).toBeDefined();
     });
     expect(
-      useWorkspaceFoldersStore.getState().folderInfoByPath[
-        "/Users/dev/on-host-2"
-      ].hostId,
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-2",
+      ).folderInfoByPath["/Users/dev/on-host-2"].hostId,
     ).toBe("host-2");
   });
 
@@ -810,19 +847,24 @@ describe("<ProviderMcpTab />", () => {
 
   it("shows multi-workspace picker on first use with no prior selection", () => {
     useWorkspaceFoldersStore.setState({
-      folders: ["/Users/dev/app", "/Users/dev/other"],
-      folderInfoByPath: {
-        "/Users/dev/app": {
-          path: "/Users/dev/app",
-          name: "app",
-          repoIdentifier: null,
-          hostId: "host-1",
-        },
-        "/Users/dev/other": {
-          path: "/Users/dev/other",
-          name: "other",
-          repoIdentifier: null,
-          hostId: "host-1",
+      byHost: {
+        "host-1": {
+          folders: ["/Users/dev/app", "/Users/dev/other"],
+          folderInfoByPath: {
+            "/Users/dev/app": {
+              path: "/Users/dev/app",
+              name: "app",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+            "/Users/dev/other": {
+              path: "/Users/dev/other",
+              name: "other",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+          },
+          primaryPath: null,
         },
       },
     });
@@ -859,13 +901,18 @@ describe("<ProviderMcpTab />", () => {
       },
     ];
     useWorkspaceFoldersStore.setState({
-      folders: ["/Users/a/scratch"],
-      folderInfoByPath: {
-        "/Users/a/scratch": {
-          path: "/Users/a/scratch",
-          name: "scratch",
-          repoIdentifier: null,
-          hostId: "host-A",
+      byHost: {
+        "host-1": {
+          folders: ["/Users/a/scratch"],
+          folderInfoByPath: {
+            "/Users/a/scratch": {
+              path: "/Users/a/scratch",
+              name: "scratch",
+              repoIdentifier: null,
+              hostId: "host-A",
+            },
+          },
+          primaryPath: null,
         },
       },
     });
@@ -885,22 +932,27 @@ describe("<ProviderMcpTab />", () => {
 
   it("excludes unresolved paths belonging to another host", () => {
     useWorkspaceFoldersStore.setState({
-      folders: ["/Users/dev/app", "/Users/dev/other-host"],
-      folderInfoByPath: {
-        "/Users/dev/app": {
-          path: "/Users/dev/app",
-          name: "app",
-          repoIdentifier: null,
-          hostId: "host-1",
-        },
-        "/Users/dev/other-host": {
-          path: "/Users/dev/other-host",
-          name: "other-host",
-          repoIdentifier: {
-            owner: "acme",
-            repo: "other",
+      byHost: {
+        "host-1": {
+          folders: ["/Users/dev/app", "/Users/dev/other-host"],
+          folderInfoByPath: {
+            "/Users/dev/app": {
+              path: "/Users/dev/app",
+              name: "app",
+              repoIdentifier: null,
+              hostId: "host-1",
+            },
+            "/Users/dev/other-host": {
+              path: "/Users/dev/other-host",
+              name: "other-host",
+              repoIdentifier: {
+                owner: "acme",
+                repo: "other",
+              },
+              hostId: "host-B",
+            },
           },
-          hostId: "host-B",
+          primaryPath: null,
         },
       },
     });

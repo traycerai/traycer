@@ -61,6 +61,7 @@ function StatusPill(props: {
 
   if (!canEdit) {
     return (
+      // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor; --canvas never equals --muted
       <span className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground">
         <span className={cn("size-2 rounded-full", current.dotClass)} />
         {current.label}
@@ -76,6 +77,8 @@ function StatusPill(props: {
         sideOffset={undefined}
         align={undefined}
       >
+        {/* muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor;
+            --canvas never equals --muted */}
         <span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground opacity-50">
           <span className={cn("size-2 rounded-full", current.dotClass)} />
           {current.label}
@@ -91,6 +94,7 @@ function StatusPill(props: {
           type="button"
           disabled={updateStatus.isPending || !epicId}
           data-testid="status-pill"
+          // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor; --canvas never equals --muted
           className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
         >
           {updateStatus.isPending ? (

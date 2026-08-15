@@ -658,14 +658,16 @@ describe("notification desktop-pass design corrections", () => {
       const row = await screen.findByTestId("notification-entry");
       expect(row.className.split(/\s+/)).toEqual(
         expect.arrayContaining([
-          "hover:bg-muted/70",
-          "has-[:focus-visible]:bg-muted/70",
+          // Foreground-alpha, not `bg-muted/70`: the popover surface IS
+          // `--muted`'s value in every preset dark theme.
+          "hover:bg-foreground/6",
+          "has-[:focus-visible]:bg-foreground/6",
         ]),
       );
       // Separators/labels are not rows - no hover tint class there.
       const separator = screen.queryByTestId("notification-temporal-separator");
       if (separator !== null) {
-        expect(separator.className).not.toContain("hover:bg-muted/70");
+        expect(separator.className).not.toContain("hover:bg-foreground/6");
       }
     });
 

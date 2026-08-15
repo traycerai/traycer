@@ -257,7 +257,7 @@ function HostDownloadProgress(props: HostDownloadProgressProps) {
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={props.percent}
-        className="h-2 w-full overflow-hidden rounded-full bg-muted"
+        className="h-2 w-full overflow-hidden rounded-full bg-foreground/8"
       >
         <div
           className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
@@ -337,6 +337,7 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     return (
       <p
         data-testid="local-host-loading-empty-tail"
+        // muted-fill-ok: weak tint delimited by its own border-border/60
         className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground"
       >
         Waiting for bootstrap output…
@@ -348,6 +349,7 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     <pre
       ref={ref}
       data-testid="local-host-loading-log-tail"
+      // muted-fill-ok: weak tint delimited by its own border-border/60
       className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground"
     >
       {props.tail}

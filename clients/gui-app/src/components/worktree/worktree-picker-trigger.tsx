@@ -29,6 +29,8 @@ export function WorktreePickerTrigger(props: WorktreePickerTriggerProps) {
       type="button"
       data-testid={testId}
       className={cn(
+        // muted-fill-ok: this is the PopoverTrigger, sitting on the canvas-scoped
+        // sidebar - not inside the popover this file opens
         "@container flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md bg-muted/20 px-2 py-1.5 text-left transition-colors hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         className,
       )}

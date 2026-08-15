@@ -1247,8 +1247,12 @@ describe("NotificationsPopover", () => {
     expect(row.className).not.toMatch(/bg-accent\/55|bg-muted\/35/);
     expect(row.className.split(/\s+/)).toEqual(
       expect.arrayContaining([
-        "hover:bg-muted/70",
-        "has-[:focus-visible]:bg-muted/70",
+        // Foreground-alpha, not `bg-muted/70`: these rows render on the
+        // notifications popover, whose surface IS `--muted`'s value in every
+        // preset dark theme, so a muted tint left the hover/focus states
+        // invisible there.
+        "hover:bg-foreground/6",
+        "has-[:focus-visible]:bg-foreground/6",
         "py-2.5",
         "pl-6",
         "pr-4",

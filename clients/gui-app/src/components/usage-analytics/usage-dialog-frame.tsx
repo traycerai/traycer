@@ -85,7 +85,9 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
         {props.children}
       </div>
       {props.footer === null ? null : (
-        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t bg-muted/50 px-4 py-3 max-[28rem]:rounded-b-none max-[28rem]:pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+        // The band fill is the primitive's own default - restating it here
+        // would just be a second copy to keep in sync.
+        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t px-4 py-3 max-[28rem]:rounded-b-none max-[28rem]:pb-[max(env(safe-area-inset-bottom),0.75rem)]">
           {props.footer}
         </DialogFooter>
       )}
