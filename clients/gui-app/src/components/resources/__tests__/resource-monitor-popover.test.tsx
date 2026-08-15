@@ -283,9 +283,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      useGlobalResourcesUnsupported: () =>
+      useGlobalResourcesUnsupported: (claimedHostId: string | null) =>
         globalResourcesUnsupportedMock.unsupported ??
-        actual.useGlobalResourcesUnsupported(),
+        actual.useGlobalResourcesUnsupported(claimedHostId),
     };
   },
 );

@@ -477,3 +477,76 @@ describe("resourcesRegistry", () => {
     expect(global.owners).toHaveLength(2);
   });
 });
+
+describe("global scope support", () => {
+  afterEach(() => {
+    resourcesRegistry.disposeAll();
+  });
+
+  it("starts unknown and records the verdict the stream publishes", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "global" },
+      streamClientFactory: fake.factory,
+    });
+
+    expect(handle.store.getState().scopeSupport).toBe("unknown");
+
+    fake.callbacks().onScopeSupport("unsupported");
+    expect(handle.store.getState().scopeSupport).toBe("unsupported");
+
+    handle.dispose();
+  });
+
+  it("reads unknown with no global entry to ask", () => {
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("unknown");
+  });
+
+  it("repeats the verdict for the host the stream was opened against", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe(
+      "unsupported",
+    );
+  });
+
+  // The entry is a module singleton that outlives a swap, so the verdict it
+  // holds routinely belongs to the machine we just STOPPED watching. Repeating
+  // it for whoever asks would print "cannot report its processes" under the
+  // name of a host that never said any such thing.
+  it("refuses to repeat one host's verdict for another", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport("host-b")).toBe("unknown");
+  });
+
+  // Two unnamed things are not the same thing. An entry whose mount could not
+  // name its host, asked about a scope that has not resolved one either, would
+  // match on `null === null` and convict a machine neither side identified.
+  it("does not match an unnamed entry to an unnamed claim", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", null, () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport(null)).toBe("unknown");
+  });
+});

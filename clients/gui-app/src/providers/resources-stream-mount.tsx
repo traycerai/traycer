@@ -5,7 +5,7 @@ import {
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
+import { useGlobalResourcesPreCheckUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
@@ -96,7 +96,17 @@ export function GlobalResourcesStreamMount(): ReactNode {
   // reader checks its data against, so it has to be the host this transport is
   // actually dialing rather than the one the caller believes it asked for.
   const hostId = useStreamHostId();
-  const resourcesUnsupported = useGlobalResourcesUnsupported();
+  // The PRE-STREAM verdict only, never the full one the panel reads. The full
+  // one includes this stream's own negotiation, so gating the acquire on it
+  // would be a loop: acquire → learn `unsupported` → release → the verdict dies
+  // with the store → acquire again. The pre-check cannot move as a result of
+  // anything this effect does, which is what makes it safe to gate on.
+  //
+  // So a host convicted only by its own stream keeps that stream open. It costs
+  // one idle subscription: an `@1.0` host answers a global probe with a single
+  // empty projection and then, having nothing to say about an epic that does
+  // not exist, stays silent.
+  const resourcesUnsupported = useGlobalResourcesPreCheckUnsupported();
 
   useEffect(() => {
     if (resourcesUnsupported) return;

@@ -5,6 +5,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   ResourcesProjectionPayload,
+  ResourcesScopeSupport,
   ResourcesStreamScope,
   ResourcesStreamCallbacks,
   ResourcesStreamClient,
@@ -70,6 +71,17 @@ export function globalResourceOwnerKey(
 export interface ResourcesState {
   readonly key: string;
   readonly connectionStatus: StreamConnectionStatus;
+  /**
+   * Whether the host this stream negotiated with can serve THIS store's scope -
+   * the transport-agnostic half of that question, learned from the session
+   * itself rather than from a capability pre-check only a local client can
+   * answer. See `ResourcesScopeSupport`.
+   *
+   * A global-scope store answering `"unsupported"` is the whole reason this
+   * exists: it is the only way a REMOTE host too old for a global stream is
+   * ever distinguishable from one that is merely quiet.
+   */
+  readonly scopeSupport: ResourcesScopeSupport;
   /** `null` until the first projection lands. */
   readonly sampledAt: number | null;
   /**
@@ -331,6 +343,10 @@ export function createResourcesStore(
         if (disposed) return;
         set({ connectionStatus: status });
       },
+      onScopeSupport: (support: ResourcesScopeSupport) => {
+        if (disposed) return;
+        set({ scopeSupport: support });
+      },
     };
 
     streamClient = options.streamClientFactory(options.scope, callbacks);
@@ -338,6 +354,7 @@ export function createResourcesStore(
     return {
       key,
       connectionStatus: "connecting",
+      scopeSupport: "unknown",
       sampledAt: null,
       owners: EMPTY_OWNERS,
       app: null,
