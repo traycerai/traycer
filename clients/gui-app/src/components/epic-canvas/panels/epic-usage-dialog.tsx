@@ -24,8 +24,10 @@ import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
 import {
   buildUsageChartColumns,
   buildUsageSeriesScaleForBuckets,
+  type UsageChartGroupBy,
 } from "@/lib/usage-analytics/usage-chart-data";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
+import { UsageChartGroupByToggle } from "@/components/usage-analytics/usage-chart-groupby-toggle";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 import { UsageChatBreakdown } from "@/components/usage-analytics/usage-chat-breakdown";
@@ -58,6 +60,13 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
   const [windowDays, setWindowDays] =
     useState<UsageSummaryWindowDays>(DEFAULT_WINDOW_DAYS);
+  // Held here rather than in the body: Radix unmounts `DialogContent` - and
+  // with it the body - while the dialog is closed, so a grouping picked
+  // there would silently reset on every reopen. This component outlives
+  // that (it lives as long as its `EpicShell`), which is the same reason
+  // the window selection above it is held here.
+  const [chartGroupBy, setChartGroupBy] =
+    useState<UsageChartGroupBy>("harness");
   const request = useMemo(
     () =>
       buildUsageSummaryRequest({
@@ -90,7 +99,11 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
         </div>
         <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <EpicUsageDialogBody query={query} />
+          <EpicUsageDialogBody
+            query={query}
+            chartGroupBy={chartGroupBy}
+            onChartGroupByChange={setChartGroupBy}
+          />
         </div>
         <DialogFooter className="-mx-4 -mb-4 mt-0 border-t bg-muted/50 px-4 py-3">
           <Button
@@ -113,8 +126,10 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
 
 function EpicUsageDialogBody(props: {
   readonly query: UsageSummaryQueryResult;
+  readonly chartGroupBy: UsageChartGroupBy;
+  readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
 }): ReactNode {
-  const { query } = props;
+  const { query, chartGroupBy, onChartGroupByChange } = props;
 
   if (query.isLoading) {
     return (
@@ -148,13 +163,18 @@ function EpicUsageDialogBody(props: {
 
   const { summary, coverage, servedBy } = query.data;
   const days = daysForSummaryWindow(summary);
-  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, "harness");
+  // One scale, keyed by the reader's grouping. Unlike the Settings
+  // dashboard - where the harness split beside the headline needs a
+  // harness-keyed scale of its own regardless of what the chart shows - the
+  // chart is this dialog's only consumer of the scale, so there is no second
+  // one to keep pinned to harnesses.
+  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, chartGroupBy);
   const columns = buildUsageChartColumns({
     days,
     buckets: summary.buckets,
     scale,
     metric: "cost",
-    groupBy: "harness",
+    groupBy: chartGroupBy,
   });
 
   return (
@@ -168,13 +188,29 @@ function EpicUsageDialogBody(props: {
         hostScopeName={null}
         size="default"
       />
+      {/* The toggle lives inside this guard, not beside the window picker
+          above: with no facts there is no chart for it to regroup, and a
+          control that changes nothing visible reads as broken. */}
       {summary.totals.factCount === 0 ? null : (
-        <UsageDailyChart
-          columns={columns}
-          scale={scale}
-          metric="cost"
-          groupBy="harness"
-        />
+        <div className="flex flex-col gap-2">
+          <div className="flex justify-end">
+            <UsageChartGroupByToggle
+              groupBy={chartGroupBy}
+              onChange={onChartGroupByChange}
+            />
+          </div>
+          {/* `key` per the prop's contract: the legend's hidden-series set is
+              keyed by the current grouping's series keys, so a switch
+              remounts rather than letting stale harness keys filter model
+              bands. */}
+          <UsageDailyChart
+            key={chartGroupBy}
+            columns={columns}
+            scale={scale}
+            metric="cost"
+            groupBy={chartGroupBy}
+          />
+        </div>
       )}
       <div>
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">

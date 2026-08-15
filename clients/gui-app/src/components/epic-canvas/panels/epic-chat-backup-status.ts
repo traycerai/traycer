@@ -1,22 +1,21 @@
-import { CircleAlert, CloudUpload } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import type {
   ChatBackupHaltCause,
   ChatBackupStatusRow,
 } from "@traycer/protocol/host/epic/chat-backup-status";
-import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useRegisteredEpicActiveAgentIds } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
 
-export interface EpicBackupStatusIndicatorProps {
-  readonly epicId: string;
+export interface EpicChatBackupStatus {
+  readonly severity: "activity" | "warning";
+  readonly tooltip: string;
+  readonly ariaLabel: string;
 }
 
 /**
@@ -40,15 +39,15 @@ export interface EpicBackupStatusIndicatorProps {
 const IDLE_BACKUP_ALARM_MS = 45 * 60_000;
 
 /**
- * Quiet local publication health, shown only when somebody can act on it.
+ * Local chat-publication health for the Epic header's shared status dot.
  *
  * Scoped to the host that owns the surrounding Epic SESSION, not to the app-wide
  * active host. The two differ whenever a retained Epic tab is bound to one host
  * while another is active, and `epic.chatBackupStatus` is a question about THIS
  * Epic's publisher: asked of the wrong machine it either hides the bound host's
  * halted backup or reports a status for a task that host is not running. Same
- * contract every other sidebar RPC follows - the sidebar is a sibling of the
- * canvas, outside every tile `TabHostProvider`, so it reads the session's host.
+ * contract every pane-level RPC follows: the header is outside every tile
+ * `TabHostProvider`, so it reads the Epic session's host.
  *
  * ## `behind` is two states wearing one name
  *
@@ -71,32 +70,22 @@ const IDLE_BACKUP_ALARM_MS = 45 * 60_000;
  * activity for the epic, and the chat projection's own `updatedAt`). No new
  * host round trip was added for the distinction.
  */
-export function EpicBackupStatusIndicator(
-  props: EpicBackupStatusIndicatorProps,
-) {
+export function useEpicChatBackupStatus(
+  epicId: string,
+): EpicChatBackupStatus | null {
   const client = useHostClientForHostId(useEpicSessionHostId());
-  if (client === null) return null;
-  return <BoundEpicBackupStatusIndicator {...props} client={client} />;
-}
-
-function BoundEpicBackupStatusIndicator(
-  props: EpicBackupStatusIndicatorProps & {
-    readonly client: HostRequester<HostRpcRegistry>;
-  },
-) {
-  const { client } = props;
   const readiness = useReactiveHostReadiness(client);
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
     client,
     method: "epic.chatBackupStatus",
-    params: { epicId: props.epicId },
+    params: { epicId },
     options: { poll: true },
   });
-  const workingChatIds = useRegisteredEpicActiveAgentIds(props.epicId);
-  const chatsById = useEpicChatProjections(props.epicId);
+  const workingChatIds = useRegisteredEpicActiveAgentIds(epicId);
+  const chatsById = useEpicChatProjections(epicId);
   // The shared 60s clock, so a chat that crosses the idle threshold while the
-  // sidebar is open starts alarming on the next tick rather than waiting for
+  // Task is open starts alarming on the next tick rather than waiting for
   // whatever re-renders this component next.
   const now = useSampledNow();
 
@@ -106,37 +95,7 @@ function BoundEpicBackupStatusIndicator(
     chatsById,
     now,
   });
-  if (view === null) return null;
-
-  const Icon = view.halted ? CircleAlert : CloudUpload;
-  return (
-    <div
-      className="flex w-full items-start gap-2 border-t px-3 py-2 text-xs text-muted-foreground"
-      role="status"
-    >
-      <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-      <div className="min-w-0">
-        <div className="text-foreground/80">{view.label}</div>
-        {view.staleCount > 0 ? (
-          <div>
-            {view.staleCount === 1
-              ? "1 chat not backed up"
-              : `${view.staleCount} chats not backed up`}
-            {view.lastPublishedAt === null ? (
-              " · never backed up"
-            ) : (
-              <LastBackupTimestamp timestamp={view.lastPublishedAt} />
-            )}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function LastBackupTimestamp(props: { readonly timestamp: number }) {
-  const relative = useRelativeTimestamp(props.timestamp);
-  return <> · last backup {relative.toLowerCase()}</>;
+  return view === null ? null : statusFromView(view, now);
 }
 
 const NO_CHATS: ChatsSlice["byId"] = Object.freeze({});
@@ -145,12 +104,8 @@ const NO_CHATS: ChatsSlice["byId"] = Object.freeze({});
  * Every chat record this window currently projects for the epic, or an empty
  * map when it holds no session for it.
  *
- * Resolved through the session REGISTRY rather than `useOpenEpicHandle`, for
- * the same reason the `useRegisteredEpic*` selectors are: this indicator is
- * rendered as a sibling of the sidebar's own session-ready gate, so the
- * provider's value can legitimately still be null underneath it and the
- * throwing accessor would take the whole column down on the way to a hint about
- * backup lag.
+ * Resolved through the session REGISTRY rather than a throwing handle accessor
+ * so the explicit `epicId` remains safe while a retained pane is tearing down.
  *
  * `chats.byId` is handed back as-is. The projector already gives that record a
  * stable identity - it is rebuilt only when a chat record actually changes -
@@ -182,7 +137,7 @@ interface BackupActivityEvidence {
 }
 
 interface BackupStatusView {
-  readonly halted: boolean;
+  readonly severity: EpicChatBackupStatus["severity"];
   readonly label: string;
   /** Behind chats whose lag the publisher can no longer explain. */
   readonly staleCount: number;
@@ -241,7 +196,7 @@ function backupStatusView(
     // says only that, with no count of chats to be alarmed about and no
     // timestamp implying the last backup is late.
     return {
-      halted: false,
+      severity: "activity",
       label: "Backing up…",
       staleCount: 0,
       lastPublishedAt: null,
@@ -252,7 +207,7 @@ function backupStatusView(
     .map((chat) => chat.lastPublishedAt)
     .filter((timestamp): timestamp is number => timestamp !== null);
   return {
-    halted: halted.length > 0,
+    severity: "warning",
     label:
       halted.length === 0
         ? "Chat backup behind"
@@ -263,6 +218,59 @@ function backupStatusView(
     lastPublishedAt:
       lastPublished.length === 0 ? null : Math.max(...lastPublished),
   };
+}
+
+function statusFromView(
+  view: BackupStatusView,
+  now: number,
+): EpicChatBackupStatus {
+  if (view.severity === "activity") {
+    return {
+      severity: "activity",
+      tooltip: "Backing up chats",
+      ariaLabel: "Backing up chats",
+    };
+  }
+
+  const count = chatCountSuffix(view.staleCount);
+  const lastBackup = lastBackupSuffix(
+    view.staleCount,
+    view.lastPublishedAt,
+    now,
+  );
+  const message = `${view.label}${count}${lastBackup}`;
+  return {
+    severity: "warning",
+    tooltip: message,
+    ariaLabel: message,
+  };
+}
+
+function chatCountSuffix(staleCount: number): string {
+  if (staleCount === 0) {
+    return "";
+  }
+  if (staleCount === 1) {
+    return " · 1 chat not backed up";
+  }
+  return ` · ${staleCount} chats not backed up`;
+}
+
+function lastBackupSuffix(
+  staleCount: number,
+  lastPublishedAt: number | null,
+  now: number,
+): string {
+  if (staleCount === 0) {
+    return "";
+  }
+  if (lastPublishedAt === null) {
+    return " · never backed up";
+  }
+  return ` · last backup ${formatRelativeTimestamp(
+    lastPublishedAt,
+    now,
+  ).toLowerCase()}`;
 }
 
 function isHaltCause(
@@ -288,10 +296,10 @@ function isHaltCause(
  */
 function labelForHaltCauses(causes: readonly ChatBackupHaltCause[]): string {
   if (causes.some((cause) => cause === "conflict" || cause === "escalation")) {
-    return "Backup failing";
+    return "Chat backup failing";
   }
   if (causes.some((cause) => cause === "too-large")) {
-    return "Backup stopped: chat too large";
+    return "Chat backup stopped: chat too large";
   }
   if (
     causes.some(
@@ -301,7 +309,7 @@ function labelForHaltCauses(causes: readonly ChatBackupHaltCause[]): string {
         cause === "forked-lineage",
     )
   ) {
-    return "Backup paused on a fork decision";
+    return "Chat backup paused on a fork decision";
   }
-  return "Backup paused by plan";
+  return "Chat backup paused by plan";
 }

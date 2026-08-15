@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
+// The PERSISTED variant, with its `.default(...)` backstops, and not the
+// wire-strict one: this is a read of a record that may have been written before
+// `serviceTier` or `profileId` existed, and the strict schema exists to stop a
+// partial WRITE from null-clobbering fields it never looked at. Parsing a
+// legacy record with it would fail the read outright.
+import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -199,6 +205,69 @@ export const listChatRecordsResponseSchema = z.object({
 });
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
+>;
+
+/**
+ * `epic.getChatRunSettings@1.0` - ONE chat's full run-settings tuple.
+ *
+ * ## Why a second read exists next to the row above
+ *
+ * The row carries `runSettingsSummary` - the harness id and nothing else -
+ * because the registry index it is served from must hold every chat in an epic
+ * at once, and a growing chat-shaped settings object has no place in it (see
+ * `chat-registry-row.ts`). That was the whole tuple's only client-side source
+ * once the single-write pivot stopped writing doc chat entries, so every
+ * surface that renders resolved settings for a chat it has not opened - the
+ * sidebar's agent hover card is the one that exists - lost model, reasoning
+ * effort, service tier, profile and permission mode at the same moment.
+ *
+ * This is the narrow read that gives them back WITHOUT widening the list: it is
+ * keyed on one chat, it is issued only when such a surface actually asks (the
+ * hover card fetches on open, beside `worktree.getBinding`), and it answers
+ * from the same store the row does - one keyed `json_extract`, no transcript
+ * materialized. A list read would pay that cost for every chat in the epic to
+ * serve the one the pointer is resting on.
+ *
+ * ## `settings` is nullable, and the two nulls mean different things
+ *
+ * `null` covers both "this host holds no projection for that chat" and "the
+ * chat has no persisted settings" (a legacy record written before the field, or
+ * one that has never run a turn). Deliberately NOT distinguished and
+ * deliberately NOT an error: every caller renders the same nothing for both,
+ * and a chat id this host does not know is a routing answer the CLIENT already
+ * has - it addresses the read to the chat's owning host, so a miss here means
+ * the row moved, not that the caller asked wrongly.
+ *
+ * ## Owner-scoped, like every other chat read
+ *
+ * Rows owned by the calling identity only. A chat living on ANOTHER of the
+ * viewer's hosts is served by THAT host - the client resolves a requester for
+ * the chat's `originHostId` rather than asking whichever host its tab happens
+ * to be bound to - so this method never needs a foreign arm. A foreign replica
+ * carries only the summary anyway (the cloud metadata row does not replicate
+ * the tuple), so serving one here would be inventing detail this host was never
+ * told.
+ *
+ * ## Optional, with a degrade story
+ *
+ * Registered `degrade: { kind: "unsupported" }` and not on the released floor.
+ * A host predating it answers `E_HOST_UNSUPPORTED` and the caller renders what
+ * the row already gave it - the harness mark - which is strictly what that
+ * host's own client showed before this method existed.
+ */
+export const getChatRunSettingsRequestSchema = z.object({
+  epicId: z.string().min(1),
+  chatId: z.string().min(1),
+});
+export type GetChatRunSettingsRequest = z.infer<
+  typeof getChatRunSettingsRequestSchema
+>;
+
+export const getChatRunSettingsResponseSchema = z.object({
+  settings: chatRunSettingsSchema.nullable(),
+});
+export type GetChatRunSettingsResponse = z.infer<
+  typeof getChatRunSettingsResponseSchema
 >;
 
 /**

@@ -5,7 +5,7 @@ import {
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
 import { QueueEditDraftPill } from "@/components/chat/composer/queue-edit-draft-pill";
-import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 
 interface ChatComposerAttachmentsStripProps {
   readonly content: JsonContent;
@@ -17,7 +17,9 @@ interface ChatComposerAttachmentsStripProps {
 export function ChatComposerAttachmentsStrip(
   props: ChatComposerAttachmentsStripProps,
 ) {
-  const fetcher = useEpicImageFetcher();
+  // Chat-plane bytes for hash-only chips, scoped by the surrounding tile's
+  // `ChatAttachmentScopeContext` - the same chat the composer posts into.
+  const fetcher = useChatImageFetcher();
   return (
     <>
       <QueueEditDraftPill

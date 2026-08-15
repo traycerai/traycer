@@ -29,16 +29,28 @@ import {
   prReviewStateSchema,
   prGetLocalDiffRequestSchema,
   prGetLocalDiffResponseSchema,
+  prGetLocalDiffSummaryRequestSchema,
+  prGetLocalDiffSummaryResponseSchema,
+  prGetLocalFileDiffRequestSchema,
+  prGetLocalFileDiffResponseSchema,
   prLocalDiffFileSchema,
+  prLocalDiffSummaryFileSchema,
+  prLocalDiffOidSchema,
   prLinkGroupKeySchema,
   prRepoIdentifierSchema,
   DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET,
+  DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
 } from "@traycer/protocol/host/pr-schemas";
 import {
   prSubscribeListForEpicV10,
   prSubscribeDetailV10,
   prGetLocalDiffV10,
+  prGetLocalDiffSummaryV10,
+  prGetLocalFileDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
+import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 const BASE_COORDINATES_FIXTURE = {
   owner: "traycerai",
@@ -1302,11 +1314,294 @@ describe("pr contract sanity", () => {
     expect(prSubscribeListForEpicV10.method).toBe("pr.subscribeListForEpic");
     expect(prSubscribeDetailV10.method).toBe("pr.subscribeDetail");
     expect(prGetLocalDiffV10.method).toBe("pr.getLocalDiff");
+    expect(prGetLocalDiffSummaryV10.method).toBe("pr.getLocalDiffSummary");
+    expect(prGetLocalFileDiffV10.method).toBe("pr.getLocalFileDiff");
     expect(prSubscribeListForEpicV10.schemaVersion).toEqual({
       major: 1,
       minor: 0,
     });
     expect(prSubscribeDetailV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(prGetLocalDiffV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(prGetLocalDiffSummaryV10.schemaVersion).toEqual({
+      major: 1,
+      minor: 0,
+    });
+    expect(prGetLocalFileDiffV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+  });
+});
+
+const LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE = {
+  epicId: LOCAL_DIFF_REQUEST_FIXTURE.epicId,
+  linkGroupKey: LOCAL_DIFF_REQUEST_FIXTURE.linkGroupKey,
+  repoIdentifier: LOCAL_DIFF_REQUEST_FIXTURE.repoIdentifier,
+  repoRole: LOCAL_DIFF_REQUEST_FIXTURE.repoRole,
+  baseRefName: LOCAL_DIFF_REQUEST_FIXTURE.baseRefName,
+  headRefName: LOCAL_DIFF_REQUEST_FIXTURE.headRefName,
+  expectedHeadOid: LOCAL_DIFF_REQUEST_FIXTURE.expectedHeadOid,
+  ignoreWhitespace: LOCAL_DIFF_REQUEST_FIXTURE.ignoreWhitespace,
+};
+
+const LOCAL_FILE_DIFF_REQUEST_FIXTURE = {
+  epicId: "epic-1",
+  linkGroupKey: "/Users/dev/worktrees/traycer-jolly-fox",
+  repoIdentifier: REPO_IDENTIFIER_FIXTURE,
+  repoRole: "superproject" as const,
+  mergeBaseOid: "c".repeat(40),
+  headOid: "a".repeat(40),
+  path: "traycer-host/src/domain/git/git-service.ts",
+  previousPath: null,
+  ignoreWhitespace: false,
+  byteBudget: DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
+};
+
+describe("prGetLocalDiffSummaryRequestSchema", () => {
+  it("is the monolith request minus byteBudget - parses without it and strips nothing else", () => {
+    const parsed = prGetLocalDiffSummaryRequestSchema.parse(
+      LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE,
+    );
+    expect(parsed).toEqual(LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE);
+    expect(parsed).not.toHaveProperty("byteBudget");
+
+    const fromMonolith = prGetLocalDiffSummaryRequestSchema.parse(
+      LOCAL_DIFF_REQUEST_FIXTURE,
+    );
+    expect(fromMonolith).toEqual(LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE);
+    expect(fromMonolith).not.toHaveProperty("byteBudget");
+  });
+
+  it("parses and reparses a populated request unchanged", () => {
+    const parsed1 = prGetLocalDiffSummaryRequestSchema.parse(
+      LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE,
+    );
+    const parsed2 = prGetLocalDiffSummaryRequestSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+});
+
+describe("prLocalDiffOidSchema", () => {
+  it("accepts exactly 40- and 64-char lowercase hex", () => {
+    expect(prLocalDiffOidSchema.parse("a".repeat(40))).toBe("a".repeat(40));
+    expect(prLocalDiffOidSchema.parse("0123456789abcdef".repeat(4))).toBe(
+      "0123456789abcdef".repeat(4),
+    );
+    expect(prLocalDiffOidSchema.parse("b".repeat(64))).toBe("b".repeat(64));
+  });
+
+  it("rejects abbreviations, uppercase, ref names, and revision expressions", () => {
+    for (const value of [
+      "a".repeat(7),
+      "a".repeat(39),
+      "a".repeat(41),
+      "A".repeat(40),
+      "a".repeat(39) + "F",
+      "HEAD",
+      "main",
+      "refs/heads/main",
+      "a..b",
+      `${"a".repeat(20)}..${"b".repeat(18)}`,
+    ]) {
+      expect(() => prLocalDiffOidSchema.parse(value)).toThrow();
+    }
+  });
+});
+
+describe("prGetLocalDiffSummaryResponseSchema", () => {
+  it("parses and reparses a summary response unchanged", () => {
+    const fixture = {
+      kind: "summary" as const,
+      runningDir: "/Users/dev/worktrees/traycer-jolly-fox",
+      resolvedBaseRef: "origin/development",
+      baseOid: "b".repeat(40),
+      mergeBaseOid: "c".repeat(40),
+      localHeadOid: "a".repeat(40),
+      isStale: false,
+      files: [
+        {
+          path: LOCAL_DIFF_FILE_FIXTURE.path,
+          previousPath: LOCAL_DIFF_FILE_FIXTURE.previousPath,
+          status: LOCAL_DIFF_FILE_FIXTURE.status,
+          insertions: LOCAL_DIFF_FILE_FIXTURE.insertions,
+          deletions: LOCAL_DIFF_FILE_FIXTURE.deletions,
+          isBinary: LOCAL_DIFF_FILE_FIXTURE.isBinary,
+        },
+      ],
+    };
+    const parsed1 = prGetLocalDiffSummaryResponseSchema.parse(fixture);
+    const parsed2 = prGetLocalDiffSummaryResponseSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+
+  it("rejects empty path and previousPath in a summary file", () => {
+    // The client forwards a summary file's path and previousPath verbatim
+    // into pr.getLocalFileDiff requests, whose schema requires min(1) (path)
+    // and min(1) | null (previousPath). The summary states the SAME rules so
+    // a parse-valid summary can never build a request-invalid ask. (The
+    // released monolith file schema stays looser - its files never feed a
+    // request.)
+    const renamed = prLocalDiffSummaryFileSchema.parse({
+      path: "new/path.ts",
+      previousPath: "old/path.ts",
+      status: "renamed",
+      insertions: 1,
+      deletions: 1,
+      isBinary: false,
+    });
+    expect(renamed.previousPath).toBe("old/path.ts");
+    expect(
+      prLocalDiffSummaryFileSchema.safeParse({
+        ...renamed,
+        previousPath: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      prLocalDiffSummaryFileSchema.safeParse({
+        ...renamed,
+        path: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      prLocalDiffFileSchema.safeParse({
+        ...renamed,
+        path: "",
+        previousPath: "",
+        patch: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("parses and reparses every unavailable reason unchanged", () => {
+    for (const reason of [
+      "no-local-checkout",
+      "repo-mismatch",
+      "ref-unavailable",
+      "no-merge-base",
+      "git-unavailable",
+    ] as const) {
+      const parsed1 = prGetLocalDiffSummaryResponseSchema.parse({
+        kind: "unavailable",
+        reason,
+      });
+      const parsed2 = prGetLocalDiffSummaryResponseSchema.parse(parsed1);
+      expect(parsed2).toEqual(parsed1);
+    }
+  });
+});
+
+describe("prGetLocalFileDiffRequestSchema", () => {
+  it("defaults byteBudget to the 256 KiB per-file budget and accepts null", () => {
+    const { byteBudget, ...withoutBudget } = LOCAL_FILE_DIFF_REQUEST_FIXTURE;
+    expect(byteBudget).toBe(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET);
+    expect(prGetLocalFileDiffRequestSchema.parse(withoutBudget).byteBudget).toBe(
+      DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
+    );
+    expect(
+      prGetLocalFileDiffRequestSchema.parse({
+        ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+        byteBudget: null,
+      }).byteBudget,
+    ).toBeNull();
+  });
+
+  it("parses and reparses a populated request unchanged", () => {
+    const parsed1 = prGetLocalFileDiffRequestSchema.parse(
+      LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+    );
+    const parsed2 = prGetLocalFileDiffRequestSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+});
+
+describe("prGetLocalFileDiffResponseSchema", () => {
+  it("keeps patch non-nullable and truncatedAfterBytes nullable", () => {
+    const parsed = prGetLocalFileDiffResponseSchema.parse({
+      kind: "diff",
+      patch: "",
+      isBinary: false,
+      isTruncated: false,
+      truncatedAfterBytes: null,
+    });
+    expect(parsed).toEqual({
+      kind: "diff",
+      patch: "",
+      isBinary: false,
+      isTruncated: false,
+      truncatedAfterBytes: null,
+    });
+
+    expect(() =>
+      prGetLocalFileDiffResponseSchema.parse({
+        kind: "diff",
+        patch: null,
+        isBinary: false,
+        isTruncated: false,
+        truncatedAfterBytes: null,
+      }),
+    ).toThrow();
+  });
+
+  it("parses and reparses a truncated file-diff response unchanged", () => {
+    const fixture = {
+      kind: "diff" as const,
+      patch: "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b",
+      isBinary: false,
+      isTruncated: true,
+      truncatedAfterBytes: DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
+    };
+    const parsed1 = prGetLocalFileDiffResponseSchema.parse(fixture);
+    const parsed2 = prGetLocalFileDiffResponseSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+});
+
+describe("pr split RPC contracts", () => {
+  it("registers both canonical v1.0 contracts with the exact schema instances", () => {
+    const summary = hostRpcRegistry["pr.getLocalDiffSummary"];
+    const fileDiff = hostRpcRegistry["pr.getLocalFileDiff"];
+    const summaryContract = summary[1].versions[0].contract;
+    const fileDiffContract = fileDiff[1].versions[0].contract;
+
+    expect(summaryContract).toBe(prGetLocalDiffSummaryV10);
+    expect(fileDiffContract).toBe(prGetLocalFileDiffV10);
+    expect(summaryContract.requestSchema).toBe(
+      prGetLocalDiffSummaryRequestSchema,
+    );
+    expect(summaryContract.responseSchema).toBe(
+      prGetLocalDiffSummaryResponseSchema,
+    );
+    expect(fileDiffContract.requestSchema).toBe(
+      prGetLocalFileDiffRequestSchema,
+    );
+    expect(fileDiffContract.responseSchema).toBe(
+      prGetLocalFileDiffResponseSchema,
+    );
+    expect(summaryContract.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(fileDiffContract.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(summaryContract.method).toBe("pr.getLocalDiffSummary");
+    expect(fileDiffContract.method).toBe("pr.getLocalFileDiff");
+  });
+
+  it("keeps both additive methods optional and unsupported on older hosts", () => {
+    for (const method of [
+      "pr.getLocalDiffSummary",
+      "pr.getLocalFileDiff",
+    ] as const) {
+      expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
+      expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
+    }
+
+    const split = splitConnectionManifest(
+      hostRpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+    );
+    expect(split.manifest["pr.getLocalDiffSummary"]).toBeUndefined();
+    expect(split.manifest["pr.getLocalFileDiff"]).toBeUndefined();
+    expect(split.optionalManifest["pr.getLocalDiffSummary"]).toEqual({
+      major: 1,
+      minor: 0,
+    });
+    expect(split.optionalManifest["pr.getLocalFileDiff"]).toEqual({
+      major: 1,
+      minor: 0,
+    });
   });
 });

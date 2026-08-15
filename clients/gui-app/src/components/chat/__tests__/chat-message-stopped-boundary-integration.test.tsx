@@ -109,7 +109,7 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
-  contentBlocksText: () => "",
+  contentBlocksPreview: () => "",
 };
 
 function userMessage(messageId: string): Extract<Message, { role: "user" }> {

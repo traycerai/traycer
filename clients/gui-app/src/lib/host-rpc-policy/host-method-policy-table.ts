@@ -885,6 +885,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // One chat image attachment's bytes. Not polled, and it must not be: the
+  // answer is content-addressed, so a hash that resolved once resolves to the
+  // same bytes forever and a hash that missed is re-driven by the image blob
+  // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
+  // interval here would re-fetch megabytes to re-learn a constant.
+  "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -927,6 +933,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.listChatRecords": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
+  // UNPOLLED, unlike the list above, and for the opposite reason: the list has
+  // to notice a chat that appeared elsewhere, while this answers a question
+  // whose subject cannot change without a user action. Run settings move when
+  // somebody moves them, and the surfaces that move them invalidate this key.
+  // Its caller unmounts on close, so a re-open is a fresh read once the entry
+  // goes stale - a cadence would only re-ask the host about a card nobody is
+  // looking at.
+  "epic.getChatRunSettings": {
+    ...LATEST_SCHEDULING,
+    poll: null,
   },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
@@ -976,6 +993,12 @@ export const HOST_METHOD_POLL_TABLE = {
   // No poll: the PR detail stream is what notices a new push, and a re-render
   // off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The split form of the same read: one metadata frame when the tile opens,
+  // then one small patch per visible row. Same no-poll reasoning - the detail
+  // stream notices pushes, and the per-file queries are keyed by immutable
+  // OIDs, so there is nothing a cadence could learn.
+  "pr.getLocalDiffSummary": { ...LATEST_SCHEDULING, poll: null },
+  "pr.getLocalFileDiff": { ...LATEST_SCHEDULING, poll: null },
   // The composer's PR/issue mention sections. Both are latest-wins with no
   // poll: the menu is open for seconds at a time and drives every fetch
   // explicitly (open, refresh click, filter change), so there is no cadence
