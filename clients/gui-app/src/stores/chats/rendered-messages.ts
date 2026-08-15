@@ -94,7 +94,9 @@ export interface RenderedMessagesDisplayContext {
     sender: AgentSender,
     reasoningEffort: string | null,
   ) => string | null;
-  readonly contentBlocksText: (blocks: ReadonlyArray<ContentBlock>) => string;
+  readonly contentBlocksPreview: (
+    blocks: ReadonlyArray<ContentBlock>,
+  ) => string;
 }
 
 export interface RenderedMessagesInput {
@@ -2257,7 +2259,7 @@ function renderAssistantTurnSlice(
   return {
     id: assistantSliceRowId(input.turnKey, input.chunkIndex, input.split),
     role: "assistant",
-    content: input.ctx.contentBlocksText(input.blocks),
+    content: input.ctx.contentBlocksPreview(input.blocks),
     segments: buildAssistantSegments(
       input.blocks,
       input.checkpointView,
