@@ -4,7 +4,7 @@ import type {
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { AttachmentImageFailure } from "./attachment-image";
 import { useSanitizedSvg } from "./use-sanitized-svg";
@@ -126,17 +126,23 @@ function GeneratedImageContent(props: {
   readonly result: ImageGenerationResult;
   readonly fallbackAlt: string;
 }): ReactNode {
-  const image = useAttachmentBlobSrc(
+  const image = useChatAttachmentBlobSrc(
     props.result.attachmentHash,
     props.result.mediaType,
     null,
   );
   const alt =
     props.result.alt ?? props.result.revisedPrompt ?? props.fallbackAlt;
+  // The resolved blob's OWN type once it exists, falling back to the stored
+  // claim only while nothing is resolved yet (the gate is inert then anyway,
+  // since there is no `src` to sanitize). A host-sniffed type overrides the
+  // claim, so SVG bytes stored as `image/png` still reach the sanitizer.
+  const effectiveMediaType =
+    image.status === "ready" ? image.mediaType : props.result.mediaType;
   const sanitizedSvg = useSanitizedSvg(
     image.src ?? "",
     image.src !== null &&
-      props.result.mediaType === "image/svg+xml" &&
+      effectiveMediaType === "image/svg+xml" &&
       !image.src.startsWith("data:"),
   );
 
@@ -174,7 +180,7 @@ function GeneratedImageContent(props: {
       <ImageLightbox
         src={image.src}
         alt={alt.length > 0 ? alt : "Generated image"}
-        mediaType={props.result.mediaType}
+        mediaType={effectiveMediaType}
         suggestedName={generatedImageName(props.result)}
         className="size-full overflow-hidden"
       >

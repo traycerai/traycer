@@ -28,12 +28,21 @@ const blobSrcState = vi.hoisted(() => ({
   value: {
     status: "loading",
     src: null as string | null,
+    // The EFFECTIVE type of the resolved blob (host-sniffed when the byte
+    // source had a verdict), not the type stored on the message.
+    mediaType: "image/png",
   },
 }));
 
-vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
-  useAttachmentBlobSrc: () => blobSrcState.value,
-}));
+vi.mock(
+  "@/lib/attachments/use-attachment-blob-src",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/attachments/use-attachment-blob-src")
+    >()),
+    useChatAttachmentBlobSrc: () => blobSrcState.value,
+  }),
+);
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -181,7 +190,11 @@ function renderImage(args: {
 }
 
 beforeEach(() => {
-  blobSrcState.value = { status: "loading", src: null };
+  blobSrcState.value = {
+    status: "loading",
+    src: null,
+    mediaType: "image/png",
+  };
 });
 
 afterEach(() => {
@@ -304,6 +317,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/resolved-local",
+      mediaType: "image/png",
     };
     renderImage({
       src: "/workspace/shots/diagram.png",
@@ -340,6 +354,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/resolved-svg",
+      mediaType: "image/svg+xml",
     };
     renderImage({
       src: "/workspace/shots/diagram.svg",
@@ -367,8 +382,60 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     });
   });
 
+  it("sanitizes bytes the host says are SVG even when the message claims PNG", async () => {
+    // The stored `mediaType` is written by whichever composer produced the
+    // message and describes bytes nobody re-checked; `epic.readChatAttachment`
+    // sniffs the delivered bytes' magic bytes and is host-authoritative. Gating
+    // sanitization on the stored claim let SVG-filed-as-PNG reach the renderer
+    // with `sanitizeUntrustedSvg` skipped entirely.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(atob(UNSAFE_SVG_DATA_URL.split(",")[1]), {
+            status: 200,
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
+        ),
+      ),
+    );
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/mislabeled-svg",
+      mediaType: "image/svg+xml",
+    };
+    renderImage({
+      src: "/workspace/shots/diagram.png",
+      alt: undefined,
+      context: {
+        ...BASE_CONTEXT,
+        resolutions: [
+          resolution(
+            resolvedEntry("/workspace/shots/diagram.png", {
+              mediaType: "image/png",
+            }),
+            "msg-1",
+          ),
+        ],
+      },
+    });
+
+    const img = await screen.findByRole("img", { name: "diagram" });
+    await waitFor(() => {
+      const renderedSource = img.getAttribute("src") ?? "";
+      expect(renderedSource).toContain("data:image/svg+xml;base64,");
+      expect(atob(renderedSource.split(",")[1] ?? "")).not.toContain(
+        "<script>",
+      );
+    });
+  });
+
   it("shows the remote-host waiting skeleton when the hash is known but the blob is still pending", () => {
-    blobSrcState.value = { status: "loading", src: null };
+    blobSrcState.value = {
+      status: "loading",
+      src: null,
+      mediaType: "image/png",
+    };
     renderImage({
       src: "/workspace/shots/pending.png",
       alt: undefined,
@@ -391,7 +458,11 @@ describe("AssistantMarkdownImage source classification matrix", () => {
   });
 
   it("shows a terminal failure when a resolved attachment is unavailable", () => {
-    blobSrcState.value = { status: "unavailable", src: null };
+    blobSrcState.value = {
+      status: "unavailable",
+      src: null,
+      mediaType: "image/png",
+    };
     renderImage({
       src: "/workspace/shots/missing.png",
       alt: "missing image",
@@ -775,6 +846,7 @@ describe("AssistantMarkdownImage markdown pipeline", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/windows-chart",
+      mediaType: "image/png",
     };
     const client = createQueryClient();
     render(

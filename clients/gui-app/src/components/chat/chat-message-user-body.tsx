@@ -42,7 +42,6 @@ import {
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -87,6 +86,7 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
@@ -1018,24 +1018,13 @@ function MessageCopyButton({
     onSuccess: null,
     onError: handleCopyError,
   });
-  const handle = useMaybeOpenEpicHandle();
-  const resolveAttachmentBytes = useCallback(
-    async (hash: string): Promise<Uint8Array | null> => {
-      if (handle === null) return null;
-      const state = handle.store.getState();
-      // Only read hashes whose bytes are already local — `readAttachmentBytes`
-      // otherwise waits indefinitely for a cross-device sync, which would hang
-      // the clipboard write. An absent hash (a dangling ref from the old
-      // edit-flow bug) stays hash-only; downstream paste validation drops it.
-      if (!state.hasAttachmentBytes(hash)) return null;
-      const bytes = await state.readAttachmentBytes(
-        hash,
-        new AbortController().signal,
-      );
-      return bytes === null ? null : new Uint8Array(bytes);
-    },
-    [handle],
-  );
+  // Chat-plane read with the reader's own bound. This replaces a
+  // `hasAttachmentBytes` pre-check that existed purely to stop
+  // `readAttachmentBytes` from waiting indefinitely and hanging the clipboard
+  // write; the bytes are no longer answerable synchronously, so the same
+  // guarantee now comes from the timeout. A hash that does not resolve stays
+  // hash-only, exactly as before, and downstream paste validation drops it.
+  const resolveAttachmentBytes = useChatAttachmentByteReader();
   const onClick = useCallback(() => {
     if (structuredContent === null) {
       copy(text);
