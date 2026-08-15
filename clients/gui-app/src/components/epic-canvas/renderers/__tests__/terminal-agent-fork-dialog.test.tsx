@@ -161,7 +161,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -177,7 +177,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {

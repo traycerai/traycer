@@ -21,7 +21,12 @@ export interface UsageCostFigureProps {
    * subject is the same work wherever it ran).
    */
   readonly hostScopeName: string | null;
-  readonly size: "compact" | "default";
+  /**
+   * `display` is the epic usage dialog's hero treatment: one step larger,
+   * proportional figures. `default` (Settings' hero, the chat dialog) and
+   * `compact` are untouched by it.
+   */
+  readonly size: "compact" | "default" | "display";
 }
 
 /**
@@ -42,10 +47,14 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
   const tooltip =
     totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
   const scopeNote = servedByScopeNote(servedBy, hostScopeName);
-  const compact = size === "compact";
   const amountClassName = cn(
-    "font-semibold tabular-nums text-foreground",
-    compact ? "text-ui-sm" : "text-title-md",
+    "font-semibold text-foreground",
+    size === "compact" && "text-ui-sm tabular-nums",
+    size === "default" && "text-title-md tabular-nums",
+    // No `tabular-nums` at display size on purpose: tabular figures give
+    // every digit a zero's width, which reads loose on a standalone hero
+    // number - they are for columns that must align, not display type.
+    size === "display" && "text-title-lg",
   );
 
   return (

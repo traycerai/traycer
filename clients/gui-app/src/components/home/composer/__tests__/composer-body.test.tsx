@@ -60,15 +60,44 @@ vi.mock("@/components/home/composer/composer-workspace-mode-row", () => ({
   ComposerWorkspaceRow: () => null,
 }));
 
+const bodyMocks = vi.hoisted(() => ({
+  // S11 coverage (see "forwards a non-null hostId..." below): `ComposerBody`
+  // forwards its `hostId` prop to the terminal panel's `hostId` and the
+  // toolbar's `createProfileHostId`/`runTargetHostId` - both children are
+  // mocked wholesale here, so a test can only see that forwarding by
+  // recording the props these mocks actually receive.
+  terminalPanelHostIds: [] as (string | null)[],
+  toolbarHostIds: [] as {
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }[],
+}));
+
 vi.mock("@/components/home/composer/terminal-launch-panel", () => ({
-  TerminalLaunchPanel: () => null,
+  TerminalLaunchPanel: (props: { readonly hostId: string | null }) => {
+    bodyMocks.terminalPanelHostIds.push(props.hostId);
+    return null;
+  },
 }));
 
 vi.mock("@/components/home/toolbar/composer-toolbar", () => ({
-  ComposerToolbar: () => null,
+  ComposerToolbar: (props: {
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }) => {
+    bodyMocks.toolbarHostIds.push({
+      createProfileHostId: props.createProfileHostId,
+      runTargetHostId: props.runTargetHostId,
+    });
+    return null;
+  },
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  bodyMocks.terminalPanelHostIds.length = 0;
+  bodyMocks.toolbarHostIds.length = 0;
+});
 
 function makePaste(): UseComposerPasteResult {
   return {
@@ -92,10 +121,12 @@ interface RenderComposerBodyOptions {
   readonly header?: ReactNode;
   readonly topBanner?: ReactNode;
   readonly stashControl?: ReactNode;
+  readonly hostId: string | null;
 }
 
 function renderComposerBody(options: RenderComposerBodyOptions) {
-  const { composerMode, paste, header, topBanner, stashControl } = options;
+  const { composerMode, paste, header, topBanner, stashControl, hostId } =
+    options;
   const toolbarStore = createComposerToolbarStore({
     seedKey: "test",
     values: {
@@ -113,6 +144,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       pickerStore={createComposerPickerStore()}
       editorRef={{ current: null }}
       toolbarStore={toolbarStore}
+      hostId={hostId}
       composerMode={composerMode}
       chatEditorIsActive={composerMode === "chat"}
       editorClassName=""
@@ -145,7 +177,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
 describe("ComposerBody file-transfer routing", () => {
   it("does not dispatch file transfers to the hidden chat editor in terminal mode", () => {
     const paste = makePaste();
-    renderComposerBody({ composerMode: "terminal", paste });
+    renderComposerBody({ composerMode: "terminal", paste, hostId: null });
 
     const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
@@ -166,7 +198,7 @@ describe("ComposerBody file-transfer routing", () => {
 
   it("keeps file-transfer handling active in chat mode", () => {
     const paste = makePaste();
-    renderComposerBody({ composerMode: "chat", paste });
+    renderComposerBody({ composerMode: "chat", paste, hostId: null });
 
     const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
@@ -186,7 +218,11 @@ describe("ComposerBody file-transfer routing", () => {
 
 describe("ComposerBody image-attachment caret stabilization", () => {
   it("enables caret stabilization on the underlying prompt editor", () => {
-    renderComposerBody({ composerMode: "chat", paste: makePaste() });
+    renderComposerBody({
+      composerMode: "chat",
+      paste: makePaste(),
+      hostId: null,
+    });
 
     const editor = screen.getByRole("textbox", { name: "Prompt editor" });
     expect(editor.getAttribute("data-stabilize-caret")).toBe("true");
@@ -199,6 +235,7 @@ describe("ComposerBody topBanner placement", () => {
       composerMode: "chat",
       paste: makePaste(),
       header: <div data-testid="mode-switch-header">header</div>,
+      hostId: null,
     });
 
     expect(screen.queryByTestId("rate-limit-banner")).toBeNull();
@@ -212,6 +249,7 @@ describe("ComposerBody topBanner placement", () => {
       paste: makePaste(),
       header: <div data-testid="mode-switch-header">header</div>,
       topBanner: <div data-testid="rate-limit-banner">banner</div>,
+      hostId: null,
     });
     const header = screen.getByTestId("mode-switch-header");
     const banner = screen.getByTestId("rate-limit-banner");
@@ -247,6 +285,7 @@ describe("ComposerBody overlay utility visibility", () => {
           Stash 2
         </div>
       ),
+      hostId: null,
     });
     const stash = screen.getByRole("status", { name: "Stashed prompts" });
     expect(
@@ -266,9 +305,42 @@ describe("ComposerBody overlay utility visibility", () => {
           Stash 2
         </div>
       ),
+      hostId: null,
     });
     expect(
       screen.queryByRole("status", { name: "Stashed prompts" }),
     ).toBeNull();
+  });
+});
+
+// S11 coverage: `ComposerBody` forwards its single `hostId` prop to the
+// terminal panel and the toolbar - a regression back to reading the app-wide
+// default anywhere along that path would leave one (or both) of these
+// children pinned to `null` regardless of what the composer is bound to.
+describe("ComposerBody host scoping", () => {
+  it("forwards a non-null hostId to the terminal panel's hostId and the toolbar's createProfileHostId/runTargetHostId", () => {
+    renderComposerBody({
+      composerMode: "chat",
+      paste: makePaste(),
+      hostId: "host-b",
+    });
+
+    expect(bodyMocks.terminalPanelHostIds).toEqual(["host-b"]);
+    expect(bodyMocks.toolbarHostIds).toEqual([
+      { createProfileHostId: "host-b", runTargetHostId: "host-b" },
+    ]);
+  });
+
+  it("forwards a null hostId (app-wide default) unchanged", () => {
+    renderComposerBody({
+      composerMode: "chat",
+      paste: makePaste(),
+      hostId: null,
+    });
+
+    expect(bodyMocks.terminalPanelHostIds).toEqual([null]);
+    expect(bodyMocks.toolbarHostIds).toEqual([
+      { createProfileHostId: null, runTargetHostId: null },
+    ]);
   });
 });

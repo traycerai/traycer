@@ -2,7 +2,18 @@
  * Pure geometry helpers for `chat-turn-minimap.tsx` (decision log #20). Kept
  * dependency-free (no DOM reads) so they stay unit-testable without a
  * LegendList/jsdom harness.
+ *
+ * The evenly-spaced-track helpers below delegate to
+ * `@/components/minimap/minimap-track-geometry`, which the artifact heading
+ * rail shares. They stay exported from here (as chat's own tuning applied to
+ * the shared math) so chat call sites and this module's suite are unaffected.
  */
+import {
+  resolveMinimapTrackHeightStyle,
+  resolveMinimapTrackIndexFromPointer,
+  resolveMinimapTrackTopPercent,
+  resolveMinimapTrackTopStyle,
+} from "@/components/minimap/minimap-track-geometry";
 
 /**
  * Marks the rail's single keyboard hit-target so the transcript's window-
@@ -26,23 +37,21 @@ export const CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS =
 export const CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH_REM = 48;
 
 export function resolveChatTurnMinimapHeightStyle(itemCount: number): string {
-  const naturalTrackHeight = Math.max(
-    1,
-    (itemCount - 1) * CHAT_TURN_MINIMAP_ITEM_SPACING,
+  return resolveMinimapTrackHeightStyle(
+    {
+      itemCount,
+      itemSpacing: CHAT_TURN_MINIMAP_ITEM_SPACING,
+      endHitPadding: CHAT_TURN_MINIMAP_END_HIT_PADDING,
+    },
+    [CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS, CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS],
   );
-  const naturalHeight =
-    naturalTrackHeight + CHAT_TURN_MINIMAP_END_HIT_PADDING * 2;
-  return `min(${naturalHeight}px, ${CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS}, ${CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS})`;
 }
 
 export function resolveChatTurnMinimapTopPercent(
   index: number,
   itemCount: number,
 ): number {
-  if (itemCount <= 1) {
-    return 0;
-  }
-  return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
+  return resolveMinimapTrackTopPercent(index, itemCount);
 }
 
 /**
@@ -53,12 +62,11 @@ export function resolveChatTurnMinimapTopStyle(
   index: number,
   itemCount: number,
 ): string {
-  const percent = resolveChatTurnMinimapTopPercent(index, itemCount);
-  const pixelOffset =
-    CHAT_TURN_MINIMAP_END_HIT_PADDING * (1 - (percent * 2) / 100);
-  if (pixelOffset === 0) return `${percent}%`;
-  const operator = pixelOffset > 0 ? "+" : "-";
-  return `calc(${percent}% ${operator} ${Math.abs(pixelOffset)}px)`;
+  return resolveMinimapTrackTopStyle(
+    index,
+    itemCount,
+    CHAT_TURN_MINIMAP_END_HIT_PADDING,
+  );
 }
 
 export function resolveChatTurnMinimapIndexFromPointer(input: {
@@ -67,27 +75,13 @@ export function resolveChatTurnMinimapIndexFromPointer(input: {
   readonly railHeight: number;
   readonly pointerY: number;
 }): number | null {
-  if (input.itemCount <= 0 || input.railHeight <= 0) {
-    return null;
-  }
-  if (input.itemCount === 1) {
-    return 0;
-  }
-
-  const endPadding = Math.min(
-    CHAT_TURN_MINIMAP_END_HIT_PADDING,
-    Math.max(0, (input.railHeight - 1) / 2),
-  );
-  const trackTop = input.railTop + endPadding;
-  const trackHeight = input.railHeight - endPadding * 2;
-  const progress = Math.max(
-    0,
-    Math.min(1, (input.pointerY - trackTop) / trackHeight),
-  );
-  return Math.max(
-    0,
-    Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))),
-  );
+  return resolveMinimapTrackIndexFromPointer({
+    itemCount: input.itemCount,
+    endHitPadding: CHAT_TURN_MINIMAP_END_HIT_PADDING,
+    railTop: input.railTop,
+    railHeight: input.railHeight,
+    pointerY: input.pointerY,
+  });
 }
 
 /** Matches the rem-based `left-3` / `right-3` interaction-region inset. */

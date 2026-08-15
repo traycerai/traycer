@@ -39,6 +39,17 @@ export interface DictationAvailability {
  * status. Composers gate the mic button + shortcut on `ready` (so dictation is
  * never offered, and the OS mic prompt never fires, before the on-device model
  * exists) and surface `preparing` as a status indicator while it downloads.
+ *
+ * DELIBERATELY the app-wide host (`useHostClient()`), not the composer's target
+ * host - the documented exception to the composer host-scope rule in
+ * `AGENTS.md`. Dictation describes the person at the keyboard, not the run:
+ * `speech.dictate` streams live microphone audio and `speech.ensureModel`
+ * downloads an on-device model, so following a remote run target would ship a
+ * user's audio to a machine they only picked to execute a turn on, and drop a
+ * model download there. The accepted cost is that a composer pinned to another
+ * host gates its mic on the app-wide host's model rather than that host's. Do
+ * not "fix" this by threading a target client through - it is a change to where
+ * a user's voice goes, and wants that conversation first.
  */
 export function useDictationAvailability(
   enabled: boolean,

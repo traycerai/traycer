@@ -73,11 +73,9 @@ function ProfileUsagePickerProfileDropdown({
     return resolveHostConsistentUsageProfiles(
       props.profiles,
       provider.profiles,
-      props.runTargetHostId !== null,
     );
   }, [
     props.profiles,
-    props.runTargetHostId,
     providerId,
     runTargetClient,
     runTargetProvidersQuery.data,
@@ -98,21 +96,34 @@ function ProfileUsagePickerProfileDropdown({
 
 /**
  * Usage rows must never combine one host's visible identity with another
- * host's rate-limit summary. Only enable comparison when the explicit run
- * target reports the same complete set of profile identities the dropdown is
+ * host's rate-limit summary. Only enable comparison when the run target
+ * reports the same complete set of profile identities the dropdown is
  * rendering; return the target host's objects so every summary field consumed
  * by `useProfileUsageComparison` comes from that same host. A missing, partial,
  * renamed, recolored, or differently-authenticated target set stays
- * identity-only until the picker receives a coherent snapshot. An explicit
- * target host also requires a concrete account identity: two unresolved null
- * identities are not evidence that independently queried hosts use the same
- * account. The null/default target is already the visible profiles' host, so
- * it may use that host's unresolved snapshot without a cross-host join.
+ * identity-only until the picker receives a coherent snapshot.
+ *
+ * `visibleProfiles` is caller-supplied, so this stays as the structural guard
+ * for a caller whose rail is scoped to some other host. Today no such caller
+ * exists: `HarnessModelPicker` resolves its rail's `providers.list` through
+ * the SAME `runTargetHostId` this dropdown queries, so both arrays come from
+ * one host's cached response and the join is a self-comparison that passes.
+ *
+ * Account identity is compared structurally, unresolved included: two
+ * `identity === null` rows (or two resolved rows with no `accountUuid` /
+ * `email` key) are the SAME row seen twice, not two independently queried
+ * hosts that happen to both be unresolved. The guard used to demand a resolved
+ * identity whenever the run target was explicit - back when the rail's
+ * visible rows came from the app-wide default host and the dropdown's from
+ * the tab host, so a null on each side proved nothing. That cross-host join no
+ * longer exists, and keeping the requirement made every tab-bound picker drop
+ * usage for the whole dropdown as soon as ONE profile's identity had not
+ * resolved yet - a state the same picker on the landing page (`null` target)
+ * always rendered through.
  */
 function resolveHostConsistentUsageProfiles(
   visibleProfiles: ReadonlyArray<ProviderProfile>,
   runTargetProfiles: ReadonlyArray<ProviderProfile>,
-  requireResolvedAccountIdentity: boolean,
 ): ReadonlyArray<ProviderProfile> {
   if (visibleProfiles.length !== runTargetProfiles.length) {
     return EMPTY_PROFILES;
@@ -126,11 +137,7 @@ function resolveHostConsistentUsageProfiles(
     );
     if (
       runTargetProfile === undefined ||
-      !hasSameVisibleProfileIdentity(
-        visibleProfile,
-        runTargetProfile,
-        requireResolvedAccountIdentity,
-      )
+      !hasSameVisibleProfileIdentity(visibleProfile, runTargetProfile)
     ) {
       return null;
     }
@@ -146,7 +153,6 @@ function resolveHostConsistentUsageProfiles(
 function hasSameVisibleProfileIdentity(
   left: ProviderProfile,
   right: ProviderProfile,
-  requireResolvedAccountIdentity: boolean,
 ): boolean {
   return (
     left.kind === right.kind &&
@@ -155,7 +161,7 @@ function hasSameVisibleProfileIdentity(
     left.auth.badgeText === right.auth.badgeText &&
     left.auth.label === right.auth.label &&
     left.auth.detail === right.auth.detail &&
-    hasSameAccountIdentity(left, right, requireResolvedAccountIdentity) &&
+    hasSameAccountIdentity(left, right) &&
     left.accentColor === right.accentColor
   );
 }
@@ -163,18 +169,9 @@ function hasSameVisibleProfileIdentity(
 function hasSameAccountIdentity(
   left: ProviderProfile,
   right: ProviderProfile,
-  requireResolvedAccountIdentity: boolean,
 ): boolean {
   if (left.identity === null || right.identity === null) {
-    return !requireResolvedAccountIdentity && left.identity === right.identity;
-  }
-  const leftKey = left.identity.accountUuid ?? left.identity.email;
-  const rightKey = right.identity.accountUuid ?? right.identity.email;
-  if (
-    requireResolvedAccountIdentity &&
-    (leftKey === null || rightKey === null)
-  ) {
-    return false;
+    return left.identity === right.identity;
   }
   return (
     left.identity.email === right.identity.email &&

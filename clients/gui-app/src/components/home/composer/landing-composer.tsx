@@ -220,12 +220,14 @@ export function LandingComposer(props: LandingComposerProps) {
   // Never authoritative: the landing composer has no reauth gate of its own
   // to defend a dead pin with a banner, so a genuinely-removed profile must
   // be corrected to ambient here rather than silently submitted as the new
-  // chat's initial settings.
+  // chat's initial settings. The catalog reads through the same `hostClient`:
+  // the landing host picker rebinds the app-wide default, so the active
+  // client IS this composer's target host.
   const toolbarStore = useComposerToolbarStore(
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    composerMode === "terminal",
+    { hostClient, tuiOnly: composerMode === "terminal" },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -716,8 +718,7 @@ export function LandingComposer(props: LandingComposerProps) {
             probeTarget={rateLimitPrompt.probeTarget}
             // Landing has no tab of its own; `null` resolves the usage
             // sidecar/R-key refresh to the app-wide default host, matching
-            // `ComposerToolbar`'s own `runTargetHostId={null}` for this
-            // surface (composer-body.tsx).
+            // the `hostId={null}` this surface hands `ComposerBody` below.
             runTargetHostId={null}
             onSwitchProfile={onSwitchRateLimitedProfile}
             affectedChatCount={0}
@@ -745,6 +746,10 @@ export function LandingComposer(props: LandingComposerProps) {
       hasPastedImageBytes={hasLandingImageBytes}
       ingestPastedComposerImages={ingestPastedComposerImages}
       onEditorReady={reingestPendingImages}
+      // No tab yet: the landing composer creates on the app-wide default host,
+      // which its own host picker rebinds - so `null` (follow the default) IS
+      // the picked host here.
+      hostId={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}

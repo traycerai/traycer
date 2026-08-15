@@ -25,6 +25,7 @@ import type {
   EpicCanvasState,
   GitDiffTileRef,
   GitDiffTileViewState,
+  PrDiffTileViewState,
   TilesByInstanceId,
 } from "./types";
 import {
@@ -1491,7 +1492,7 @@ export function toggleSnapshotDiffBundleFileCollapsed(
 export function updatePrDiffTileView(
   state: EpicCanvasState,
   tileId: string,
-  view: GitDiffTileViewState,
+  view: PrDiffTileViewState,
 ): EpicCanvasState {
   return updateTilesWhere(
     state,
@@ -1507,16 +1508,33 @@ export function updatePrDiffTileView(
  * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
  * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
  * there is no non-bundle variant to exclude.
+ *
+ * `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), toggled in the
+ * PR tile's own `collapsedFileKeys` - deliberately NOT the shared
+ * `toggleCollapsedFilePath`, whose bare-path field the PR tile no longer
+ * reads or writes.
  */
 export function togglePrDiffFileCollapsed(
   state: EpicCanvasState,
   tileId: string,
-  filePath: string,
+  fileKey: string,
 ): EpicCanvasState {
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isPrDiffTileRef(ref),
-    (ref) => toggleCollapsedFilePath(ref, filePath),
+    (ref) => {
+      if (!isPrDiffTileRef(ref)) return ref;
+      const collapsed = new Set(ref.view.collapsedFileKeys);
+      if (collapsed.has(fileKey)) {
+        collapsed.delete(fileKey);
+      } else {
+        collapsed.add(fileKey);
+      }
+      return {
+        ...ref,
+        view: { ...ref.view, collapsedFileKeys: [...collapsed] },
+      };
+    },
   );
 }
 
@@ -1524,11 +1542,7 @@ function toggleCollapsedFilePath(
   ref: EpicCanvasTileRef,
   filePath: string,
 ): EpicCanvasTileRef {
-  if (
-    !isGitDiffTileRef(ref) &&
-    !isSnapshotDiffTileRef(ref) &&
-    !isPrDiffTileRef(ref)
-  ) {
+  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) {
     return ref;
   }
   const collapsed = new Set(ref.view.collapsedFilePaths);
