@@ -11,7 +11,10 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding } from "@/lib/host/runtime";
-import { hostTransportKey } from "@/lib/host/transport-key";
+import {
+  hostTransportKey,
+  remoteAwareOwnerIdentity,
+} from "@/lib/host/transport-key";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
@@ -152,20 +155,27 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       client: wsStreamClient.instanceId,
       hasTransport: true,
     });
-    // `identityKey`, not `target.hostId`: this provider rebuilds whenever the
-    // identity moves, and that includes the authenticated user and a remote
-    // host's public key / relay coordinates. Keyed on the bare host id, a
-    // rebuild for a NEW user or a rotated remote identity on the SAME machine
-    // would inherit the previous session's quick-close streak and pace its
-    // first stumble by up to the ceiling.
+    // Derived from `target` and the `userId` the client above was actually
+    // built with - NOT the render's `identityKey`, and for the same reason the
+    // published `hostId` below comes from `target`. A host swap landing between
+    // commit and this passive effect makes the render's answer name the
+    // PREVIOUS endpoint while the client dials the new one, and `markBuilt`
+    // reads that name to decide whether the streak carries: same name, so the
+    // old endpoint's quick-close streak survives onto a client dialed at a new
+    // one, and a terminal-class close there can be paced by up to the full
+    // ceiling before the identity-change render lands and clears it. That is
+    // exactly the cross-endpoint pacing the streak reset exists to prevent, so
+    // the identity has to come from the same read as the client it describes.
     //
-    // Unlike the published `hostId` below, the render's value is the right one
-    // here. That one names a machine on screen and routes kills, so a
-    // commit-to-effect swap must not be able to mislabel it. This only answers
-    // "same endpoint as last build?", and an identity change re-runs this
-    // effect by dependency anyway - so the worst a stale read can do is reset a
-    // streak one rebuild early.
-    rebuildBackoff.markBuilt(Date.now(), identityKey);
+    // Not `target.hostId` either: identity includes the authenticated user and
+    // a remote host's public key / relay coordinates, so a new user or a
+    // rotated remote identity on the SAME machine is a different endpoint.
+    // `remoteAwareOwnerIdentity` is the same helper `useReactiveOwnerIdentityKey`
+    // projects through, so successive builds compare like for like.
+    rebuildBackoff.markBuilt(
+      Date.now(),
+      remoteAwareOwnerIdentity(target, requestContextUserId),
+    );
     // The client and the host it dials are published in ONE value, so no
     // consumer can observe the new host beside the old client.
     //
