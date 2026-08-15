@@ -280,6 +280,31 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 30 * SECOND_MS,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * `host.update.check` answered `cli-unavailable`. That answer retires the
+ * whole update region and the retired region hides Check now, so with no
+ * focus/reconnect refetch in production nothing would ever notice the Traycer
+ * CLI being reinstalled — the region stayed retired until the user left the
+ * host scope and came back. The probe fails fast on the host while the CLI is
+ * genuinely absent, and the first ok answer revives the region and ends the
+ * lane.
+ */
+export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.cli-recovery",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 60 * SECOND_MS,
+};
+/**
+ * The check itself failed — a transport fault, not an answer. Same recovery
+ * reasoning as the lane above ("Couldn't ask …" has no retry button either),
+ * on a quieter cadence: reachability is the scope's problem first, this query
+ * only needs to catch up once the host is back.
+ */
+export const UPDATE_CHECK_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.error",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 5 * 60 * SECOND_MS,
+};
 
 const NO_RESET_LANES: ReadonlySet<string> = new Set();
 export const PROVIDERS_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
@@ -303,7 +328,20 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
-  "host.status": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
+  // affordance. Its `busySessionCount` is the number "Apply now — ends N
+  // sessions" promises and then destroys, so the question is not whether the
+  // cached value may be reused but whether it is still TRUE. Going stale does
+  // not refetch on its own, so without a cadence a focused Overview served the
+  // count it read on mount indefinitely.
+  //
+  // Under the query's `staleTime` (30s), deliberately: this interval keeps a
+  // healthy read fresh while `isStale` demotes an unhealthy one to `null`. The
+  // two numbers are one mechanism and must move together.
+  "host.status": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The host's own name: a bounded read that can coalesce. It has no poll —
@@ -318,13 +356,41 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.doctor": { ...LATEST_SCHEDULING, poll: null },
-  "host.update.check": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.check": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("host.update.check", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        return data.outcome === "cli-unavailable"
+          ? UPDATE_CHECK_CLI_RECOVERY_POLL_LANE
+          : false;
+      },
+      initialErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      staleDataErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   "host.update.install": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
   "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
+  "host.service.status": { ...LATEST_SCHEDULING, poll: null },
+  // FIFO, like `host.update.install` and for the same reason: these mutate the
+  // host's own lifecycle, so two in flight must never collapse to "the latest".
+  // Unpolled — a service registration changes only when someone changes it, and
+  // the status read above is what refreshes after a write.
+  "host.service.register": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.service.deregister": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
@@ -707,6 +773,22 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "epic.prepareArtifactImage": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -803,6 +885,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // One chat image attachment's bytes. Not polled, and it must not be: the
+  // answer is content-addressed, so a hash that resolved once resolves to the
+  // same bytes forever and a hash that missed is re-driven by the image blob
+  // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
+  // interval here would re-fetch megabytes to re-learn a constant.
+  "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -845,6 +933,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.listChatRecords": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
+  // UNPOLLED, unlike the list above, and for the opposite reason: the list has
+  // to notice a chat that appeared elsewhere, while this answers a question
+  // whose subject cannot change without a user action. Run settings move when
+  // somebody moves them, and the surfaces that move them invalidate this key.
+  // Its caller unmounts on close, so a re-open is a fresh read once the entry
+  // goes stale - a cadence would only re-ask the host about a card nobody is
+  // looking at.
+  "epic.getChatRunSettings": {
+    ...LATEST_SCHEDULING,
+    poll: null,
   },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
@@ -894,6 +993,12 @@ export const HOST_METHOD_POLL_TABLE = {
   // No poll: the PR detail stream is what notices a new push, and a re-render
   // off a changed `headRefOid` re-keys the query on its own.
   "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The split form of the same read: one metadata frame when the tile opens,
+  // then one small patch per visible row. Same no-poll reasoning - the detail
+  // stream notices pushes, and the per-file queries are keyed by immutable
+  // OIDs, so there is nothing a cadence could learn.
+  "pr.getLocalDiffSummary": { ...LATEST_SCHEDULING, poll: null },
+  "pr.getLocalFileDiff": { ...LATEST_SCHEDULING, poll: null },
   // The composer's PR/issue mention sections. Both are latest-wins with no
   // poll: the menu is open for seconds at a time and drives every fetch
   // explicitly (open, refresh click, filter change), so there is no cadence

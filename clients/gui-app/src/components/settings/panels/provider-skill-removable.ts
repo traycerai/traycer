@@ -53,6 +53,11 @@ export function skillRemovability(args: {
   readonly source: ProviderSkillSourceBadge;
   /** Scope the tab is currently listing/mutating at. */
   readonly effectiveScope: ProviderNativeScope;
+  /**
+   * Occupied link-target row. Not independently removable: the foreign
+   * folder is not ours to delete, and a link row is never a remove target.
+   */
+  readonly conflict: boolean;
 }): SkillRemovability {
   // The selected scope specifically, not "any scope": the tab lists and
   // mutates at `effectiveScope`, so a provider advertising only the other
@@ -62,6 +67,13 @@ export function skillRemovability(args: {
   // it was written to prevent.
   if (!args.removeScopes.includes(args.effectiveScope)) {
     return { kind: "hidden" };
+  }
+  if (args.conflict) {
+    return {
+      kind: "blocked",
+      reason:
+        "This row is a conflict. A folder already occupies the provider link, so it cannot be removed from here.",
+    };
   }
   if (!isWritableSkillSource(args.source)) {
     return { kind: "blocked", reason: BLOCKED_REASON[args.source] };

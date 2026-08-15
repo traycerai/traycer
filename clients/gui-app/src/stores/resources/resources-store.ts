@@ -5,6 +5,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   ResourcesProjectionPayload,
+  ResourcesScopeSupport,
   ResourcesStreamScope,
   ResourcesStreamCallbacks,
   ResourcesStreamClient,
@@ -70,6 +71,17 @@ export function globalResourceOwnerKey(
 export interface ResourcesState {
   readonly key: string;
   readonly connectionStatus: StreamConnectionStatus;
+  /**
+   * Whether the host this stream negotiated with can serve THIS store's scope -
+   * the transport-agnostic half of that question, learned from the session
+   * itself rather than from a capability pre-check only a local client can
+   * answer. See `ResourcesScopeSupport`.
+   *
+   * A global-scope store answering `"unsupported"` is the whole reason this
+   * exists: it is the only way a REMOTE host too old for a global stream is
+   * ever distinguishable from one that is merely quiet.
+   */
+  readonly scopeSupport: ResourcesScopeSupport;
   /** `null` until the first projection lands. */
   readonly sampledAt: number | null;
   /**
@@ -307,54 +319,66 @@ export function createResourcesStore(
   const key =
     options.scope.kind === "global" ? "__global__" : options.scope.epicId;
 
-  const store = create<ResourcesState>()((set) => {
-    const applyProjection = (payload: ResourcesProjectionPayload): void => {
+  const store = create<ResourcesState>()(() => ({
+    key,
+    connectionStatus: "connecting",
+    scopeSupport: "unknown",
+    sampledAt: null,
+    owners: EMPTY_OWNERS,
+    app: null,
+    hostTree: null,
+    other: null,
+    epic: null,
+    epics: EMPTY_EPICS,
+    dispose: () => {
       if (disposed) return;
-      set((state) => ({
-        sampledAt: payload.sampledAt,
-        owners: mergeOwners(state.owners, payload, options.scope),
-        app: mergeApp(state.app, payload.app),
-        hostTree: mergeHostTree(state.hostTree, payload.hostTree),
-        other: mergeOther(state.other, payload.other),
-        epic: mergeEpic(state.epic, payload.epic),
-        epics: mergeEpics(state.epics, payload),
-      }));
-    };
+      disposed = true;
+      if (streamClient === null) return;
+      const client = streamClient;
+      streamClient = null;
+      client.close();
+    },
+  }));
 
-    const callbacks: ResourcesStreamCallbacks = {
-      onSnapshot: applyProjection,
-      onUpdate: applyProjection,
-      onConnectionStatus: (
-        status: StreamConnectionStatus,
-        _reason: StreamCloseReason | null,
-      ) => {
-        if (disposed) return;
-        set({ connectionStatus: status });
-      },
-    };
+  const applyProjection = (payload: ResourcesProjectionPayload): void => {
+    if (disposed) return;
+    store.setState((state) => ({
+      sampledAt: payload.sampledAt,
+      owners: mergeOwners(state.owners, payload, options.scope),
+      app: mergeApp(state.app, payload.app),
+      hostTree: mergeHostTree(state.hostTree, payload.hostTree),
+      other: mergeOther(state.other, payload.other),
+      epic: mergeEpic(state.epic, payload.epic),
+      epics: mergeEpics(state.epics, payload),
+    }));
+  };
 
-    streamClient = options.streamClientFactory(options.scope, callbacks);
+  const callbacks: ResourcesStreamCallbacks = {
+    onSnapshot: applyProjection,
+    onUpdate: applyProjection,
+    onConnectionStatus: (
+      status: StreamConnectionStatus,
+      _reason: StreamCloseReason | null,
+    ) => {
+      if (disposed) return;
+      store.setState({ connectionStatus: status });
+    },
+    onScopeSupport: (support: ResourcesScopeSupport) => {
+      if (disposed) return;
+      store.setState({ scopeSupport: support });
+    },
+  };
 
-    return {
-      key,
-      connectionStatus: "connecting",
-      sampledAt: null,
-      owners: EMPTY_OWNERS,
-      app: null,
-      hostTree: null,
-      other: null,
-      epic: null,
-      epics: EMPTY_EPICS,
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        if (streamClient === null) return;
-        const client = streamClient;
-        streamClient = null;
-        client.close();
-      },
-    };
-  });
+  // Opened only AFTER the initial state is installed, never from inside the
+  // zustand initializer. A stream can publish before its factory returns: a
+  // remote session that is already ready but does not advertise the method
+  // rejects the subscribe synchronously, and `LogicalStream.onStatusChange`
+  // replays that terminal close the instant the typed wrapper's constructor
+  // installs a handler. Built inside the initializer, those writes land on a
+  // state object the initializer's own `return` then overwrites - and a
+  // terminal close has nothing following it to republish the verdict, so the
+  // surface waits forever on a host that already answered.
+  streamClient = options.streamClientFactory(options.scope, callbacks);
 
   return {
     key,

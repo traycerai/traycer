@@ -31,7 +31,13 @@ function renderEmpty(props: {
       selected={null}
       activeHostId={null}
       onSelect={() => undefined}
-      onAddHost={props.onAddHost ?? (() => undefined)}
+      action={{
+        kind: "add-host",
+        onSelect: props.onAddHost ?? (() => undefined),
+      }}
+      surface="rail"
+      intent="view"
+      disabled={false}
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists ?? (() => undefined)}
@@ -95,7 +101,10 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        onAddHost={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        disabled={false}
         isLoading={false}
         listsFailed
         onRetryLists={() => undefined}
@@ -122,7 +131,10 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        onAddHost={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        disabled={false}
         isLoading={false}
         listsFailed
         onRetryLists={onRetryLists}
@@ -158,7 +170,10 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        onAddHost={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        disabled={false}
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
@@ -170,5 +185,72 @@ describe("<HostSwitcher /> empty vs failed", () => {
     );
     expect(screen.getByText("requires upgrade")).not.toBeNull();
     expect(screen.queryByText("unreachable")).toBeNull();
+  });
+});
+
+describe("<HostSwitcher /> trailing action", () => {
+  // The two surfaces mounting this picker end the list differently on
+  // purpose: Settings owns the add-host dialog — the snapshot it takes and
+  // every failure state it can land in all live there — so its footer opens
+  // that flow directly. The header's usage popover only WATCHES a host; it
+  // has no business growing a second copy of that dialog, so its footer
+  // instead points back to Settings. The host rows above are identical
+  // either way — only this trailing row changes with `action.kind`.
+  it("ends the list with Manage hosts…, not Add host…, for the manage-hosts kind", () => {
+    const onSelect = vi.fn();
+    render(
+      <HostSwitcher
+        hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect }}
+        surface="panel-header"
+        intent="view"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
+
+    expect(screen.getByTestId("settings-host-switcher-manage")).not.toBeNull();
+    expect(screen.queryByTestId("settings-host-switcher-add")).toBeNull();
+    expect(screen.queryByText("Add host…")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher-manage"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Manage hosts…, not Add host…, in the genuinely-empty branch", () => {
+    // Same rule at the empty branch's opener: a picker that ends in
+    // manage-hosts must not fall back to add-host just because `hosts` is
+    // empty — the empty state is still Settings-vs-popover, not a special
+    // third ending.
+    render(
+      <HostSwitcher
+        hosts={[]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        surface="panel-header"
+        intent="view"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("settings-host-switcher-empty-manage"),
+    ).not.toBeNull();
+    expect(screen.getByText("Manage hosts…")).not.toBeNull();
+    expect(screen.queryByTestId("settings-host-switcher-empty-add")).toBeNull();
   });
 });

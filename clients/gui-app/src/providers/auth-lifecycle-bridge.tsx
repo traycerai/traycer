@@ -9,6 +9,8 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -61,6 +63,17 @@ export function EpicSessionLifecycleBridge(
       // it is "follow the active host", so this returns the surface to its
       // default rather than emptying it.
       useSettingsHostScopeStore.getState().setScopedHostId(null);
+      // The Usage popover pins a host id on the same account-owned terms, and
+      // it PERSISTS — left standing it survives the restart into the next
+      // sign-in and opens Usage on a `vanished` host the new account has never
+      // seen. Same rule, same `null`-means-follow default. Tab and size stay:
+      // they are window habits, not account facts.
+      useRateLimitPopoverStore.getState().setScopedHostId(null);
+      // The resource monitor pins a host id on exactly the same persisted,
+      // account-owned terms, so it needs the same reset - otherwise it survives
+      // the restart into the next sign-in and opens on a `vanished` host the
+      // new account has never seen.
+      useResourceMonitorStore.getState().setScopedHostId(null);
       // The Add-host dialog is module-level too, and it carries more than a
       // boolean: `knownHostIds` is the snapshot the arrival watcher diffs
       // against to decide which machine is NEW. Left standing across a switch

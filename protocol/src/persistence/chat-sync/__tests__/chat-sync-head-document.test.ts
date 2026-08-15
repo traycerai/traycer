@@ -3,6 +3,7 @@ import {
   decodeChatHeadDocument,
   encodeChatHeadDocument,
   encodeChatHead,
+  listChatHeadPartAddresses,
   listChatHeadParts,
   serializeChatHeadDocument,
   type ChatHeadRecord,
@@ -69,17 +70,29 @@ describe("chat-head document envelope", () => {
     // displaces, so a record-serialized head that lacked it would be
     // uncommittable.
     expect(readEnvelope(serializeChatHeadDocument(graduated.head))).toEqual([
-      ...listChatHeadParts(graduated.head),
+      ...listChatHeadPartAddresses(graduated.head),
     ]);
   });
 
   it("derives the envelope as the three shard lists in head order", () => {
     const head = graduated.head;
     expect(readEnvelope(serializeChatHeadDocument(head))).toEqual([
-      ...head.messageShards,
-      ...head.eventShards,
-      head.hostPrivateShard,
+      ...listChatHeadPartAddresses(head),
     ]);
+  });
+
+  it("keeps the envelope address-only even when payload cohorts carry seq ranges", () => {
+    const envelope = readEnvelope(serializeChatHeadDocument(graduated.head));
+    expect(Array.isArray(envelope)).toBe(true);
+    if (!Array.isArray(envelope)) return;
+    expect(envelope.length).toBeGreaterThan(0);
+    for (const entry of envelope) {
+      expect(Object.keys(entry as object).sort()).toEqual([
+        "byteLength",
+        "sha256",
+      ]);
+    }
+    expect(graduated.head.messageShards[0].firstSeq).toBeDefined();
   });
 
   it("names an empty envelope for a head with no parts at all", () => {
@@ -188,7 +201,7 @@ describe("chat-head document strips the envelope before parsing", () => {
     // And a re-publication derives its envelope afresh rather than re-emitting
     // whatever the document happened to carry.
     expect(readEnvelope(serializeChatHeadDocument(result.record))).toEqual([
-      ...listChatHeadParts(graduated.head),
+      ...listChatHeadPartAddresses(graduated.head),
     ]);
   });
 });

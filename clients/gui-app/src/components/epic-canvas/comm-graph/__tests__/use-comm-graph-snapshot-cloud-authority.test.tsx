@@ -375,7 +375,9 @@ describe("useCommGraphSnapshot cloud authority", () => {
 
   it("skips unavailable directory entries when choosing a cloud relay", async () => {
     directoryEntries.current = [
-      directoryEntry("unavailable-relay", { status: "unavailable" }),
+      directoryEntry("unavailable-relay", {
+        transportDialability: "not-dialable",
+      }),
       directoryEntry("available-relay", undefined),
     ];
     __setCommGraphSubscriptionOpenerForTests(() => ({ close: vi.fn() }));
@@ -477,16 +479,14 @@ function directoryEntry(
     label: hostId,
     kind: "remote",
     websocketUrl: `ws://${hostId}/rpc`,
-    status: "available",
+    transportDialability: "dialable",
     version: null,
     publicKey: "public-key-a",
+    relayFuseGrace: false,
     remoteStatus: {
-      presenceLease: "fresh",
-      hostRelayAttached: true,
+      connectivity: "connectable",
       viewerReachability: "ok",
       clientCloud: "ok",
-      busy: false,
-      busySessionCount: 0,
       updateState: "current",
       appVersion: null,
       lastSeenAt: null,

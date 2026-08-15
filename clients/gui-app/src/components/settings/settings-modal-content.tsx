@@ -9,6 +9,7 @@ import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
+import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
@@ -72,6 +73,8 @@ export function SettingsPanelForSection(props: {
       return <HostSettingsPanel />;
     case "devices":
       return <DevicesSessionsPanel />;
+    case "app-diagnostics":
+      return <AppDiagnosticsSettingsPanel />;
     case "diagnostics":
       return <DiagnosticsSettingsPanel />;
     case "usage":

@@ -57,16 +57,32 @@ export const hostStatusV11 = defineRpcContract({
       minor: z.number().int().nonnegative(),
     }),
     busy: z.boolean(),
-    busySessionCount: z.number().int().nonnegative(),
+    /**
+     * Open sessions blocking an update drain. `null` means the host did not
+     * report a count — NOT that it reported zero. The two are different claims
+     * and the drain UI depends on the difference: it names the count in
+     * "Apply now — ends N sessions" and then ends that many.
+     */
+    busySessionCount: z.number().int().nonnegative().nullable(),
     updateProgress: hostStatusUpdateProgressSchema.nullable(),
   }),
 });
 
-// A v1.0 peer never reports busy/update-progress state through this RPC -
-// default to "not busy, nothing in flight" rather than leaving the newer
-// side to special-case a missing field. Safe because a v1.0 host predates
-// remote support entirely (Architecture §13); no caller distinguishes this
-// default from a genuinely idle host today.
+// A v1.0 peer never reports busy/update-progress state through this RPC.
+//
+// `busySessionCount` upgrades to `null`, NOT to `0`. This used to fabricate a
+// zero, with a comment observing that no caller distinguished the default from
+// a genuinely idle host. That stopped being true: the drain affordance now
+// treats an absent count as "no live source" and withholds the destructive
+// "Apply now — ends N sessions" force, while a real `0` is an affirmative
+// statement that nothing is blocking. Manufacturing the zero here would put
+// that affirmative claim in an old host's mouth — the client would believe the
+// host had said "no sessions" when it said nothing at all, one negotiation
+// layer below where anyone would think to look.
+//
+// `busy: false` stays a fabricated default: it drives a badge, not a
+// destructive action, and there is no affordance whose safety turns on telling
+// "not busy" apart from "did not say".
 export const hostStatusUpgradeV10ToV11 = defineUpgradePath<
   typeof hostStatusV10,
   typeof hostStatusV11
@@ -77,7 +93,7 @@ export const hostStatusUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({
     ...response,
     busy: false,
-    busySessionCount: 0,
+    busySessionCount: null,
     updateProgress: null,
   }),
 });

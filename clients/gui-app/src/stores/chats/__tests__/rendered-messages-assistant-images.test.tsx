@@ -54,7 +54,7 @@ const displayContext: RenderedMessagesDisplayContext = {
     modelLabel: null,
   }),
   resolveAgentReasoningLabel: () => null,
-  contentBlocksText: () => "",
+  contentBlocksPreview: () => "",
 };
 
 function toolCallInputFields(toolName: string, input: unknown) {

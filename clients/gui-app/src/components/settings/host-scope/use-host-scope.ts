@@ -1,33 +1,18 @@
 import { useMemo } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
-import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
-import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
-import { useRunnerHost } from "@/providers/use-runner-host";
-import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
-import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
-import { getViewerReachabilityCheck } from "@/lib/host/viewer-reachability-store";
 import {
   useHostBinding,
   useHostClient,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   deriveHostScopeStatus,
-  hostListReadiness,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
-  buildHostScopeOptions,
   findHostOption,
   resolveScopedHost,
   transientClientEntry,
@@ -68,21 +53,23 @@ export interface HostScope {
   readonly nowMs: number;
 }
 
-const HEALTHY_PRESENCE: HostPresenceHealth = {
-  status: "healthy",
-  reason: null,
-};
-
 /**
- * Stand-in `queryFn` for the disabled installed-record query.
+ * WHERE a surface keeps its pick, handed in rather than imported, so the host
+ * model below is not welded to one store.
  *
- * TanStack requires one even when `enabled` is false, and a rejecting stub is
- * the honest shape: if it ever runs, the `enabled` guard above it is wrong and
- * should fail loudly rather than resolve a fake `null` that would read as
- * "nothing is installed".
+ * Settings owns the original (`settings-host-scope-store`, deliberately not
+ * persisted); the header's usage popover owns a second, persisted one. They
+ * are separate SELECTIONS on purpose — someone watching one machine's rate
+ * limits has not thereby asked to administer it — but they must not become
+ * separate host MODELS, because two answers to "what is this host called and
+ * can I reach it" is exactly the drift `HostScopeOption` was introduced to
+ * end. Everything below this line is therefore shared verbatim.
  */
-function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
-  return Promise.reject(new Error("host management bridge unavailable"));
+export interface HostScopeSelection {
+  /** `null` means "follow the active host" — not "no host". */
+  readonly scopedHostId: string | null;
+  /** `null` returns to following the active host. */
+  readonly setScopedHostId: (hostId: string | null) => void;
 }
 
 /**
@@ -91,109 +78,30 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
  * than one more picker among five.
  */
 export function useHostScope(): HostScope {
-  const ambientClient = useHostClient();
-  const binding = useHostBinding();
-  const runnerHost = useRunnerHost();
-  const activeHostId = useReactiveActiveHostId();
-  const nowMs = useNowMs();
-
-  const directoryQuery = useHostDirectoryList();
-  const registryQuery = useRegisteredHosts();
-  const localSnapshot = useLocalHostSnapshot(runnerHost);
-  // Same gate the header and workspace pickers consult, so Settings cannot
-  // offer a remote route the other two surfaces already refuse.
-  const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
-
   const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
   const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
+  return useHostScopeFor({ scopedHostId, setScopedHostId });
+}
 
-  const directory = directoryQuery.data;
-  const registry = registryQuery.data;
+/**
+ * The host model itself, over whichever selection the caller owns. Splitting
+ * this out from `useHostScope` was the whole change: the rules that make a
+ * scope safe — `resolveScopedHost`'s refusal to silently retarget a vanished
+ * pick, `transientClientEntry`'s `connectable` gate, `deriveHostScopeStatus` —
+ * are properties of reading somebody else's host, not properties of Settings.
+ * A second surface that re-derived them would eventually re-derive one of them
+ * wrongly.
+ */
+export function useHostScopeFor(selection: HostScopeSelection): HostScope {
+  const ambientClient = useHostClient();
+  const binding = useHostBinding();
+  // The list itself is shared with every other picker in the app — see
+  // `useHostOptions`. What is left here is the SELECTION on top of it, which is
+  // the only part Settings and the usage popover own.
+  const options = useHostOptions();
+  const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
-  // Which host id is THIS computer's, asked of the directory rather than of
-  // `getLocalEntry()`.
-  //
-  // `getLocalEntry()` is backed by the live local snapshot, so it goes null the
-  // moment the local host stops — exactly when "is this my machine?" has to
-  // keep answering yes, because the answer gates install / restart / recovery.
-  // The directory keeps answering: while the local host is down it presents the
-  // registry twin carrying this machine's id as a non-dialable `kind: "local"`
-  // entry (`bootingLocalEntry`). Reading the list is therefore the durable
-  // question; the live entry is only a faster path to the same id.
-  const localHostId = useMemo(() => {
-    const fromDirectory = (directory ?? []).find(
-      (entry) => entry.kind === "local",
-    );
-    if (fromDirectory !== undefined) return fromDirectory.hostId;
-    return binding?.directory.getLocalEntry()?.hostId ?? null;
-  }, [directory, binding]);
-
-  // The installed record is what separates "stopped" from "not installed" — the
-  // two local states a person can actually act on. Without it `deriveStatus`
-  // can only answer `running` or `undefined`, and a stopped local host falls
-  // through to its registry lease and reads "Offline · last seen 3h ago": true
-  // of the lease, useless to someone whose host is sitting there stopped with a
-  // Start button one click away.
-  //
-  // Same query key as the Host panel's, so the two share one request rather
-  // than doubling it, and `enabled` keeps shells without the CLI bridge on the
-  // old honest-`undefined` path instead of guessing.
-  const management = runnerHost.hostManagement;
-  const installedQuery = useQuery(
-    queryOptions<HostInstalledRecord | null>({
-      queryKey:
-        management === null
-          ? runnerQueryKeys.hostInstalledRecordUnavailable()
-          : runnerQueryKeys.hostInstalledRecord(management),
-      queryFn:
-        management === null
-          ? skipInstalledRecord
-          : () => management.installedRecord(),
-      enabled: management !== null,
-      staleTime: 30_000,
-    }),
-  );
-
-  const localService = useMemo(
-    () => deriveStatus(localSnapshot, installedQuery.data),
-    [localSnapshot, installedQuery.data],
-  );
-
-  const hosts = useMemo(
-    () =>
-      buildHostScopeOptions({
-        directory: directory ?? [],
-        registry: registry?.hosts ?? [],
-        presenceHealth: registry?.presenceHealth ?? HEALTHY_PRESENCE,
-        localHostId,
-        activeHostId,
-        localService,
-        hasLiveSession: hasReadyRemoteSession,
-        viewerCheck: getViewerReachabilityCheck,
-        remoteHostsPlanRestricted,
-        nowMs,
-      }),
-    [
-      directory,
-      registry,
-      localHostId,
-      activeHostId,
-      localService,
-      remoteHostsPlanRestricted,
-      nowMs,
-    ],
-  );
-
-  // `data !== undefined` rather than `!isLoading`, because a background refetch
-  // of an already-resolved list must not re-open the "still loading" window and
-  // un-say `vanished`. The rule itself — including that an error is an ANSWER —
-  // lives in `hostListReadiness`, where a test can reach it.
-  const lists = hostListReadiness(
-    { hasData: directory !== undefined, isError: directoryQuery.isError },
-    { hasData: registry !== undefined, isError: registryQuery.isError },
-  );
-  const listsResolved = lists.resolved;
-  const listsFailed = lists.failed;
+  const { scopedHostId, setScopedHostId } = selection;
 
   // Still loading is not the same as gone, and a list that FAILED cannot prove
   // a host was removed. Both rules — and the reason the `vanished` verdict is
@@ -266,12 +174,9 @@ export function useHostScope(): HostScope {
     makeActive: (hostId: string) => {
       binding?.directory.selectById(hostId);
     },
-    isLoading: directoryQuery.isLoading || registryQuery.isLoading,
+    isLoading: options.isLoading,
     listsFailed,
-    retryLists: () => {
-      void directoryQuery.refetch();
-      void registryQuery.refetch();
-    },
+    retryLists: options.retryLists,
     nowMs,
   };
 }

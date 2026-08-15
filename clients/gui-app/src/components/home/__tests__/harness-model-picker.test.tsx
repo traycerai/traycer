@@ -250,7 +250,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         hostId: "local",
         kind: "local",
         label: "Local host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://127.0.0.1:0",
       },
       // A second local-kind host, distinct from the app-wide default
@@ -261,7 +261,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         hostId: "tab-host-1",
         kind: "local",
         label: "Tab host",
-        status: "available",
+        transportDialability: "dialable",
         websocketUrl: "ws://127.0.0.1:1",
       },
     ],

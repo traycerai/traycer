@@ -48,14 +48,19 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  openHostOverviewAdvanced,
+  openHostOverviewMenu,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
+  resetHostServiceWriteLatchesForTest();
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -102,7 +107,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-async function waitForButton(name: string): Promise<HTMLElement> {
+async function waitForButton(name: string | RegExp): Promise<HTMLElement> {
   return screen.findByRole("button", { name });
 }
 
@@ -123,7 +128,7 @@ function renderPanel(): void {
 }
 
 // ---------------------------------------------------------------------------
-// B. Sticky cloud-pin-only updates degrade — the whole region retires
+// B. Sticky updates degrade — the whole region retires
 // ---------------------------------------------------------------------------
 
 describe("<HostSettingsPanel /> Overview updates region — sticky vs transient degrade", () => {
@@ -153,23 +158,31 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
   });
 
   it("install-side cli-unavailable retires the region too — Check-now disappears with it", async () => {
+    // The check TRACKS the install's discovery. Discovering the refusal kicks
+    // an immediate re-check whose fresh answer owns recovery, so a fixture
+    // whose check kept answering ok would model an impossible host — install
+    // and check shell the same CLI — and that re-check's ok would then
+    // LEGITIMATELY un-retire the region, turning this pin into a race on
+    // whether the assertion or the refetch settles first.
+    let cliGone = false;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       hostVersion: "1.5.0",
       overrideHandlers: {
         "host.update.check": () =>
-          Promise.resolve({
-            outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
-          }),
-        "host.update.install": () =>
-          Promise.resolve({ outcome: "cli-unavailable" as const }),
+          Promise.resolve(
+            cliGone
+              ? { outcome: "cli-unavailable" as const }
+              : {
+                  outcome: "ok" as const,
+                  manifest: updateCheckManifest("1.6.0"),
+                },
+          ),
+        "host.update.install": () => {
+          cliGone = true;
+          return Promise.resolve({ outcome: "cli-unavailable" as const });
+        },
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -178,14 +191,15 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
     ).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
-      expect(screen.queryByTestId("host-overview-update-install")).toBeNull();
+      expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
     });
   });
 
@@ -198,12 +212,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "externally-managed" as const }),
@@ -215,7 +224,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-updates-degraded"),
@@ -236,12 +246,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
           Promise.resolve({ outcome: "cli-failed" as const }),
@@ -253,7 +258,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton(/^Install \d/));
 
     expect(
       await screen.findByTestId("host-overview-update-attempt-failed"),
@@ -261,7 +267,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
     expect(screen.queryByTestId("host-overview-updates-degraded")).toBeNull();
     expect(screen.getByTestId("host-overview-updates")).toBeTruthy();
     expect(screen.getByTestId("host-overview-update-check")).toBeTruthy();
-    expect(screen.getByTestId("host-overview-update-install")).toBeTruthy();
+    expect(screen.getByTestId("host-overview-version-picker")).toBeTruthy();
   });
 });
 
@@ -270,7 +276,7 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
 // ---------------------------------------------------------------------------
 
 describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched draft is not dirty", () => {
-  it("Save stays disabled on an untouched draft, issues no write, and typing the systemName stores an override rather than clearing", async () => {
+  it("an untouched draft issues no write, and typing the systemName stores an override rather than clearing", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -285,31 +291,39 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
 
     await screen.findByText("Build Box");
     fireEvent.click(await waitForButton("Edit name"));
-    const input = await screen.findByRole<HTMLInputElement>("textbox", {
-      name: "Display Name",
-    });
+    const input = await screen.findByTestId<HTMLInputElement>(
+      "host-overview-name-input",
+    );
     // Seeded with the LABEL (`effectiveName`), not the systemName — a
     // `TRAYCER_HOST_LABEL` host has no override, so the draft opens on the
     // label the host is actually showing.
     expect(input.value).toBe("Build Box");
-    expect(
-      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
-    ).toBe(true);
 
-    // Belt and braces on the disabled button: clicking it anyway must not
-    // issue a write. jsdom already refuses the click on a disabled control,
-    // so this mostly documents the invariant the disabled state exists for.
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // COMMITTING AN UNTOUCHED DRAFT WRITES NOTHING. This is what the disabled
+    // Save button used to assert, and it survived the editor becoming an inline
+    // input — it is now enforced twice over, by `useInlineRename` skipping an
+    // unchanged commit and by `submitRename`'s own no-op guard. Worth keeping
+    // because the write is not harmless: storing the current effective name as
+    // an explicit `customName` FREEZES a label that would otherwise keep
+    // tracking the host.
+    fireEvent.keyDown(input, { key: "Enter" });
+    // The absence must not be read in the same tick it was created: the write
+    // path runs through a mutation, so a regressed guard's `host.identity.set`
+    // reaches the fixture a task later. Settle the editor close, then flush a
+    // full macrotask so a queued write would have LANDED before the zero-read.
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-name-input")).toBeNull();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fixture.identitySetCalls()).toBe(0);
 
-    // Must not regress: a genuinely different name enables Save and writes.
-    fireEvent.change(input, { target: { value: "Studio Two" } });
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
-      ).toBe(false);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Must not regress: a genuinely different name writes.
+    fireEvent.click(await waitForButton("Edit name"));
+    const changed = await screen.findByTestId<HTMLInputElement>(
+      "host-overview-name-input",
+    );
+    fireEvent.change(changed, { target: { value: "Studio Two" } });
+    fireEvent.keyDown(changed, { key: "Enter" });
     await waitFor(() => {
       expect(fixture.identitySetCalls()).toBe(1);
     });
@@ -321,16 +335,11 @@ describe("<HostSettingsPanel /> Overview rename — a labeled host's untouched d
     // host owns the label, and `customNameFromIdentityDraft` stores it as a
     // real override instead.
     fireEvent.click(await waitForButton("Edit name"));
-    const reopened = await screen.findByRole<HTMLInputElement>("textbox", {
-      name: "Display Name",
-    });
+    const reopened = await screen.findByTestId<HTMLInputElement>(
+      "host-overview-name-input",
+    );
     fireEvent.change(reopened, { target: { value: "buildbox-01" } });
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
-      ).toBe(false);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.keyDown(reopened, { key: "Enter" });
     await waitFor(() => {
       expect(fixture.identitySetCalls()).toBe(2);
     });
@@ -399,7 +408,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
 
     // Opening the sheet IS the request: `HostDoctorRpcCard` runs Doctor once
     // on mount.
-    fireEvent.click(await waitForButton("Run doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     await screen.findByText("Running Doctor…");
 
     // Move the scope to another host WHILE the request is still parked.
@@ -418,7 +428,20 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     expect(otherHostCalls).toBe(0);
   });
 
-  it("host.update.check: a scope move mid-flight does not redirect the request to the new host", async () => {
+  // Rewritten when `host.update.check` became a QUERY that fires on mount.
+  //
+  // The old pin was `otherHostCalls === 0` — no second call at all — which only
+  // held because the check was imperative and nothing but a click could start
+  // one. Under an automatic read, host-b asking for itself is the FEATURE, so
+  // that assertion would now fail for the right reason, and asserting it still
+  // would pin the page shut against the change it was rewritten for.
+  //
+  // What survives is the invariant the arm-time capture actually protects: one
+  // host's answer must never be displayed under another host's name. The two
+  // fixtures return DIFFERENT versions so the rendered sentence names which host
+  // answered, and host-a's parked reply is released LAST, after the page has
+  // already moved on.
+  it("host.update.check: a late answer never lands on the host the page moved to", async () => {
     let releaseCheck: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseCheck = resolve;
@@ -434,12 +457,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           armedHostCalls += 1;
           return {
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           };
         },
       },
@@ -452,12 +470,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           otherHostCalls += 1;
           return Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.7.0"),
           });
         },
       },
@@ -480,24 +493,31 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     );
     const view = render(makeUi());
 
-    fireEvent.click(await waitForButton("Check now"));
-    await waitFor(() => {
-      expect(armedHostCalls).toBe(0); // still parked on the gate
-    });
+    // No click: mounting the page IS the request now. It parks on the gate.
+    await screen.findByText("Checking for updates…");
+    expect(armedHostCalls).toBe(0);
 
     hostBindingMock.current = { hostClient: fixtureB.client };
     scopeOverrides.current = scopeFrom("host-b", fixtureB);
     view.rerender(makeUi());
 
+    // host-b asks for ITSELF, which is the whole point of an automatic check.
+    await waitFor(() => {
+      expect(otherHostCalls).toBe(1);
+    });
+    await screen.findByText("v1.7.0 is available.");
+
+    // Now let host-a reply, long after the page stopped being about host-a.
     await act(async () => {
       releaseCheck?.();
       await gate;
     });
-
     await waitFor(() => {
       expect(armedHostCalls).toBe(1);
     });
-    expect(otherHostCalls).toBe(0);
+    // THE PIN: host-a's manifest is not on screen, and host-b's still is.
+    expect(screen.queryByText("v1.6.0 is available.")).toBeNull();
+    expect(screen.getByText("v1.7.0 is available.")).toBeTruthy();
   });
 
   it("host.update.install: a scope move mid-flight does not redirect the request to the new host", async () => {
@@ -515,12 +535,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            manifest: {
-              schemaVersion: 1 as const,
-              generatedAt: "2026-08-12T00:00:00Z",
-              latest: "1.6.0",
-              versions: [],
-            },
+            manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": async () => {
           await gate;
@@ -558,7 +573,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     const view = render(makeUi());
 
     fireEvent.click(await waitForButton("Check now"));
-    fireEvent.click(await waitForButton("Update to v1.6.0"));
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton(/^Install \d/));
     await waitFor(() => {
       expect(armedHostCalls).toBe(0); // still parked on the gate
     });
@@ -651,7 +667,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     );
     const view = render(makeUi());
 
-    fireEvent.click(await waitForButton("Run doctor"));
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
     fireEvent.click(
       await screen.findByTestId("host-doctor-fix-STALE_LOG_CHECK"),
     );

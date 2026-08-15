@@ -1,5 +1,6 @@
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 
 /**
  * A ready `HostScope` for panel tests.
@@ -31,10 +32,8 @@ export function hostScopeOptionFixture(
       detail: null,
       tone: "live",
       live: true,
-      busy: false,
     },
     updateState: "current",
-    busySessionCount: 0,
     entry: null,
     item: null,
     ...overrides,
@@ -77,6 +76,41 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     setHostId: () => undefined,
     makeActive: () => undefined,
     isLoading: false,
+    listsFailed: false,
+    retryLists: () => undefined,
+    nowMs: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * A resolved `HostOptions` for suites that render a picker but are not about
+ * the host LIST.
+ *
+ * It exists because unifying the pickers moved every surface from a narrow,
+ * easily-stubbed directory query onto `useHostOptions`, which composes six
+ * hooks (the runner host, the local service snapshot, the installed record,
+ * both list queries, the plan gate). A suite that used to stub one hook now
+ * has to stand up all of them — so it mocks at THIS boundary instead, exactly
+ * as the panel suites mock `useHostScope` rather than its internals.
+ *
+ * A suite whose subject IS the merge belongs in `host-scope-model`'s tests,
+ * where the real builder runs: a test that supplies this fixture can only
+ * prove what the picker does with a list, never that the list is right.
+ */
+export function hostOptionsFixture(
+  overrides: Partial<HostOptions>,
+): HostOptions {
+  const hosts = overrides.hosts ?? [
+    hostScopeOptionFixture({ hostId: "host-a" }),
+  ];
+  return {
+    hosts,
+    activeHostId: hosts[0]?.hostId ?? null,
+    isLoading: false,
+    directoryResolved: true,
+    directoryFailed: false,
+    listsResolved: true,
     listsFailed: false,
     retryLists: () => undefined,
     nowMs: 0,

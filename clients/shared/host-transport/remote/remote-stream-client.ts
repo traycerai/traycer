@@ -95,7 +95,7 @@ export class RemoteStreamClient<
    * (a remote session's first dial races the queries that created it; see
    * the session contract for why). This is what un-strands errored
    * host-scoped queries for a tab bound to a NON-active remote host, whose
-   * only recovery evidence is its own transport (the presence lease +
+   * only recovery evidence is its own transport (the registry-liveness +
    * relay-resume path only covers the active host).
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void {

@@ -98,23 +98,37 @@ function worktreeListAllForHostParams(
 }
 
 /**
- * Whether the card still has nothing to show. A caller-supplied binding skips
- * the binding RPC entirely, so its pending flag must not count; likewise an
- * owner with no managed worktrees never issues the worktree listing, and one
- * with no plain folders never issues the workspace summary - each leg's
- * pending flag only counts when that leg's path set is non-empty.
+ * Whether an answer that could still change is in flight. A caller-supplied
+ * binding skips the binding RPC entirely, so its pending flag must not count;
+ * likewise an owner with no managed worktrees never issues the worktree
+ * listing, and one with no plain folders never issues the workspace summary -
+ * each leg's pending flag only counts when that leg's path set is non-empty.
+ *
+ * ## Why the binding leg reads FETCHING and not just PENDING
+ *
+ * TanStack's `isPending` means "no data cached yet", so it answers false the
+ * moment ANY answer has been stored - including a `{ binding: null }` cached
+ * before the host had written the owner's binding row. Every later open then
+ * served that null as a settled fact while the refetch that would replace it
+ * was still running, and the card printed "No workspace linked" for a chat that
+ * had a workspace. `isFetching` is the question this actually needs to ask: is
+ * a read in flight right now, whatever is in the cache behind it.
+ *
+ * Consumers that already have items to show are unaffected - they render them
+ * through a refetch (see `OwnerWorkspaceMetadataContent`), so widening this
+ * only changes what the EMPTY state says while the host is being asked.
  */
 function ownerMetadataPending(input: {
   readonly enabled: boolean;
   readonly bindingSupplied: boolean;
-  readonly bindingPending: boolean;
+  readonly bindingInFlight: boolean;
   readonly worktreePathCount: number;
   readonly worktreesPending: boolean;
   readonly workspacePathCount: number;
   readonly workspacesPending: boolean;
 }): boolean {
   if (!input.enabled) return false;
-  if (!input.bindingSupplied && input.bindingPending) return true;
+  if (!input.bindingSupplied && input.bindingInFlight) return true;
   if (input.worktreePathCount > 0 && input.worktreesPending) return true;
   return input.workspacePathCount > 0 && input.workspacesPending;
 }
@@ -145,6 +159,19 @@ export interface WorktreeOwnerMetadata {
    */
   readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly isPending: boolean;
+  /**
+   * There is no host client to ask, so these facts are UNKNOWN rather than
+   * absent.
+   *
+   * The owner's host resolved to no requester - unreachable, absent from the
+   * host directory, or signed out - which is a normal state for a chat that
+   * lives on another machine (it is the same condition the sidebar draws its
+   * unreachable padlock from). Callers must not render it as either "loading"
+   * (nothing is in flight and nothing ever will be) or as an empty binding
+   * ("no workspace linked" is a claim about the OWNER, and this says only that
+   * we could not ask).
+   */
+  readonly hostUnavailable: boolean;
   readonly error: HostRpcError | null;
   /**
    * When the HOST last derived these facts, or `null` before anything has been
@@ -152,8 +179,9 @@ export interface WorktreeOwnerMetadata {
    *
    * Deliberately the rows' own `resolvedAt` and not the query's client-side
    * `dataUpdatedAt`: the card unmounts on close, so every re-open refetches and
-   * `dataUpdatedAt` is always ~now - it reported "Checked now" forever while
-   * the host was serving facts from its TTL cache that could be an hour old.
+   * `dataUpdatedAt` is always ~now - it made the workspace snapshot appear
+   * current forever while the host was serving facts from its TTL cache that
+   * could be an hour old.
    * Staleness is the entire point of the label, so it has to come from the
    * side that actually does the deriving.
    */
@@ -346,10 +374,30 @@ export function useWorktreeOwnerMetadata(args: {
     binding,
     worktrees,
     workspaces,
+    // Only when this hook would have had to ASK. A caller that supplied the
+    // binding already has the answer, and a closed card has no question.
+    hostUnavailable:
+      args.enabled && suppliedBinding === undefined && args.client === null,
     isPending: ownerMetadataPending({
       enabled: args.enabled,
       bindingSupplied: suppliedBinding !== undefined,
-      bindingPending: bindingQuery.isPending,
+      // Requires a CLIENT, then `isPending || isFetching`.
+      //
+      // The two flags cover different gaps and neither is sufficient alone:
+      // `isPending` misses a refetch over cached data (the stale-null case this
+      // whole signal exists for), and `isFetching` misses a query whose host is
+      // merely still connecting - it has no data and no request yet, but one is
+      // coming.
+      //
+      // The client check is what stops the pair from spinning FOREVER. With no
+      // client there is no request now and none pending: `useHostQuery` gates
+      // the query off, so `isPending` stays true for the lifetime of the card
+      // with `isFetching` false. Reporting that as "loading" is a dead end -
+      // nothing will ever arrive to end it. It is reported as
+      // `hostUnavailable` below instead, which the card can state plainly.
+      bindingInFlight:
+        args.client !== null &&
+        (bindingQuery.isPending || bindingQuery.isFetching),
       worktreePathCount: worktreePaths.length,
       worktreesPending: worktreesQuery.isPending,
       workspacePathCount: workspacePaths.length,

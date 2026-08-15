@@ -27,9 +27,12 @@ import {
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
+  userMessageSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  type ChatEvent,
   type ChatRunSettings,
+  type Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
   agentModeSchema,
@@ -906,6 +909,18 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     event: chatEventSchemaPreInReplyTo,
   });
 
+// Frozen common frames bound to `chat.subscribe@1.6`: live queue/event trees,
+// but the message swapped for its pre-`turnTailUuid` freeze - 1.6 shipped
+// before the Claude anchor gained `turnTailUuid`, and its surface is frozen
+// EXACTLY (`chat-subscribe-v16-surface-compat.test.ts`), so a `messageAccepted`
+// frame on that line must never declare the field.
+const chatSubscribeCommonServerFrameSchemasPreTurnTail =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaPreTurnTail,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+  });
+
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
 // trees (`inReplyTo` shipped in 1.4) but the pre-union queue, so a released
 // 1.4/1.5 `queueChanged` frame can never carry a managed-command item.
@@ -943,6 +958,46 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
 export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
 >;
+
+/** Cheap structural stand-in for a deep parse: is it a plain object at all? */
+function isStructuralRecord(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * `snapshot` frame schema with the two unbounded arrays — `chat.messages`
+ * and `chat.events` — validated STRUCTURALLY (each element is a plain
+ * object) instead of deeply. Snapshots are the one frame whose size scales
+ * with chat history (10s–100s of MB under full-chat-on-subscribe), and a
+ * deep zod parse over that is seconds of render-thread CPU per snapshot; the
+ * arrays' elements live in the same trust domain as the `blockDelta` frames
+ * that stream the same content, so validating the envelope + every bounded
+ * field deeply and the histories structurally trades no trust for the time.
+ * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
+ * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
+ *
+ * ONLY SOUND ON THE LIVE LINE (`chatSubscribeLiveSchemaVersion`). The deep
+ * message/event schemas carry compatibility defaults (`imageResolutions`,
+ * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
+ * objects; the structural check skips them, so a `1.6` assistant message
+ * would reach consumers with `imageResolutions` genuinely absent while typed
+ * as present. A host serving the client's own live line emits fully live
+ * shapes (its in-memory objects are post-parse normalized and its frame
+ * projection is the identity on the live line), so the shallow path is
+ * exact there — callers MUST fall back to the deep parse for any other
+ * negotiated version.
+ */
+export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchema.extend({
+    chat: chatSchema.extend({
+      messages: z.array(z.custom<Message>(isStructuralRecord)),
+      events: z.array(z.custom<ChatEvent>(isStructuralRecord)).default([]),
+    }),
+  }),
+});
 
 export function createImageResolutionUpdatedFrame(input: {
   readonly epicId: string;
@@ -1863,11 +1918,13 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // directly (a bug: it let every later change to `chatSchema`/`messageSchema`/
 // `contentBlockSchema` mutate this released line) - pinned here to its
 // pre-image shape so this line can never observe `imageResults`/the image
-// resolution record added on `1.7`. Only `chat` (→ `chatSchemaPreImage`) and
-// `blockDelta`'s event (→ `runtimeEventSchemaPreImage`) actually differ from
-// the live shapes; queue/message/managedCommands/turnStateChanged are
-// untouched by images, so this bundle reuses those live sub-schemas exactly
-// like `chatSubscribeServerFrameSchemaV14`/`V15` do.
+// resolution record added on `1.7`. `chat` (→ `chatSchemaPreImage`),
+// `blockDelta`'s event (→ `runtimeEventSchemaPreImage`), and the common
+// frames' message (→ `userMessageSchemaPreTurnTail`, via the pre-turn-tail
+// bundle: the Claude anchor gained `turnTailUuid` after 1.6 shipped) differ
+// from the live shapes; queue/managedCommands/turnStateChanged are untouched
+// by either freeze point, so those reuse the live sub-schemas exactly like
+// `chatSubscribeServerFrameSchemaV14`/`V15` do.
 const chatSnapshotSchemaV16 = z.object({
   chat: chatSchemaPreImage,
   access: chatAccessSchema,
@@ -1899,7 +1956,7 @@ const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV16,
   chatSubscribeTurnStateChangedServerFrameSchema,
   managedCommandsChangedServerFrameSchema(managedCommandSchemaPreImage),
-  ...chatSubscribeCommonServerFrameSchemas,
+  ...chatSubscribeCommonServerFrameSchemasPreTurnTail,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
 
@@ -1926,3 +1983,11 @@ export const chatSubscribeV17 = defineStreamRpcContract({
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
+
+/**
+ * The live line's version, declared HERE (next to the live contract) so a
+ * future line bump cannot miss it. This is the one negotiated version on
+ * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
+ * doc for why any down-negotiated line must take the deep parse instead.
+ */
+export const chatSubscribeLiveSchemaVersion = chatSubscribeV17.schemaVersion;

@@ -32,9 +32,12 @@ import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;
+/** The second copy of `store.ts`'s list — see the note there before editing. */
 const SETTINGS_PATHS = new Set([
   "agents",
+  "app-diagnostics",
   "appearance",
+  "devices",
   "diagnostics",
   "general",
   "host",

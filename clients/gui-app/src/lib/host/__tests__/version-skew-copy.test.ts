@@ -78,15 +78,13 @@ describe("hostAppVersionFromDirectoryEntry", () => {
       kind: "remote",
       websocketUrl: "wss://relay.traycer.invalid/attach",
       version: "1.0.0",
-      status: "available",
+      transportDialability: "dialable",
       publicKey: "pk",
+      relayFuseGrace: false,
       remoteStatus: {
-        presenceLease: "fresh",
-        hostRelayAttached: true,
+        connectivity: "connectable",
         viewerReachability: "unknown",
         clientCloud: "ok",
-        busy: false,
-        busySessionCount: 0,
         updateState: "current",
         appVersion: "1.4.2",
         lastSeenAt: null,
@@ -103,7 +101,7 @@ describe("hostAppVersionFromDirectoryEntry", () => {
       kind: "local",
       websocketUrl: "ws://127.0.0.1:5001/rpc",
       version: "1.4.1",
-      status: "available",
+      transportDialability: "dialable",
     };
 
     expect(hostAppVersionFromDirectoryEntry(entry)).toBe("1.4.1");

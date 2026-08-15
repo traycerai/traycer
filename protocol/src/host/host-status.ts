@@ -6,9 +6,8 @@ import { z } from "zod";
  * ⚠️ CROSS-REPO MIRROR — keep in sync with the internal monorepo:
  *   - `@traycerai/common/types/host` (`HostStatusDTO`, `HostKind`,
  *     `HostUpdateState`, presence/viewer/cloud enums) — the T1 contract, and
- *   - `authn-v3/src/utils/hosts/host-status-dto.ts` (`HostListItem`) +
- *     `authn-v3/src/utils/hosts/host-presence.ts` (`HostPresenceHealth`) — the
- *     T5 `GET /api/v3/hosts` response envelope.
+ *   - `authn-v3/src/utils/hosts/host-status-dto.ts` (`HostListItem`) — the
+ *     `GET /api/v3/hosts` response envelope.
  *
  * The open-source `traycer/` submodule does NOT depend on `@traycerai/common`
  * (zero references in the repo), so the DTO cannot be imported across the repo
@@ -19,10 +18,32 @@ import { z } from "zod";
  * fail closed on drift (an unknown/removed field surfaces as a parse error the
  * fetcher classifies as a transport failure, never a silent mis-render).
  *
- * Populated fields in S1 (registry + presence only):
- *   `presenceLease`, `clientCloud`, `busy`, `updateState`, `appVersion`,
- *   `lastSeenAt`. The relay-derived fields (`hostRelayAttached`,
- *   `viewerReachability`) carry their shape-only defaults until S2.
+ * Liveness is RELAY-ATTACHMENT, not a heartbeat. The 20s host→authn beat and
+ * the presence lease it fed are gone; the relay pushes attach/detach and authn
+ * keeps a short-TTL lease, which it collapses into the single {@link
+ * HostConnectivity} enum below. That replaced `presenceLease` (a tri-state
+ * about the beat leg) and `hostRelayAttached` (a second, separately-derived
+ * claim about the same leg — the pair is what produced the "Up, re-establishing
+ * its tunnel" and "Not reporting — likely reachable" states, both of which
+ * described a disagreement between two signals rather than anything about the
+ * host).
+ *
+ * `busy` / `busySessionCount` went with them, for a different reason: they
+ * describe a *right now* that a lease refreshed on the order of minutes cannot
+ * carry. Both already exist on the live host↔GUI connection
+ * (`host.status@1.1`), and the notification room's
+ * {@link HOST_RUNTIME_STATUS_AWARENESS_FIELD} carries them for surfaces that
+ * hold a room rather than a session. A client with neither has no live source
+ * and must render no drain state at all — not a stale one, and not a zero.
+ *
+ * `updateState` / `appVersion` / `lastSeenAt` STAY: they are Postgres-derived,
+ * cost no liveness read, and are precisely what an OFFLINE host's update UI
+ * needs to stay useful.
+ *
+ * This shape changed in one coordinated cut with authn — no version marker, no
+ * dual-parse. That is only sound because nothing released parses it; treat any
+ * FUTURE change as breaking (`.strict()` at every level, and GUIs have no
+ * force-update lever).
  */
 
 // -----------------------------------------------------------------------------
@@ -32,8 +53,33 @@ import { z } from "zod";
 /** Host classification. Mirrors the `HostKind` common type / Prisma enum. */
 export type HostRegistryKind = "personal" | "sandbox";
 
-/** Freshness of the presence lease as judged by coordination. */
-export type HostPresenceLeaseState = "fresh" | "stale" | "expired";
+/**
+ * Whether this host can be reached, as the cloud sees it. The ONE liveness
+ * word — there is no second signal to reconcile it against.
+ *
+ *  - `connectable` — the relay holds a live attachment for the host's own leg.
+ *    This is what "Online" means now.
+ *  - `offline`     — no attachment. Includes a host that is *running* but whose
+ *    relay egress is blocked (the ws-proxy population): the client cannot get
+ *    to it, so saying anything warmer than Offline would be a promise we can't
+ *    keep. Support reading: "Offline + host process up ⇒ relay egress blocked".
+ *  - `local-only`  — the owner's plan has no remote hosts, so this host never
+ *    attaches to a relay by design. Its absence is a fact about the plan, NOT
+ *    evidence about the process, and rendering it as Offline reads as a fault
+ *    with a retry as the remedy when the remedy is an upgrade.
+ *  - `unknown`     — the liveness store could not be read. Never render this as
+ *    Offline: blind is not the same as absent, and the durable `lastSeenAt` is
+ *    the only honest thing left to show.
+ *
+ * Detach latency is asymmetric and the UI copy should not over-promise: a clean
+ * teardown is pushed in seconds, while a dirty death (lid close, cable pull)
+ * waits out the lease TTL — on the order of 15 minutes.
+ */
+export type HostConnectivity =
+  | "connectable"
+  | "offline"
+  | "local-only"
+  | "unknown";
 
 /** This client's own probe result at tab-open / on-demand (S2). */
 export type HostViewerReachability = "ok" | "failing" | "unknown";
@@ -63,27 +109,15 @@ export type HostUpdatePolicy = "manual" | "auto";
 // -----------------------------------------------------------------------------
 
 export type HostStatusDTO = {
-  /** Lease freshness — hearsay about the heartbeat leg, not the data path. */
-  presenceLease: HostPresenceLeaseState;
-  /** Is the HOST's relay leg up? From the relay via CS (S2). */
-  hostRelayAttached: boolean;
+  /** The single liveness word, from the relay lease. */
+  connectivity: HostConnectivity;
   /** This client's probe of its own path to the host (S2). */
   viewerReachability: HostViewerReachability;
   /** Is this client online at all. */
   clientCloud: HostClientCloudState;
-  /** Active agent turns / watched PTYs / queued work. */
-  busy: boolean;
-  /**
-   * Count of sessions currently blocking an update drain (Architecture §13,
-   * T16) — populated (`> 0`) whenever `updateState === "pending"` and the
-   * host is waiting on open sessions before it can swap; `0` otherwise. Backs
-   * the "Waiting for N sessions" copy and the "Apply now — ends N sessions"
-   * drain-force affordance.
-   */
-  busySessionCount: number;
   /** Update lifecycle for the host. */
   updateState: HostUpdateState;
-  /** App version the host last reported (null until first heartbeat). */
+  /** App version the host last reported (null until first check-in). */
   appVersion: string | null;
   /** ISO-8601 last-seen timestamp from Postgres (null until first seen). */
   lastSeenAt: string | null;
@@ -113,30 +147,30 @@ export type HostListItem = {
 };
 
 /**
- * CS self-health of the presence-ingestion pipeline (R4-C3). `degraded` means
- * coordination cannot currently read presence, so the client MUST render an
- * `expired` lease as "status unknown — presence degraded", never a false
- * "Offline — last seen …" (Architecture §7).
+ * The `GET /api/v3/hosts` envelope. Just the rows.
+ *
+ * It used to carry a `presenceHealth` flag — the server's self-report that its
+ * liveness-read pipeline was degraded — which the client turned into "status
+ * unknown" instead of a false "Offline". That rule is intact and load-bearing;
+ * it simply moved INTO the row, as `connectivity: "unknown"`. Per-host is the
+ * better carrier: a partial read (some hosts resolved, the rest not) has an
+ * honest answer under the per-host form and none at all under one envelope
+ * flag, which had to be all-or-nothing and so was wrong in one direction or
+ * the other whenever the read was partial.
  */
-export type HostPresenceHealth = {
-  status: "healthy" | "degraded";
-  /** Machine-readable cause when degraded; null when healthy. */
-  reason: string | null;
-};
-
 export type HostListResponse = {
   hosts: HostListItem[];
-  presenceHealth: HostPresenceHealth;
 };
 
 // -----------------------------------------------------------------------------
 // Zod schemas — fail-closed parsing of the untrusted network response
 // -----------------------------------------------------------------------------
 
-export const hostPresenceLeaseStateSchema = z.enum([
-  "fresh",
-  "stale",
-  "expired",
+export const hostConnectivitySchema = z.enum([
+  "connectable",
+  "offline",
+  "local-only",
+  "unknown",
 ]);
 
 export const hostViewerReachabilitySchema = z.enum([
@@ -168,12 +202,9 @@ export const hostUpdatePolicySchema = z.enum(["manual", "auto"]);
 // strips at every level, not just the top one.
 export const hostStatusDtoSchema: z.ZodType<HostStatusDTO> = z
   .object({
-    presenceLease: hostPresenceLeaseStateSchema,
-    hostRelayAttached: z.boolean(),
+    connectivity: hostConnectivitySchema,
     viewerReachability: hostViewerReachabilitySchema,
     clientCloud: hostClientCloudStateSchema,
-    busy: z.boolean(),
-    busySessionCount: z.number().int().nonnegative(),
     updateState: hostUpdateStateSchema,
     appVersion: z.string().nullable(),
     lastSeenAt: z.string().nullable(),
@@ -193,17 +224,9 @@ export const hostListItemSchema: z.ZodType<HostListItem> = z
   })
   .strict();
 
-export const hostPresenceHealthSchema: z.ZodType<HostPresenceHealth> = z
-  .object({
-    status: z.enum(["healthy", "degraded"]),
-    reason: z.string().nullable(),
-  })
-  .strict();
-
 export const hostListResponseSchema: z.ZodType<HostListResponse> = z
   .object({
     hosts: z.array(hostListItemSchema),
-    presenceHealth: hostPresenceHealthSchema,
   })
   .strict();
 

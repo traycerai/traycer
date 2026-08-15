@@ -24,15 +24,14 @@ import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
 import {
   buildUsageChartColumns,
   buildUsageSeriesScaleForBuckets,
+  type UsageChartGroupBy,
 } from "@/lib/usage-analytics/usage-chart-data";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
+import { UsageChartGroupByToggle } from "@/components/usage-analytics/usage-chart-groupby-toggle";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 import { UsageChatBreakdown } from "@/components/usage-analytics/usage-chat-breakdown";
-import {
-  EpicUsageWindowPicker,
-  type EpicUsageWindow,
-} from "@/components/usage-analytics/epic-usage-window-picker";
+import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
 
 export interface EpicUsageDialogProps {
   readonly epicId: string;
@@ -46,32 +45,35 @@ type UsageSummaryQueryResult = UseQueryResult<
   HostRpcError
 >;
 
-const DEFAULT_WINDOW_DAYS: UsageSummaryWindowDays = 30;
-const DEFAULT_WINDOW: EpicUsageWindow = DEFAULT_WINDOW_DAYS;
+const DEFAULT_WINDOW_DAYS: UsageSummaryWindowDays = 7;
 
 /**
  * The scoped epic panel ticket 12 replaces the ambient cost badge with:
  * headline (`UsageCostFigure`, reused unmodified), a small per-day trend
- * chart, and a by-chat/agent breakdown, with window options 7/30/90 plus
- * "entire epic". Cost is on-demand by construction - the query is only
+ * chart, and a by-chat/agent breakdown, with window options 7/30/90. Cost is
+ * on-demand by construction - the query is only
  * `enabled` while the dialog is open, so there is nothing ambient left to
  * silently revert (fixup-01's failure mode). `poll: false` matches every
  * other actively-viewed usage surface (Settings' `UsageSummaryPanel`).
  */
 export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
-  const [windowValue, setWindowValue] =
-    useState<EpicUsageWindow>(DEFAULT_WINDOW);
+  const [windowDays, setWindowDays] =
+    useState<UsageSummaryWindowDays>(DEFAULT_WINDOW_DAYS);
+  // Held here rather than in the body: Radix unmounts `DialogContent` - and
+  // with it the body - while the dialog is closed, so a grouping picked
+  // there would silently reset on every reopen. This component outlives
+  // that (it lives as long as its `EpicShell`), which is the same reason
+  // the window selection above it is held here.
+  const [chartGroupBy, setChartGroupBy] =
+    useState<UsageChartGroupBy>("harness");
   const request = useMemo(
     () =>
       buildUsageSummaryRequest({
-        // The request schema requires `windowDays` unconditionally even for
-        // `window: "epic"` - the host ignores it for that window kind.
-        windowDays: windowValue === "epic" ? DEFAULT_WINDOW_DAYS : windowValue,
+        windowDays,
         epicId,
-        window: windowValue === "epic" ? "epic" : undefined,
       }),
-    [epicId, windowValue],
+    [epicId, windowDays],
   );
   const query = useUsageSummaryForClient(client, request, open, false);
   const { openSettings } = useSystemTabModalActions();
@@ -95,9 +97,13 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
             </DialogDescription>
           </div>
         </div>
-        <EpicUsageWindowPicker value={windowValue} onChange={setWindowValue} />
+        <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <EpicUsageDialogBody query={query} />
+          <EpicUsageDialogBody
+            query={query}
+            chartGroupBy={chartGroupBy}
+            onChartGroupByChange={setChartGroupBy}
+          />
         </div>
         <DialogFooter className="-mx-4 -mb-4 mt-0 border-t bg-muted/50 px-4 py-3">
           <Button
@@ -120,8 +126,10 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
 
 function EpicUsageDialogBody(props: {
   readonly query: UsageSummaryQueryResult;
+  readonly chartGroupBy: UsageChartGroupBy;
+  readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
 }): ReactNode {
-  const { query } = props;
+  const { query, chartGroupBy, onChartGroupByChange } = props;
 
   if (query.isLoading) {
     return (
@@ -155,8 +163,19 @@ function EpicUsageDialogBody(props: {
 
   const { summary, coverage, servedBy } = query.data;
   const days = daysForSummaryWindow(summary);
-  const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
-  const columns = buildUsageChartColumns(days, summary.buckets, scale, "cost");
+  // One scale, keyed by the reader's grouping. Unlike the Settings
+  // dashboard - where the harness split beside the headline needs a
+  // harness-keyed scale of its own regardless of what the chart shows - the
+  // chart is this dialog's only consumer of the scale, so there is no second
+  // one to keep pinned to harnesses.
+  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, chartGroupBy);
+  const columns = buildUsageChartColumns({
+    days,
+    buckets: summary.buckets,
+    scale,
+    metric: "cost",
+    groupBy: chartGroupBy,
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -169,21 +188,28 @@ function EpicUsageDialogBody(props: {
         hostScopeName={null}
         size="default"
       />
+      {/* The toggle lives inside this guard, not beside the window picker
+          above: with no facts there is no chart for it to regroup, and a
+          control that changes nothing visible reads as broken. */}
       {summary.totals.factCount === 0 ? null : (
-        <div className="flex flex-col gap-1">
-          <UsageDailyChart columns={columns} scale={scale} metric="cost" />
-          {/* Never cap silently: when the epic outruns the trend's ceiling
-              the chart covers less ground than the figure above it, and the
-              reader has to be told which is which. */}
-          {summary.window.windowDays > days.length ? (
-            <p
-              className="text-ui-xs text-muted-foreground/80"
-              data-testid="epic-usage-trend-capped-note"
-            >
-              Trend shows the last {days.length} days; the total covers the
-              whole epic.
-            </p>
-          ) : null}
+        <div className="flex flex-col gap-2">
+          <div className="flex justify-end">
+            <UsageChartGroupByToggle
+              groupBy={chartGroupBy}
+              onChange={onChartGroupByChange}
+            />
+          </div>
+          {/* `key` per the prop's contract: the legend's hidden-series set is
+              keyed by the current grouping's series keys, so a switch
+              remounts rather than letting stale harness keys filter model
+              bands. */}
+          <UsageDailyChart
+            key={chartGroupBy}
+            columns={columns}
+            scale={scale}
+            metric="cost"
+            groupBy={chartGroupBy}
+          />
         </div>
       )}
       <div>
@@ -197,48 +223,26 @@ function EpicUsageDialogBody(props: {
 }
 
 /**
- * Hard ceiling on the columns the trend may generate. `window: "epic"`
- * resolves `windowDays` from the epic's OWN fact span, which is unbounded
- * from this component's point of view: a long-lived epic - or a single fact
- * carrying a skewed or near-epoch `occurredAt`, which the wire accepts as
- * any non-negative integer - yields thousands to tens of thousands of days,
- * and every day is a `Tooltip`-wrapped button with a segment span per
- * harness. That is enough DOM to stall the dialog outright.
- *
- * 90 also happens to be the widest fixed window the picker offers, so a
- * capped epic trend is never denser than a chart this component already
- * renders comfortably.
- */
-const MAX_TREND_DAYS = 90;
-
-/**
  * The trend chart's x-axis, anchored on the RESPONSE's own window rather
- * than on any client clock - one rule for both window kinds.
+ * than on any client clock.
  *
  * `endAtExclusive` is the first instant OUTSIDE the window, so
  * `endAtExclusive - 1` is the last instant it includes, which is the day
- * the axis must end on. Both bounds resolvers in `packages/common` agree on
- * that reading: a fixed window ends at local midnight tomorrow (so
- * `- 1` lands on "today so far"), and `resolveUsageSummaryEpicWindowBounds`
- * stamps `nowMs + 1` (so `- 1` lands on the host's now).
+ * the axis must end on. A fixed window ends at local midnight tomorrow, so
+ * `- 1` lands on "today so far".
  *
  * Anchoring on a client `Date.now()` sampled at mount was the earlier
  * shape, and this dialog is mounted for as long as its `EpicShell` lives
  * while staying closed - so opening it after a local midnight built columns
  * ending on the previous day and dropped the newest buckets the query had
  * just returned.
- *
- * The cap trims from the OLD end, keeping the most recent days, and the
- * totals above the chart are untouched by it - so a trimmed trend is
- * narrower than its own headline, which is why the caller says so in
- * standing text rather than letting the two silently disagree.
  */
 function daysForSummaryWindow(
   summary: UsageSummaryResponse["summary"],
 ): readonly string[] {
   if (summary.totals.factCount === 0) return [];
   return lastNCalendarDays(
-    Math.min(summary.window.windowDays, MAX_TREND_DAYS),
+    summary.window.windowDays,
     summary.window.timezone,
     summary.window.endAtExclusive - 1,
   );

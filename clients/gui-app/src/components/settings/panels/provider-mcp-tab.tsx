@@ -877,7 +877,7 @@ function McpScopeHeader(props: {
         />
       )}
       {props.canAdd && !props.projectNeedsWorkspace ? (
-        <Button type="button" size="sm" variant="outline" onClick={props.onAdd}>
+        <Button type="button" size="sm" onClick={props.onAdd}>
           <Plus className="size-3.5" />
           Add MCP server
         </Button>

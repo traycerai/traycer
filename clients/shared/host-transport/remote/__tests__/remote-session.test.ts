@@ -30,6 +30,9 @@ import {
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
+  type EncodeMuxFrameInput,
+  type MuxFrameTypeValue,
+  type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
@@ -54,13 +57,20 @@ import type {
   WebSocketOpenEvent,
 } from "../../ws-factory";
 import {
+  BULK_CHUNK_SIZE_BYTES,
   ChunkReassembler,
-  chunkOutboundMessage,
+  encodeMuxMessageBody,
+  OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
-} from "../chunker";
+} from "@traycer/protocol/host-transport/chunking";
 import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
+import { INBOUND_CREDIT_GRANT_BATCH } from "../config";
+import type {
+  StreamCloseReason,
+  StreamFrameEnvelope,
+} from "../../i-stream-session";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -174,6 +184,14 @@ class FakeRelayHost {
   readonly openBearers: string[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
+  /** streamId of every logical subscribe, index-aligned with `subscribeParams`. */
+  readonly subscribeStreamIds: number[] = [];
+  /** Every `credits` value from a CREDIT control frame the client sent. */
+  readonly creditGrants: number[] = [];
+  /** Fired synchronously the instant a CREDIT frame is recorded - lets a test
+   * capture ordering evidence (e.g. "was the stream frame already delivered
+   * to the consumer?") at the exact tick the grant landed, not on a later poll. */
+  onCreditGrant: (() => void) | null = null;
   streamManifest = buildStreamManifest(emptyStreamRegistry);
   /**
    * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
@@ -197,9 +215,19 @@ class FakeRelayHost {
     method: string;
     schemaVersion: unknown;
     params: unknown;
+    streamId: number;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
   unaryResult: unknown = { ready: true };
+  /**
+   * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
+   * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
+   * stream-scoped FATAL) for that request's streamId instead of racing the
+   * harness's own reply.
+   */
+  skipUnaryAutoRespond = false;
+  /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
+  readonly closesSent: number[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -221,7 +249,7 @@ class FakeRelayHost {
         ),
         noise: null,
         handshake: null,
-        reassembler: new ChunkReassembler(),
+        reassembler: new ChunkReassembler(undefined),
         seqByStream: new Map(),
         queue: Promise.resolve(),
         closed: false,
@@ -270,6 +298,86 @@ class FakeRelayHost {
       reason: "server-drop",
       wasClean: false,
     });
+  }
+
+  /** The current live connection - shared lookup for the raw-frame helpers below. */
+  private liveConnection(): FakeConnection {
+    const connection = [...this.connections]
+      .reverse()
+      .find((entry) => !entry.closed);
+    if (connection === undefined) {
+      throw new Error("no live connection");
+    }
+    return connection;
+  }
+
+  /**
+   * Pushes a single logical STREAM_FRAME to the client through the REAL
+   * chunker (`OutboundChunkSource`, same as production `sendMux`) - a body
+   * over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically. Used
+   * by the C1 per-frame credit-accounting regression to drive a transfer
+   * long enough to cross `INBOUND_CREDIT_GRANT_BATCH` mid-flight.
+   */
+  async sendStreamFrame(
+    streamId: number,
+    envelope: Record<string, unknown>,
+    binary: Uint8Array | null,
+    qos: QosClassValue,
+  ): Promise<void> {
+    await this.sendMux(this.liveConnection(), {
+      type: MuxFrameType.STREAM_FRAME,
+      streamId,
+      qos,
+      json: envelope,
+      binary,
+    });
+  }
+
+  /**
+   * Sends a stream-scoped FATAL for `streamId` through the real chunker
+   * (`sendMux`, same path as `sendStreamFrame`) - lets a test simulate the
+   * host abandoning a pending unary request or a live subscription without
+   * ever answering it normally.
+   */
+  async sendStreamFatal(
+    streamId: number,
+    details: FatalErrorDetails,
+  ): Promise<void> {
+    await this.sendMux(this.liveConnection(), {
+      type: MuxFrameType.FATAL,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      json: { details: { ...details } },
+      binary: null,
+    });
+  }
+
+  /**
+   * Noise-encrypts one already-built `EncodeMuxFrameInput` WITHOUT delivering
+   * it - lets a test build several chunk sequences by hand, encrypt them in
+   * whatever order it chooses (the Noise send counter is reserved
+   * synchronously per call, so sequential `await`s here still produce a
+   * strictly increasing, decryptable counter sequence), and then hand the
+   * sealed bytes to `deliverToClient` in an INTERLEAVED order that differs
+   * from a naive "one sequence at a time" send.
+   */
+  async encryptFrame(input: EncodeMuxFrameInput): Promise<Uint8Array> {
+    const connection = this.liveConnection();
+    const noise = connection.noise;
+    if (noise === null) {
+      throw new Error("no established noise session");
+    }
+    return noise.encrypt(encodeMuxFrame(input), EMPTY_AD);
+  }
+
+  /**
+   * Hands one already-Noise-sealed frame straight to the client's socket
+   * `onmessage` - the same call `deliverBinary` makes internally, exposed so
+   * a test can fire several of these back-to-back with NO await between
+   * them, matching production `onData`'s fire-and-forget per-message entry.
+   */
+  deliverToClient(bytes: Uint8Array): void {
+    this.deliverBinary(this.liveConnection(), bytes);
   }
 
   private enqueue(connection: FakeConnection, data: string | Uint8Array): void {
@@ -325,6 +433,17 @@ class FakeRelayHost {
   ): Promise<void> {
     if (message.type === MuxFrameType.SUBSCRIBE) {
       this.subscribeParams.push(message.json?.params);
+      this.subscribeStreamIds.push(message.streamId);
+      return;
+    }
+    if (message.type === MuxFrameType.CREDIT) {
+      const json = message.json;
+      const credits =
+        json !== null && typeof json.credits === "number" ? json.credits : null;
+      if (credits !== null) {
+        this.creditGrants.push(credits);
+        this.onCreditGrant?.();
+      }
       return;
     }
     if (message.type === MuxFrameType.REQUEST) {
@@ -333,7 +452,11 @@ class FakeRelayHost {
         method: typeof json.method === "string" ? json.method : "",
         schemaVersion: json.schemaVersion,
         params: json.params,
+        streamId: message.streamId,
       });
+      if (this.skipUnaryAutoRespond) {
+        return;
+      }
       await this.sendMux(connection, {
         type: MuxFrameType.RESPONSE,
         streamId: message.streamId,
@@ -346,6 +469,10 @@ class FakeRelayHost {
         },
         binary: null,
       });
+      return;
+    }
+    if (message.type === MuxFrameType.CLOSE) {
+      this.closesSent.push(message.streamId);
       return;
     }
     if (
@@ -397,13 +524,16 @@ class FakeRelayHost {
     if (noise === null || connection.closed) {
       return;
     }
-    const frames = chunkOutboundMessage(message, () => {
+    const source = new OutboundChunkSource(message, () => {
       const current = connection.seqByStream.get(message.streamId) ?? 0;
       connection.seqByStream.set(message.streamId, current + 1);
       return current;
     });
-    for (const frame of frames) {
-      const sealed = await noise.encrypt(encodeMuxFrame(frame), EMPTY_AD);
+    while (!source.done) {
+      const sealed = await noise.encrypt(
+        encodeMuxFrame(source.nextFrame()),
+        EMPTY_AD,
+      );
       this.deliverBinary(connection, sealed);
     }
   }
@@ -1549,6 +1679,538 @@ describe("RemoteSession openAck without optionalRpc", () => {
         expect(getNegotiatedHostMethods("host-1")).toBeNull();
         expect(session.isClosed()).toBe(false);
       } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-message)", () => {
+  it(
+    "grants credits after INBOUND_CREDIT_GRANT_BATCH FRAMES - mid-transfer, before the logical STREAM_FRAME finishes reassembling",
+    async () => {
+      // The deadlock this pins: the old code counted consumed BULK frames
+      // per completed logical MESSAGE, so a single message spanning more
+      // than `INBOUND_CREDIT_GRANT_BATCH` chunk frames would never itself
+      // trigger a grant - the peer's send credits would run out and the
+      // transfer would stall forever. Accounting per FRAME (remote-session's
+      // `onData`, right after decrypt) grants mid-transfer instead.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let messageDelivered = false;
+      stream.onServerFrame(() => {
+        messageDelivered = true;
+      });
+      // Captured at the exact tick the FIRST credit grant lands - proves the
+      // grant fires before the (much later) full-message delivery callback,
+      // rather than relying on a later poll racing both events.
+      let creditSeenBeforeDelivery: boolean | null = null;
+      relay.onCreditGrant = () => {
+        if (creditSeenBeforeDelivery === null) {
+          creditSeenBeforeDelivery = !messageDelivered;
+        }
+      };
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        // Comfortably over INBOUND_CREDIT_GRANT_BATCH frames at the real
+        // BULK_CHUNK_SIZE_BYTES chunk cap - a transfer the old per-MESSAGE
+        // accounting would never have granted credits for mid-flight.
+        const frameCount = INBOUND_CREDIT_GRANT_BATCH + 5;
+        const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * frameCount);
+        await relay.sendStreamFrame(
+          streamId,
+          { kind: "snapshot", hasBinaryPayload: true },
+          binary,
+          QosClass.BULK,
+        );
+
+        await vi.waitFor(() => expect(messageDelivered).toBe(true), WAIT);
+        // Exactly one grant, of exactly the batch size: `frameCount` crossed
+        // the batch boundary once (at frame 256) and the remaining 5 frames
+        // were not enough to cross it again.
+        expect(relay.creditGrants).toEqual([INBOUND_CREDIT_GRANT_BATCH]);
+        expect(creditSeenBeforeDelivery).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client side)", () => {
+  it(
+    "reassembles several interleaved chunk sequences correctly when delivered without awaiting between wire frames",
+    async () => {
+      // The production `onData` handler is fire-and-forget per `onmessage`
+      // call (Noise decrypt is the only await, entered synchronously in
+      // arrival order - see the ORDERING INVARIANT comment above `onData`).
+      // This drives several DISTINCT streams' chunk sequences interleaved
+      // frame-by-frame through that same entry point, delivered in one tight
+      // synchronous burst, and asserts every sequence reassembles to its own
+      // stream with no cross-stream splice.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const labels = ["alpha", "beta", "gamma"] as const;
+      const streams = labels.map(() =>
+        session.subscribe("cursor.subscribe", { cursor: null }),
+      );
+      const received = new Map<number, StreamFrameEnvelope>();
+      const closedLabels: string[] = [];
+      streams.forEach((stream, index) => {
+        stream.onServerFrame((envelope) => {
+          received.set(index, envelope);
+        });
+        stream.onStatusChange((status) => {
+          if (status === "closed") {
+            closedLabels.push(labels[index]);
+          }
+        });
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        const streamIds = relay.subscribeStreamIds;
+
+        // Three independent 3-chunk sequences, one per stream.
+        const sequences = streamIds.map((streamId, index) => {
+          const label = labels[index];
+          const json = { kind: "snapshot", hasBinaryPayload: true, label };
+          const binary = new TextEncoder().encode(
+            `${label}-payload-${"x".repeat(64)}`,
+          );
+          const body = encodeMuxMessageBody(json, binary);
+          const chunkCount = 3;
+          const sliceSize = Math.ceil(body.length / chunkCount);
+          const frames: EncodeMuxFrameInput[] = [];
+          for (let i = 0; i < chunkCount; i += 1) {
+            const start = i * sliceSize;
+            const end = Math.min(start + sliceSize, body.length);
+            frames.push({
+              type: MuxFrameType.STREAM_FRAME,
+              streamId,
+              seq: i,
+              qos: QosClass.INTERACTIVE,
+              chunked: true,
+              chunkFirst: i === 0,
+              chunkLast: end >= body.length,
+              json: null,
+              binary: body.subarray(start, end),
+            });
+          }
+          return { label, json, frames };
+        });
+
+        // Interleave frame-by-frame across the three sequences (alpha0,
+        // beta0, gamma0, alpha1, beta1, gamma1, ...) rather than sending one
+        // whole sequence before starting the next.
+        const interleaved: EncodeMuxFrameInput[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          for (const sequence of sequences) {
+            interleaved.push(sequence.frames[i]);
+          }
+        }
+
+        // Encrypt sequentially (the Noise send counter must be reserved in
+        // this exact order for the counter sequence to stay decryptable),
+        // THEN deliver every sealed frame with no await between calls.
+        const sealed: Uint8Array[] = [];
+        for (const frame of interleaved) {
+          sealed.push(await relay.encryptFrame(frame));
+        }
+        for (const bytes of sealed) {
+          relay.deliverToClient(bytes);
+        }
+
+        await vi.waitFor(() => expect(received.size).toBe(3), WAIT);
+        sequences.forEach((sequence, index) => {
+          expect(received.get(index)).toEqual(sequence.json);
+        });
+        expect(closedLabels).toEqual([]);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streams.forEach((stream) => stream.close());
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession per-stream inbound error routing", () => {
+  it(
+    "fails only the corrupted stream on a chunk-sequence mismatch - the session stays ready and an untouched sibling stream keeps working",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBDelivered: StreamFrameEnvelope | null = null;
+      streamB.onServerFrame((envelope) => {
+        streamBDelivered = envelope;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA, streamIdB] = relay.subscribeStreamIds;
+
+        // Stream A: a corrupt chunk sequence - a valid CHUNK_FIRST followed
+        // by a continuation whose `seq` skips ahead (must be 1, sent as 5),
+        // tripping `ChunkSequenceMismatchError` (a `ChunkReassemblyError`
+        // subclass) on THIS stream only.
+        const bodyA = encodeMuxMessageBody(
+          { kind: "snapshot", hasBinaryPayload: true },
+          new TextEncoder().encode("x".repeat(200)),
+        );
+        const half = Math.ceil(bodyA.length / 2);
+        const firstFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.INTERACTIVE,
+          chunked: true,
+          chunkFirst: true,
+          chunkLast: false,
+          json: null,
+          binary: bodyA.subarray(0, half),
+        };
+        const skippedFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 5,
+          qos: QosClass.INTERACTIVE,
+          chunked: true,
+          chunkFirst: false,
+          chunkLast: true,
+          json: null,
+          binary: bodyA.subarray(half),
+        };
+        const sealedFirst = await relay.encryptFrame(firstFrame);
+        const sealedSkipped = await relay.encryptFrame(skippedFrame);
+        relay.deliverToClient(sealedFirst);
+        relay.deliverToClient(sealedSkipped);
+
+        await vi.waitFor(
+          () => expect(streamAClosedReason).not.toBeNull(),
+          WAIT,
+        );
+        expect(streamAClosedReason).toEqual({
+          kind: "fatalError",
+          details: expect.objectContaining({
+            code: "STREAM_CHUNK_REASSEMBLY_FAILED",
+          }),
+        });
+        // The Noise decrypt succeeded - only THIS stream is condemned; the
+        // session itself must not have been dropped/reconnected over it.
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers).toHaveLength(1);
+
+        // Stream B, never touched by the corruption, still delivers a
+        // perfectly normal frame afterward - proving the shared connection
+        // (and this stream's own reassembly state) survived stream A's fatal
+        // untouched.
+        const normalEnvelope = { kind: "snapshot", hasBinaryPayload: false };
+        await relay.sendStreamFrame(
+          streamIdB,
+          normalEnvelope,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(streamBDelivered).not.toBeNull(), WAIT);
+        expect(streamBDelivered).toEqual(normalEnvelope);
+        // `isReady()` requires every LIVE subscription to have delivered at
+        // least one frame (Architecture's ready-boundary evidence): stream A
+        // was condemned and dropped out of `subscriptions` on its fatal, and
+        // stream B just delivered its first frame above - so the boundary is
+        // reached only now, which is itself further proof the connection
+        // never reconnected (a reconnect would have re-armed a NEW
+        // generation and required B to be resubscribed AND re-delivered).
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // An "over-cap sequence via a shrunk-cap reassembler" sub-case
+  // (`MuxMessageSizeError` routing) is intentionally NOT covered here.
+  // `RemoteSession` constructs the client-side `ActiveConnection.reassembler`
+  // as a fixed `new ChunkReassembler(undefined)` (remote-session.ts) with no
+  // seam for a test to inject a smaller `maxMessageBytes` cap for one session
+  // under test. Exercising `MuxMessageSizeError` routing honestly would
+  // require either genuinely exceeding `MAX_MUX_MESSAGE_BYTES` (512 MiB - not
+  // viable in a unit test) or adding an injection seam to `RemoteSession`,
+  // which this task's brief forbids touching. Skipped; flagged for whoever
+  // owns that seam decision.
+});
+
+describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
+  // A host-side per-stream FATAL for a still-pending unary request must
+  // reject the caller promptly - not after the 30s unary timeout - and must
+  // CLOSE the stream back to the host so it stops producing for an id this
+  // side has already tombstoned. Mirrors `failStreamOnInboundError`'s
+  // `rejectUnary` path, exercised here through a REAL stream-scoped FATAL
+  // frame instead of a reassembly error.
+  const statusContract = defineRpcContract({
+    method: "host.status",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ready: z.boolean() }),
+  });
+  const statusRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+      "host.status": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: statusContract, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "rejects the pending sendUnary promptly with the FATAL's code, and the client CLOSEs the stream",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      // The harness must NOT auto-answer this REQUEST - the whole point is
+      // that the host abandons it with a stream-scoped FATAL instead.
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const pending = session.sendUnary("host.status", {}, null);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests[0]?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        await relay.sendStreamFatal(streamId, {
+          code: "RPC_ERROR",
+          reason: "host abandoned the request mid-flight",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+
+        // Settles well inside a normal `await` - nowhere near the 30s unary
+        // timeout, which this pins is NOT what settled the promise.
+        const error: unknown = await pending.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect((error as HostRpcError).fatalDetails?.code).toBe("RPC_ERROR");
+
+        // The client tells the host it is done with the stream - the host
+        // must not keep producing/pacing for an id this side already
+        // tombstoned.
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        // The FATAL was stream-scoped, not session-level - the session
+        // itself survives untouched.
+        expect(session.isClosed()).toBe(false);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-client)", () => {
+  it(
+    "fails the poisoned stream and notifies the host (S2), then refuses to resurrect an accumulator for the withheld genuine chunks (S4-client)",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      // A sibling stream, subscribed BEFORE the attack, so it can prove
+      // afterward that the poisoned stream's failure stayed local to itself.
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBDelivered: StreamFrameEnvelope | null = null;
+      streamB.onServerFrame((envelope) => {
+        streamBDelivered = envelope;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA, streamIdB] = relay.subscribeStreamIds;
+
+        // A genuine 3-chunk sequence for stream A. Only the FINAL chunk is
+        // delivered first (adversarial reorder - the relay withholds the
+        // genuine CHUNK_FIRST and middle chunk) - no CHUNK_FIRST for this
+        // streamId has EVER been sent, so `accept()` throws a bare
+        // `ChunkReassemblyError` (a continuation with no accumulator at
+        // all), not a sequence mismatch.
+        const bodyA = encodeMuxMessageBody(
+          { kind: "snapshot", hasBinaryPayload: true },
+          new TextEncoder().encode("y".repeat(300)),
+        );
+        const third = Math.ceil(bodyA.length / 3);
+        const genuineFrames: EncodeMuxFrameInput[] = [
+          {
+            type: MuxFrameType.STREAM_FRAME,
+            streamId: streamIdA,
+            seq: 0,
+            qos: QosClass.INTERACTIVE,
+            chunked: true,
+            chunkFirst: true,
+            chunkLast: false,
+            json: null,
+            binary: bodyA.subarray(0, third),
+          },
+          {
+            type: MuxFrameType.STREAM_FRAME,
+            streamId: streamIdA,
+            seq: 1,
+            qos: QosClass.INTERACTIVE,
+            chunked: true,
+            chunkFirst: false,
+            chunkLast: false,
+            json: null,
+            binary: bodyA.subarray(third, 2 * third),
+          },
+          {
+            type: MuxFrameType.STREAM_FRAME,
+            streamId: streamIdA,
+            seq: 2,
+            qos: QosClass.INTERACTIVE,
+            chunked: true,
+            chunkFirst: false,
+            chunkLast: true,
+            json: null,
+            binary: bodyA.subarray(2 * third),
+          },
+        ];
+
+        // S2: deliver ONLY the final chunk. No accumulator exists for this
+        // streamId, so this trips `ChunkReassemblyError` ->
+        // `failStreamOnInboundError`.
+        const sealedFinal = await relay.encryptFrame(genuineFrames[2]);
+        relay.deliverToClient(sealedFinal);
+
+        await vi.waitFor(
+          () => expect(streamAClosedReason).not.toBeNull(),
+          WAIT,
+        );
+        expect(streamAClosedReason).toEqual({
+          kind: "fatalError",
+          details: expect.objectContaining({
+            code: "STREAM_CHUNK_REASSEMBLY_FAILED",
+          }),
+        });
+        // The failure is communicated to the host, not silently local-only:
+        // the client CLOSEs the stream it just condemned.
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamIdA),
+          WAIT,
+        );
+        expect(session.pendingReassemblyCount).toBe(0);
+        expect(session.isClosed()).toBe(false);
+
+        // S4-client: the relay now delivers the withheld GENUINE start-chunk
+        // and middle chunk for the SAME (now-tombstoned) streamId. Pre-R-2
+        // this would call `reassembler.accept()` before ever checking
+        // whether the streamId already failed, starting a fresh,
+        // uncollectable accumulator.
+        const closesBeforeReplay = relay.closesSent.length;
+        const sealedFirst = await relay.encryptFrame(genuineFrames[0]);
+        const sealedMiddle = await relay.encryptFrame(genuineFrames[1]);
+        relay.deliverToClient(sealedFirst);
+        relay.deliverToClient(sealedMiddle);
+        // Give the fire-and-forget `onData` handler a tick to run.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // No accumulator got created, and no duplicate CLOSE was sent - the
+        // frames were dropped outright as tombstoned.
+        expect(session.pendingReassemblyCount).toBe(0);
+        expect(relay.closesSent.length).toBe(closesBeforeReplay);
+        // The session survived untouched - not force-closed over a single
+        // condemned stream.
+        expect(session.isClosed()).toBe(false);
+
+        // A sibling stream, subscribed before the attack, still works.
+        const normalEnvelope = { kind: "snapshot", hasBinaryPayload: false };
+        await relay.sendStreamFrame(
+          streamIdB,
+          normalEnvelope,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(streamBDelivered).not.toBeNull(), WAIT);
+        expect(streamBDelivered).toEqual(normalEnvelope);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamB.close();
         session.close();
       }
     },

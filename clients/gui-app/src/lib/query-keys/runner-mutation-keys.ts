@@ -191,6 +191,9 @@ export const runnerQueryKeys = {
     ["runner.host.doctor", management] as const,
   hostCliManifest: (management: object) =>
     ["runner.host.cliManifest", management] as const,
+  // Same no-bridge placeholder contract as `hostInstalledRecordUnavailable`.
+  hostCliManifestUnavailable: () =>
+    ["runner.host.cliManifest", "unavailable"] as const,
   hostName: (management: object) => ["runner.host.name", management] as const,
   // Direct removal-sentinel read used by the host gate, independent of
   // `ensureHost`'s one-shot auto-provision result.

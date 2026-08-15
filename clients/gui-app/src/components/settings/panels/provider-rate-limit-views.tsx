@@ -10,7 +10,10 @@ import type {
   ProviderRateLimitWindow,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
-import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
+import {
+  classifyProviderRateLimitWindow,
+  isOpenCodeGoRateLimitWindowLimited,
+} from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +28,10 @@ import {
 } from "@/components/ui/tooltip";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
+import {
+  OpenCodeGoManageLink,
+  OpenModelProvidersButton,
+} from "@/components/settings/panels/opencode-go-actions";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 import {
@@ -112,6 +119,10 @@ type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
 type HuggingFaceRateLimits = Extract<
   ProviderRateLimits,
   { provider: "huggingface" }
+>;
+type OpenCodeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "opencode"; available: true }
 >;
 
 const MINUTES_PER_HOUR = 60;
@@ -1152,6 +1163,61 @@ export function KiloCodeRateLimitView({
   );
 }
 
+function OpenCodeGoWindowRow({
+  label,
+  window,
+  now,
+}: {
+  readonly label: string;
+  readonly window: OpenCodeRateLimits["fiveHour"];
+  readonly now: number;
+}): ReactNode {
+  return (
+    <MeterRow
+      label={label}
+      usedPercent={window.usedPercent}
+      severity={
+        isOpenCodeGoRateLimitWindowLimited(window, now)
+          ? "limited"
+          : classifyProviderRateLimitWindow(window)
+      }
+      detail={
+        <WindowMeterDetail
+          resetsAt={window.resetsAt}
+          usedPercent={window.usedPercent}
+        />
+      }
+    />
+  );
+}
+
+export function OpenCodeRateLimitView({
+  data,
+}: {
+  readonly data: OpenCodeRateLimits;
+}): ReactNode {
+  const now = useSampledNow();
+  const limited = [data.fiveHour, data.weekly, data.monthly].some((window) =>
+    isOpenCodeGoRateLimitWindowLimited(window, now),
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      {limited ? (
+        <div className="flex flex-col items-start gap-1.5">
+          <Badge variant="destructive">Go limit reached</Badge>
+          <p className="text-ui-xs text-muted-foreground">
+            Go quota is exhausted. Free models or Zen balance may still work.
+          </p>
+        </div>
+      ) : null}
+      <OpenCodeGoWindowRow label="5-hour" window={data.fiveHour} now={now} />
+      <OpenCodeGoWindowRow label="Weekly" window={data.weekly} now={now} />
+      <OpenCodeGoWindowRow label="Monthly" window={data.monthly} now={now} />
+      <OpenCodeGoManageLink />
+    </div>
+  );
+}
+
 /**
  * Grok's period bar label: the billing period's cadence taken from the
  * provider's `periodType` token (e.g. `"USAGE_PERIOD_TYPE_WEEKLY"` -> "Weekly"),
@@ -1302,6 +1368,7 @@ export function GrokRateLimitView({
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
+    readonly openModelProvidersAction: (() => void) | null;
   },
 ): ReactNode {
   const state = resolveProviderRateLimitViewState(props);
@@ -1338,9 +1405,16 @@ export function ProviderRateLimitBody(
   const data = state.data;
   if (!data.available) {
     return (
-      <p className="text-ui-xs text-muted-foreground">
-        Usage limits unavailable - {formatUnavailableReason(data.reason)}
-      </p>
+      <div className="flex flex-col items-start gap-1.5">
+        <p className="text-ui-xs text-muted-foreground">
+          Usage limits unavailable - {formatUnavailableReason(data.reason)}
+        </p>
+        {data.provider === "opencode" &&
+        data.reason === "insufficient_permissions" &&
+        props.openModelProvidersAction !== null ? (
+          <OpenModelProvidersButton onClick={props.openModelProvidersAction} />
+        ) : null}
+      </div>
     );
   }
   const detail = (
@@ -1448,5 +1522,7 @@ export function ProviderRateLimitDetail({
     // without one render spend figures alone.
     case "huggingface":
       return <HuggingFaceRateLimitView data={data} variant={variant} />;
+    case "opencode":
+      return <OpenCodeRateLimitView data={data} />;
   }
 }

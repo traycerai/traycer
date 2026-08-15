@@ -22,9 +22,15 @@ const blobSrcState = vi.hoisted((): { value: AttachmentBlobState } => ({
   },
 }));
 
-vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
-  useAttachmentBlobSrc: () => blobSrcState.value,
-}));
+vi.mock(
+  "@/lib/attachments/use-attachment-blob-src",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/attachments/use-attachment-blob-src")
+    >()),
+    useChatAttachmentBlobSrc: () => blobSrcState.value,
+  }),
+);
 
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),

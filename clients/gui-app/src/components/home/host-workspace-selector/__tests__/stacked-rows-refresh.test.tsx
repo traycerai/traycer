@@ -25,7 +25,7 @@ interface MockHostClient {
     readonly kind: "local";
     readonly websocketUrl: string;
     readonly version: string;
-    readonly status: "available";
+    readonly transportDialability: "dialable";
   };
   getActiveHostId(): string;
   getRequestContextUserId(): string;
@@ -92,7 +92,7 @@ const hostClient: MockHostClient = {
     kind: "local",
     websocketUrl: "ws://127.0.0.1:4917/rpc",
     version: "0.0.0-test",
-    status: "available",
+    transportDialability: "dialable",
   }),
   getActiveHostId: () => mocks.activeHostId.current,
   getRequestContextUserId: () => "user-home",
@@ -134,11 +134,28 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         kind: "local",
         websocketUrl: "ws://127.0.0.1:4917/rpc",
         version: "0.0.0-test",
-        status: "available",
+        transportDialability: "dialable",
       },
     ],
   }),
 }));
+
+// This suite is about the refresh-on-mount latch, not the host list, so it
+// mocks `useHostOptions` at the boundary (the same pattern panel suites use
+// for `useHostScope`) rather than standing up the six hooks it composes.
+// Reads `mocks.activeHostId.current` live so the "host swapped underneath
+// the same mount" case stays exercised.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [hostScopeOptionFixture({ hostId: mocks.activeHostId.current })],
+        activeHostId: mocks.activeHostId.current,
+      }),
+  };
+});
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => mocks.resolvedWorkspace.current,

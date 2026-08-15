@@ -64,8 +64,16 @@ const mocks = vi.hoisted(() => ({
   deleteMutate: vi.fn(),
 }));
 
+// `null` is what the real hook returns for the client this factory declares:
+// it names a host only when `useWsStreamClient` is live, and here it is not.
+// The mount registers its entry unattributed, which is the honest shape for a
+// suite whose frames arrive through an injected factory rather than a
+// transport. S9 reads the per-epic store by owner key, which never consults
+// the attribution, so naming a host here would assert nothing and would only
+// contradict the null client above.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  useStreamHostId: () => null,
   useStreamMethodSupport: () => "supported",
   useStreamMethodSchemaVersion: () => null,
 }));

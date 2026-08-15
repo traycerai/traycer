@@ -23,6 +23,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
 import { useHostClient } from "@/lib/host/runtime";
+import { createStreamRebuildBackoff } from "@/lib/host/stream-rebuild-backoff";
+import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   hostTransportKey,
@@ -53,12 +55,12 @@ const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
  * check needs it to be present.
  */
 const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
-  presenceLease: "expired",
-  hostRelayAttached: false,
+  // `unknown`, not `offline`: this value is never rendered, but if it ever
+  // leaked to a status surface it must not assert something we did not learn.
+  // We are here precisely because the caller had no status DTO to hand.
+  connectivity: "unknown",
   viewerReachability: "unknown",
   clientCloud: "ok",
-  busy: false,
-  busySessionCount: 0,
   updateState: "current",
   appVersion: null,
   lastSeenAt: null,
@@ -315,6 +317,14 @@ export function useHostStreamClientBindingFor(
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
   const teardownInProgressRef = useRef(false);
+  // Same rebuild pacing the app-wide `HostStreamProvider` runs, and needed here
+  // MORE than there: that provider follows the active host, while this hook
+  // dials whichever machine its caller names - a per-tab binding, or a host
+  // somebody picked out of a list and whose selection PERSISTS. An older host,
+  // an incompatible protocol or a plan restriction closes every fresh dial the
+  // same way, and without backoff that is a mint/dial/handshake loop running
+  // for as long as the selection stands, with nothing on screen to explain it.
+  const [rebuildBackoff] = useState(createStreamRebuildBackoff);
 
   // Builds AND owns the client's lifecycle inside this ONE effect, rather
   // than a `useMemo` (as this hook did before S1's session cache) - see
@@ -351,6 +361,12 @@ export function useHostStreamClientBindingFor(
     // role in transport construction (`buildHostStreamClient` only reads
     // `hostId`/`websocketUrl`/`publicKey`); it is a placeholder purely to
     // satisfy `isRemoteHostDirectoryEntry`'s shape check.
+    //
+    // `transportDialability` is written coarsely here for the same reason: this
+    // is a FABRICATED entry describing an endpoint this effect has already
+    // decided to dial, not a directory row carrying a verdict about a machine.
+    // The gate that decides whether to dial at all ran above this, against the
+    // real entry.
     const memoizedTarget =
       endpointKind === "remote" && endpointPublicKey !== null
         ? ({
@@ -359,9 +375,11 @@ export function useHostStreamClientBindingFor(
             kind: "remote",
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
             publicKey: endpointPublicKey,
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
+            // Fabricated endpoint, not a directory verdict: never in fuse grace.
+            relayFuseGrace: false,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -369,7 +387,7 @@ export function useHostStreamClientBindingFor(
             kind: endpointKind,
             websocketUrl: endpointWebsocketUrl,
             version: null,
-            status: "available",
+            transportDialability: "dialable",
           } satisfies HostDirectoryEntry);
 
     const client = buildHostStreamClient({
@@ -404,8 +422,14 @@ export function useHostStreamClientBindingFor(
         client.close("transient-host-client-teardown");
       }
     };
+    // The SAME identity the binding is filed under, so the streak follows the
+    // transport rather than this hook instance: a caller that retargets is
+    // dialing a different machine, and the previous one's failures are not
+    // evidence about it.
+    const builtTransportKey = remoteAwareOwnerIdentity(memoizedTarget, userId);
+    rebuildBackoff.markBuilt(Date.now(), builtTransportKey);
     setBinding({
-      transportKey: remoteAwareOwnerIdentity(memoizedTarget, userId),
+      transportKey: builtTransportKey,
       client,
       pin,
       unpin,
@@ -433,6 +457,7 @@ export function useHostStreamClientBindingFor(
     endpointPublicKey,
     endpointWebsocketUrl,
     globalClient,
+    rebuildBackoff,
     rebuildNonce,
     transportKey,
     userId,
@@ -455,16 +480,42 @@ export function useHostStreamClientBindingFor(
 
   useEffect(() => {
     if (client === null) return;
+    let backoffTimer: number | null = null;
+    const clearBackoffTimer = (): void => {
+      if (backoffTimer === null) return;
+      window.clearTimeout(backoffTimer);
+      backoffTimer = null;
+    };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      setRebuildNonce((nonce) => nonce + 1);
+      const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
+      appLogger.warn(
+        "[stream] transient host stream client closed underneath its binding - rebuilding",
+        {
+          client: client.instanceId,
+          closedReason: client.getClosedReason(),
+          rebuildDelayMs: delayMs,
+        },
+      );
+      if (delayMs === 0) {
+        setRebuildNonce((nonce) => nonce + 1);
+        return;
+      }
+      backoffTimer = window.setTimeout(() => {
+        backoffTimer = null;
+        setRebuildNonce((nonce) => nonce + 1);
+      }, delayMs);
     };
     if (client.isClosed()) {
       rebuild();
-      return;
+      return clearBackoffTimer;
     }
-    return client.onClosed(rebuild);
-  }, [client]);
+    const unsubscribe = client.onClosed(rebuild);
+    return () => {
+      unsubscribe();
+      clearBackoffTimer();
+    };
+  }, [client, rebuildBackoff]);
 
   return binding?.client.isClosed() === true ? null : binding;
 }

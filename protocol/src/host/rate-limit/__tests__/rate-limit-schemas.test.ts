@@ -11,6 +11,11 @@ import {
   hostGetRateLimitUsageDowngradeV4ToV3,
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
+  hostGetRateLimitUsageUpgradeV40ToV50,
+  hostGetRateLimitUsageDowngradeV5ToV1,
+  hostGetRateLimitUsageDowngradeV5ToV2,
+  hostGetRateLimitUsageDowngradeV5ToV3,
+  hostGetRateLimitUsageDowngradeV5ToV4,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -25,6 +30,7 @@ import {
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
+  rateLimitUsageResponseSchemaV50,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -1096,7 +1102,7 @@ describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", 
     expect(rateLimitUsageResponseSchemaV40.parse(upgraded)).toEqual(response);
   });
 
-  it("registers host.getRateLimitUsage major 4.0 as the latest line", () => {
+  it("registers host.getRateLimitUsage major 4.0 as a frozen line", () => {
     expect(
       hostRpcRegistry["host.getRateLimitUsage"][4].versions[0].contract
         .schemaVersion,
@@ -1107,5 +1113,230 @@ describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", 
           .downgradePathsFromLatest as Record<string, unknown>,
       ).sort(),
     ).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("host.getRateLimitUsage v5.0 OpenCode freeze + downgrade bridges", () => {
+  const openCodeAvailable = {
+    provider: "opencode" as const,
+    available: true as const,
+    credentialGeneration: "gen-opencode-1",
+    fiveHour: {
+      status: "ok" as const,
+      usedPercent: 10,
+      resetsAt: 1_784_678_400_000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      status: "rate-limited" as const,
+      usedPercent: 20,
+      resetsAt: 1_785_283_200_000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      status: "ok" as const,
+      usedPercent: 30,
+      resetsAt: 1_787_011_200_000,
+      durationMinutes: null,
+    },
+  };
+
+  const openCodeUnsupported = {
+    provider: "opencode" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const openCodeUnavailable = {
+    provider: "opencode" as const,
+    available: false as const,
+    reason: "usage_fetch_failed" as const,
+    credentialGeneration: "gen-opencode-1",
+  };
+
+  const huggingFaceAvailable = {
+    provider: "huggingface" as const,
+    available: true as const,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  it("accepts an OpenCode arm and generation on v5 and rejects the available arm on frozen v4", () => {
+    expect(providerRateLimitsSchema.parse(openCodeAvailable)).toEqual(
+      openCodeAvailable,
+    );
+    expect(providerRateLimitsSchema.parse(openCodeUnavailable)).toEqual(
+      openCodeUnavailable,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: openCodeAvailable,
+      }),
+    ).toMatchObject({ providerRateLimits: openCodeAvailable });
+    expect(() =>
+      providerRateLimitsSchema.parse({
+        ...openCodeAvailable,
+        credentialGeneration: undefined,
+      }),
+    ).toThrow();
+    expect(() =>
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: openCodeAvailable,
+      }),
+    ).toThrow();
+  });
+
+  it("degrades an available OpenCode snapshot to unsupported_provider on every v5 downgrade", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV5ToV4,
+      hostGetRateLimitUsageDowngradeV5ToV3,
+      hostGetRateLimitUsageDowngradeV5ToV2,
+      hostGetRateLimitUsageDowngradeV5ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+  });
+
+  it("keeps an unavailable OpenCode reason and strips credentialGeneration on v4", () => {
+    const result = hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(
+      rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: openCodeUnavailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual({
+      provider: "opencode",
+      available: false,
+      reason: "usage_fetch_failed",
+    });
+    expect(
+      result.value.providerRateLimits !== null &&
+        "credentialGeneration" in result.value.providerRateLimits,
+    ).toBe(false);
+    expect(() =>
+      rateLimitUsageResponseSchemaV40.parse(result.value),
+    ).not.toThrow();
+  });
+
+  it("keeps an unavailable OpenCode reason through v5 -> v3 / v2 and maps it for v1", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeUnavailable,
+    });
+    const unavailable = {
+      provider: "opencode",
+      available: false,
+      reason: "usage_fetch_failed",
+    };
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV5ToV3,
+      hostGetRateLimitUsageDowngradeV5ToV2,
+    ]) {
+      expect(bridge.downgradeResponse(response)).toEqual({
+        ok: true,
+        value: { ...response, providerRateLimits: unavailable },
+      });
+    }
+    expect(
+      hostGetRateLimitUsageDowngradeV5ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...response,
+        providerRateLimits: {
+          ...unavailable,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("passes a Hugging Face arm through the 5.0 -> 4.0 bridge unchanged", () => {
+    const result = hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(
+      rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: huggingFaceAvailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(huggingFaceAvailable);
+  });
+
+  it("degrades OpenCode through the host registry major 5 -> 4 / 3 / 2 / 1 paths", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openCodeAvailable,
+    });
+    const registry = hostRpcRegistry["host.getRateLimitUsage"];
+    const toV4 = downgradeResponseAcrossMajors(registry, 5, 4, response);
+    expect(toV4.ok).toBe(true);
+    if (toV4.ok) {
+      expect(toV4.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+    const toV3 = downgradeResponseAcrossMajors(registry, 5, 3, response);
+    expect(toV3.ok).toBe(true);
+    if (toV3.ok) {
+      expect(toV3.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+    const toV2 = downgradeResponseAcrossMajors(registry, 5, 2, response);
+    expect(toV2.ok).toBe(true);
+    if (toV2.ok) {
+      expect(toV2.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+    const toV1 = downgradeResponseAcrossMajors(registry, 5, 1, response);
+    expect(toV1.ok).toBe(true);
+    if (toV1.ok) {
+      expect(toV1.value.providerRateLimits).toEqual(openCodeUnsupported);
+    }
+  });
+
+  it("upgrades a v4.0 response to v5.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: huggingFaceAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV40ToV50.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV50.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage major 5.0 as the latest line", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][5].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 5, minor: 0 });
+    expect(
+      Object.keys(
+        hostRpcRegistry["host.getRateLimitUsage"][5]
+          .downgradePathsFromLatest as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(["1", "2", "3", "4"]);
   });
 });

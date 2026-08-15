@@ -42,6 +42,46 @@ export type StreamCloseReason =
     };
 
 /**
+ * Whether a close reason PROVES the connected host cannot serve this session's
+ * method at all - the fatal class that is a statement about the host's
+ * CAPABILITY rather than about this attempt.
+ *
+ * It is the only capability evidence a remote session ever produces: the mux
+ * resolves an incompatible method as a fatal on the subscribe attempt rather
+ * than as a queryable pre-check, so `RemoteStreamClient.getMethodSupport`
+ * answers `"unknown"` forever and a consumer that waits for it waits for
+ * nothing (see `getMethodSupport`'s own note). The local `StreamSession`
+ * reaches the same close through its mirror check, so a caller reading this
+ * gets one answer on both transports.
+ *
+ * Deliberately a WHITELIST rather than "any fatal". `CLIENT_CLOSED` (a late
+ * subscribe on a torn-down client), `UNAUTHORIZED`, `STREAM_MESSAGE_TOO_LARGE`,
+ * `PLAN_RESTRICTED` and the transport timeouts all arrive through this same
+ * channel and say nothing about what the host can serve. Reading any of them as
+ * incompatibility would pin a permanent "this host is too old" verdict on a
+ * failure the next dial clears - and worse, on hosts that are perfectly capable.
+ *
+ * `INCOMPATIBLE` is the whole list, because it is the whole set that is
+ * actually emitted here: `checkStreamMethodCompatibility` (both the local
+ * mirror check and `RemoteSession.openSubscription`) is the only producer of a
+ * capability fatal on a stream. `DOWNGRADE_UNSUPPORTED` reads like a member and
+ * is NOT one - it is a `DowngradeResult` error on a unary RPC result, never a
+ * `FatalErrorDetails.code` - so adding it would widen this to a code that
+ * cannot arrive, which no test could ever hold honest. `FatalErrorDetails.code`
+ * is an open `string` by design (older hosts must be able to send codes we do
+ * not know), so this cannot be a total switch; it is a membership test, and it
+ * must only name codes with a real emitter.
+ */
+export function isMethodIncompatibleClose(
+  reason: StreamCloseReason | null,
+): boolean {
+  if (reason === null || reason.kind !== "fatalError") {
+    return false;
+  }
+  return reason.details.code === "INCOMPATIBLE";
+}
+
+/**
  * Frame envelope shape exposed to session consumers. The `kind` discriminant
  * plus `hasBinaryPayload` is the minimum the transport needs to route each
  * frame; every other field is contract-specific and is preserved verbatim

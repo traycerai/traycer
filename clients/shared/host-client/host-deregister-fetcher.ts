@@ -7,15 +7,16 @@
  * origin, not the app renderer; browser/dev shells call it directly.
  *
  * WHAT THE ROUTE ACTUALLY DOES, because the UI copy has to be true of it:
- * it stamps `deregisteredAt` and clears the presence lease. It does NOT revoke.
- * The `hostId` survives, so nothing about the machine changes and no data is
- * deleted; the row simply stops being listed (`GET /api/v3/hosts` filters
- * `deregisteredAt: null`) and its heartbeats start coming back 404.
+ * it stamps `deregisteredAt` and drops the host's liveness record. It does NOT
+ * revoke. The `hostId` survives, so nothing about the machine changes and no
+ * data is deleted; the row simply stops being listed (`GET /api/v3/hosts`
+ * filters `deregisteredAt: null`) and the host's own periodic call to the cloud
+ * starts being rejected as not-registered.
  *
  * A live host does NOT come back on its own, and the copy must not imply it
- * does. It reads that 404 as "not registered" and loops adopt → beat → 404
- * → adopt, because nothing on that path calls `registerHost()` — the only
- * thing that would clear `deregisteredAt`. Signing in again on the machine
+ * does. It reads that rejection as "not registered" and loops adopt → check in
+ * → rejected → adopt, because nothing on that path calls `registerHost()` — the
+ * only thing that would clear `deregisteredAt`. Signing in again on the machine
  * does not help either: the interactive login sits below the same early
  * return, so a fresh `traycer login` is never consulted while a matching
  * credential file exists. Coming back requires setting the host up again on

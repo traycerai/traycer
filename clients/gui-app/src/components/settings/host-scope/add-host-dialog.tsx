@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -18,11 +17,35 @@ import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
-const INSTALL_COMMAND = "curl -fsSL traycer.ai/install | sh";
-const WINDOWS_COMMAND = "irm traycer.ai/install.ps1 | iex";
+// The commands that actually stand a host up, and nothing else.
+//
+// What used to be here was fiction on every line. `curl -fsSL
+// traycer.ai/install | sh` pipes an HTML page into a shell — that path 308s to
+// docs.traycer.ai/install, a Mintlify document, not a script — and
+// `traycer.ai/install.ps1` is a 404, so the Windows tab printed a command that
+// could only ever fail. Neither installer has ever existed: the CLI ships
+// through npm and Homebrew (`clients/traycer-cli/README.md`).
+//
+// The step it then skipped is the one that does the work. `traycer login` ONLY
+// authenticates — `commands/login.ts` says so in as many words, and refuses to
+// provision a host as a side effect of signing in — so a person who ran the old
+// three steps to the letter finished with no host, and this dialog watched for
+// a machine that was never going to arrive.
+//
+// `host ensure` rather than `host install`: it resolves the archive packaged
+// beside the CLI before the registry, so the host matches the CLI just
+// installed, and it no-ops when the host is already installed, registered and
+// running instead of stopping a live host to re-swap it.
+//
+// This is the terminal path only. A machine someone installs the desktop app on
+// registers its own host at sign-in and never needs these instructions — and
+// the download page it would point at is on THAT screen, not this one.
+const CLI_NPM_COMMAND = "npm install -g @traycerai/cli";
+const CLI_HOMEBREW_COMMAND = "brew install traycerai/traycer/traycer";
 const LOGIN_COMMAND = "traycer login";
+const HOST_ENSURE_COMMAND = "traycer host ensure";
+
 /**
  * Tolerance when comparing a registry `createdAt` (server clock) against the
  * dialog's open time (client clock) — see the enrollment-beat-the-baseline
@@ -33,15 +56,13 @@ const ENROLLED_DURING_OPEN_SLACK_MS = 2 * 60_000;
 /**
  * Adding a host, as something you WATCH happen.
  *
- * The old dialog printed a curl command beside a static paragraph that read
- * "Waiting for a new host to come online…" — a sentence that always rendered
- * and was never true, because nothing was watching. The registry already polls
- * every ~15s and this dialog already knows which hosts existed when it
- * opened, so the wait can be real: run the command on the other computer, and
- * the moment it registers, the dialog resolves into that host's identity.
- *
- * That is the one moment worth animating in this whole surface. It is also the
- * product's core promise (one account, many hosts) rendered literally.
+ * The dialog used to end on a static paragraph — "Waiting for a new host to
+ * come online…" — that always rendered and was never true, because nothing was
+ * watching. The wait is real now and needs no sentence to say so: the registry
+ * already polls every ~15s and this dialog already knows which hosts existed
+ * when it opened, so the moment the new machine registers, the whole body is
+ * replaced by that host's identity and a button to set it up. The arrival IS
+ * the indicator; a spinner beside it only restated the header.
  */
 export function AddHostDialog(): ReactNode {
   const open = useAddHostDialogStore((s) => s.open);
@@ -53,8 +74,13 @@ export function AddHostDialog(): ReactNode {
         if (!next) closeDialog();
       }}
     >
+      {/* Both halves, or neither works: `DialogContent`'s base class caps at
+          `sm:max-w-sm`, so a lone `w-[…]` is dead weight — the panel painted at
+          24rem while its grid track stretched to whatever the widest command
+          needed, and every row rendered outside the box. Same pairing as the
+          other wide dialogs (chat-fork, provider-skill-*). */}
       <DialogContent
-        className="w-[min(92vw,34rem)]"
+        className="w-[min(92vw,30rem)] sm:max-w-[min(92vw,30rem)]"
         data-testid="add-host-dialog"
       >
         {open ? <AddHostDialogBody /> : null}
@@ -67,7 +93,6 @@ function AddHostDialogBody(): ReactNode {
   const scope = useHostScope();
   const knownHostIds = useAddHostDialogStore((s) => s.knownHostIds);
   const closeDialog = useAddHostDialogStore((s) => s.closeDialog);
-  const [platform, setPlatform] = useState<"unix" | "windows">("unix");
 
   // The arrival: a host that was NOT in the last COMPLETE picture of the
   // account and has finished enrolling.
@@ -202,85 +227,78 @@ function AddHostDialogBody(): ReactNode {
       <DialogHeader>
         <DialogTitle>Add host</DialogTitle>
         <DialogDescription>
-          Run these on the computer you want to reach. Traycer can&apos;t
-          install itself onto another computer, so this part happens over there
-          — this window will notice the moment it connects.
+          A host is Traycer running on the computer you want to reach. Run these
+          over there — this window notices the moment it joins your account.
         </DialogDescription>
       </DialogHeader>
 
-      {/* Radio semantics, not tabs: the two buttons pick one value of two,
-          and nothing here is a tabpanel with `aria-controls` wiring or the
-          arrow-key movement a real tablist owes its users. */}
-      <div
-        className="flex gap-1"
-        role="radiogroup"
-        aria-label="Install platform"
-      >
-        <PlatformTab
-          label="macOS / Linux"
-          selected={platform === "unix"}
-          onSelect={() => setPlatform("unix")}
-        />
-        <PlatformTab
-          label="Windows"
-          selected={platform === "windows"}
-          onSelect={() => setPlatform("windows")}
-        />
-      </div>
-
-      <ol className="flex flex-col gap-3 text-ui-sm">
-        <li className="flex flex-col gap-2">
-          <span>Install the host, which registers it as a service:</span>
-          <CommandBlock
-            command={platform === "unix" ? INSTALL_COMMAND : WINDOWS_COMMAND}
-          />
-        </li>
-        <li className="flex flex-col gap-2">
-          <span>Sign in on that computer:</span>
-          <CommandBlock command={LOGIN_COMMAND} />
-        </li>
-        <li>Approve the login in the browser that opens.</li>
+      <ol className="flex min-w-0 flex-col" data-testid="add-host-steps">
+        <Step index={1} title="Install the Traycer CLI">
+          <CommandBlock command={CLI_NPM_COMMAND} label="npm" />
+          <CommandBlock command={CLI_HOMEBREW_COMMAND} label="brew" />
+          <StepNote>
+            Pick one — npm (needs Node 20.18 or newer) or Homebrew (macOS and
+            Linux). Running both installs two competing copies.
+          </StepNote>
+        </Step>
+        <Step index={2} title="Sign in">
+          <CommandBlock command={LOGIN_COMMAND} label={null} />
+          <StepNote>
+            Prints a link and a code — open the link on any device, enter the
+            code, approve. This only signs in.
+          </StepNote>
+        </Step>
+        <Step index={3} title="Install and start the host">
+          <CommandBlock command={HOST_ENSURE_COMMAND} label={null} />
+          <StepNote>
+            Installs the host, registers it as a background service, and starts
+            it. Safe to run again if anything looks wrong.
+          </StepNote>
+        </Step>
       </ol>
-
-      <p
-        className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-ui-xs text-muted-foreground"
-        data-testid="add-host-waiting"
-      >
-        <AgentSpinningDots
-          testId={undefined}
-          variant="orbit"
-          className="text-muted-foreground"
-        />
-        Watching for a new host…
-      </p>
     </>
   );
 }
 
-function PlatformTab(props: {
-  readonly label: string;
-  readonly selected: boolean;
-  readonly onSelect: () => void;
+/**
+ * One numbered step on a connected rail. The connector is drawn behind the
+ * badge and stops at the last step (`group-last:hidden`), so the list reads as
+ * one sequence rather than as separate rows.
+ */
+function Step(props: {
+  readonly index: number;
+  readonly title: string;
+  readonly children: ReactNode;
 }): ReactNode {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={props.selected}
-      onClick={props.onSelect}
-      className={cn(
-        "rounded-md px-2.5 py-1 text-ui-xs transition-colors",
-        props.selected
-          ? "bg-accent text-accent-foreground"
-          : "text-muted-foreground hover:bg-accent/50",
-      )}
-    >
-      {props.label}
-    </button>
+    <li className="group relative flex min-w-0 gap-3 pb-4 last:pb-0">
+      {/* `group-last:`, not `last:` — the rail hides on the LAST STEP, and this
+          span is always its own parent's first child. */}
+      <span
+        aria-hidden
+        className="absolute top-7 bottom-0 left-3 w-px bg-border group-last:hidden"
+      />
+      <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-ui-xs font-medium text-muted-foreground ring-1 ring-border">
+        {props.index}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
+        <span className="text-ui-sm font-medium">{props.title}</span>
+        {props.children}
+      </div>
+    </li>
   );
 }
 
-function CommandBlock(props: { readonly command: string }): ReactNode {
+function StepNote(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <span className="text-ui-xs text-muted-foreground">{props.children}</span>
+  );
+}
+
+function CommandBlock(props: {
+  readonly command: string;
+  readonly label: string | null;
+}): ReactNode {
   // The hook, not a hand-rolled writeText + timeout: it withholds the success
   // check when the write rejects (denied permission, insecure context) and
   // clears its reset timer on unmount, both of which the inline version got
@@ -291,15 +309,20 @@ function CommandBlock(props: { readonly command: string }): ReactNode {
     onError: () => toast.error("Couldn't copy the command"),
   });
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
-      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-code-xs text-foreground">
+    <div className="group flex min-w-0 items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 transition-colors hover:bg-muted/70">
+      {props.label === null ? null : (
+        <span className="shrink-0 font-mono text-code-xs text-muted-foreground/70 select-none">
+          {props.label}
+        </span>
+      )}
+      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-code-xs whitespace-pre text-foreground">
         {props.command}
       </code>
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        className="size-7 shrink-0 p-0"
+        className="size-6 shrink-0 p-0 opacity-60 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         aria-label={`Copy: ${props.command}`}
         onClick={() => clipboard.copy(props.command)}
       >

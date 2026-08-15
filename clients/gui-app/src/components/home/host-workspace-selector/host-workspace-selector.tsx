@@ -1,3 +1,5 @@
+import { hostSelectRowRefused } from "./host-select-row-refused";
+import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import {
   useCallback,
   useEffect,
@@ -12,6 +14,11 @@ import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection } from "./host-section";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  findHostOption,
+  unavailableHostOption,
+} from "@/components/settings/host-scope/host-scope-model";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type {
   RepoBranchPrefixState,
@@ -358,13 +365,22 @@ export function ActiveHostWorkspaceControls(
     props.hostScope.kind === "fixed"
       ? props.hostScope.hostClient
       : defaultHostClient;
-  const visibleHostEntries =
+  // The picker's rows come from the merged host list, not from the directory
+  // this component reads for the chip label: a host the account owns but this
+  // client cannot dial belongs in the list (named, with its reason, inert),
+  // where before it was simply absent here and present in Settings.
+  //
+  // A FIXED scope is pinned to one machine — the source agent's — so the list
+  // is that host alone. It resolves out of the same merged list, and only falls
+  // back to a stand-in row when the list has never heard of it.
+  const hostOptions = useHostOptions();
+  const fixedHostOption =
     props.hostScope.kind === "fixed"
-      ? [
-          activeEntry ??
-            fixedUnavailableHostEntry(props.hostScope.hostId, hostLabel),
-        ]
-      : directoryEntries;
+      ? (findHostOption(hostOptions.hosts, props.hostScope.hostId) ??
+        unavailableHostOption(props.hostScope.hostId, hostLabel))
+      : null;
+  const visibleHostOptions =
+    fixedHostOption === null ? hostOptions.hosts : [fixedHostOption];
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
@@ -407,10 +423,17 @@ export function ActiveHostWorkspaceControls(
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
-          entries={visibleHostEntries}
+          hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
-          disabled={disabled}
+          // A FIXED scope cannot change hosts — `handleSelectHost` returns
+          // early there. Saying so on the row instead of swallowing the click
+          // is the same rule the section already applies to a busy submission:
+          // a row that accepts a click and does nothing reads as broken.
+          disabled={disabled || props.hostScope.kind === "fixed"}
+          isLoading={hostOptions.isLoading}
+          listsFailed={hostOptions.listsFailed}
+          onRetryLists={hostOptions.retryLists}
         />
         <section
           aria-label="Workspaces"
@@ -466,20 +489,6 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
-}
-
-function fixedUnavailableHostEntry(
-  hostId: string,
-  hostLabel: string,
-): HostDirectoryEntry {
-  return {
-    hostId,
-    label: hostLabel,
-    kind: "local",
-    websocketUrl: null,
-    version: null,
-    status: "unavailable",
-  };
 }
 
 function HomeWorkspaceRows(props: {
@@ -1098,23 +1107,54 @@ function HostOnlySelect(props: {
         className="data-[side=bottom]:translate-y-0 data-[side=bottom]:rounded-t-none data-[side=top]:translate-y-0 data-[side=top]:rounded-b-none"
       >
         {options.map((host) => (
-          <SelectItem
+          <HostSelectRow
             key={host.hostId}
-            value={host.hostId}
-            disabled={
-              props.mode === "locked" ||
-              host.status === "unavailable" ||
-              (remoteRestricted && host.kind === "remote")
-            }
-          >
-            <HostSelectOptionContent
-              host={host}
-              remoteRestricted={remoteRestricted}
-            />
-          </SelectItem>
+            host={host}
+            remoteRestricted={remoteRestricted}
+            locked={props.mode === "locked"}
+          />
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function HostSelectRow(props: {
+  readonly host: HostDirectoryEntry;
+  readonly remoteRestricted: boolean;
+  readonly locked: boolean;
+}) {
+  // Subscribed, not read: the refusal predicate is ready-session-aware, and
+  // the session cache is pull-only - a readiness flip changes no directory
+  // value, so a row that read `hasReadyRemoteSession` at render time would
+  // keep its refusal answer until some unrelated directory emit. The poll
+  // subscription is what lets a row grey out when its backing session dies
+  // (and re-enable on the converse) while the popover is open.
+  const hasReadySession = useRemoteSessionPollReadiness(props.host.hostId);
+  return (
+    <SelectItem
+      value={props.host.hostId}
+      disabled={
+        props.locked ||
+        // Not `status === "unavailable"`, and not the raw
+        // `hostUnavailability` verdict either: the refusal is asked
+        // through the SAME ready-session-aware predicate the activation
+        // path dials through, so a fuse-window `offline` (recovery dial
+        // permitted) or an offline verdict this client holds a ready
+        // live session against stays selectable - see
+        // `hostSelectRowRefused` for the full derivation.
+        hostSelectRowRefused(
+          props.host,
+          props.remoteRestricted,
+          hasReadySession,
+        )
+      }
+    >
+      <HostSelectOptionContent
+        host={props.host}
+        remoteRestricted={props.remoteRestricted}
+      />
+    </SelectItem>
   );
 }
 
@@ -1160,6 +1200,8 @@ function hostSelectOptions(
   ) {
     return entries;
   }
+  // Same fabricated-row rule as `fixedUnavailableHostEntry`: no route exists to
+  // ask about, so the coarse bit is written directly rather than derived.
   return [
     {
       hostId: activeHostId,
@@ -1167,7 +1209,7 @@ function hostSelectOptions(
       kind: "local",
       websocketUrl: null,
       version: null,
-      status: "unavailable",
+      transportDialability: "not-dialable",
     },
     ...entries,
   ];

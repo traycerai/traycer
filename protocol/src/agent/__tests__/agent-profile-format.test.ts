@@ -208,6 +208,48 @@ describe("detailed rate-limit formatting", () => {
     expect(human).toContain("unavailable (cli_not_found)");
     expect(human).not.toContain("% used");
   });
+
+  it("renders OpenCode Go windows with each upstream status", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "opencode",
+        available: true,
+        credentialGeneration: "gen-1",
+        fiveHour: {
+          status: "ok",
+          usedPercent: 12,
+          resetsAt: CAPTURED_AT,
+          durationMinutes: 300,
+        },
+        weekly: {
+          status: "rate-limited",
+          usedPercent: 8,
+          resetsAt: CAPTURED_AT,
+          durationMinutes: 10_080,
+        },
+        monthly: {
+          status: "ok",
+          usedPercent: 4,
+          resetsAt: null,
+          durationMinutes: null,
+        },
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toContain(
+      "5-hour: 12% used, resets 2026-07-13T09:30:00.000Z, 300m window [ok]",
+    );
+    expect(human).toContain(
+      "weekly: 8% used, resets 2026-07-13T09:30:00.000Z, 10080m window [rate-limited]",
+    );
+    expect(human).toContain("monthly: 4% used [ok]");
+  });
 });
 
 describe("configure formatting", () => {

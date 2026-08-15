@@ -57,14 +57,30 @@ import {
 } from "vitest";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+
+const notificationIndicatorTestState = vi.hoisted(
+  (): {
+    request: {
+      readonly epicIds: ReadonlyArray<string>;
+      readonly chatIds: ReadonlyArray<string>;
+    } | null;
+  } => ({ request: null }),
+);
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
-  useHostNotificationIndicators: () => ({
-    data: { epics: {}, chats: {} },
-    isPending: false,
-    isFetching: false,
-    error: null,
-    refetch: () => Promise.resolve(),
-  }),
+  useHostNotificationIndicators: (request: {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  }) => {
+    notificationIndicatorTestState.request = request;
+    return {
+      data: { epics: {}, chats: {} },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    };
+  },
 }));
 
 interface TestSetPinnedVariables {
@@ -532,6 +548,7 @@ describe("<TabStrip />", () => {
     toastTestState.messages.length = 0;
     toastTestState.actionLabel = null;
     toastTestState.undo = null;
+    notificationIndicatorTestState.request = null;
     resetStores();
   });
 
@@ -552,6 +569,24 @@ describe("<TabStrip />", () => {
     expect(await screen.findByTestId("tab-epic-e-a")).toBeDefined();
     expect(screen.getByTestId("tab-epic-e-b")).toBeDefined();
     expect(screen.getByTestId("tab-new")).toBeDefined();
+  });
+
+  it("queries every open task tab without requiring a live Epic session", async () => {
+    const epics = Array.from({ length: 6 }, (_value, index) =>
+      epicFixture(index),
+    );
+    for (const epic of epics) openEpicFixture(epic);
+    const router = buildRouter(`/epics/${epics[0].id}/${epics[0].id}`);
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId(`tab-epic-${epics[5].id}`)).toBeDefined();
+    await waitFor(() => {
+      expect(notificationIndicatorTestState.request?.epicIds).toHaveLength(6);
+      expect(notificationIndicatorTestState.request?.epicIds).toEqual(
+        epics.map((epic) => epic.id),
+      );
+      expect(notificationIndicatorTestState.request?.chatIds).toEqual([]);
+    });
   });
 
   it("updates a Phase migration close button without rebuilding its unlocked partner", async () => {

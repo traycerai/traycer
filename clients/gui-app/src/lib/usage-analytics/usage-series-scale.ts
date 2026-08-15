@@ -51,24 +51,34 @@ export function buildUsageSeriesScale(
 }
 
 /**
- * Harness ids in first-appearance order across the buckets, by earliest
- * `day`. `harnessId` breaks a same-day tie so the order - and therefore
- * every harness's color slot - is a function of the DATA rather than of the
- * order the host happened to return two buckets for one day in.
+ * Series keys in first-appearance order across the buckets, by earliest
+ * `day`. The key itself breaks a same-day tie so the order - and therefore
+ * every series' color slot - is a function of the DATA rather than of the
+ * order the host happened to return two buckets for one day in. Generic over
+ * the key extractor because the daily chart groups the same buckets by
+ * harness OR by model, and both groupings need identical slot semantics.
  */
-export function harnessIdsByFirstAppearance(
-  buckets: ReadonlyArray<{ readonly day: string; readonly harnessId: string }>,
+export function seriesKeysByFirstAppearance<T extends { readonly day: string }>(
+  buckets: readonly T[],
+  keyOf: (bucket: T) => string,
 ): readonly string[] {
   const sorted = [...buckets].sort(
-    (a, b) =>
-      a.day.localeCompare(b.day) || a.harnessId.localeCompare(b.harnessId),
+    (a, b) => a.day.localeCompare(b.day) || keyOf(a).localeCompare(keyOf(b)),
   );
   const seen = new Set<string>();
   const order: string[] = [];
   for (const bucket of sorted) {
-    if (seen.has(bucket.harnessId)) continue;
-    seen.add(bucket.harnessId);
-    order.push(bucket.harnessId);
+    const key = keyOf(bucket);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    order.push(key);
   }
   return order;
+}
+
+/** {@link seriesKeysByFirstAppearance} keyed by harness id. */
+export function harnessIdsByFirstAppearance(
+  buckets: ReadonlyArray<{ readonly day: string; readonly harnessId: string }>,
+): readonly string[] {
+  return seriesKeysByFirstAppearance(buckets, (bucket) => bucket.harnessId);
 }

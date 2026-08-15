@@ -105,8 +105,14 @@ vi.mock("@/components/notifications/notifications-bell", () => ({
   NotificationsBell: () => null,
 }));
 
+// Both header host-scoped surfaces resolve a `HostScope`, which reads the
+// ambient host client - a provider this route harness does not mount.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => null,
+}));
+
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
 }));
 
 vi.mock("@/components/auth/user-menu", () => ({

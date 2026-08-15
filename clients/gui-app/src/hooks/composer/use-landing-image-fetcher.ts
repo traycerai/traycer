@@ -20,7 +20,9 @@ export function useLandingImageFetcher(): ImageBytesFetcher {
       if (bytes === undefined) {
         throw new Error(`Landing image ${hash} unavailable`);
       }
-      return bytes;
+      // The local store keeps raw bytes with no sniffed header, so it has no
+      // media-type verdict of its own and the chip's declared type stands.
+      return { bytes, mediaType: null };
     },
     [],
   );

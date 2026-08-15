@@ -7,6 +7,7 @@ import {
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import {
   commGraphAgentIdsAsOfCursor,
+  commGraphCreationCursorByAgentId,
   commGraphCursorForEvent,
   commGraphEventsAsOfCursor,
   commGraphPulseForEvent,
@@ -28,6 +29,29 @@ function a2a(
     inReplyTo: null,
     expectReply: false,
     messageText: "hi",
+    noticeReason: null,
+    originKind: null,
+    originChatId: null,
+    originRefId: null,
+    ...overrides,
+  };
+}
+
+function created(
+  overrides: Partial<CommGraphEvent> & {
+    readonly id: number;
+    readonly timestamp: number;
+  },
+): CommGraphEvent {
+  return {
+    hostId: "host-a",
+    kind: "agent_created",
+    senderAgentId: "a",
+    receiverAgentId: "b",
+    responseId: null,
+    inReplyTo: null,
+    expectReply: null,
+    messageText: null,
     noticeReason: null,
     originKind: null,
     originChatId: null,
@@ -128,16 +152,33 @@ describe("commGraphEventsAsOfCursor", () => {
 describe("commGraphAgentIdsAsOfCursor", () => {
   it("shows every agent when live", () => {
     const agents = [agent("a", 10), agent("b", 500)];
-    expect([...commGraphAgentIdsAsOfCursor(agents, null)].sort()).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(
+      [...commGraphAgentIdsAsOfCursor(agents, null, new Map())].sort(),
+    ).toEqual(["a", "b"]);
   });
 
   it("reveals an agent only at its createdAt", () => {
     const agents = [agent("a", 10), agent("b", 500)];
     const cursor = commGraphCursorForEvent(a2a({ id: 1, timestamp: 100 }));
-    expect([...commGraphAgentIdsAsOfCursor(agents, cursor)]).toEqual(["a"]);
+    expect([...commGraphAgentIdsAsOfCursor(agents, cursor, new Map())]).toEqual(
+      ["a"],
+    );
+  });
+
+  it("does not reveal an agent before its same-millisecond creation row", () => {
+    const agents = [agent("a", 10), agent("b", 500)];
+    const events = [
+      a2a({ id: 1, timestamp: 500 }),
+      created({ id: 2, timestamp: 500 }),
+    ];
+
+    expect([
+      ...commGraphAgentIdsAsOfCursor(
+        agents,
+        commGraphCursorForEvent(events[0]),
+        commGraphCreationCursorByAgentId(events),
+      ),
+    ]).toEqual(["a"]);
   });
 });
 

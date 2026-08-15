@@ -430,6 +430,33 @@ function describeShardMismatch(
     return `Chat ${request.section} part ${request.index} claims ${shard.schemaVersion.major}.${shard.schemaVersion.minor} but the head claims ${head.schemaVersion.major}.${head.schemaVersion.minor}`;
   }
 
+  // The 1.1 cut-plan claims, checked against the parsed shard in hand. Content
+  // addressing proved these are the bytes the head named; this proves the
+  // head's MEMBERSHIP claims describe them - a count or boundary id that
+  // disagrees is a publication contradicting itself, and reading on would
+  // hand callers a plan the shard does not implement. (A publisher extending
+  // such a head independently re-verifies every claim against its own op log
+  // before reuse; this is the read/restore-time detection of the same lie.)
+  const claim = request.part;
+  if (claim.recordCount !== undefined && request.section !== "host-private") {
+    const records: readonly { readonly raw: JsonObject }[] =
+      request.section === "messages" ? shard.messages : shard.events;
+    const idKey = request.section === "messages" ? "messageId" : "eventId";
+    if (records.length !== claim.recordCount) {
+      return `Chat ${request.section} part ${request.index} carries ${records.length} records but the head claims ${claim.recordCount}`;
+    }
+    const first = records[0];
+    const last = records[records.length - 1];
+    const firstId = first === undefined ? undefined : first.raw[idKey];
+    const lastId = last === undefined ? undefined : last.raw[idKey];
+    if (claim.firstRecordId !== undefined && firstId !== claim.firstRecordId) {
+      return `Chat ${request.section} part ${request.index} starts at ${String(firstId)} but the head claims ${claim.firstRecordId}`;
+    }
+    if (claim.lastRecordId !== undefined && lastId !== claim.lastRecordId) {
+      return `Chat ${request.section} part ${request.index} ends at ${String(lastId)} but the head claims ${claim.lastRecordId}`;
+    }
+  }
+
   return null;
 }
 
