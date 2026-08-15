@@ -2,10 +2,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 import { queryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+
+function openCodeRateLimitKey() {
+  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
+    "host-1",
+    "host.getRateLimitUsage",
+    {
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "opencode",
+      profileId: null,
+    },
+  );
+}
 
 /**
  * Does a settled credential mutation actually bring the TAB's own list back to
@@ -244,5 +257,75 @@ describe("model provider auth invalidation", () => {
       expect(result.current.isSuccess).toBe(true);
     });
     expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("resets the exact OpenCode usage key so last-good cannot survive a credential mutation", async () => {
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
+    const rateLimitKey = openCodeRateLimitKey();
+    client.setQueryData(rateLimitKey, {
+      latest: { provider: "opencode", available: true },
+      lastGood: { provider: "opencode", available: true },
+      lastGoodAt: 1,
+      lastFailureAt: null,
+    });
+    const reset = vi.spyOn(client, "resetQueries");
+    const remove = vi.spyOn(client, "removeQueries");
+    hostMocks.request.mockResolvedValue({ result: { kind: "done" } });
+
+    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
+      wrapper: wrapper(client),
+    });
+    result.current.mutate({
+      providerId: "opencode",
+      action: { action: "disconnect", modelProviderId: "huggingface" },
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    expect(reset).toHaveBeenCalledWith({
+      queryKey: rateLimitKey,
+      exact: true,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(client.getQueryData(rateLimitKey)).toBeUndefined();
+  });
+
+  it("does not reset OpenCode usage when a different provider mutates", async () => {
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
+    const rateLimitKey = openCodeRateLimitKey();
+    const cached = {
+      latest: { provider: "opencode" as const, available: true as const },
+      lastGood: { provider: "opencode" as const, available: true as const },
+      lastGoodAt: 1,
+      lastFailureAt: null,
+    };
+    client.setQueryData(rateLimitKey, cached);
+    const reset = vi.spyOn(client, "resetQueries");
+    hostMocks.request.mockResolvedValue({ result: { kind: "done" } });
+
+    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
+      wrapper: wrapper(client),
+    });
+    result.current.mutate({
+      providerId: "claude-code",
+      action: { action: "disconnect", modelProviderId: "openai" },
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    expect(reset).not.toHaveBeenCalled();
+    expect(client.getQueryData(rateLimitKey)).toEqual(cached);
   });
 });

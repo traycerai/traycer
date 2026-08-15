@@ -115,6 +115,30 @@ export function isFilteredTreeEmpty(args: {
 }
 
 /**
+ * A bare printable character with no modifier - the type-to-filter trigger
+ * shared by the artifact and chat panels.
+ *
+ * Excludes space so it can keep its tree-row activation meaning, and anything
+ * carrying a modifier so shortcuts still reach their handlers.
+ */
+export function isTypeToFilterKey(event: globalThis.KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  return event.key.length === 1 && event.key !== " ";
+}
+
+/**
+ * Whether a type-to-filter keystroke originated inside something the user is
+ * editing - a rename input, a composer - where the character belongs to that
+ * field and must not be stolen to open search.
+ */
+export function isTypeToFilterEditableTarget(
+  target: EventTarget | null,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest("input, textarea, [contenteditable='true']") !== null;
+}
+
+/**
  * Expand a set of matched node ids to also include every ancestor along each
  * match's parent chain, so the matches remain reachable in the rendered tree.
  * The parent walk is guarded against cycles via the running `result` set.

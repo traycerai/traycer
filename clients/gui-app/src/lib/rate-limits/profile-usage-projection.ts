@@ -2,8 +2,10 @@ import {
   classifyProviderRateLimits,
   classifyProviderRateLimitWindow,
   isProviderRateLimitWindowLive,
+  isOpenCodeGoRateLimitWindowLimited,
   providerRateLimitWindows,
   type LiveProviderRateLimitSeverity,
+  type OpenCodeGoRateLimitWindow,
   type ProviderRateLimits,
   type ProviderRateLimitSeverity,
   type ProviderRateLimitWindow,
@@ -165,6 +167,20 @@ function windowProjection(
   };
 }
 
+function openCodeWindowProjection(input: {
+  readonly id: string;
+  readonly role: ProfileUsageWindowRole;
+  readonly name: string;
+  readonly window: OpenCodeGoRateLimitWindow;
+  readonly now: number;
+}): ProfileUsageWindow | null {
+  const projected = windowProjection(input);
+  return projected === null ||
+    !isOpenCodeGoRateLimitWindowLimited(input.window, input.now)
+    ? projected
+    : { ...projected, severity: "limited" };
+}
+
 function openRouterCreditProjection(
   rateLimits: Extract<
     ProviderRateLimits,
@@ -322,6 +338,30 @@ function projectedLiveWindows(
           role: "primary",
           name: null,
           window: rateLimits.period,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "opencode":
+      return [
+        openCodeWindowProjection({
+          id: "five-hour",
+          role: "primary",
+          name: "5-hour",
+          window: rateLimits.fiveHour,
+          now,
+        }),
+        openCodeWindowProjection({
+          id: "weekly",
+          role: "secondary",
+          name: "Weekly",
+          window: rateLimits.weekly,
+          now,
+        }),
+        openCodeWindowProjection({
+          id: "monthly",
+          role: "extra",
+          name: "Monthly",
+          window: rateLimits.monthly,
           now,
         }),
       ].filter((window): window is ProfileUsageWindow => window !== null);

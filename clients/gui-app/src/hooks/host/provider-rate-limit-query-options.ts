@@ -38,7 +38,7 @@ export interface ProviderRateLimitQueryOptions {
  * (e.g. tab-scoped) can reuse the same shape without duplicating it.
  *
  * Branches on the fetch lane for background polling:
- * - `httpFetch` (openrouter, kilocode, huggingface): when credentials are
+ * - `httpFetch` (openrouter, kilocode, huggingface, opencode): when credentials are
  *   fetch-eligible,
  *   opts in to the table's fixed cadence.
  *   The builder fixes its background setting to false, so persistent app-shell
