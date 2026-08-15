@@ -250,6 +250,20 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip(OFFLINE_COPY);
   });
 
+  it("keeps artifact status when warning severities tie", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("connecting");
+
+    const pill = screen.getByTestId("epic-connection-pill");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).toContain("Connecting…");
+    await expectTooltip("Connecting to server");
+  });
+
   it("shows the unsafe overlap warning immediately without a durability claim", async () => {
     renderPill("offlineWithUnsavedChanges");
 
