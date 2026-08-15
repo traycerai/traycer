@@ -8,8 +8,9 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type {
   PrDetailCore,
   PrGetLocalDiffResponse,
-  PrGetLocalDiffSummaryResponse,
+  PrGetLocalDiffSummaryResponseV11,
 } from "@traycer/protocol/host/pr-schemas";
+import { prLocalDiffPathKey } from "@/lib/pr/pr-local-diff-file-key";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -81,15 +82,21 @@ export function PrDiffTile(props: PrDiffTileProps): ReactNode {
   );
 }
 
-/** What the toolbar/header need to know about whichever range resolved. */
+/**
+ * What the toolbar/header need to know about whichever range resolved.
+ * `fileKeys` are canonical file keys (`prLocalDiffFileKey`), NOT display
+ * paths: the toolbar's collapse-all writes them into the tile's
+ * `collapsedFileKeys`, so they must be the same identity the rows and the
+ * find session key by. The header only ever counts them.
+ */
 interface PrDiffRangeMeta {
   readonly resolvedBaseRef: string;
-  readonly filePaths: readonly string[];
+  readonly fileKeys: readonly string[];
 }
 
 interface PrLocalDiffTileData {
   readonly summaryQuery: UseQueryResult<
-    PrGetLocalDiffSummaryResponse,
+    PrGetLocalDiffSummaryResponseV11,
     HostRpcError
   >;
   readonly monolithQuery: UseQueryResult<PrGetLocalDiffResponse, HostRpcError>;
@@ -103,7 +110,7 @@ interface PrLocalDiffTileData {
    * keeps calling the now-missing per-file method, and the monolith fallback
    * is fetched but never read.
    */
-  readonly summaryData: PrGetLocalDiffSummaryResponse | null;
+  readonly summaryData: PrGetLocalDiffSummaryResponseV11 | null;
   /**
    * The monolith response the tile may ACT on - `null` outside fallback
    * mode. Gated HERE beside `summaryData`'s suppression so the two halves
@@ -174,41 +181,53 @@ function isMutableFileDiffEntry(query: Query): boolean {
 
 /** The OID pair naming a resolved summary range, for drift-recovery gating. */
 function summaryRangeKey(
-  summary: PrGetLocalDiffSummaryResponse | null,
+  summary: PrGetLocalDiffSummaryResponseV11 | null,
 ): string | null {
   if (summary?.kind !== "summary") return null;
   return `${summary.mergeBaseOid}..${summary.localHeadOid}`;
 }
 
-/** The toolbar's collapse-all model, or `null` before any range resolved. */
+/**
+ * The toolbar's collapse-all model, or `null` before any range resolved.
+ * The membership check is the same canonical-key comparison the row chevron
+ * and the find session make - the third of the three collapse gates. The
+ * toolbar's `filePaths` slot carries the keys OPAQUELY (it never reads
+ * them, only writes the list back wholesale).
+ */
 function collapseAllFor(
   range: PrDiffRangeMeta | null,
-  collapsedFilePaths: ReadonlyArray<string>,
+  collapsedFileKeys: ReadonlyArray<string>,
 ): { allCollapsed: boolean; filePaths: readonly string[] } | null {
-  if (range === null || range.filePaths.length === 0) return null;
+  if (range === null || range.fileKeys.length === 0) return null;
+  const collapsed = new Set(collapsedFileKeys);
   return {
-    allCollapsed: range.filePaths.every((path) =>
-      collapsedFilePaths.includes(path),
-    ),
-    filePaths: range.filePaths,
+    allCollapsed: range.fileKeys.every((key) => collapsed.has(key)),
+    filePaths: range.fileKeys,
   };
 }
 
 function resolvedRangeMeta(
-  summary: PrGetLocalDiffSummaryResponse | null,
+  summary: PrGetLocalDiffSummaryResponseV11 | null,
   monolith: PrGetLocalDiffResponse | null,
   summaryUnsupported: boolean,
 ): PrDiffRangeMeta | null {
   if (summary?.kind === "summary") {
     return {
       resolvedBaseRef: summary.resolvedBaseRef,
-      filePaths: summary.files.map((file) => file.path),
+      fileKeys: summary.files.map((file) =>
+        prLocalDiffPathKey(file.path, file.pathBytes),
+      ),
     };
   }
   if (summaryUnsupported && monolith?.kind === "diff") {
     return {
       resolvedBaseRef: monolith.resolvedBaseRef,
-      filePaths: monolith.files.map((file) => file.path),
+      // Monolith files carry no sidecars (a 1.0-only host), so every key is
+      // the clean-path form - the same normalization the body's mode seam
+      // applies.
+      fileKeys: monolith.files.map((file) =>
+        prLocalDiffPathKey(file.path, null),
+      ),
     };
   }
   return null;
@@ -281,12 +300,16 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     });
   }, [queryClient, tabHostId, target]);
 
+  // The shared toolbar's `collapsedFilePaths` slot is OPAQUE strings it only
+  // round-trips; for the PR tile those strings are canonical file keys, and
+  // the patch handler maps them back into the tile's own `collapsedFileKeys`
+  // field (never the legacy bare-path field - see `PrDiffTileViewState`).
   const toolbarView = useMemo<DiffTabToolbarView>(
     () => ({
       ...preferences,
-      collapsedFilePaths: node.view.collapsedFilePaths,
+      collapsedFilePaths: node.view.collapsedFileKeys,
     }),
-    [preferences, node.view.collapsedFilePaths],
+    [preferences, node.view.collapsedFileKeys],
   );
 
   const handleViewPatch = useCallback(
@@ -294,7 +317,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
       if ("collapsedFilePaths" in patch) {
         updateView(props.viewTabId, node.id, {
           ...node.view,
-          collapsedFilePaths: patch.collapsedFilePaths,
+          collapsedFileKeys: patch.collapsedFilePaths,
         });
         return;
       }
@@ -372,7 +395,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     recoveredRangeRef.current = null;
   }, [rangeKey]);
 
-  const collapseAll = collapseAllFor(range, node.view.collapsedFilePaths);
+  const collapseAll = collapseAllFor(range, node.view.collapsedFileKeys);
   const header = prDiffTileHeader(node, core, range);
 
   return (
@@ -432,7 +455,7 @@ function prDiffTileHeader(
       secondaryLine: coordinates,
     };
   }
-  const count = range.filePaths.length;
+  const count = range.fileKeys.length;
   const fileCount = `${count} file${count === 1 ? "" : "s"}`;
   const head = core?.headRefName ?? "head";
   return {

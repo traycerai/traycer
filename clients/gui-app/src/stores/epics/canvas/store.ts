@@ -109,6 +109,7 @@ import {
   type CommGraphTileViewState,
   type EpicViewTab,
   type GitDiffTileViewState,
+  type PrDiffTileViewState,
   type SplitDirection,
   type TilesByInstanceId,
 } from "@/stores/epics/canvas/types";
@@ -492,7 +493,7 @@ export interface EpicCanvasStore {
   updatePrDiffTileViewInTab: (
     tabId: string,
     tileId: string,
-    view: GitDiffTileViewState,
+    view: PrDiffTileViewState,
   ) => void;
   toggleGitDiffBundleFileCollapsedInTab: (
     tabId: string,
@@ -504,10 +505,12 @@ export interface EpicCanvasStore {
     tileId: string,
     filePath: string,
   ) => void;
+  // `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), never a bare
+  // path - PR collapse entries live in their own key space (`PrDiffTileViewState`).
   togglePrDiffFileCollapsedInTab: (
     tabId: string,
     tileId: string,
-    filePath: string,
+    fileKey: string,
   ) => void;
   promotePreviewInTab: (tabId: string, paneId: string) => void;
   applyNestedRouteFocus: (tabId: string, target: NestedFocusTarget) => void;
@@ -1923,10 +1926,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        togglePrDiffFileCollapsedInTab: (tabId, tileId, filePath) => {
+        togglePrDiffFileCollapsedInTab: (tabId, tileId, fileKey) => {
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
-              togglePrDiffFileCollapsed(canvas, tileId, filePath),
+              togglePrDiffFileCollapsed(canvas, tileId, fileKey),
             ),
           );
         },

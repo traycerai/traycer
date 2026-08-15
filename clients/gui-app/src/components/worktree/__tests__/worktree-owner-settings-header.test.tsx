@@ -41,6 +41,19 @@ const fetchedSettings = vi.hoisted(() => ({
   answered: false,
   lastEnabled: null as boolean | null,
 }));
+/** Per-host-id sentinel clients, plus a switch for "the owner's host cannot
+ *  be resolved" (missing from the directory / signed out). */
+const hostResolution = vi.hoisted(() => ({
+  resolveToNull: false,
+  byHostId: new Map<string, { readonly getActiveHostId: () => string }>(),
+}));
+/** The clients each host-scoped read actually received, so tests assert WHICH
+ *  host served the catalog and the provider list - not just what data came
+ *  back (data the mocks themselves supplied). */
+const scopedReads = vi.hoisted(() => ({
+  catalogClients: [] as unknown[],
+  providersClients: [] as unknown[],
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () =>
@@ -57,50 +70,78 @@ vi.mock("@/hooks/use-epic-store", () => ({
     }),
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => ({ getActiveHostId: () => "host-1" }),
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null || hostResolution.resolveToNull) return null;
+    const existing = hostResolution.byHostId.get(hostId);
+    if (existing !== undefined) return existing;
+    // One stable sentinel per host id, like the real hook's memoized
+    // requester - the identity assertions below compare what the catalog and
+    // provider-list reads received, which only means "same host" if the same
+    // id yields the same object.
+    const sentinel = { getActiveHostId: () => hostId };
+    hostResolution.byHostId.set(hostId, sentinel);
+    return sentinel;
+  },
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessCatalog: () => ({
-    harnesses: [
+  // Client-scoped like the real hook: a `null` client is a disabled read and
+  // yields an EMPTY catalog (never another host's entries), which is what
+  // drives the raw-slug fallback the unresolvable-host test asserts.
+  useGuiHarnessCatalogForClient: (client: unknown) => {
+    scopedReads.catalogClients.push(client);
+    return {
+      harnesses: client === null ? [] : catalogHarnesses(),
+      harnessesLoading: false,
+      harnessesError: null,
+      modelsLoading: false,
+    };
+  },
+}));
+const catalogHarnesses = vi.hoisted(() => () => [
+  {
+    id: "claude",
+    label: "Claude Code",
+    models: [
       {
-        id: "claude",
-        label: "Claude Code",
-        models: [
-          {
-            harnessId: "claude",
-            slug: "sonnet-4.5",
-            label: "Claude Sonnet 4.5",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            metadata: {},
-          },
-          // A SECOND model, so a host tuple and a local tuple can disagree
-          // visibly - which is the only way to test which one the header trusts.
-          {
-            harnessId: "claude",
-            slug: "opus-4.1",
-            label: "Claude Opus 4.1",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            metadata: {},
-          },
+        harnessId: "claude",
+        slug: "sonnet-4.5",
+        label: "Claude Sonnet 4.5",
+        supportedReasoningEfforts: [
+          { id: "high", label: "High", description: null },
         ],
+        metadata: {},
+      },
+      // A SECOND model, so a host tuple and a local tuple can disagree
+      // visibly - which is the only way to test which one the header trusts.
+      {
+        harnessId: "claude",
+        slug: "opus-4.1",
+        label: "Claude Opus 4.1",
+        supportedReasoningEfforts: [
+          { id: "high", label: "High", description: null },
+        ],
+        metadata: {},
       },
     ],
-  }),
-}));
+  },
+]);
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersListForClient: () => ({
+  useProvidersListForClient: (client: unknown) => {
+    scopedReads.providersClients.push(client);
     // `claude-code` is the WIRE id for the `claude` harness; the header has to
-    // map across that boundary to find these at all.
-    data: {
-      providers: [
-        { providerId: "claude-code", profiles: wireProfiles.current },
-      ],
-    },
-  }),
+    // map across that boundary to find these at all. A `null` client is a
+    // disabled read (real hook contract): no data.
+    return {
+      data:
+        client === null
+          ? undefined
+          : {
+              providers: [
+                { providerId: "claude-code", profiles: wireProfiles.current },
+              ],
+            },
+    };
+  },
 }));
 // Records `enabled` rather than ignoring it: a mock that always answers would
 // let the header read a fetched tuple it never actually requested, and the
@@ -226,6 +267,63 @@ describe("WorktreeOwnerSettingsHeader", () => {
     fetchedSettings.current = null;
     fetchedSettings.answered = false;
     fetchedSettings.lastEnabled = null;
+    hostResolution.resolveToNull = false;
+    hostResolution.byHostId.clear();
+    scopedReads.catalogClients = [];
+    scopedReads.providersClients = [];
+  });
+
+  it("reads the harness catalog through the OWNER's host client - the same one the provider list uses", () => {
+    // The regression this guards: the catalog read went through the app-wide
+    // default host (`useGuiHarnessCatalog(null, …)`) while the provider list
+    // beside it was scoped to `props.hostId` - so a chat on another of the
+    // viewer's hosts labeled its model from the WRONG host's catalog (a model
+    // only the owner's host offers rendered as a raw slug even with that
+    // host's catalog warm).
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    const ownerClient = hostResolution.byHostId.get("host-1");
+    expect(ownerClient).toBeDefined();
+    expect(scopedReads.catalogClients.length).toBeGreaterThan(0);
+    // Every catalog read AND every provider-list read received the owner's
+    // pinned client - one shared host resolution, no default-host leak.
+    for (const client of scopedReads.catalogClients) {
+      expect(client).toBe(ownerClient);
+    }
+    for (const client of scopedReads.providersClients) {
+      expect(client).toBe(ownerClient);
+    }
+    // And that catalog actually carried the labels: proof the header's label
+    // source is the client-scoped read, not some other path.
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
+  });
+
+  it("falls back to raw slugs when the owner's host cannot be resolved, instead of borrowing another host's catalog", () => {
+    hostResolution.resolveToNull = true;
+    renderChatHeader({
+      permissionMode: "full_access",
+      profileId: null,
+      profiles: [],
+      serviceTier: null,
+    });
+
+    // The read still happened - with a null client (disabled), never a
+    // fallback to a different host's client.
+    expect(scopedReads.catalogClients.length).toBeGreaterThan(0);
+    for (const client of scopedReads.catalogClients) {
+      expect(client).toBeNull();
+    }
+    // Raw persisted slug, not the default host's friendly label.
+    const model = screen.getByTestId("owner-settings-model").textContent;
+    expect(model).toContain("sonnet-4.5");
+    expect(model).not.toContain("Claude Sonnet 4.5");
   });
 
   it("renders a distinct icon for each permission mode", () => {
@@ -422,6 +520,10 @@ describe("chat settings sourced from the host", () => {
     fetchedSettings.current = null;
     fetchedSettings.answered = false;
     fetchedSettings.lastEnabled = null;
+    hostResolution.resolveToNull = false;
+    hostResolution.byHostId.clear();
+    scopedReads.catalogClients = [];
+    scopedReads.providersClients = [];
   });
 
   function renderRegistryOnlyChat(): void {

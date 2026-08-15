@@ -15,7 +15,7 @@ import {
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
-import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useChatById } from "@/lib/epic-selectors";
@@ -38,8 +38,9 @@ interface TuiHeaderFields {
  * self-sources the owner's settings from the already-local per-Epic store
  * (`useChatById` / the `tuiAgents` slice) keyed by the `ownerId` the tooltip
  * already carries - it takes no settings prop, so the sidebar row that renders
- * the tooltip owns none of this. Labels resolve against the live GUI harness
- * catalog, with a raw-slug fallback whenever the catalog lacks the entry.
+ * the tooltip owns none of this. Labels resolve against the OWNER's host's
+ * live GUI harness catalog, with a raw-slug fallback whenever the catalog
+ * lacks the entry (or the owner's host cannot be resolved at all).
  *
  * It renders only while the hover card is open (mounted by `HoverCardContent`,
  * which has no `forceMount`), so nothing here can fire before open: the catalog
@@ -48,13 +49,16 @@ interface TuiHeaderFields {
  * The settings themselves cost nothing - they are a store read. Chat profile
  * labels remain pure cache reads; managed terminal profiles can fetch the same
  * live provider list their launch/fork surfaces use. The catalog is NOT free,
- * though: `useGuiHarnessesQuery` carries a finite 15-min staleTime, so opening
+ * though: the harnesses query carries a finite 15-min staleTime, so opening
  * the card on a stale availability query can refetch it, and if that surfaces a
  * newly-available harness with no cached model list the `listModels` fan-out
  * follows (which, per that module's header, can spawn the OpenCode server and
- * reset the host's idle-reap clock). In the steady state - the app-load
- * prefetcher has filled the cache and models are `staleTime: Infinity` - an
- * open renders straight from cache.
+ * reset the host's idle-reap clock) - and both now land on the OWNER's host.
+ * For an owner on the default host that is the steady state as before: the
+ * app-load prefetcher filled the same host-id-keyed cache slot and models are
+ * `staleTime: Infinity`, so an open renders straight from cache. For an owner
+ * on another host the first open fetches that host's catalog cold - the same
+ * self-sufficiency trade the provider-list read below already makes.
  */
 export function WorktreeOwnerSettingsHeader(props: {
   readonly ownerId: string;
@@ -107,7 +111,16 @@ export function WorktreeOwnerSettingsHeader(props: {
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
   // settings never mounts the catalog fan-out at all. Warm entries render from
   // cache; see the component doc above for when an open can still refetch.
-  const catalog = useGuiHarnessCatalog(null, {
+  //
+  // Scoped to the OWNER's host like the provider-list read below: the tuple
+  // being labeled is what THAT host runs, so a model only that host offers
+  // must not fall back to a raw slug just because the default host's catalog
+  // lacks it. On the common path (owner on the default host) this is the same
+  // cache slot the app-load prefetcher warmed - host-id-keyed, so nothing
+  // refetches. A `null` client (owner's host missing from the directory,
+  // signed out) disables the read and labels fall back to raw slugs - honest,
+  // rather than borrowing another host's catalog under this host's name.
+  const catalog = useGuiHarnessCatalogForClient(hostClient, null, {
     enabled: hasSubject,
     subscribed: hasSubject,
   });

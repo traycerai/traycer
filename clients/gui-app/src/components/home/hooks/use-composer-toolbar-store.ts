@@ -6,7 +6,9 @@ import {
   useState,
 } from "react";
 import { useStore } from "zustand";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostRpcRegistry } from "@/lib/host";
 
 import type {
   PermissionMode,
@@ -26,8 +28,8 @@ import {
 import { commitSelection } from "@/stores/composer/commit-selection";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import {
-  useGuiHarnessesQuery,
-  useGuiHarnessModelsQuery,
+  useGuiHarnessesQueryForClient,
+  useGuiHarnessModelsQueryForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useRegisterFocusedComposerControls } from "@/hooks/command-palette/use-register-composer-controls";
 import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
@@ -43,6 +45,26 @@ import {
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
 /**
+ * The catalog a composer's toolbar store resolves selections against: WHICH
+ * host's harnesses/models, and whether only TUI-capable harnesses count.
+ */
+export interface ComposerToolbarCatalogScope {
+  /**
+   * The host this composer runs turns on - a chat tab's bound host, a fork
+   * dialog's fixed host, the new-conversation modal's pinned host, the
+   * landing page's active host. The harness + model catalog is fetched
+   * through this client, so the harnesses/models the store resolves and
+   * validates a selection against are that host's, never the app-wide
+   * default's while the composer is bound elsewhere. `null` while that host's
+   * client is still resolving: the catalog stays empty rather than borrowing
+   * another host's.
+   */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /** Restrict the catalog to TUI-capable harnesses (terminal launchers). */
+  readonly tuiOnly: boolean;
+}
+
+/**
  * Creates this composer's private toolbar store (see
  * `createComposerToolbarStore` for the state model) and keeps it synchronized
  * with its external inputs:
@@ -50,7 +72,8 @@ const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
  * - settings-store defaults / the seeded settings (re-seeds when the seed
  *   identity changes);
  * - the harness + model catalog queries, gated on the surrounding
- *   `SurfaceActivityContext`;
+ *   `SurfaceActivityContext` and issued against `catalog.hostClient` (see
+ *   `ComposerToolbarCatalogScope`);
  * - the latest `onSettingsChange` callback.
  *
  * When `registerAs !== null` (and the surface is active), the store's setters
@@ -85,8 +108,9 @@ export function useComposerToolbarStore(
   registerAs: FocusedComposerKind | null,
   seedSource: ComposerSeedSource,
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
-  tuiOnly: boolean,
+  catalog: ComposerToolbarCatalogScope,
 ): ComposerToolbarStore {
+  const { hostClient, tuiOnly } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
@@ -178,14 +202,19 @@ export function useComposerToolbarStore(
   // (availability rerouting included); `modelsHarnessId` rides along so a
   // stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
-  const harnessesQuery = useGuiHarnessesQuery({
+  const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const modelsQuery = useGuiHarnessModelsQuery(harnessId, null, {
-    enabled: activityEnabled,
-    subscribed: activityEnabled,
-  });
+  const modelsQuery = useGuiHarnessModelsQueryForClient(
+    hostClient,
+    harnessId,
+    null,
+    {
+      enabled: activityEnabled,
+      subscribed: activityEnabled,
+    },
+  );
   // Read the cache regardless of `activityEnabled`. The gate above already does
   // the whole job it exists for - an inactive surface fetches nothing and holds
   // no observer - and `enabled:false` does not evict what is already cached.
@@ -227,9 +256,13 @@ export function useComposerToolbarStore(
         commitSelection(store, harnessId, modelSlug, null),
     };
   }, [store]);
+  // The palette's composer subpages list the catalog of the SAME host this
+  // store reads it through, so what they offer is what `switchHarness` /
+  // `selectModel` can commit against.
   useRegisterFocusedComposerControls(
     activityEnabled ? registerAs : null,
     registeredControls,
+    hostClient,
   );
 
   return store;

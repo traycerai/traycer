@@ -30,6 +30,12 @@ vi.mock("@/lib/host", () => {
     useHostClient: () => ({
       request: () => new Promise(() => {}),
       getActiveHostId: () => "host-test",
+      // `useTabHostClient` resolves through `useHostClientForHostId`, which
+      // asks the default client for the tab's entry (live directory first,
+      // then the active entry) before handing it to `useHostClientFor` -
+      // mocked below to return the same stub client for any entry.
+      resolveHostById: () => entry,
+      getActiveHost: () => entry,
       getRequestContextUserId: () => "user-test",
       onChange: () => () => undefined,
     }),

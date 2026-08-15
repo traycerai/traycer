@@ -1,8 +1,12 @@
 import { useCallback, useMemo, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import type { PrLocalDiffSummaryFile } from "@traycer/protocol/host/pr-schemas";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import { isPrLocalDiffLargeFile } from "@/lib/pr/pr-local-diff-large-file";
+import {
+  isPrLocalDiffFileCollapsed,
+  prLocalDiffFileKey,
+  type PrLocalDiffViewFile,
+} from "@/lib/pr/pr-local-diff-file-key";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TILE_KIND_PR_DIFF } from "@/stores/epics/canvas/tile-kinds";
 import type { PrDiffTileRef } from "@/stores/epics/canvas/types";
@@ -27,12 +31,13 @@ export type PrBundleDiffFindPatchMode = "split" | "monolith";
 // Stable identity for a PR range-diff file within the find index. Shared by
 // the session (coverage / loaded-patch registration) and the section renderer
 // (`data-bundle-diff-file-id`, `notifySectionMounted`) so reveal targets the
-// same file id the index was built with. Keyed on `path` alone because that is
-// the list's row identity too (`computeItemKey`): a range diff names each
-// destination path once, and a rename's `previousPath` is a property of the
-// row, not a second row.
-export function prBundleDiffFindFileId(file: PrLocalDiffSummaryFile): string {
-  return `pr:${file.path}`;
+// same file id the index was built with. Keyed on the CANONICAL file key
+// because that is the list's row identity too (`computeItemKey`): a range
+// diff names each destination once, and a rename's previous side is a
+// property of the row, not a second row - but the lossy `path` alone is NOT
+// unique when two byte paths replace to the same string.
+export function prBundleDiffFindFileId(file: PrLocalDiffViewFile): string {
+  return `pr:${prLocalDiffFileKey(file)}`;
 }
 
 /**
@@ -46,7 +51,7 @@ export function prBundleDiffFindFileId(file: PrLocalDiffSummaryFile): string {
  */
 export function prBundleLoadedPatchCacheKey(args: {
   readonly comparisonKey: string;
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly ignoreWhitespace: boolean;
   readonly isTruncated: boolean;
 }): string {
@@ -56,6 +61,10 @@ export function prBundleLoadedPatchCacheKey(args: {
     args.ignoreWhitespace,
     args.file.previousPath,
     args.file.path,
+    // The byte-path sidecars are patch identity too: two lossy-name
+    // colliding files carry different patches under the same `path` string.
+    args.file.previousPathBytes,
+    args.file.pathBytes,
     args.isTruncated ? "truncated" : "full",
   ]);
 }
@@ -70,7 +79,7 @@ export function prBundleLoadedPatchCacheKey(args: {
  * (see `gitBundleDiffFindCoverageState`).
  */
 function prBundleDiffFindCoverageState(args: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly collapsed: boolean;
   /** Monolith mode: the patch the response carried, `null` past the budget. */
   readonly monolithPatch: string | null | undefined;
@@ -83,7 +92,7 @@ function prBundleDiffFindCoverageState(args: {
 }
 
 function prBundleDiffFindFileInput(args: {
-  readonly file: PrLocalDiffSummaryFile;
+  readonly file: PrLocalDiffViewFile;
   readonly collapsed: boolean;
   readonly monolithPatch: string | null | undefined;
 }): BundleDiffFindFileInput {
@@ -131,7 +140,7 @@ function prBundleDiffFindContentIdentity(args: {
   readonly comparisonKey: string;
   readonly patchMode: PrBundleDiffFindPatchMode;
   readonly ignoreWhitespace: boolean;
-  readonly files: ReadonlyArray<PrLocalDiffSummaryFile>;
+  readonly files: ReadonlyArray<PrLocalDiffViewFile>;
 }): string {
   return JSON.stringify([
     "pr-diff",
@@ -141,6 +150,8 @@ function prBundleDiffFindContentIdentity(args: {
     args.files.map((file) => [
       file.path,
       file.previousPath,
+      file.pathBytes,
+      file.previousPathBytes,
       file.status,
       file.isBinary,
       file.insertions,
@@ -167,7 +178,7 @@ function prBundleDiffFindContentIdentity(args: {
 export function usePrBundleDiffFind(args: {
   readonly node: PrDiffTileRef;
   readonly viewTabId: string;
-  readonly files: ReadonlyArray<PrLocalDiffSummaryFile>;
+  readonly files: ReadonlyArray<PrLocalDiffViewFile>;
   readonly comparisonKey: string;
   readonly patchMode: PrBundleDiffFindPatchMode;
   /** Monolith mode's per-path patches (`null` = past the budget), else null. */
@@ -191,18 +202,23 @@ export function usePrBundleDiffFind(args: {
   } = args;
   const nodeId = node.id;
   const nodeView = node.view;
-  const collapsedFilePaths = nodeView.collapsedFilePaths;
+  // Collapse membership goes through the SAME predicate the row chevron and
+  // the toolbar's collapse-all use (`isPrLocalDiffFileCollapsed`), so find
+  // coverage, reveal-expand and the visible chevrons can never disagree
+  // about what "collapsed" means. Monolith patch lookups stay on the lossy
+  // `path` - that map came from a source whose identity IS the lossy string.
+  const collapsedFileKeys = nodeView.collapsedFileKeys;
 
   const bundleFindFiles = useMemo(
     () =>
       files.map((file) =>
         prBundleDiffFindFileInput({
           file,
-          collapsed: collapsedFilePaths.includes(file.path),
+          collapsed: isPrLocalDiffFileCollapsed(collapsedFileKeys, file),
           monolithPatch: monolithPatches?.get(file.path),
         }),
       ),
-    [collapsedFilePaths, files, monolithPatches],
+    [collapsedFileKeys, files, monolithPatches],
   );
   const bundleFindNavigationFiles = useMemo(
     () =>
@@ -215,32 +231,28 @@ export function usePrBundleDiffFind(args: {
   const collapsedBundleFindFileIds = useMemo(
     () =>
       new Set(
-        bundleFindFiles.flatMap((file) =>
-          collapsedFilePaths.includes(file.filePath) ? [file.id] : [],
+        files.flatMap((file) =>
+          isPrLocalDiffFileCollapsed(collapsedFileKeys, file)
+            ? [prBundleDiffFindFileId(file)]
+            : [],
         ),
       ),
-    [bundleFindFiles, collapsedFilePaths],
+    [collapsedFileKeys, files],
   );
   const expandBundleFindFile = useCallback(
     (fileId: string): void => {
-      const file = bundleFindFiles.find((candidate) => candidate.id === fileId);
+      const file = files.find(
+        (candidate) => prBundleDiffFindFileId(candidate) === fileId,
+      );
       if (file === undefined) return;
-      if (!collapsedFilePaths.includes(file.filePath)) return;
+      if (!isPrLocalDiffFileCollapsed(collapsedFileKeys, file)) return;
+      const fileKey = prLocalDiffFileKey(file);
       updateView(viewTabId, nodeId, {
         ...nodeView,
-        collapsedFilePaths: collapsedFilePaths.filter(
-          (filePath) => filePath !== file.filePath,
-        ),
+        collapsedFileKeys: collapsedFileKeys.filter((key) => key !== fileKey),
       });
     },
-    [
-      bundleFindFiles,
-      collapsedFilePaths,
-      nodeId,
-      nodeView,
-      updateView,
-      viewTabId,
-    ],
+    [collapsedFileKeys, files, nodeId, nodeView, updateView, viewTabId],
   );
   const bundleFindNavigation = useBundleDiffFindNavigation({
     files: bundleFindNavigationFiles,
