@@ -1097,15 +1097,19 @@ function rememberLandingWorktreeIntent(
 function clearConsumedLandingWorktreeIntent(
   workspaceContext: LandingWorkspaceContext,
 ): void {
-  if (workspaceContext.worktreeIntent === null) return;
   const stagingKey: WorktreeStagingKey = {
     surface: "landing",
     hostId: workspaceContext.hostId,
     draftId: workspaceContext.draftId,
   };
-  // Every host's copy: the landing picker rebinds the app-wide host in
-  // place, so a pick staged on another host belongs to this same consumed
-  // session and must not survive into the next landing page.
+  // Every host's copy, and unconditionally: the landing picker rebinds the
+  // app-wide host in place, so a pick staged on another host belongs to this
+  // same consumed session. Gating on the SUBMITTING host having an intent
+  // would skip the whole consume when the user staged on host A and then
+  // submitted from a folderless host B - leaving A's slot to seed the next
+  // landing session (null draft) or linger against the staging cap (minted
+  // draft). This only runs once a create has actually succeeded, so there is
+  // no retry left that needs the staged intent.
   useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
 }
 

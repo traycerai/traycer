@@ -17,6 +17,7 @@ import {
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
+  type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -244,6 +245,66 @@ describe("useLandingComposerActions", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
+  });
+
+  // Regression: consuming the landing session was gated on the SUBMITTING
+  // host having an intent, so staging on host A and then submitting from a
+  // folderless host B left A's slot alive - to seed the next landing session
+  // (null draft) or linger against the staging cap (minted draft).
+  it("consumes another host's staged pick even when the submitting host has none", async () => {
+    const otherHostKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: "host-other",
+      draftId: null,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(otherHostKey, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/elsewhere/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    // The submitting host is folderless, so its own intent is null...
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: { worktreeIntent: null },
+    });
+    // ...and the other host's copy is still consumed with the session.
+    await waitFor(() => {
+      expect(
+        useWorktreeIntentStagingStore.getState().intentByKey[
+          worktreeStagingKeyString(otherHostKey)
+        ],
+      ).toBeUndefined();
+    });
+
+    queryClient.clear();
   });
 
   it("creates a folderless epic without a selected workspace folder", async () => {
