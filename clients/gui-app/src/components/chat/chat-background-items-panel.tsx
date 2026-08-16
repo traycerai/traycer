@@ -447,7 +447,7 @@ function HeldManagedCommandRow(props: {
   return (
     <li className="m-0">
       <div
-        className="group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40"
+        className="group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8"
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
       >
         <TooltipWrapper
@@ -559,7 +559,7 @@ function ManagedCommandRow(props: {
     <li className="m-0">
       <div
         className={cn(
-          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40",
+          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8",
           isDragging ? "opacity-50" : null,
         )}
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
@@ -654,7 +654,7 @@ function BackgroundTreeRow(props: {
     <li className="m-0">
       <div
         className={cn(
-          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40",
+          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8",
           item === null ? "text-muted-foreground" : null,
         )}
         style={{

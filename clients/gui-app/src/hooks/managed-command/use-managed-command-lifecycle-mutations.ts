@@ -10,6 +10,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   ManagedCommandHeldReleaseFailure,
   ManagedCommandHeldReleaseUnattributed,
@@ -47,6 +48,23 @@ export interface ManagedCommandLifecycleVariables {
 type LifecycleMethod =
   "managedCommand.start" | "managedCommand.stop" | "managedCommand.delete";
 
+/**
+ * Resolve the per-command host client from an already-looked-up directory
+ * entry. Both "no such host in the directory" and "that host is not reachable"
+ * collapse to `null` here, because every caller answers them the same way: the
+ * `hostClientUnavailableError` rejection, named for its own method.
+ *
+ * Takes the ENTRY rather than the directory so this stays a plain function.
+ * `useHostClientFor` is the render-time equivalent and is a hook, so it cannot
+ * be called from inside a `mutationFn`.
+ */
+function transientClientForEntry(
+  defaultClient: HostClient<HostRpcRegistry>,
+  entry: HostDirectoryEntry | null,
+): HostClient<HostRpcRegistry> | null {
+  return entry === null ? null : buildTransientHostClient(defaultClient, entry);
+}
+
 function useManagedCommandLifecycleMutation<Method extends LifecycleMethod>(
   method: Method,
   mutationKey: readonly string[],
@@ -71,11 +89,10 @@ function useManagedCommandLifecycleMutation<Method extends LifecycleMethod>(
       mutationKey,
       mutationFn: (variables: ManagedCommandLifecycleVariables) =>
         withHostRpcErrorBoundary(method, () => {
-          const entry = directory.findById(variables.hostId);
-          const client: HostClient<HostRpcRegistry> | null =
-            entry === null
-              ? null
-              : buildTransientHostClient(defaultClient, entry);
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
           if (client === null) {
             return Promise.reject(hostClientUnavailableError(method));
           }
@@ -368,11 +385,10 @@ export function useManagedCommandDeliverHeld(
       mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
       mutationFn: (variables: ManagedCommandDeliverHeldVariables) =>
         withHostRpcErrorBoundary("managedCommand.deliverHeld", () => {
-          const entry = directory.findById(variables.hostId);
-          const client: HostClient<HostRpcRegistry> | null =
-            entry === null
-              ? null
-              : buildTransientHostClient(defaultClient, entry);
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
           if (client === null) {
             return Promise.reject(
               hostClientUnavailableError("managedCommand.deliverHeld"),

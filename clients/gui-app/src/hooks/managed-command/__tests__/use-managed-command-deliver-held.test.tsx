@@ -163,6 +163,35 @@ describe("useManagedCommandDeliverHeld", () => {
     expect(toastWarning).not.toHaveBeenCalled();
   });
 
+  it("sends a selected subset as a copy, not the caller's own array", async () => {
+    const { result } = renderHook(() => useManagedCommandDeliverHeld(CHAT_ID), {
+      wrapper,
+    });
+    // The Background panel's per-row Deliver takes this branch; every other
+    // case here sends `null`, so the subset arm shipped unguarded.
+    const selected = ["cmd-1", "cmd-2"];
+
+    act(() => {
+      result.current.mutate({
+        hostId: mockLocalHostEntry.hostId,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        commandIds: selected,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(lastRequestCommandIds).toEqual(["cmd-1", "cmd-2"]);
+    // The mutation spreads into a fresh array. The mock messenger hands the
+    // handler the params object by reference - no parse, no clone - so this
+    // identity check actually discriminates: drop the spread and it fails.
+    expect(lastRequestCommandIds).not.toBe(selected);
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
   it("resolves - does not reject - when the response names unresolved holds", async () => {
     deliverResponse = {
       released: ["cmd-1"],
