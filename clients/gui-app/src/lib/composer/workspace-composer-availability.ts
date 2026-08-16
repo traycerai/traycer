@@ -100,6 +100,21 @@ function describeMissingBoundFolder(
  * (a re-bind that raced this render), or a blank `worktreePath`, which is never
  * a valid run directory. `null` means "the key already names the missing
  * directory", so the hint falls back to it.
+ *
+ * Deliberately mirrors the HOST's rule (`entryRunDirectory`: `worktreePath`
+ * when non-null and non-empty, else `workspacePath`) rather than this repo's
+ * mode-aware `resolveBindingRunningDir`, and the difference is load-bearing:
+ * this hint exists to explain a refusal the host already made, and the host
+ * stat-ed the run directory under ITS rule. Both notions are legitimate — the
+ * git surface's Q4 lock says a Local row runs in its workspace — but a Local
+ * row that still carries a stale `worktreePath` (a shape the host defends
+ * against but never writes: every `mode: "local"` writer nulls it) would then
+ * be stat-ed by the host at the stale worktree and described here as the
+ * workspace. Naming a folder that is still on disk while the gone one goes
+ * unnamed is exactly the bug this hint was changed to fix. If mode should win,
+ * the fix belongs in the host's single `entryRunDirectory` owner — which also
+ * decides the launch cwd — not in a hint that would then contradict the gate
+ * it explains.
  */
 function runDirectoryForWorkspacePath(
   workspacePath: string,

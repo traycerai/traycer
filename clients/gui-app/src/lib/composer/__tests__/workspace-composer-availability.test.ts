@@ -200,6 +200,30 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
     });
   });
 
+  it("follows the host's run-directory rule for a Local row carrying a stale worktreePath", () => {
+    // The host's `entryRunDirectory` is mode-INDEPENDENT — `worktreePath` when
+    // set, else `workspacePath` — and it decides BOTH what the missing-check
+    // stats and where a turn launches. So for this shape the host stat-ed the
+    // stale worktree, and that is what the hint must name. Describing it as
+    // `/Users/me/project` (this repo's mode-aware `resolveBindingRunningDir`
+    // rule) would name a folder still on disk and leave the gone one unnamed —
+    // the exact defect this hint was changed to fix. If mode should win, the
+    // host's single run-directory owner is where that changes.
+    expect(
+      worktreeMissingComposerHint(
+        ["/Users/me/project"],
+        binding([
+          {
+            ...bindingEntry("/Users/me/project"),
+            worktreePath: "/Users/me/worktrees/stale",
+          },
+        ]),
+      ),
+    ).toContain(
+      "/Users/me/worktrees/stale (the worktree bound to /Users/me/project)",
+    );
+  });
+
   it("falls back to the entry key when the binding cannot name a run directory", () => {
     // A Local row is its own run directory, and a re-bind can drop the entry
     // between the host's stat and this render — neither may lose the path.
