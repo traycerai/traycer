@@ -229,6 +229,154 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
     expect(captured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
   });
 
+  it("descends a hostile 2,000-deep chain without re-validating each suffix", () => {
+    // Depth alone is not the hazard - the walk terminating in ONE pass is. A
+    // per-level `isJsonObject` re-validates the whole remaining suffix, making
+    // the descent quadratic: at depth 10,000 that occupied the decoder for
+    // ~2.8 SECONDS on a value under 130 KB, which a corrupt or hostile document
+    // reaches for free. It is ~1 ms now. Deliberately NO wall-clock assertion -
+    // a timing pin flakes in CI. The bound is structural, and this fixture is
+    // here so a future edit that reintroduces the deep check has something that
+    // exercises the path.
+    //
+    // 2,000 rather than 10,000, and the ceiling is NOT this code: `isJsonValue`
+    // / `isJsonObject` recurse per level (`json.ts`), so the entry validation
+    // every capture already performed blows the stack somewhere between 5,000
+    // and 6,000 inside a vitest worker - and lower as ambient stack depth
+    // grows, which is what makes a pin up there flaky rather than strict. That
+    // recursion predates this fix and strikes any deep chat-sync value, residual
+    // chain or not; outside the worker this same chain flattens fine at 10,000.
+    const bag = bagOf({
+      alpha: 1,
+      [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(
+        { carried: "at the bottom of 2,000 wrappers" },
+        1_999,
+      ),
+    });
+
+    expect(bag).toEqual({ carried: "at the bottom of 2,000 wrappers" });
+  });
+});
+
+/**
+ * The bag can hold the ONLY copy of a field the current schema now models.
+ *
+ * A 1.0 reader bags a 1.1 writer's `newSetting` and has no top-level copy of
+ * it, because it never had one to write. That post-capture shape is a supported
+ * CARRIER - a clone seed passes `core.settings` verbatim, the host's settings
+ * adapter re-offers its opaque settings whole - so a 1.1 schema really does
+ * meet it again, with `newSetting` declared by then. Dropping the bag copy
+ * there destroys the field: silently for a defaulted one, as a parse failure
+ * for a required one.
+ *
+ * Two declared sets are what make this observable at all; a fixed-schema test
+ * cannot witness it, which is how the first cut of this fix shipped the drop.
+ */
+describe("residual capture promotes a since-modeled field out of the bag", () => {
+  const oldSchema = captureResidualKeys(["alpha"]);
+  const newSchema = captureResidualKeys(["alpha", "newSetting"]);
+
+  function captureWith(
+    capturer: (raw: unknown) => unknown,
+    raw: JsonValue,
+  ): JsonObject {
+    const result = capturer(raw);
+    if (!isJsonObject(result)) {
+      throw new Error("expected capture to produce a JSON object");
+    }
+    return result;
+  }
+
+  it("promotes it when the carrier has no modeled copy", () => {
+    // Step 1: the old schema bags a field it does not model.
+    const carried = captureWith(oldSchema, {
+      alpha: 1,
+      newSetting: "written by a newer minor",
+    });
+    expect(carried[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({
+      newSetting: "written by a newer minor",
+    });
+    expect(carried.newSetting).toBeUndefined();
+
+    // Step 2: the new schema meets that carrier and now declares the field.
+    const recaptured = captureWith(newSchema, carried);
+    expect(recaptured.newSetting).toBe("written by a newer minor");
+    expect(recaptured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
+  });
+
+  it("promotes it from under legacy wrappers too", () => {
+    // The nesting and the skew are independent, and a lineage that accumulated
+    // wrappers is exactly the population this fix exists for - so the promotion
+    // has to reach through them rather than only reading the top bag.
+    for (const depth of [2, 4, 19]) {
+      const recaptured = captureWith(newSchema, {
+        alpha: 1,
+        [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(
+          { newSetting: "written by a newer minor" },
+          depth - 1,
+        ),
+      });
+      expect(recaptured.newSetting).toBe("written by a newer minor");
+      expect(recaptured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
+    }
+  });
+
+  it("promotes the SHALLOWEST copy when the chain holds several", () => {
+    // Same precedence as retention: the outermost bag is the newest cycle's
+    // reading, and promotion must not reach past it to an older value.
+    const recaptured = captureWith(newSchema, {
+      alpha: 1,
+      [CHAT_SNAPSHOT_RESIDUAL_KEY]: {
+        newSetting: "newest",
+        [CHAT_SNAPSHOT_RESIDUAL_KEY]: {
+          newSetting: "older",
+          [CHAT_SNAPSHOT_RESIDUAL_KEY]: { newSetting: "oldest" },
+        },
+      },
+    });
+
+    expect(recaptured.newSetting).toBe("newest");
+    expect(recaptured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
+  });
+
+  it("still prefers the carrier's own modeled copy over a bagged one", () => {
+    // The complement, and what keeps promotion from becoming "the bag wins":
+    // when the carrier DOES have a top-level copy it is authoritative, and the
+    // stale bagged one is dropped rather than promoted over it.
+    const recaptured = captureWith(newSchema, {
+      alpha: 1,
+      newSetting: "the carrier's own value",
+      [CHAT_SNAPSHOT_RESIDUAL_KEY]: { newSetting: "a stale bagged copy" },
+    });
+
+    expect(recaptured.newSetting).toBe("the carrier's own value");
+    expect(recaptured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
+  });
+
+  it("stays idempotent across the promotion", () => {
+    // Promotion moves a key between homes, which is exactly the shape of edit
+    // that could reintroduce a per-cycle drift. Re-capturing the healed output
+    // must change nothing.
+    const healed = captureWith(newSchema, {
+      alpha: 1,
+      [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(
+        { newSetting: "written by a newer minor", stillUnmodeled: [1, 2] },
+        7,
+      ),
+    });
+
+    let cycled = healed;
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      cycled = captureWith(newSchema, cycled);
+    }
+
+    expect(canonicalJsonStringify(cycled)).toBe(canonicalJsonStringify(healed));
+    expect(cycled.newSetting).toBe("written by a newer minor");
+    expect(cycled[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({
+      stillUnmodeled: [1, 2],
+    });
+  });
+
   it("carries a __proto__ key through the merge as an own key", () => {
     const prior: JsonObject = Object.create(null);
     Object.defineProperty(prior, "__proto__", {
