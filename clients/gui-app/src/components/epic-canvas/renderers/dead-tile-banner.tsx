@@ -331,6 +331,8 @@ export function ChatHostStartingBanner(
       role="status"
       data-testid={props.testId}
       className={cn(
+        // muted-fill-ok: banner carries its own border-b border-border, so a
+        // collapse loses the wash and not the band
         "flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-ui-sm text-muted-foreground",
         props.className,
       )}

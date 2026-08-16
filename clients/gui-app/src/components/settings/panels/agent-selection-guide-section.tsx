@@ -438,8 +438,8 @@ function SaveStatus(props: {
 function EditorSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-muted/40" />
-      <div className="h-4 w-2/3 animate-pulse rounded bg-muted/30" />
+      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-foreground/10" />
+      <div className="h-4 w-2/3 animate-pulse rounded bg-foreground/10" />
     </div>
   );
 }

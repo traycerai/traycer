@@ -75,7 +75,7 @@ function ComposerAreaImpl({
       <ComposerMenu pickerStore={pickerStore} />
       <div
         data-composer-shell=""
-        className="relative rounded-lg bg-muted/30 ring-1 ring-border ring-inset focus-within:ring-ring/30"
+        className="relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30"
       >
         {overlay}
         <div

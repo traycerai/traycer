@@ -310,7 +310,7 @@ function StepRow(props: StepRowProps): ReactNode {
       {percent !== null && (
         <div
           aria-hidden
-          className="h-1 w-full overflow-hidden rounded-full bg-muted"
+          className="h-1 w-full overflow-hidden rounded-full bg-foreground/8"
         >
           <div
             className="h-full rounded-full bg-primary transition-all duration-150"

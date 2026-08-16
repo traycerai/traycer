@@ -193,7 +193,7 @@ export function DiagnosticsLogEntryFrame(props: {
       {open ? (
         <div className="mt-3 flex items-start gap-2">
           <pre
-            className="max-h-[min(13rem,40vh)] min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+            className="max-h-[min(13rem,40vh)] min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-foreground/3 px-3 py-2 font-mono text-code-xs text-muted-foreground"
             data-testid={`diagnostics-log-output-${target}`}
           >
             {tailText}

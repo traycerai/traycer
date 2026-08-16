@@ -84,7 +84,10 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-footer"
       className={cn(
-        "flex items-center rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/card:p-3",
+        // `bg-foreground/5` for the `ui/skeleton.tsx` reason: this band sits
+        // on `bg-card`, which every preset dark theme defines equal to
+        // `--muted`.
+        "flex items-center rounded-b-xl border-t bg-foreground/5 p-4 group-data-[size=sm]/card:p-3",
         className,
       )}
       {...props}

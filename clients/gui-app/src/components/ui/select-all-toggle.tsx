@@ -43,7 +43,9 @@ export function SelectAllToggle(props: {
           onClick={props.onToggle}
           className={cn(
             "text-ui-xs text-foreground",
-            allSelected || indeterminate ? "bg-muted" : null,
+            // Checked fill per `ui/skeleton.tsx` - this toggle rides
+            // popover/card surfaces where `bg-muted` is the surface itself.
+            allSelected || indeterminate ? "bg-foreground/8" : null,
           )}
         >
           <span

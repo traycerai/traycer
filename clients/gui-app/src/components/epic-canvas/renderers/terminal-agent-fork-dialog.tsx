@@ -772,7 +772,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
             <section
               aria-label="Run location"
-              className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3"
+              className="min-w-0 rounded-lg border border-border/60 bg-foreground/3 p-3"
             >
               <ActiveHostWorkspaceControls
                 disabled={false}

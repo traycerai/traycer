@@ -109,7 +109,7 @@ export function HostIdentityCard(props: {
       aria-label={`${props.displayName} overview`}
     >
       <div className="flex min-w-0 items-start gap-3 px-5 py-4">
-        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
           <HostGlyph host={host} className="size-4.5" />
         </span>
         <div className="min-w-0 flex-1">
@@ -223,7 +223,7 @@ function ActiveSessionsChip(props: {
         "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-ui-xs font-medium",
         live
           ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
-          : "border-border/60 bg-muted/40 text-muted-foreground",
+          : "border-border/60 bg-foreground/5 text-muted-foreground",
       )}
       data-testid="host-active-sessions"
       data-count={count}
@@ -251,7 +251,7 @@ export function HostTag(props: {
         "shrink-0 rounded-sm px-1 py-px text-[0.625rem] font-medium tracking-wide uppercase",
         accent
           ? "bg-primary/15 text-primary"
-          : "bg-muted/70 text-muted-foreground",
+          : "bg-foreground/6 text-muted-foreground",
       )}
     >
       {props.label}

@@ -1219,8 +1219,13 @@ describe("<HarnessModelPicker />", () => {
     const inactiveRail = screen.getByRole("tab", { name: "Claude" });
     expect(activeRail.className).toContain("bg-primary/10");
     expect(activeRail.className).toContain("ring-primary/25");
-    expect(activeRail.className).not.toContain("hover:bg-muted/50");
-    expect(inactiveRail.className).toContain("hover:bg-muted/50");
+    // Only the inactive rail carries a hover fill, and it must be a
+    // foreground alpha: the picker lives in a `PopoverContent`, and every
+    // preset dark defines `--muted` as that surface, so a muted hover is no
+    // hover at all there.
+    expect(activeRail.className).not.toContain("hover:bg-foreground/");
+    expect(inactiveRail.className).toContain("hover:bg-foreground/");
+    expect(inactiveRail.className).not.toContain("bg-muted");
     expect(inactiveRail.className).not.toContain("bg-primary/10");
     expect(
       screen

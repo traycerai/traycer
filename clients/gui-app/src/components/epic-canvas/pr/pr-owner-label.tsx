@@ -276,7 +276,7 @@ function PrOwnerOverflow(props: {
         <Badge
           asChild
           variant="outline"
-          className="cursor-pointer font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="cursor-pointer font-normal text-muted-foreground hover:bg-foreground/8 hover:text-foreground"
         >
           <button
             type="button"
@@ -432,7 +432,7 @@ function PrOwnerBadge(props: {
     <Badge
       asChild
       variant="outline"
-      className="max-w-[min(60vw,16rem)] cursor-pointer font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="max-w-[min(60vw,16rem)] cursor-pointer font-normal text-muted-foreground hover:bg-foreground/8 hover:text-foreground"
     >
       <TooltipWrapper
         label={label}
@@ -568,7 +568,7 @@ function PrOwnerRow(props: {
       aria-label={`Open ${label}`}
       data-testid="pr-owner-row"
       style={indent}
-      className="flex w-full min-w-0 items-center gap-2 rounded py-1.5 pr-2 text-left text-ui-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="flex w-full min-w-0 items-center gap-2 rounded py-1.5 pr-2 text-left text-ui-xs text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
     >
       <Icon className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">{label}</span>

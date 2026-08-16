@@ -54,6 +54,8 @@ import {
   FAILURE_TONE,
   FORK_TONE,
   INTERVIEW_TONE,
+  terminalFailureTone,
+  TERMINAL_FAILURE_TONE,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
 import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
@@ -345,7 +347,8 @@ type ChatDescendantStatusKind =
   | "approval"
   | "running"
   | "background"
-  | "done";
+  | "done"
+  | "terminal-failure";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -358,16 +361,18 @@ type ChatDescendantStatusKind =
  * / subagent / Monitor / scheduled wakeup keeping a session non-idle while the
  * agent itself is idle), matching the turn-over-background precedence the
  * per-chat indicator already uses. Both still outrank `done`, so any live work
- * beats a finished-but-unread one.
+ * beats a finished-but-unread one. A terminal failure is deliberately the
+ * lowest notable tier: Done remains the stronger task-level signal.
  */
 const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
-  failure: 7,
-  fork: 6,
-  interview: 5,
-  approval: 4,
-  running: 3,
-  background: 2,
-  done: 1,
+  failure: 8,
+  fork: 7,
+  interview: 6,
+  approval: 5,
+  running: 4,
+  background: 3,
+  done: 2,
+  "terminal-failure": 1,
 };
 
 /** {@link CHAT_STATUS_RANKS} most-urgent first, for picking a rollup's kind. */
@@ -379,6 +384,7 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "running",
   "background",
   "done",
+  "terminal-failure",
 ];
 
 /** The ladder kind an activity tier occupies. */
@@ -402,6 +408,7 @@ function chatDescendantKind(
   if (tone === APPROVAL_TONE) return "approval";
   if (tier !== undefined) return activityTierKind(tier);
   if (indicatorState.unreadDone) return "done";
+  if (terminalFailureTone(indicatorState) !== null) return "terminal-failure";
   return null;
 }
 
@@ -420,6 +427,7 @@ interface ChatDescendantStatusRollup {
   readonly runningCount: number;
   readonly backgroundCount: number;
   readonly doneCount: number;
+  readonly terminalFailureCount: number;
 }
 
 const EMPTY_CHAT_DESCENDANT_IDS: ReadonlyArray<string> = [];
@@ -502,6 +510,7 @@ function useChatDescendantStatus(args: {
         running: 0,
         background: 0,
         done: 0,
+        "terminal-failure": 0,
       };
       for (const chatId of descendants) {
         const indicatorState = selectNotificationIndicatorState(
@@ -528,6 +537,7 @@ function useChatDescendantStatus(args: {
         runningCount: counts.running,
         backgroundCount: counts.background,
         doneCount: counts.done,
+        terminalFailureCount: counts["terminal-failure"],
       };
     }),
   );
@@ -2913,6 +2923,7 @@ const CHAT_DESCENDANT_STATUS_TONES: Record<
   interview: INTERVIEW_TONE,
   approval: APPROVAL_TONE,
   done: DONE_TONE,
+  "terminal-failure": TERMINAL_FAILURE_TONE,
 };
 
 /**
@@ -2934,6 +2945,9 @@ function chatSelfStatusRank(
   if (selfTier === "turn") return CHAT_STATUS_RANKS.running;
   if (selfTier === "background") return CHAT_STATUS_RANKS.background;
   if (state.unreadDone) return CHAT_STATUS_RANKS.done;
+  if (terminalFailureTone(state) !== null) {
+    return CHAT_STATUS_RANKS["terminal-failure"];
+  }
   return 0;
 }
 
@@ -2959,6 +2973,11 @@ function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
     parts.push(`${rollup.backgroundCount} in background`);
   }
   if (rollup.doneCount > 0) parts.push(`${rollup.doneCount} completed`);
+  if (rollup.terminalFailureCount > 0) {
+    parts.push(
+      `${rollup.terminalFailureCount} terminal ${rollup.terminalFailureCount === 1 ? "failure" : "failures"}`,
+    );
+  }
   return `Nested: ${parts.join(" · ")}`;
 }
 
@@ -3024,13 +3043,14 @@ type ChatOwnStatusKind =
   | "working"
   | "background"
   | "done"
+  | "terminal-failure"
   | "read-only"
   | "idle";
 
 /**
  * The precedence lattice, reused unchanged from the per-row notification icon
- * (`NotificationIndicatorIcon`): attention tone (failure > interview >
- * approval) > running turn > background > unread-done > default. Terminal-agent
+ * (`NotificationIndicatorIcon`): attention tone (failure > fork > interview >
+ * approval) > running turn > background > unread-done > terminal failure > default. Terminal-agent
  * rows resolve through the same lattice - their `agent.stopped` notifications
  * are chat-scoped to the agent id, so `state` is populated for them too; only
  * the read-only arm stays chat-only.
@@ -3054,6 +3074,7 @@ function chatOwnStatusKind(
   if (running === "turn") return "working";
   if (running === "background") return "background";
   if (state.unreadDone) return "done";
+  if (terminalFailureTone(state) !== null) return "terminal-failure";
   if (isReadOnly) return "read-only";
   return "idle";
 }

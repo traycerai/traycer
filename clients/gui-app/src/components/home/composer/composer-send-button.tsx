@@ -53,9 +53,9 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
     onStopTurn();
   }, [hintActive, onStopTurn, onSubmit, stopMode]);
   const buttonClassName = cn(
-    "size-8 rounded-full disabled:bg-muted disabled:text-muted-foreground aria-disabled:cursor-not-allowed aria-disabled:bg-muted aria-disabled:text-muted-foreground aria-disabled:hover:bg-muted",
+    "size-8 rounded-full disabled:bg-foreground/8 disabled:text-muted-foreground aria-disabled:cursor-not-allowed aria-disabled:bg-foreground/8 aria-disabled:text-muted-foreground aria-disabled:hover:bg-foreground/8",
     stopMode
-      ? "bg-muted text-foreground hover:bg-muted/80"
+      ? "bg-foreground/8 text-foreground hover:bg-foreground/10"
       : "bg-primary text-primary-foreground hover:bg-primary/90",
   );
 

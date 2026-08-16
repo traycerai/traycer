@@ -125,7 +125,7 @@ function PromptStashTriggerButton(props: {
             <span
               key={pulseEpoch}
               className={cn(
-                "rounded-full bg-muted px-1.5 font-medium tabular-nums",
+                "rounded-full bg-foreground/8 px-1.5 font-medium tabular-nums",
                 pulseEpoch > 0 && "prompt-stash-count-flash",
               )}
             >
@@ -423,7 +423,7 @@ function PromptStashEntryRowView(props: {
                 type="button"
                 aria-label="Insert stashed prompt"
                 aria-keyshortcuts="Enter"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -443,7 +443,7 @@ function PromptStashEntryRowView(props: {
                 type="button"
                 aria-label="Delete stashed prompt"
                 aria-keyshortcuts="D"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -557,7 +557,7 @@ function PromptStashUnavailableRowView(props: {
                 <button
                   type="button"
                   aria-label="Copy stashed text"
-                  className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                   onPointerDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -576,7 +576,7 @@ function PromptStashUnavailableRowView(props: {
                 type="button"
                 aria-label="Delete stashed prompt"
                 aria-keyshortcuts="D"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();

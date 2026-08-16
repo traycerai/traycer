@@ -135,12 +135,12 @@ const HOST_SWITCHER_SURFACES: Record<
   HostSwitcherSurfacePresentation
 > = {
   rail: {
-    trigger: "rounded-md bg-muted/50 hover:bg-muted/80",
+    trigger: "rounded-md bg-foreground/5 hover:bg-foreground/7",
     list: "",
     sideOffsetPx: 4,
   },
   "panel-header": {
-    trigger: "hover:bg-muted/50",
+    trigger: "hover:bg-foreground/5",
     list: "rounded-t-none",
     sideOffsetPx: 0,
   },

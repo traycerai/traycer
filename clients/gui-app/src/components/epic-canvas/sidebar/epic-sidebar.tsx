@@ -149,6 +149,7 @@ import {
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
+import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
   usePanelHeaderMenuOpen,
@@ -1962,6 +1963,7 @@ function ArtifactHeaderMoreMenu(props: {
 }) {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
+  const searchAvailable = useArtifactSearchAvailable();
   const menu = useExpandableHeaderMenu(
     props.tabId,
     "artifacts",
@@ -1981,13 +1983,18 @@ function ArtifactHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
-        <DropdownMenuItem
-          onSelect={() => openSearch(props.tabId, "artifacts", "")}
-          data-testid="epic-sidebar-more-search-artifacts"
-        >
-          <Search className="size-4" />
-          Search artifacts
-        </DropdownMenuItem>
+        {/* Hidden only when the Epic has NO artifacts - see
+            `useArtifactSearchAvailable` for why emptiness gates this and a size
+            threshold does not. */}
+        {searchAvailable ? (
+          <DropdownMenuItem
+            onSelect={() => openSearch(props.tabId, "artifacts", "")}
+            data-testid="epic-sidebar-more-search-artifacts"
+          >
+            <Search className="size-4" />
+            Search artifacts
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}

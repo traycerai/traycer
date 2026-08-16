@@ -94,12 +94,12 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         showCloseButton
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        <div className="relative flex max-h-[90vh] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30">
+        <div className="relative flex max-h-[90vh] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
           {props.mediaType === "image/svg+xml" ? (
             <div className="h-[min(88vh,52rem)] w-full">
               <Suspense
                 fallback={
-                  <div className="size-full animate-pulse bg-muted/60 motion-reduce:animate-none" />
+                  <div className="size-full animate-pulse bg-foreground/10 motion-reduce:animate-none" />
                 }
               >
                 <UntrustedSvgLightbox src={props.src} alt={alt} />

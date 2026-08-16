@@ -190,7 +190,7 @@ function ProfileUsageSidecarContent({
         ) : null}
       </div>
       {!isHostReady ? (
-        <p className="mt-2.5 rounded-md bg-muted/60 px-2 py-1.5 text-ui-xs text-muted-foreground">
+        <p className="mt-2.5 rounded-md bg-foreground/6 px-2 py-1.5 text-ui-xs text-muted-foreground">
           Run host unavailable. Cached usage is shown when available.
         </p>
       ) : null}
@@ -375,7 +375,7 @@ function ProfileUsageEmptyState({
   return (
     <div
       className={cn(
-        "rounded-md border border-border/60 bg-muted/35 px-2.5 py-2",
+        "rounded-md border border-border/60 bg-foreground/4 px-2.5 py-2",
         tone === "warning" && "border-warning/30 bg-warning/10",
         tone === "destructive" && "border-destructive/30 bg-destructive/10",
       )}
