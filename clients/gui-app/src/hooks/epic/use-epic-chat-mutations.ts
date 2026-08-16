@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequestV11,
+  CreateChatRequestV12,
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
@@ -34,6 +34,10 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import {
+  beginPendingChatCreation,
+  clearPendingChatCreation,
+} from "@/lib/chats/pending-chat-creations";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 
 /**
@@ -52,7 +56,7 @@ import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persiste
  * is rejected through the mutation error channel instead of creating the chat
  * on the wrong machine.
  */
-export type CreateChatMutationInput = CreateChatRequestV11;
+export type CreateChatMutationInput = CreateChatRequestV12;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
 }
@@ -128,7 +132,8 @@ export function useEpicCreateChat(): UseMutationResult<
     },
     options: {
       onMutate: () => ({ hostId: activeHostId }),
-      onSuccess: (_data, _params, ctx) => {
+      onSuccess: (data, params, ctx) => {
+        retainCreatedChatUntilProjected(data, params);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
         // The created chat lands in the host's chat DATABASE and nowhere the
         // renderer already listens (chat-sync-v2 ticket 19 stopped the doc
@@ -137,11 +142,34 @@ export function useEpicCreateChat(): UseMutationResult<
         invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error, variables) => {
+        releaseCreatedChat(variables);
         if (isRecoverableLatestForkFailure(error, variables)) return;
         toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
+}
+
+/**
+ * Whether the caller is expected to render this refusal ITSELF, inline, instead
+ * of through the generic toast.
+ *
+ * `E_FORK_BOUNDARY_NOT_PUBLISHED` is the host saying "the message you picked
+ * hasn't finished backing up yet - try again shortly". It is retryable in the
+ * plainest sense: the identical request succeeds a moment later. A toast would
+ * be wrong in tone (nothing is broken) and wrong in place - the fork dialog
+ * stays OPEN on this refusal so the retry is one click, and a toast beside a
+ * dialog that is already explaining itself says the same thing twice.
+ *
+ * Narrower than {@link isRecoverableLatestForkFailure} by construction rather
+ * than by an added `forkSource` test: the host mints this code for exactly one
+ * condition, reachable only from a request that named a precise fork boundary.
+ * Every other caller of the hook below is therefore unaffected - they cannot
+ * produce it - which is what keeps this from becoming a general "quiet fork
+ * errors" bucket that would swallow a real failure for someone.
+ */
+function isInlineForkRefusal(error: HostRpcError): boolean {
+  return error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED";
 }
 
 /**
@@ -233,7 +261,8 @@ export function useEpicCreateChatForHostClient(
     options: {
       mutationKey: epicMutationKeys.createChat(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, _params, ctx) => {
+      onSuccess: (data, params, ctx) => {
+        retainCreatedChatUntilProjected(data, params);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
         // Same reason as the app-wide hook above, and NOT optional here: this
         // is the variant the in-Epic new-conversation modal and the fork
@@ -246,11 +275,68 @@ export function useEpicCreateChatForHostClient(
         // is the one whose registry changed.
         invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
-      onError: (error) => {
+      onError: (error, variables) => {
+        releaseCreatedChat(variables);
+        if (isInlineForkRefusal(error)) return;
         toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
+}
+
+/**
+ * Make the created chat visible NOW, on every creation surface at once.
+ *
+ * The host writes the chat to its own database and to nothing this renderer
+ * projects, so without this the agent the user just made is invisible until its
+ * record completes the round trip - a ≤20s poll at best, and longer when the
+ * creating host is not the one this window's record stream is keyed to. See
+ * `stores/epics/open-epic/pending-chat-creations.ts`.
+ *
+ * Wired into the shared create hooks rather than into each caller for three
+ * reasons. It cannot be forgotten - a surface added later inherits it by using
+ * the hook, which is how the sibling surfaces came to share one silent
+ * `CHAT_PROJECTION_WAIT_MS` wait in the first place. It reads the REQUEST, so
+ * the retained row can never disagree with what was actually sent (the host it
+ * was dialled at, the parent, the title). And it is mutation-level rather than
+ * a per-`mutate` callback, which TanStack drops when the calling component
+ * unmounts - and every one of these surfaces closes itself the moment it
+ * submits.
+ *
+ * On SUCCESS, deliberately, not at mutate time: until the host answers, the
+ * chat exists nowhere, and a row for it would advance the initial-chat
+ * handoff's projection machine (and disarm its orphan deadline) for a chat that
+ * may never be created. The window this closes is the one the user actually
+ * waits through - between "created" and "visible" - not the one they spend
+ * watching a submit spinner.
+ *
+ * The id is read back from the RESPONSE: the resolver is idempotent on the
+ * client-minted id and echoes it, and it is the id the opener navigates to, so
+ * taking it from here keeps the retained row, the open intent and the eventual
+ * record on one identity.
+ */
+function retainCreatedChatUntilProjected(
+  response: CreateChatResponse,
+  request: CreateChatMutationInput,
+): void {
+  beginPendingChatCreation(request.epicId, {
+    chatId: response.chatId,
+    hostId: request.hostId,
+    parentChatId: request.parentId,
+    title: request.title,
+  });
+}
+
+/**
+ * No record will ever arrive for this chat - the create failed. A no-op for the
+ * hooks' own flow (which retains only on success) and the reason the registry's
+ * failure arm exists at all: a surface that seeds a row BEFORE the answer, to
+ * cover a long create, has exactly one way to take it back down. Runs for EVERY
+ * failure, including the ones this hook deliberately does not toast (the clone
+ * flow's recoverable fork refusals, which retry under a fresh chat id).
+ */
+function releaseCreatedChat(request: CreateChatMutationInput): void {
+  clearPendingChatCreation(request.epicId, request.chatId);
 }
 
 function invalidateBindingsForEpic(
