@@ -26,7 +26,10 @@ import {
   type LeaderModifier,
   type LeaderState,
 } from "@/providers/keybinding-context";
-import { isDiffsEditorEvent } from "@/lib/keybindings/editable-target";
+import {
+  isDiffsEditorEvent,
+  isEditableEventTarget,
+} from "@/lib/keybindings/editable-target";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -459,6 +462,17 @@ function resolveReservedAction(event: KeyboardEvent): ActionId | null {
   if (chord === null) return null;
   const actionId = findActionForChord(chord);
   if (actionId === null) return null;
+  // Cmd+Left/Right is browser history on macOS, but it is also the native
+  // beginning/end-of-line command in text fields. Keep the familiar global
+  // navigation binding without breaking editing. The same safeguard applies
+  // if a non-Mac user explicitly remaps history to Ctrl+Left/Right.
+  if (
+    (actionId === "nav.back" || actionId === "nav.forward") &&
+    (chord === "mod+arrowleft" || chord === "mod+arrowright") &&
+    (isEditableEventTarget(event.target) || isDiffsEditorEvent(event))
+  ) {
+    return null;
+  }
   return isExternallyHandled(actionId) ? null : actionId;
 }
 
