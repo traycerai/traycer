@@ -60,6 +60,15 @@ export interface ComposerToolbarCatalogScope {
    * another host's.
    */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /**
+   * The same target host as `hostClient`, as an id: it keys the per-host
+   * harness-memory reads/writes (`commitSelection` + the recording
+   * `onSettingsChange` wrapper), so a selection committed on one host never
+   * seeds or overwrites another host's remembered state. `null` while the
+   * target host is still resolving - memory writes are dropped, never
+   * misattributed.
+   */
+  readonly hostId: string | null;
   /** Restrict the catalog to TUI-capable harnesses (terminal launchers). */
   readonly tuiOnly: boolean;
 }
@@ -110,7 +119,7 @@ export function useComposerToolbarStore(
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   catalog: ComposerToolbarCatalogScope,
 ): ComposerToolbarStore {
-  const { hostClient, tuiOnly } = catalog;
+  const { hostClient, hostId, tuiOnly } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
@@ -160,6 +169,7 @@ export function useComposerToolbarStore(
       // caller callback - so it is the single, always-present write site.
       onSettingsChange: null,
       tuiOnly,
+      hostId,
     }),
   );
   // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
@@ -174,9 +184,14 @@ export function useComposerToolbarStore(
       // Precondition: every store emit site `set()`s the derived state BEFORE
       // invoking `onSettingsChange`, so `getState().selectionCatalogConfirmed`
       // here reflects the very settings being emitted - the write gate does not
-      // race the emit.
-      if (store.getState().selectionCatalogConfirmed) {
-        useComposerHarnessMemoryStore.getState().record(settings);
+      // race the emit. The memory write is keyed by the store-carried target
+      // host (`catalog.hostId`) - the same host the confirming catalog was
+      // fetched from - so the record can never land in another host's bucket.
+      const state = store.getState();
+      if (state.selectionCatalogConfirmed) {
+        useComposerHarnessMemoryStore
+          .getState()
+          .record(state.catalog.hostId, settings);
       }
       onSettingsChange?.(settings);
     },
@@ -233,13 +248,14 @@ export function useComposerToolbarStore(
   const modelsLoaded = modelsQuery.data !== undefined;
   useEffect(() => {
     store.getState().setCatalog({
+      hostId,
       harnesses,
       modelsHarnessId: harnessId,
       models,
       modelsLoaded,
       tuiOnly,
     });
-  }, [store, harnesses, models, modelsLoaded, harnessId, tuiOnly]);
+  }, [store, hostId, harnesses, models, modelsLoaded, harnessId, tuiOnly]);
 
   const registeredControls = useMemo(() => {
     const actions = store.getState();

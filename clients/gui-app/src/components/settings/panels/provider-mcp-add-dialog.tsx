@@ -681,7 +681,7 @@ export function ProviderMcpAddDialog(props: {
                     ) : null}
                   </div>
 
-                  <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+                  <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
                     <Button
                       type="button"
                       variant="outline"
@@ -862,7 +862,7 @@ function SegmentChipGroup(props: {
     <div
       role="group"
       aria-label={props.label}
-      className="inline-flex w-fit items-center gap-0.5 rounded-md border border-border bg-muted/30 p-0.5"
+      className="inline-flex w-fit items-center gap-0.5 rounded-md border border-border bg-foreground/3 p-0.5"
     >
       {props.children}
     </div>
@@ -916,7 +916,7 @@ function PillChip(props: {
       className={cn(
         "rounded-md border px-2.5 py-1 text-ui-xs transition-colors",
         props.active
-          ? "border-border bg-muted text-foreground"
+          ? "border-border bg-foreground/8 text-foreground"
           : "border-border/60 text-muted-foreground hover:text-foreground",
       )}
     >

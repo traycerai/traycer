@@ -278,7 +278,7 @@ function Step(props: {
         aria-hidden
         className="absolute top-7 bottom-0 left-3 w-px bg-border group-last:hidden"
       />
-      <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-ui-xs font-medium text-muted-foreground ring-1 ring-border">
+      <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/8 text-ui-xs font-medium text-muted-foreground ring-1 ring-border">
         {props.index}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
@@ -309,7 +309,7 @@ function CommandBlock(props: {
     onError: () => toast.error("Couldn't copy the command"),
   });
   return (
-    <div className="group flex min-w-0 items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 transition-colors hover:bg-muted/70">
+    <div className="group flex min-w-0 items-center gap-2 rounded-lg border border-border bg-foreground/5 px-2.5 py-1.5 transition-colors hover:bg-foreground/6">
       {props.label === null ? null : (
         <span className="shrink-0 font-mono text-code-xs text-muted-foreground/70 select-none">
           {props.label}

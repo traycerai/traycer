@@ -5,7 +5,11 @@ import { useShallow } from "zustand/react/shallow";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
+import {
+  selectLastProfileByHarness,
+  useComposerHarnessMemoryStore,
+} from "@/stores/composer/composer-harness-memory-store";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
   useEpicCanvasStore,
   type EpicCanvasStore,
@@ -99,8 +103,13 @@ export function useRateLimitProfileSelection(): RateLimitProfileSelection {
     getComposerSettings,
     () => null,
   );
+  // The header surfaces describe the app-wide active host's providers, so
+  // the per-harness profile memory reads that host's bucket. The focused
+  // chat's own settings (above) stay authoritative for its harness either
+  // way.
+  const activeHostId = useReactiveActiveHostId();
   const lastProfileByHarness = useComposerHarnessMemoryStore(
-    (state) => state.lastProfileByHarness,
+    useShallow((state) => selectLastProfileByHarness(state, activeHostId)),
   );
   return { activeChatSettings, lastProfileByHarness };
 }

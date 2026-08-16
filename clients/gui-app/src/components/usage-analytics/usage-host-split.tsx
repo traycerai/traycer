@@ -63,7 +63,7 @@ function UsageHostSplitItem(props: {
         </span>
       </TooltipWrapper>
       <span
-        className="h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-muted"
+        className="h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-foreground/8"
         role="img"
         aria-label={`${percentLabel} of cost`}
       >

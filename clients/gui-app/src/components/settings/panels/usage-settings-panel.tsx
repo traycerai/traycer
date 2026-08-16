@@ -205,7 +205,7 @@ function UsageNotice(props: {
       className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >
-      <span className="flex size-9 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+      <span className="flex size-9 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
         <LineChart className="size-4.5" />
       </span>
       <div className="max-w-[60ch] space-y-1">

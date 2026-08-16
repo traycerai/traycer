@@ -442,11 +442,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -466,11 +462,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -707,16 +699,20 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [GIT_SUMMARY.workspacePath],
-      folderInfoByPath: {
-        [GIT_SUMMARY.workspacePath]: {
-          path: GIT_SUMMARY.workspacePath,
-          name: "app",
-          repoIdentifier: GIT_SUMMARY.repoIdentifier,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [GIT_SUMMARY.workspacePath],
+          folderInfoByPath: {
+            [GIT_SUMMARY.workspacePath]: {
+              path: GIT_SUMMARY.workspacePath,
+              name: "app",
+              repoIdentifier: GIT_SUMMARY.repoIdentifier,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: GIT_SUMMARY.workspacePath,
         },
       },
-      primaryPath: GIT_SUMMARY.workspacePath,
     });
     useWorktreeIntentMemoryStore.getState().setFolderIntent(
       {
@@ -864,16 +860,20 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [folderAPath],
-      folderInfoByPath: {
-        [folderAPath]: {
-          path: folderAPath,
-          name: "app",
-          repoIdentifier: GIT_REPO_IDENTIFIER,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [folderAPath],
+          folderInfoByPath: {
+            [folderAPath]: {
+              path: folderAPath,
+              name: "app",
+              repoIdentifier: GIT_REPO_IDENTIFIER,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: folderAPath,
         },
       },
-      primaryPath: folderAPath,
     });
 
     const queryClient = renderControl("stacked");
@@ -933,22 +933,26 @@ describe("landing workspace summary empty state", () => {
         isLoading: false,
       };
       useWorkspaceFoldersStore.setState({
-        folders: [folderAPath, folderBPath],
-        folderInfoByPath: {
-          [folderAPath]: {
-            path: folderAPath,
-            name: "app",
-            repoIdentifier: GIT_REPO_IDENTIFIER,
-            hostId: null,
-          },
-          [folderBPath]: {
-            path: folderBPath,
-            name: "lib",
-            repoIdentifier: folderBRepo,
-            hostId: null,
+        byHost: {
+          "host-home": {
+            folders: [folderAPath, folderBPath],
+            folderInfoByPath: {
+              [folderAPath]: {
+                path: folderAPath,
+                name: "app",
+                repoIdentifier: GIT_REPO_IDENTIFIER,
+                hostId: "host-home",
+              },
+              [folderBPath]: {
+                path: folderBPath,
+                name: "lib",
+                repoIdentifier: folderBRepo,
+                hostId: "host-home",
+              },
+            },
+            primaryPath: folderAPath,
           },
         },
-        primaryPath: folderAPath,
       });
     });
 

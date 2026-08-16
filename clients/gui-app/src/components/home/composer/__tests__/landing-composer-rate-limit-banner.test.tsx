@@ -145,12 +145,16 @@ vi.mock("@/stores/home/landing-draft-store", () => {
 
 vi.mock("@/stores/composer/composer-run-settings-store", () => {
   const state = {
-    globalLastRunSettings: null,
+    globalLastRunSettingsByHostId: {},
+    legacyGlobalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
   };
   return {
     useComposerRunSettingsStore: (selector: (value: typeof state) => unknown) =>
       selector(state),
+    // The landing composer reads its seed through this selector; a constant
+    // null preserves this suite's "no remembered last-run" premise.
+    selectGlobalLastRunSettings: () => null,
   };
 });
 
