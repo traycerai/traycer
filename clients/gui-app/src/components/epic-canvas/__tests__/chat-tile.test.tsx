@@ -568,6 +568,7 @@ function emitChatSnapshotWithMessages(input: {
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
     },
   });
 }

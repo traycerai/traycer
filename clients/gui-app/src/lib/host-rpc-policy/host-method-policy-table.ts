@@ -520,8 +520,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Shell lifecycle from the Shells list and the output window header.
-  // `fifo` is what buys these three the guarantees the
+  // Shell lifecycle from the Shells list and the output window header. `fifo`
+  // is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
   // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
   // refuses to cancel one. A delete destroys the command's entire output
@@ -543,6 +543,23 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "managedCommand.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deliver takes `fifo` for a reason the other three do not have, and NOT the
+  // one about distinct params. The coordinator keys queues by
+  // [hostId, userId, method, params], so two Delivers naming different subsets
+  // are already distinct jobs - but the common press names no subset at all
+  // (`commandIds: null`), and two of THOSE are byte-identical params, one
+  // queue, and would coalesce under `latest`. Coalescing them is precisely what
+  // must not happen: releasing a hold advances a DURABLE delivery cursor, so a
+  // second press collapsed into the first, or a request aborted on a host swap,
+  // leaves the human looking at a list that may or may not still be held with
+  // no way to tell which.
+  // Never poll it - it is a mutation, and the held set it would poll for
+  // arrives unprompted on `chat.subscribe`.
+  "managedCommand.deliverHeld": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

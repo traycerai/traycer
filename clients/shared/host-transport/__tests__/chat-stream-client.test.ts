@@ -235,6 +235,7 @@ describe("ChatStreamClient", () => {
     // Collected as whole sets, because that is what the frame carries - there
     // is no per-command delta to accumulate.
     const managedCommandSets: string[][] = [];
+    const heldUpdateSets: string[][] = [];
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
         snapshots.push(frame.snapshot.chat.id);
@@ -288,6 +289,9 @@ describe("ChatStreamClient", () => {
         managedCommandSets.push(
           frame.managedCommands.map((command) => command.id),
         );
+      },
+      onHeldUpdatesChanged: (frame) => {
+        heldUpdateSets.push(frame.heldUpdates.map((held) => held.commandId));
       },
       onConnectionStatus: () => undefined,
     };
@@ -395,6 +399,24 @@ describe("ChatStreamClient", () => {
       hasBinaryPayload: false,
       epicId: "epic-1",
       chatId: "chat-1",
+    });
+
+    // Routed to `onHeldUpdatesChanged` and nothing else - this frame was a
+    // deliberate no-op until the Deliver affordance landed, and the switch it
+    // rides has no exhaustiveness guard, so only this assertion catches a
+    // regression back to silently dropping it.
+    sockets[0].fireText({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      heldUpdates: [
+        {
+          commandId: "cmd-held-1",
+          description: "deploy watcher",
+          heldAtMs: 10,
+        },
+      ],
     });
 
     sockets[0].fireText({
@@ -510,6 +532,7 @@ describe("ChatStreamClient", () => {
       "restoreCompleted",
     ]);
     expect(managedCommandSets).toEqual([["cmd-1"], []]);
+    expect(heldUpdateSets).toEqual([["cmd-held-1"]]);
     expect(parseText(sockets[0].textSent[2])).toEqual(frame);
 
     client.close();
@@ -545,6 +568,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
       onErrorNotice: () => undefined,
       onWorktreeStateChanged: () => undefined,
       onManagedCommandsChanged: () => undefined,
+      onHeldUpdatesChanged: () => undefined,
       onConnectionStatus: () => undefined,
     };
   }

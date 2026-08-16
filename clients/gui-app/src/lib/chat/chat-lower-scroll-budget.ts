@@ -7,12 +7,25 @@
  * Managed commands count even when the harness session reports no background
  * work of its own - they reach the section by a client-side join on the epic's
  * command list.
+ *
+ * Held shells are a THIRD input rather than part of the running count, and the
+ * distinction is load-bearing rather than tidy. The two sets do overlap - a
+ * still-running shell keeps its hold until it next prints - but the hold that
+ * only a human can clear is the one on a shell that has FINISHED, and that is
+ * precisely the case the Deliver button exists for. There, both other counts
+ * are zero: gating on them alone hid the whole section, taking the only
+ * affordance that clears a hold off screen while the hold survived restarts.
  */
 export function chatBackgroundSectionVisible(input: {
   readonly backgroundItemCount: number;
   readonly runningManagedCommandCount: number;
+  readonly heldManagedCommandCount: number;
 }): boolean {
-  return input.backgroundItemCount > 0 || input.runningManagedCommandCount > 0;
+  return (
+    input.backgroundItemCount > 0 ||
+    input.runningManagedCommandCount > 0 ||
+    input.heldManagedCommandCount > 0
+  );
 }
 
 export interface LowerScrollBudgetInput {

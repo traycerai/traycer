@@ -285,7 +285,10 @@ export function useChatMessageActions(
       const workspaceSeed =
         mode === "ab-worktree"
           ? buildAbForkWorkspaceSeed(seedInput)
-          : buildForkWorkspaceSeed(seedInput);
+          : buildForkWorkspaceSeed({
+              ...seedInput,
+              hostId: tabHostId,
+            });
       // Seed the fork dialog's picker from the source chat's currently visible
       // workspace (its binding overlaid with any unsent staged choices) so it
       // opens exactly where the source chat's composer is. The dialog applies

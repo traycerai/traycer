@@ -17,11 +17,14 @@ export interface ForkWorkspaceSeed {
 export function buildForkWorkspaceSeed(input: {
   readonly binding: WorktreeBinding | null;
   readonly stagedIntent: WorktreeIntent | null;
+  // Stamp only when this producer actually read the binding from that host.
+  // Null stays unresolved for local-only rows (B6). Never infer "this host".
+  readonly hostId: string | null;
 }): ForkWorkspaceSeed {
   const intent = visibleWorktreeIntent(input.binding, input.stagedIntent);
   return {
     intent,
-    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent),
+    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent, input.hostId),
   };
 }
 
@@ -57,12 +60,13 @@ export function buildAbForkWorkspaceSeed(input: {
         };
   return {
     intent,
-    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent),
+    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent, null),
   };
 }
 
 export function buildForkWorkspaceSeedFromWorkspaceFolders(
   workspaceFolders: readonly string[],
+  hostId: string | null,
 ): ForkWorkspaceSeed {
   const intent =
     workspaceFolders.length === 0
@@ -77,7 +81,7 @@ export function buildForkWorkspaceSeedFromWorkspaceFolders(
         };
   return {
     intent,
-    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent),
+    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent, hostId),
   };
 }
 
@@ -114,6 +118,7 @@ function mergeVisibleEntries(
 
 function worktreeIntentToLandingWorkspaceSnapshot(
   intent: WorktreeIntent | null,
+  hostId: string | null,
 ): LandingDraftWorkspaceSnapshot {
   // An entry-less intent is the empty workspace. Every producer above already
   // collapses that to `null`, but checking it here is what lets the primary
@@ -126,7 +131,7 @@ function worktreeIntentToLandingWorkspaceSnapshot(
   >(
     (accumulator, entry) => ({
       ...accumulator,
-      [entry.workspacePath]: folderIntentToWorkspaceFolderInfo(entry),
+      [entry.workspacePath]: folderIntentToWorkspaceFolderInfo(entry, hostId),
     }),
     {},
   );
@@ -144,15 +149,12 @@ function worktreeIntentToLandingWorkspaceSnapshot(
 
 function folderIntentToWorkspaceFolderInfo(
   intent: WorktreeFolderIntent,
+  hostId: string | null,
 ): WorkspaceFolderInfo {
   return {
     path: intent.workspacePath,
     name: workspaceFolderName(intent.workspacePath),
     repoIdentifier: intent.repoIdentifier,
-    // Fork seed inherits the chat's bound host via the fork flow; hostId is
-    // stamped when folders are re-prepared on a host. Null here is safe —
-    // git-backed rows resolve via repoIdentifier; local-only rows without
-    // hostId stay unresolved under multi-host (B6).
-    hostId: null,
+    hostId,
   };
 }

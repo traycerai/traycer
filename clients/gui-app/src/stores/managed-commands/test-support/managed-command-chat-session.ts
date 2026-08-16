@@ -4,7 +4,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatSubscribeServerFrame } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -35,6 +38,16 @@ export interface ManagedCommandChatSessionStub {
    */
   readonly setCommandsWithoutSnapshot: (
     commands: readonly ManagedCommand[],
+  ) => void;
+  /**
+   * The chat's whole set of held updates, as the host sends it on a
+   * `heldUpdatesChanged` frame - never a delta. Unlike {@link setCommands} this
+   * needs no snapshot-first ordering: the store's `onHeldUpdatesChanged`
+   * handler is a plain assignment gated only on chat identity, the same as
+   * {@link setCommandsWithoutSnapshot}'s frame.
+   */
+  readonly setHeldUpdates: (
+    heldUpdates: readonly HeldManagedCommandUpdate[],
   ) => void;
   readonly setConnectionStatus: (status: StreamConnectionStatus) => void;
   readonly dispose: () => void;
@@ -123,6 +136,15 @@ export function installManagedCommandChatSession(args: {
     setCommandsWithoutSnapshot: (commands) => {
       changeFrame(commands);
     },
+    setHeldUpdates: (heldUpdates) => {
+      callbacks().onHeldUpdatesChanged({
+        kind: "heldUpdatesChanged",
+        hasBinaryPayload: false,
+        epicId,
+        chatId,
+        heldUpdates: [...heldUpdates],
+      });
+    },
     setConnectionStatus: (status: StreamConnectionStatus) => {
       const reason: StreamCloseReason | null = null;
       callbacks().onConnectionStatus(status, reason);
@@ -177,6 +199,7 @@ function emptyChatSnapshot(args: {
     accumulatedFileChanges: [],
     backgroundItems: [],
     managedCommands: [...args.commands],
+    heldUpdates: [],
   };
 }
 
