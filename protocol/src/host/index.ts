@@ -18,6 +18,7 @@ export * from "./migration";
 export * from "./mention-contracts";
 export * from "./mention-schemas";
 export * from "./notifications";
+export * from "./policy";
 export * from "./pr-contracts";
 export * from "./pr-schemas";
 export * from "./rate-limit";
