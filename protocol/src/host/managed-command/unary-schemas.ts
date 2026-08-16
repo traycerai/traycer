@@ -166,3 +166,121 @@ export const managedCommandDeleteResponseSchema = z.object({
 export type ManagedCommandDeleteResponse = z.infer<
   typeof managedCommandDeleteResponseSchema
 >;
+
+/**
+ * One shell whose last batch of output a committed Stop fence captured and is
+ * holding back. The hold is DURABLE and survives host restarts, which is the
+ * whole reason this needs a surface: a shell that is still running releases its
+ * own hold the moment it prints again, but one whose FINAL batch the Stop
+ * caught will never produce later output, so nothing re-dirties it and only an
+ * explicit Deliver can ever clear it.
+ *
+ * Deliberately narrow. `description` rides along so a surface can name the row
+ * without joining, but everything else a viewer needs - status, monitoring, the
+ * command line - is already on the chat's `managedCommands` entry under the
+ * same `commandId`, and a held command is always still in that set (deleting
+ * one cascades its hold away).
+ *
+ * The delivery-state revision carrying the hold is deliberately NOT here, for
+ * the reason `managedCommandStatusSchema` leaves out `pidStartTimeMs`: it
+ * settles an internal write race and is nothing a viewer can act on.
+ */
+export const heldManagedCommandUpdateSchema = z.object({
+  commandId: z.string(),
+  /** The command's human label, so the row reads without a join. */
+  description: z.string(),
+  /** When the Stop commit installed the hold. */
+  heldAtMs: z.number(),
+});
+export type HeldManagedCommandUpdate = z.infer<
+  typeof heldManagedCommandUpdateSchema
+>;
+
+/**
+ * Deliver is chat-scoped, not command-scoped, because a hold is: the Stop that
+ * installed it fenced a CHAT, and "deliver everything you are holding for me"
+ * is the action a human actually takes. `commandIds` narrows it to specific
+ * shells; null means every hold this chat owns.
+ *
+ * `epicId` is named for the same reason the id-addressed controls name it - a
+ * chat in another epic is answered exactly as one that never existed.
+ */
+export const managedCommandDeliverHeldRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  commandIds: z.array(z.string()).nullable(),
+});
+export type ManagedCommandDeliverHeldRequest = z.infer<
+  typeof managedCommandDeliverHeldRequestSchema
+>;
+
+/**
+ * One hold the host could not prove it released.
+ *
+ * The host's own release path is all-or-nothing: it throws unless EVERY
+ * in-scope durable row is provably hold-free, because resolution there means
+ * "you may tell the user this output was delivered". That is the right
+ * guarantee for a proof obligation and the wrong shape for a surface - a person
+ * who asked to deliver four shells and got three should be told which one is
+ * stuck, not that the whole action failed. So the RPC reports the split instead
+ * of inheriting it (see `managedCommandDeliverHeldResponseSchema`).
+ *
+ * `retryable` is the ONLY field a client may branch on, and it is a boolean on
+ * purpose. A reason enum would have to grow as new failure modes appear, and an
+ * added enum value on a host->client payload is a wire break at a released
+ * version (`surface-compat.ts`) - so the one bit a surface genuinely needs is
+ * carried in a shape that can never need widening:
+ *
+ * - `true`  - transient. The hold is real and this host process could still
+ *   release it: the pair has not been materialized by a reconcile pass yet, or
+ *   a later Stop re-installed the hold. Offer the action again.
+ * - `false` - wedged for the life of this host process, and no amount of
+ *   retrying changes it: a delivery row written by a NEWER build that this one
+ *   cannot decode, or a boot record load that failed (the supervisor memoizes
+ *   that rejection and never reloads). Say so - "this shell's output needs a
+ *   newer/restarted host" - rather than offering a button that cannot work.
+ *
+ * `code` is a free-form string, NOT an enum, precisely so new failure modes can
+ * be distinguished in logs and telemetry without a wire break. Clients must not
+ * branch on it; it is for humans reading a report.
+ */
+export const managedCommandHeldReleaseFailureSchema = z.object({
+  commandId: z.string(),
+  /** Stable identifier for logs and telemetry. Never branch on this. */
+  code: z.string(),
+  /** Whether retrying against THIS host process could ever succeed. */
+  retryable: z.boolean(),
+  /** Host-authored detail, safe to show in a diagnostic surface. */
+  message: z.string(),
+});
+export type ManagedCommandHeldReleaseFailure = z.infer<
+  typeof managedCommandHeldReleaseFailureSchema
+>;
+
+/**
+ * Deliver answers with what actually happened, per command, and RESOLVES even
+ * when part of it failed. A non-empty `unresolved` is a normal, expected
+ * outcome - not an error channel - so a caller can render "3 delivered, 1 still
+ * held" in one pass. The RPC itself rejects only for the ordinary reasons any
+ * other control does: an epic/chat the caller may not touch, or a transport
+ * failure.
+ *
+ * `held` is the post-state, the same way start and stop answer with the
+ * command's post-transition state: the chat's REMAINING holds after the call.
+ * On a fully successful Deliver of every hold it is empty. It is not derivable
+ * from `released` + `unresolved` - a hold installed by a Stop that landed
+ * concurrently belongs in it and in neither of the others - so the caller that
+ * pressed the button settles its own list from this rather than re-deriving it
+ * and waiting for the stream to correct it.
+ */
+export const managedCommandDeliverHeldResponseSchema = z.object({
+  /** Command ids whose hold this call proved gone. */
+  released: z.array(z.string()),
+  /** In-scope commands whose release could not be proven. */
+  unresolved: z.array(managedCommandHeldReleaseFailureSchema),
+  /** Every hold the chat still owns once this call settled. */
+  held: z.array(heldManagedCommandUpdateSchema),
+});
+export type ManagedCommandDeliverHeldResponse = z.infer<
+  typeof managedCommandDeliverHeldResponseSchema
+>;

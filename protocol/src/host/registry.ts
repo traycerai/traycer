@@ -247,6 +247,7 @@ import {
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
   managedCommandDeleteV10,
+  managedCommandDeliverHeldV10,
   managedCommandStartV10,
   managedCommandStopV10,
   managedCommandSubscribeOutputV10,
@@ -6329,6 +6330,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Releasing a Stop fence's durable holds. `degrade: unsupported` like its
+  // siblings, and the degrade matters more here than for the other three: a
+  // host without it is not merely missing a button, it is holding output that
+  // has no other way out. The client renders the held rows (they ride
+  // `chat.subscribe`, which negotiates separately) with the action disabled
+  // rather than offering one that cannot be served.
+  "managedCommand.deliverHeld": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandDeliverHeldV10,
           upgradeFromPreviousVersion: null,
         },
       },

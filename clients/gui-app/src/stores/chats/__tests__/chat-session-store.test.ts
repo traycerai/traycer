@@ -399,6 +399,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
       pendingFileEditApprovals: [...input.pendingFileEditApprovals],
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
+      heldUpdates: [],
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
@@ -445,6 +446,7 @@ function emitSnapshotWithWorktree(
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
       worktreeBinding,
       missingWorktreePaths: [],
     },
@@ -3857,6 +3859,7 @@ describe("createChatSessionStore", () => {
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
         managedCommands: [],
+        heldUpdates: [],
       },
     });
     callbacks.onTurnStateChanged({
@@ -4026,6 +4029,7 @@ describe("createChatSessionStore", () => {
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
         managedCommands: [],
+        heldUpdates: [],
       },
     });
 

@@ -177,6 +177,7 @@ function emptyChatSnapshot(args: {
     accumulatedFileChanges: [],
     backgroundItems: [],
     managedCommands: [...args.commands],
+    heldUpdates: [],
   };
 }
 
