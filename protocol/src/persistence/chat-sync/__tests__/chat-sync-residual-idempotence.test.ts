@@ -77,9 +77,12 @@ type VisitCounter = { count: number };
  * `isJsonObject`'s prototype / symbol / descriptor checks and to the walk: what
  * is measured is the real algorithm on a real input, not a stub of it.
  *
- * `get`, `getOwnPropertyDescriptor` and `ownKeys` are the three traps capture
- * can reach - `Object.getOwnPropertyNames` and `Object.getOwnPropertySymbols`
- * both route through `ownKeys`.
+ * Four traps, which between them are every way capture can reach a level:
+ * `get`, `getOwnPropertyDescriptor`, `ownKeys` (both
+ * `Object.getOwnPropertyNames` and `Object.getOwnPropertySymbols` route
+ * through it), and `getPrototypeOf` - `isJsonObject` takes exactly one of
+ * those per level it deep-validates, so omitting it undercounts the
+ * validation-driven half of the work by 1 per level.
  */
 function countingProxy(target: JsonObject, visits: VisitCounter): JsonObject {
   return new Proxy(target, {
@@ -94,6 +97,10 @@ function countingProxy(target: JsonObject, visits: VisitCounter): JsonObject {
     ownKeys(object) {
       visits.count += 1;
       return Reflect.ownKeys(object);
+    },
+    getPrototypeOf(object) {
+      visits.count += 1;
+      return Reflect.getPrototypeOf(object);
     },
   });
 }
