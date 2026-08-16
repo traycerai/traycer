@@ -90,6 +90,7 @@ export function useLatestConversationWorkspaceSeed(
     const seed = buildForkWorkspaceSeed({
       binding,
       stagedIntent,
+      hostId: seedHostId,
     });
     if (seed.intent === null) return null;
     return {
@@ -97,7 +98,7 @@ export function useLatestConversationWorkspaceSeed(
       sourceOwnerId: latestOwner.id,
       sourceOwnerKind: latestOwner.ownerKind,
     };
-  }, [binding, canReadBinding, latestOwner, stagedIntent]);
+  }, [binding, canReadBinding, latestOwner, seedHostId, stagedIntent]);
 }
 
 export function latestCreatedConversationOwner(

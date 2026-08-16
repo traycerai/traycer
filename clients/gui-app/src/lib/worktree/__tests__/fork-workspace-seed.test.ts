@@ -163,6 +163,7 @@ describe("buildForkWorkspaceSeed", () => {
         ],
       },
       stagedIntent: null,
+      hostId: null,
     });
 
     expect(seed.workspace).toEqual({
