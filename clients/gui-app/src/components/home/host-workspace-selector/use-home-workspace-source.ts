@@ -4,7 +4,10 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -61,11 +64,14 @@ export interface HomeWorkspaceSource {
  * global), routing each action to the store(s) that own the active
  * representation. Lives in its own module (not `host-workspace-selector.tsx`)
  * so hook-level wiring tests can `renderHook` it directly - it has no
- * host/React-context dependencies of its own (zustand stores only).
+ * host/React-context dependencies of its own (zustand stores only; the
+ * caller resolves and passes `hostId`, the host whose per-host folder bucket
+ * the "global" representation reads and writes).
  */
 export function useHomeWorkspaceSource(
   stagingKey: WorktreeStagingKey,
   workspaceSeed: LandingDraftWorkspaceSnapshot | null,
+  hostId: string | null,
 ): HomeWorkspaceSource {
   const draftId = stagingKey.surface === "landing" ? stagingKey.draftId : null;
   const modalEpicId =
@@ -107,11 +113,13 @@ export function useHomeWorkspaceSource(
     (state) => state.setPrimaryFolder,
   );
   const globalPrimaryPath = useWorkspaceFoldersStore(
-    (state) => state.primaryPath,
+    (state) => selectWorkspaceFoldersBucket(state, hostId).primaryPath,
   );
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  const globalFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
+  );
   const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (state) => state.folderInfoByPath,
+    (state) => selectWorkspaceFoldersBucket(state, hostId).folderInfoByPath,
   );
   const {
     addDraftResolvedFolders,
@@ -203,7 +211,7 @@ export function useHomeWorkspaceSource(
           return;
         }
         if (!usingSeededWorkspace) {
-          const evicted = addGlobalResolvedFolders(folders);
+          const evicted = addGlobalResolvedFolders(hostId, folders);
           if (activeDraftId === null) {
             for (const path of evicted) unstageStoreEntry(stagingKey, path);
           }
@@ -242,7 +250,7 @@ export function useHomeWorkspaceSource(
           removeModalFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            removeGlobalFolder(folderPath);
+            removeGlobalFolder(hostId, folderPath);
           }
           if (activeDraftId !== null) {
             removeDraftFolder(activeDraftId, folderPath);
@@ -291,7 +299,7 @@ export function useHomeWorkspaceSource(
           setModalPrimaryFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            setGlobalPrimaryFolder(folderPath);
+            setGlobalPrimaryFolder(hostId, folderPath);
           }
           if (activeDraftId !== null) {
             setDraftWorkspacePrimary(activeDraftId, folderPath);
@@ -332,6 +340,7 @@ export function useHomeWorkspaceSource(
       capturedIntent,
       folders,
       globalFolders,
+      hostId,
       modalEpicId,
       modalSeedWorkspace,
       primaryPath,

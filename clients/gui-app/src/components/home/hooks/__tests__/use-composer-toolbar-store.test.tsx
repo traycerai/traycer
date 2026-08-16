@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { ComposerToolbarCatalogScope } from "@/components/home/hooks/use-composer-toolbar-store";
+import type { ComposerControls } from "@/lib/commands/composer-controls-registry";
 
 const harnessesData: {
   value:
@@ -56,42 +59,65 @@ const modelQueryCalls: Array<{
   readonly enabled: boolean;
   readonly subscribed: boolean;
 }> = [];
+// Records the `client` argument each `…ForClient` call was invoked with, so
+// tests can assert the store forwards the EXACT catalog scope it was given -
+// never a fallback to the app-wide default host - and forwards `null`
+// verbatim rather than substituting a default when the composer's host isn't
+// resolved yet.
+const harnessClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
+const modelClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
+// Records the `hostClient` each registration was made with, so a test can
+// assert the store registers the palette's composer subpages against the
+// SAME client its own catalog reads through (`catalog.hostClient`), and
+// re-registers (a new call, not a mutation of the old one) when it changes.
+const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
+  [];
 
 // `data` is returned regardless of `enabled`, because that is what TanStack
 // does: `enabled:false` stops FETCHING, it does not evict the cache, and a
 // focused split partner observing the same key keeps it warm. Modelling it as
 // "inactive means no data" would let a consumer that blanks its own catalog on
-// blur look correct here.
+// blur look correct here. A `null` client, however, DOES model "no data" -
+// that is what disables the underlying query for real, so a composer whose
+// host hasn't resolved yet must never render another host's cached catalog.
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: (activity: {
-    enabled: boolean;
-    subscribed: boolean;
-  }) => {
+  useGuiHarnessesQueryForClient: (
+    client: HostClient<HostRpcRegistry> | null,
+    activity: { enabled: boolean; subscribed: boolean },
+  ) => {
+    harnessClientCalls.push(client);
     harnessQueryCalls.push({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: harnessesData.value };
+    return { data: client === null ? undefined : harnessesData.value };
   },
-  useGuiHarnessModelsQuery: (
+  useGuiHarnessModelsQueryForClient: (
+    client: HostClient<HostRpcRegistry> | null,
     harnessId: string,
     workingDirectory: string | null,
     activity: { enabled: boolean; subscribed: boolean },
   ) => {
+    modelClientCalls.push(client);
     modelQueryCalls.push({
       harnessId,
       workingDirectory,
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: modelsData.value };
+    return { data: client === null ? undefined : modelsData.value };
   },
 }));
 
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
-  useRegisterFocusedComposerControls: (kind: FocusedComposerKind | null) => {
+  useRegisterFocusedComposerControls: (
+    kind: FocusedComposerKind | null,
+    _controls: ComposerControls,
+    hostClient: HostClient<HostRpcRegistry> | null,
+  ) => {
     registeredComposerKinds.push(kind);
+    registeredComposerHostClients.push(hostClient);
   },
 }));
 
@@ -105,6 +131,9 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
 }));
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
@@ -112,6 +141,53 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { FocusedComposerKind } from "@/lib/commands/types";
+
+/**
+ * A real, distinct `HostClient` instance (never a cast) so `hostClient` args
+ * threaded through `ComposerToolbarCatalogScope` compare by identity - the
+ * mocked catalog hooks above record exactly which client they were called
+ * with, so a test can assert the store forwards THIS object, not some other
+ * host's client or a fallback default.
+ */
+function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => {} },
+    // Never actually dispatched - the catalog hooks are mocked wholesale
+    // above, so this messenger exists only to satisfy `HostClient`'s
+    // constructor.
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${hostId}`,
+      handlers: {},
+    }),
+  });
+  client.bind({
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable",
+  });
+  return client;
+}
+
+// The catalog scope every test in this file used before `hostClient` became
+// part of it - a fixed, non-null client so the mocked catalog hooks keep
+// returning `harnessesData.value` / `modelsData.value` exactly as before.
+const DEFAULT_TEST_HOST_CLIENT = buildTestHostClient("default-host");
+// The host id every test in this file commits selections/memory writes
+// under, once `catalog.hostId` became a required per-host memory key.
+const TEST_HOST_ID = "host-a";
+
+function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
+  return {
+    hostClient: DEFAULT_TEST_HOST_CLIENT,
+    hostId: TEST_HOST_ID,
+    tuiOnly,
+  };
+}
 
 function seedDefault(
   harnessId: "claude" | "codex" | "opencode" | "traycer" | "cursor",
@@ -137,7 +213,10 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     harnessQueryCalls.length = 0;
     modelQueryCalls.length = 0;
+    harnessClientCalls.length = 0;
+    modelClientCalls.length = 0;
     registeredComposerKinds.length = 0;
+    registeredComposerHostClients.length = 0;
     // Reset the sticky tier default so a tier-normalization test can't leak its
     // preference into a later test's seeded values.
     useSettingsStore.setState({ defaultServiceTier: "" });
@@ -163,7 +242,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     await waitFor(() =>
@@ -186,7 +270,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     // Give the catalog-sync effect a chance to (not) reroute.
@@ -203,7 +292,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     harnessesData.value = undefined;
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     await Promise.resolve();
@@ -225,7 +319,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, catalogScope(true)),
     );
 
     await waitFor(() =>
@@ -247,7 +341,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, catalogScope(true)),
     );
 
     await Promise.resolve();
@@ -292,7 +386,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, true),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(true),
+      ),
     );
 
     // Reroute settles on a TUI-capable harness with a concrete model slug, so a
@@ -318,7 +417,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     seedDefault("claude");
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     act(() => {
@@ -338,7 +442,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     act(() => {
@@ -406,7 +515,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     await waitFor(() =>
@@ -441,7 +555,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     act(() => {
@@ -488,7 +607,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     act(() => {
@@ -533,7 +657,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     act(() => {
@@ -591,7 +720,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     // Let the catalog load so the commit resolves a concrete slug and emits
@@ -619,7 +753,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     seedDefault("codex");
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
     // The mount path (catalog sync / seed) never tracks; start from a clean count.
     trackSpy.mockClear();
@@ -702,7 +841,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     // The model supports both sticky values, so they carry before the commit.
@@ -773,7 +917,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     // The dead slug resolves to the first live model for display, with that
@@ -825,7 +974,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     // Loading window: the remembered slug is held for display but unconfirmed.
@@ -896,7 +1050,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     await waitFor(() =>
@@ -966,7 +1125,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
     );
 
     // Load WITHOUT the remembered slug -> self-heals to the first model, emits it.
@@ -1027,7 +1191,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     modelsData.value = undefined;
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     await waitFor(() =>
@@ -1072,7 +1241,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         null,
         fallbackSeedSource(seeds.current, null),
         null,
-        false,
+        catalogScope(false),
       ),
     );
     expect(result.current.getState().selection.harnessId).toBe("codex");
@@ -1130,7 +1299,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         null,
         fallbackSeedSource(seeds.current, null),
         null,
-        false,
+        catalogScope(false),
       ),
     );
     expect(result.current.getState().selection.profileId).toBe("work-uuid");
@@ -1169,7 +1338,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ],
     };
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, false),
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
     );
 
     await waitFor(() =>
@@ -1181,10 +1355,16 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
 
     const memory = useComposerHarnessMemoryStore.getState();
-    expect(memory.lastModelByHarness.codex).toBe("saved-model");
+    expect(memory.byHost[TEST_HOST_ID].lastModelByHarness.codex).toBe(
+      "saved-model",
+    );
     expect(
-      memory.resolveModelSelection("codex", "saved-model").reasoningEffort,
+      memory.resolveModelSelection(TEST_HOST_ID, "codex", "saved-model")
+        .reasoningEffort,
     ).toBe("high");
+    // The write lands in this host's bucket, never the legacy
+    // pre-host-scoping fallback.
+    expect(memory.legacy.lastModelByHarness).toEqual({});
   });
 
   it("does not record memory while the surface reroutes the harness", async () => {
@@ -1219,7 +1399,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ],
     };
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, catalogScope(true)),
     );
 
     await waitFor(() => {
@@ -1234,13 +1414,19 @@ describe("useComposerToolbarStore selection reconciliation", () => {
 
     // Rerouted -> emit suppressed -> nothing recorded for either harness.
     const memory = useComposerHarnessMemoryStore.getState();
-    expect(memory.lastModelByHarness).toEqual({});
+    expect(memory.byHost).toEqual({});
   });
 
   it("detaches harness queries and command registration when inactive", () => {
     seedDefault("codex");
     renderHook(
-      () => useComposerToolbarStore("landing", { kind: "none" }, null, false),
+      () =>
+        useComposerToolbarStore(
+          "landing",
+          { kind: "none" },
+          null,
+          catalogScope(false),
+        ),
       {
         wrapper: inactiveWrapper,
       },
@@ -1297,7 +1483,13 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(
-      () => useComposerToolbarStore("landing", { kind: "none" }, null, false),
+      () =>
+        useComposerToolbarStore(
+          "landing",
+          { kind: "none" },
+          null,
+          catalogScope(false),
+        ),
       { wrapper: inactiveWrapper },
     );
 
@@ -1315,5 +1507,81 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     ]);
     expect(state.reasoning).toBe("high");
     expect(state.supportedPermissionModes).toEqual(["full"]);
+  });
+
+  it("issues the catalog queries against the EXACT hostClient passed in, never a fallback to the default host's client", async () => {
+    seedDefault("codex");
+    const hostBClient = buildTestHostClient("host-b");
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+
+    renderHook(() =>
+      useComposerToolbarStore(null, { kind: "none" }, null, {
+        hostClient: hostBClient,
+        hostId: "host-b",
+        tuiOnly: false,
+      }),
+    );
+
+    await waitFor(() => expect(harnessClientCalls.length).toBeGreaterThan(0));
+    // The exact object identity of the passed client, not merely "some
+    // client" - a regression that quietly substituted the app-wide default
+    // host's client would still pass an identity-blind assertion here.
+    expect(harnessClientCalls.at(-1)).toBe(hostBClient);
+    expect(harnessClientCalls.at(-1)).not.toBe(DEFAULT_TEST_HOST_CLIENT);
+    expect(modelClientCalls.at(-1)).toBe(hostBClient);
+    expect(modelClientCalls.at(-1)).not.toBe(DEFAULT_TEST_HOST_CLIENT);
+  });
+
+  it("forwards a null hostClient verbatim - the catalog stays empty rather than borrowing the default host's cache", async () => {
+    seedDefault("codex");
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, { kind: "none" }, null, {
+        hostClient: null,
+        hostId: null,
+        tuiOnly: false,
+      }),
+    );
+
+    await Promise.resolve();
+    // `null` reaches the query hooks unchanged - never silently swapped for
+    // the default-host client the OTHER tests in this file use.
+    expect(harnessClientCalls.at(-1)).toBeNull();
+    expect(modelClientCalls.at(-1)).toBeNull();
+    // The mocked hooks model a `null` client as a disabled query (`data:
+    // undefined`), exactly like the real `…ForClient` hooks do - so nothing
+    // renders for this composer, even though `harnessesData.value` /
+    // `modelsData.value` are the SAME module-level fixtures every other test
+    // in this file populates and reads through the default client.
+    expect(result.current.getState().catalog.harnesses).toBeUndefined();
+    expect(result.current.getState().selectedModel).toBeNull();
+  });
+
+  it("registers the focused-composer controls with the SAME hostClient as catalog.hostClient, and re-registers when it changes", () => {
+    seedDefault("codex");
+    const hostAClient = buildTestHostClient("host-a");
+    const hostBClient = buildTestHostClient("host-b");
+
+    const { rerender } = renderHook(
+      (props: { hostClient: HostClient<HostRpcRegistry>; hostId: string }) =>
+        useComposerToolbarStore("landing", { kind: "none" }, null, {
+          hostClient: props.hostClient,
+          hostId: props.hostId,
+          tuiOnly: false,
+        }),
+      { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
+    );
+
+    expect(registeredComposerKinds.at(-1)).toBe("landing");
+    expect(registeredComposerHostClients.at(-1)).toBe(hostAClient);
+
+    rerender({ hostClient: hostBClient, hostId: "host-b" });
+
+    expect(registeredComposerKinds.at(-1)).toBe("landing");
+    expect(registeredComposerHostClients.at(-1)).toBe(hostBClient);
+    // A genuine re-registration - a SECOND recorded call, not the first call's
+    // argument silently mutating in place.
+    expect(registeredComposerHostClients).toEqual([hostAClient, hostBClient]);
   });
 });

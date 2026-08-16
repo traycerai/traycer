@@ -4,6 +4,7 @@ import {
   publishedChatLockReason,
   replicaChatLockReason,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
  * The locked composer's footer is the ONE sentence a reader of a read-only
@@ -25,6 +26,7 @@ describe("publishedChatLockReason", () => {
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
+      publishedAt: null,
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
@@ -38,6 +40,7 @@ describe("publishedChatLockReason", () => {
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
+      publishedAt: null,
     });
 
     expect(reason).toContain("last published copy");
@@ -60,6 +63,7 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
+        publishedAt: null,
       });
       expect(reason).toContain("which is offline");
       expect(reason).toContain("Sending resumes when that host is back.");
@@ -76,6 +80,7 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
+        publishedAt: null,
       }),
     ).toContain("2 items need a newer version of Traycer to render.");
     expect(
@@ -85,8 +90,88 @@ describe("publishedChatLockReason", () => {
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
+        publishedAt: null,
       }),
     ).toContain("1 attachment is unavailable.");
+  });
+
+  describe("published-at clause", () => {
+    it("says nothing about age when the row carries no publish time", () => {
+      // A row published by a build that predates the stamp, or a read that
+      // has not settled. Silence, not an invented date and not a "behind"
+      // guess - the clause states a fact or stays out of the sentence.
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+      });
+
+      expect(reason).not.toContain("Published");
+    });
+
+    it("states when the copy was published, and claims nothing further", () => {
+      // The date is the whole of what this tile can honestly say about
+      // freshness: it holds no record head to compare against. Pinned so a
+      // future "behind"/"current" verdict has to earn its evidence first.
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt,
+      });
+
+      expect(reason).toContain(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      expect(reason).not.toContain("continued");
+      expect(reason).not.toContain("behind");
+    });
+
+    it("sits before the unreadable-items tail", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 2,
+        fidelityNotice: null,
+        publishedAt,
+      });
+
+      const freshnessIndex = reason.indexOf(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      const unreadableIndex = reason.indexOf(
+        "2 items need a newer version of Traycer to render.",
+      );
+      expect(freshnessIndex).toBeGreaterThanOrEqual(0);
+      expect(unreadableIndex).toBeGreaterThan(freshnessIndex);
+    });
+
+    it("sits before the fidelity notice tail", () => {
+      const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+      const reason = publishedChatLockReason({
+        ownerIsReachable: true,
+        ownerIsThisHost: true,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: "1 attachment is unavailable.",
+        publishedAt,
+      });
+
+      const freshnessIndex = reason.indexOf(
+        `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+      );
+      const fidelityIndex = reason.indexOf("1 attachment is unavailable.");
+      expect(freshnessIndex).toBeGreaterThanOrEqual(0);
+      expect(fidelityIndex).toBeGreaterThan(freshnessIndex);
+    });
   });
 });
 

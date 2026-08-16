@@ -118,6 +118,7 @@ function ProfilesAndUsageRefreshButton({
     providerId,
     profileId,
     usageUpdatedAt,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
     fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
@@ -151,12 +152,14 @@ function EmbeddedProviderRateLimitSettingsCard({
     profileId,
     fetchEligible,
   );
-  useRefreshProviderRateLimitsOnMount(
+  useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
     usageUpdatedAt,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
     fetchEligible,
-  );
+    refetch: query.refetch,
+  });
   useRefreshProviderRateLimitsOnTurn(providerId, profileId, fetchEligible);
 
   return (
@@ -203,6 +206,7 @@ function ProviderRateLimitSettingsCard({
     providerId,
     profileId,
     usageUpdatedAt,
+    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
     fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,

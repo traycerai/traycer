@@ -188,6 +188,12 @@ export const prQueryKeys = {
       readonly headOid: string;
       readonly path: string;
       readonly previousPath: string | null;
+      // The byte-path sidecars are part of the key because they are part of
+      // the request identity: two files whose lossy `path` strings collide
+      // differ ONLY in their tokens, and sharing a slot would hand one
+      // file's patch to the other.
+      readonly pathBytes: string | null;
+      readonly previousPathBytes: string | null;
       readonly ignoreWhitespace: boolean;
       readonly byteBudget: number | null;
     },
@@ -198,6 +204,8 @@ export const prQueryKeys = {
       args.headOid,
       args.path,
       args.previousPath,
+      args.pathBytes,
+      args.previousPathBytes,
       args.ignoreWhitespace,
       args.byteBudget,
     ] as const,

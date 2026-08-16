@@ -224,9 +224,11 @@ export class MenuController {
       return;
     }
     if (command === "host.restart") {
-      // The renderer owns the confirmation modal. Once confirmed, it calls
-      // runnerHost.requestHostRespawn(), which routes back through the shared
-      // main-process respawn entrypoint.
+      // The renderer owns the whole restart flow (`LocalHostRestartFlow`):
+      // confirm, then the cooperative claim-gated `host.restart` RPC, with
+      // runnerHost.requestHostRespawn() - the shared main-process respawn
+      // entrypoint - reserved for the explicit Force choice and for a host
+      // that cannot take the cooperative path.
       if (this.options.dispatchRendererCommand(command, null)) return;
 
       void this.options.windowRegistry

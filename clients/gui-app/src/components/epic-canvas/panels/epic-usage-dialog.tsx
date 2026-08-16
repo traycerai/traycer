@@ -1,17 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { LineChart } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import {
@@ -26,12 +18,34 @@ import {
   buildUsageSeriesScaleForBuckets,
   type UsageChartGroupBy,
 } from "@/lib/usage-analytics/usage-chart-data";
+import { buildUsageHarnessSplitRows } from "@/lib/usage-analytics/usage-harness-split";
+import {
+  buildUsageStatTiles,
+  usageCompletenessAbsentNote,
+} from "@/lib/usage-analytics/usage-stat-tiles";
+import {
+  servedByScopeNote,
+  type UsageServedBy,
+} from "@/lib/usage-analytics/cost-format";
+import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
+import { cn } from "@/lib/utils";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageChartGroupByToggle } from "@/components/usage-analytics/usage-chart-groupby-toggle";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
-import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 import { UsageChatBreakdown } from "@/components/usage-analytics/usage-chat-breakdown";
+import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-split";
+import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
 import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
+import {
+  UsageDialogFrame,
+  USAGE_DIALOG_SHEET_CLASSES,
+} from "@/components/usage-analytics/usage-dialog-frame";
+import {
+  UsageDialogEmpty,
+  UsageDialogErrorState,
+  UsageDialogSkeleton,
+  UsageDialogUnavailable,
+} from "@/components/usage-analytics/usage-dialog-states";
 
 export interface EpicUsageDialogProps {
   readonly epicId: string;
@@ -47,14 +61,23 @@ type UsageSummaryQueryResult = UseQueryResult<
 
 const DEFAULT_WINDOW_DAYS: UsageSummaryWindowDays = 7;
 
+// >=44px touch targets on coarse pointers without growing the tabs list's
+// hardcoded h-8: an invisible overlay extends each trigger's vertical hit
+// area (the trigger is already `relative`; `after:` is taken by the
+// line-variant indicator, so this rides `before:`).
+const COARSE_POINTER_TRIGGER =
+  "pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5";
+
 /**
  * The scoped epic panel ticket 12 replaces the ambient cost badge with:
- * headline (`UsageCostFigure`, reused unmodified), a small per-day trend
- * chart, and a by-chat/agent breakdown, with window options 7/30/90. Cost is
- * on-demand by construction - the query is only
- * `enabled` while the dialog is open, so there is nothing ambient left to
- * silently revert (fixup-01's failure mode). `poll: false` matches every
- * other actively-viewed usage surface (Settings' `UsageSummaryPanel`).
+ * headline (`UsageCostFigure`), harness split, curated stat tiles, a
+ * per-day trend chart, and a by-chat/agent breakdown, with window options
+ * 7/30/90 - variant B of the usage-dialog redesign (48rem mini-dashboard
+ * in a fixed frame; states swap inside it, never resize it). Cost is
+ * on-demand by construction - the query is only `enabled` while the dialog
+ * is open, so there is nothing ambient left to silently revert (fixup-01's
+ * failure mode). `poll: false` matches every other actively-viewed usage
+ * surface (Settings' `UsageSummaryPanel`).
  */
 export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
@@ -81,71 +104,74 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[min(90dvh,38rem)] w-[min(92vw,32rem)] min-w-0 flex-col gap-4 overflow-hidden sm:max-w-lg"
+        // Fixed `h` - not `max-h` - is the no-jump fix: every state renders
+        // into the same frame. `sm:max-w-3xl` overrides the primitive's
+        // `sm:max-w-sm` cap (load-bearing, same reason the earlier shape
+        // carried `sm:max-w-lg`).
+        className={cn(
+          "flex h-[min(88dvh,46rem)] w-[min(92vw,48rem)] min-w-0 flex-col gap-4 overflow-hidden sm:max-w-3xl",
+          USAGE_DIALOG_SHEET_CLASSES,
+          "max-[28rem]:h-[94dvh]",
+        )}
         data-testid="epic-usage-dialog"
       >
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15">
-            <LineChart className="size-4" aria-hidden />
-          </div>
-          <div className="min-h-0 min-w-0 flex-1 space-y-1">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              Usage
-            </DialogTitle>
-            <DialogDescription>
-              Cost and token usage for this epic.
-            </DialogDescription>
-          </div>
-        </div>
-        <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <UsageDialogFrame
+          title="Usage"
+          description="Cost and token usage for this epic."
+          headerControls={
+            <UsageWindowPicker
+              windowDays={windowDays}
+              onChange={setWindowDays}
+              triggerClassName={COARSE_POINTER_TRIGGER}
+            />
+          }
+          footer={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-[28rem]:w-full"
+              data-testid="epic-usage-view-full-dashboard"
+              onClick={() => {
+                onOpenChange(false);
+                openSettings({ section: "usage", resetToGeneral: false });
+              }}
+            >
+              View full usage →
+            </Button>
+          }
+        >
           <EpicUsageDialogBody
             query={query}
+            windowDays={windowDays}
+            onWindowDaysChange={setWindowDays}
             chartGroupBy={chartGroupBy}
             onChartGroupByChange={setChartGroupBy}
           />
-        </div>
-        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t bg-muted/50 px-4 py-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="epic-usage-view-full-dashboard"
-            onClick={() => {
-              onOpenChange(false);
-              openSettings({ section: "usage", resetToGeneral: false });
-            }}
-          >
-            View full usage →
-          </Button>
-        </DialogFooter>
+        </UsageDialogFrame>
       </DialogContent>
     </Dialog>
   );
 }
 
+/**
+ * One state switch, in routing order; every branch renders into the
+ * frame's body slot while the frame (header, picker, footer) stays
+ * constant around it.
+ */
 function EpicUsageDialogBody(props: {
   readonly query: UsageSummaryQueryResult;
+  readonly windowDays: UsageSummaryWindowDays;
+  readonly onWindowDaysChange: (windowDays: UsageSummaryWindowDays) => void;
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
 }): ReactNode {
-  const { query, chartGroupBy, onChartGroupByChange } = props;
+  const { query } = props;
 
-  if (query.isLoading) {
-    return (
-      <div className="flex items-center gap-2 py-6 text-ui-sm text-muted-foreground">
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-        Loading usage…
-      </div>
-    );
-  }
+  if (query.isLoading) return <UsageDialogSkeleton variant="epic" />;
   if (query.error !== null) {
     return (
-      <UsageErrorCard
+      <UsageDialogErrorState
         error={query.error}
         onRetry={() => {
           void query.refetch();
@@ -153,65 +179,184 @@ function EpicUsageDialogBody(props: {
       />
     );
   }
-  if (query.data === undefined) {
+  if (query.data === undefined) return <UsageDialogUnavailable />;
+  // The empty routing owns "nothing in this window" entirely: the loaded
+  // layout below can assume facts exist, which is also why the group-by
+  // toggle no longer needs a factCount guard of its own - a control with
+  // nothing to regroup is unreachable from the loaded branch.
+  if (query.data.summary.totals.factCount === 0) {
     return (
-      <p className="py-6 text-ui-sm text-muted-foreground">
-        Usage data unavailable.
-      </p>
+      <EpicUsageEmptyState
+        windowDays={props.windowDays}
+        onWindowDaysChange={props.onWindowDaysChange}
+        servedBy={query.data.servedBy}
+      />
     );
   }
+  return (
+    <EpicUsageLoadedBody
+      data={query.data}
+      chartGroupBy={props.chartGroupBy}
+      onChartGroupByChange={props.onChartGroupByChange}
+    />
+  );
+}
 
-  const { summary, coverage, servedBy } = query.data;
+/**
+ * Wider windows only: a chip that re-requests the CURRENT window would be
+ * a broken control, so a 90-day empty offers none. (365 exists on the wire
+ * for the activity heatmap and is never a picker state here.)
+ */
+function widerWindows(
+  windowDays: UsageSummaryWindowDays,
+): readonly UsageSummaryWindowDays[] {
+  if (windowDays === 7) return [30, 90];
+  if (windowDays === 30) return [90];
+  return [];
+}
+
+function EpicUsageEmptyState(props: {
+  readonly windowDays: UsageSummaryWindowDays;
+  readonly onWindowDaysChange: (windowDays: UsageSummaryWindowDays) => void;
+  readonly servedBy: UsageServedBy;
+}): ReactNode {
+  const wider = widerWindows(props.windowDays);
+  return (
+    <UsageDialogEmpty
+      headline={`No usage in the last ${String(props.windowDays)} days`}
+      hint="Chats and agents in this epic haven't recorded usage in this window."
+      // A local-plane read only speaks for THIS machine, so an unqualified
+      // "no usage" would overclaim - the same note `UsageCostFigure` carries
+      // on the loaded branch (`hostScopeName` null for the reason below).
+      note={servedByScopeNote(props.servedBy, null)}
+    >
+      {wider.length === 0 ? null : (
+        <div className="flex flex-wrap justify-center gap-2">
+          {wider.map((days) => (
+            <Button
+              key={days}
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid={`usage-empty-window-${String(days)}`}
+              onClick={() => {
+                props.onWindowDaysChange(days);
+              }}
+            >
+              Show {days} days
+            </Button>
+          ))}
+        </div>
+      )}
+    </UsageDialogEmpty>
+  );
+}
+
+function EpicUsageLoadedBody(props: {
+  readonly data: UsageSummaryResponse;
+  readonly chartGroupBy: UsageChartGroupBy;
+  readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
+}): ReactNode {
+  const { chartGroupBy } = props;
+  const { summary, coverage, servedBy } = props.data;
   const days = daysForSummaryWindow(summary);
-  // One scale, keyed by the reader's grouping. Unlike the Settings
-  // dashboard - where the harness split beside the headline needs a
-  // harness-keyed scale of its own regardless of what the chart shows - the
-  // chart is this dialog's only consumer of the scale, so there is no second
-  // one to keep pinned to harnesses.
-  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, chartGroupBy);
+  // Two scales, the Settings dashboard's shape: the harness split beside
+  // the headline always stacks by harness, so it keeps a harness-keyed
+  // scale regardless of what the chart shows, and the chart shares it only
+  // while it groups by harness. A single `chartGroupBy`-keyed scale was
+  // the earlier shape here, and it grayed every split row the moment the
+  // chart regrouped by model - `colorVar` falls back to the "Other" token
+  // for keys outside its space.
+  const scale = buildUsageSeriesScaleForBuckets(summary.buckets, "harness");
+  const chartScale =
+    chartGroupBy === "harness"
+      ? scale
+      : buildUsageSeriesScaleForBuckets(summary.buckets, "model");
   const columns = buildUsageChartColumns({
     days,
     buckets: summary.buckets,
-    scale,
+    scale: chartScale,
     metric: "cost",
     groupBy: chartGroupBy,
   });
+  const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
+  const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
+  // Travels with the tiles wherever they render, per the note's own
+  // contract: turns that reported no usage at all still add a silent zero to
+  // every token sum in them, so unqualified tiles read as "this work used no
+  // cache" rather than "this work reported nothing". Settings pairs the two
+  // the same way - this dialog only needs it because it now shows tiles.
+  const absentNote = usageCompletenessAbsentNote(
+    summary.usageCompletenessBreakdown,
+  );
+  const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
-    <div className="flex flex-col gap-4">
-      <UsageCostFigure
-        totals={summary.totals}
-        coverage={coverage}
-        servedBy={servedBy}
-        // The host dimension is irrelevant at this scope: an epic's (or a
-        // chat's) work is the same work wherever it ran.
-        hostScopeName={null}
-        size="default"
-      />
-      {/* The toggle lives inside this guard, not beside the window picker
-          above: with no facts there is no chart for it to regroup, and a
-          control that changes nothing visible reads as broken. */}
-      {summary.totals.factCount === 0 ? null : (
-        <div className="flex flex-col gap-2">
-          <div className="flex justify-end">
-            <UsageChartGroupByToggle
-              groupBy={chartGroupBy}
-              onChange={onChartGroupByChange}
+    // `usage-chart-root` scopes the `--usage-series-*` palette over BOTH
+    // consumers - the chart and its sibling harness split - the same
+    // reason Settings hangs it on their common ancestor.
+    <div className="usage-chart-root flex flex-col gap-5">
+      <div
+        className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]"
+        data-testid="epic-usage-hero"
+      >
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <UsageCostFigure
+              totals={summary.totals}
+              coverage={coverage}
+              servedBy={servedBy}
+              // The host dimension is irrelevant at this scope: an epic's
+              // (or a chat's) work is the same work wherever it ran.
+              hostScopeName={null}
+              size="display"
             />
+            <span
+              className="text-ui-xs text-muted-foreground"
+              data-testid="usage-date-range-label"
+            >
+              {dateRangeLabel}
+            </span>
           </div>
-          {/* `key` per the prop's contract: the legend's hidden-series set is
-              keyed by the current grouping's series keys, so a switch
-              remounts rather than letting stale harness keys filter model
-              bands. */}
-          <UsageDailyChart
-            key={chartGroupBy}
-            columns={columns}
+          <UsageHarnessSplit
+            rows={harnessRows}
             scale={scale}
-            metric="cost"
-            groupBy={chartGroupBy}
+            showTokens={false}
           />
         </div>
-      )}
+        <div className="flex flex-col gap-1.5">
+          <UsageStatTiles tiles={statTiles} variant="curated" />
+          {absentNote === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground/80"
+              data-testid="usage-stat-tiles-absent-note"
+            >
+              {absentNote}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-ui-sm font-medium text-foreground">Daily cost</h3>
+          <UsageChartGroupByToggle
+            groupBy={chartGroupBy}
+            onChange={props.onChartGroupByChange}
+            triggerClassName={COARSE_POINTER_TRIGGER}
+          />
+        </div>
+        {/* `key` per the prop's contract: the legend's hidden-series set is
+            keyed by the current grouping's series keys, so a switch
+            remounts rather than letting stale harness keys filter model
+            bands. */}
+        <UsageDailyChart
+          key={chartGroupBy}
+          columns={columns}
+          scale={chartScale}
+          metric="cost"
+          groupBy={chartGroupBy}
+        />
+      </div>
       <div>
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">
           By chat / agent
@@ -236,11 +381,13 @@ function EpicUsageDialogBody(props: {
  * while staying closed - so opening it after a local midnight built columns
  * ending on the previous day and dropped the newest buckets the query had
  * just returned.
+ *
+ * Only called from the loaded branch, where the empty routing has already
+ * guaranteed facts exist.
  */
 function daysForSummaryWindow(
   summary: UsageSummaryResponse["summary"],
 ): readonly string[] {
-  if (summary.totals.factCount === 0) return [];
   return lastNCalendarDays(
     summary.window.windowDays,
     summary.window.timezone,

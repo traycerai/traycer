@@ -23,7 +23,12 @@ import {
   type HarnessOption,
   type ModelOption,
 } from "@/components/home/data/landing-options";
-import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  useDefaultHostClient,
+  useGuiHarnessCatalogForClient,
+  type GuiHarnessCatalog,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-composer-entry";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import {
   getActiveModelPicker,
@@ -300,11 +305,34 @@ const MODEL_SUBPAGE: CommandSubpage = {
   useItems: () => useModelSubpageItems(),
 };
 
+/**
+ * The catalog the composer subpages list: the FOCUSED composer's target
+ * host's, because that is the store `switchHarness` / `selectModel` dispatch
+ * into (`getFocusedComposerControls()` in the items' `run`) - a chat tab bound
+ * to another host must be offered that host's providers/models, not the
+ * app-wide default's. With no focused composer there is nothing to dispatch
+ * into, so the default host's catalog is listed (harmless); with a focused
+ * composer whose host client has not resolved, nothing is listed rather than
+ * another host's.
+ */
+function useFocusedComposerCatalog(): GuiHarnessCatalog {
+  const entry = useFocusedComposerEntry();
+  const defaultClient = useDefaultHostClient();
+  // `"cached-only"`: opening a palette subpage must not cold-start every
+  // provider on the focused composer's host. The subpages list what the host's
+  // cache already holds - on the default host that is the prefetcher's full
+  // fill; on a cold remote host it is at least the focused composer's selected
+  // harness, which its own picker's standalone query warms on mount, growing
+  // as the user browses providers in that picker.
+  return useGuiHarnessCatalogForClient(
+    entry === null ? defaultClient : entry.hostClient,
+    null,
+    { enabled: true, subscribed: true, modelsFetch: "cached-only" },
+  );
+}
+
 function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
-  const catalog = useGuiHarnessCatalog(null, {
-    enabled: true,
-    subscribed: true,
-  });
+  const catalog = useFocusedComposerCatalog();
   return useMemo(
     () =>
       catalog.harnesses.flatMap((provider) =>
@@ -315,10 +343,7 @@ function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
 }
 
 function useModelSubpageItems(): ReadonlyArray<CommandItem> {
-  const catalog = useGuiHarnessCatalog(null, {
-    enabled: true,
-    subscribed: true,
-  });
+  const catalog = useFocusedComposerCatalog();
   return useMemo(
     () =>
       catalog.harnesses.flatMap((provider) =>

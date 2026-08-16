@@ -57,7 +57,7 @@ export function LocalConfigFallbackNotice(props: {
   return (
     <div
       role="status"
-      className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 px-4 py-2.5 text-ui-xs text-muted-foreground"
+      className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 px-4 py-2.5 text-ui-xs text-muted-foreground"
       data-testid="local-config-fallback-notice"
       data-reason={props.reason}
     >
@@ -95,7 +95,7 @@ export function NoConfigSourceNotice(props: {
       className="flex flex-col items-start gap-3 rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm"
       data-testid="no-config-source-notice"
     >
-      <span className="flex size-9 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+      <span className="flex size-9 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
         <Laptop className="size-4.5" />
       </span>
       <div className="max-w-[60ch] space-y-1">

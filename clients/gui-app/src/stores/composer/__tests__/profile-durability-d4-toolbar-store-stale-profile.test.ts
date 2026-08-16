@@ -42,8 +42,13 @@ const AVAILABLE_CLAUDE: HarnessOption = {
   availabilityPending: false,
 };
 
+// This file is only exercising the toolbar store's stale-profile durability,
+// not host-scoped memory, so a hostless catalog keeps the fixtures focused.
+const HOST_ID = null;
+
 function catalogWithLoadedModels(): ComposerToolbarCatalog {
   return {
+    hostId: HOST_ID,
     harnesses: [AVAILABLE_CLAUDE],
     modelsHarnessId: "claude",
     models: [
@@ -82,6 +87,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       },
       onSettingsChange: null,
       tuiOnly: false,
+      hostId: HOST_ID,
     });
     store.getState().setCatalog(catalogWithLoadedModels());
 
@@ -121,8 +127,10 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       },
       onSettingsChange: null,
       tuiOnly: false,
+      hostId: HOST_ID,
     });
     store.getState().setCatalog({
+      hostId: HOST_ID,
       harnesses: [{ ...AVAILABLE_CLAUDE, available: false }],
       modelsHarnessId: "claude",
       models: [],

@@ -45,6 +45,7 @@ export function ShellFlagChips(props: {
       {chips.map((chip) => (
         <span
           key={chip.key}
+          // muted-fill-ok: chip delimited by border-border/60
           className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 font-mono text-code-xs"
         >
           {chip.arg}
@@ -85,7 +86,7 @@ export function ShellFlagChips(props: {
           type="button"
           disabled={disabled}
           onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 font-mono text-code-xs text-muted-foreground transition-colors hover:bg-muted/50 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 font-mono text-code-xs text-muted-foreground transition-colors hover:bg-foreground/5 disabled:opacity-50"
         >
           ＋ flag
         </button>

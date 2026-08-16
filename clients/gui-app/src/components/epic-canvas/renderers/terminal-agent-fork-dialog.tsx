@@ -232,12 +232,14 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   // host), so no separate resolution is needed at this call site. Never
   // authoritative: this dialog has no reauth gate of its own, so a
   // genuinely-tombstoned source profile must be corrected to ambient here
-  // rather than silently submitted to `createAgent.create`.
+  // rather than silently submitted to `createAgent.create`. The catalog reads
+  // through the same fixed client, so the fork offers this host's harnesses
+  // and models.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(settingsSeed, hostClient),
     null,
-    true,
+    { hostClient, hostId, tuiOnly: true },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
@@ -519,6 +521,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       stagingKey,
       seedIntent: target.workspaceSeed.intent,
       fallbackWorkspace: target.workspaceSeed.workspace,
+      hostId,
     });
     const worktreeIntent = launchWorkspace.worktreeIntent;
     if (worktreeIntent !== null) {
@@ -608,6 +611,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     canSubmit,
     createAgent,
     epicId,
+    hostId,
     onOpenChange,
     sourceHarnessProfiles,
     sourceProfileId,
@@ -768,7 +772,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
             <section
               aria-label="Run location"
-              className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3"
+              className="min-w-0 rounded-lg border border-border/60 bg-foreground/3 p-3"
             >
               <ActiveHostWorkspaceControls
                 disabled={false}
