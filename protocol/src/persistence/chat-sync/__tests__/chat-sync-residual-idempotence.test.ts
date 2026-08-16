@@ -67,6 +67,57 @@ function bagDepth(value: JsonValue): number {
   return depth;
 }
 
+/** Counts reflection traps taken against a wrapped input. */
+type VisitCounter = { count: number };
+
+/**
+ * A TRANSPARENT proxy that counts how many times capture reflects on it.
+ *
+ * Every trap forwards through `Reflect`, so the wrapper is invisible to
+ * `isJsonObject`'s prototype / symbol / descriptor checks and to the walk: what
+ * is measured is the real algorithm on a real input, not a stub of it.
+ *
+ * `get`, `getOwnPropertyDescriptor` and `ownKeys` are the three traps capture
+ * can reach - `Object.getOwnPropertyNames` and `Object.getOwnPropertySymbols`
+ * both route through `ownKeys`.
+ */
+function countingProxy(target: JsonObject, visits: VisitCounter): JsonObject {
+  return new Proxy(target, {
+    get(object, key, receiver) {
+      visits.count += 1;
+      return Reflect.get(object, key, receiver);
+    },
+    getOwnPropertyDescriptor(object, key) {
+      visits.count += 1;
+      return Reflect.getOwnPropertyDescriptor(object, key);
+    },
+    ownKeys(object) {
+      visits.count += 1;
+      return Reflect.ownKeys(object);
+    },
+  });
+}
+
+/** `nestResidual`, with every level wrapped in a counting proxy. */
+function countingNest(
+  value: JsonObject,
+  nesting: number,
+  visits: VisitCounter,
+): JsonObject {
+  let built: JsonObject = countingProxy(value, visits);
+  for (let level = 0; level < nesting; level += 1) {
+    const wrapper: JsonObject = Object.create(null);
+    Object.defineProperty(wrapper, CHAT_SNAPSHOT_RESIDUAL_KEY, {
+      value: built,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    built = countingProxy(wrapper, visits);
+  }
+  return built;
+}
+
 /**
  * A plain object carrying `value` under `residual`, `nesting` levels down.
  * Built with `defineProperty` on a null-prototype target for the same reason
@@ -229,15 +280,46 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
     expect(captured[CHAT_SNAPSHOT_RESIDUAL_KEY]).toEqual({});
   });
 
+  it("visits each chain level a constant number of times, not N of them", () => {
+    // THE DETECTOR for the quadratic form, and it works by instrumenting the
+    // INPUT rather than the module - so nothing had to be exported, injected or
+    // otherwise widened to make a performance property assertable.
+    //
+    // A per-level `isJsonObject` re-validates the whole remaining suffix, so a
+    // chain of depth N is reflected on N + (N-1) + … + 1 times. Wrapping every
+    // level in a transparent counting proxy makes that difference a COUNT
+    // instead of a duration: linear work touches each level a fixed number of
+    // times, quadratic work touches it once per level above it. Deterministic,
+    // and with no wall clock anywhere near it.
+    //
+    // Measured at this depth: ~6N visits one-pass, ~2N² if the deep check comes
+    // back - 1,200 against 81,600. The cap below is deliberately loose; the
+    // point is separating 6N from 2N², not freezing the constant, so ordinary
+    // refactors of the walk have room while the quadratic form cannot fit.
+    const DEPTH = 200;
+    const visits: VisitCounter = { count: 0 };
+    const chain = countingNest(
+      { carried: "at the bottom of the chain" },
+      DEPTH - 1,
+      visits,
+    );
+
+    visits.count = 0;
+    const bag = bagOf({ alpha: 1, [CHAT_SNAPSHOT_RESIDUAL_KEY]: chain });
+    const observed = visits.count;
+
+    // Correct FIRST: a walk that flattened nothing would also be cheap.
+    expect(bag).toEqual({ carried: "at the bottom of the chain" });
+    expect(observed).toBeLessThanOrEqual(DEPTH * 20);
+  });
+
   it("descends a hostile 2,000-deep chain without re-validating each suffix", () => {
-    // Depth alone is not the hazard - the walk terminating in ONE pass is. A
-    // per-level `isJsonObject` re-validates the whole remaining suffix, making
-    // the descent quadratic: at depth 10,000 that occupied the decoder for
-    // ~2.8 SECONDS on a value under 130 KB, which a corrupt or hostile document
-    // reaches for free. It is ~1 ms now. Deliberately NO wall-clock assertion -
-    // a timing pin flakes in CI. The bound is structural, and this fixture is
-    // here so a future edit that reintroduces the deep check has something that
-    // exercises the path.
+    // Not a detector - the pin above is. This one documents the STACK-BUDGET
+    // margin: it is the deepest chain the decoder is expected to meet and
+    // survive, and it would still pass if the quadratic form returned, merely
+    // slower (~2.8 SECONDS at depth 10,000 on a value under 130 KB, which a
+    // corrupt or hostile document reaches for free; ~1 ms now). No wall-clock
+    // assertion here on purpose - a timing pin flakes in CI.
     //
     // 2,000 rather than 10,000, and the ceiling is NOT this code: `isJsonValue`
     // / `isJsonObject` recurse per level (`json.ts`), so the entry validation
@@ -245,7 +327,8 @@ describe("residual capture reads a prior bag exactly as far as it should", () =>
     // and 6,000 inside a vitest worker - and lower as ambient stack depth
     // grows, which is what makes a pin up there flaky rather than strict. That
     // recursion predates this fix and strikes any deep chat-sync value, residual
-    // chain or not; outside the worker this same chain flattens fine at 10,000.
+    // chain or not (ticket 58); outside the worker this same chain flattens
+    // fine at 10,000.
     const bag = bagOf({
       alpha: 1,
       [CHAT_SNAPSHOT_RESIDUAL_KEY]: nestResidual(
