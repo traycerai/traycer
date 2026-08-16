@@ -182,7 +182,95 @@ describe("worktree-intent-staging-store", () => {
     );
   });
 
-  describe("migrateKey", () => {
+  // A slot's host can change under an open session, so both "consume this
+  // slot" and "this slot's identity changed" have to act on the whole family -
+  // otherwise the host the user drifted away from keeps a live copy.
+  describe("across-host slot lifecycle", () => {
+    const nullDraftA: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: HOST_A,
+      draftId: null,
+    };
+    const nullDraftB: WorktreeStagingKey = { ...nullDraftA, hostId: HOST_B };
+
+    it("clearForAllHosts consumes every host's copy of one slot", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(nullDraftB, localEntry("/b", true));
+      store.setSuspendedWorkspacePaths(nullDraftA, ["/a"]);
+
+      // Submitted while B happened to be selected.
+      useWorktreeIntentStagingStore.getState().clearForAllHosts(nullDraftB);
+
+      const next = useWorktreeIntentStagingStore.getState();
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(nullDraftB)).toBeNull();
+      expect(
+        next.suspendedWorkspacePathsByKey[worktreeStagingKeyString(nullDraftA)],
+      ).toBeUndefined();
+    });
+
+    it("clearForAllHosts leaves a DIFFERENT slot identity alone", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      const otherDraft: WorktreeStagingKey = { ...nullDraftA, draftId: "keep" };
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(otherDraft, localEntry("/keep", true));
+
+      useWorktreeIntentStagingStore.getState().clearForAllHosts(nullDraftA);
+
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(otherDraft)).not.toBeNull();
+    });
+
+    // Minting the draft id must carry BOTH hosts' picks onto their own
+    // destination slots. Moving only the active host's copy loses the other
+    // pick AND strands it under the null-draft key, where the next brand-new
+    // landing page on that host would inherit it.
+    it("migrateKeyForAllHosts moves each host's copy onto its own host", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(nullDraftB, localEntry("/b", true));
+
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKeyForAllHosts(nullDraftB, {
+          ...nullDraftB,
+          draftId: "minted",
+        });
+
+      const mintedA: WorktreeStagingKey = { ...nullDraftA, draftId: "minted" };
+      const mintedB: WorktreeStagingKey = { ...nullDraftB, draftId: "minted" };
+      expect(readStagedWorktreeIntent(mintedA)?.entries[0].workspacePath).toBe(
+        "/a",
+      );
+      expect(readStagedWorktreeIntent(mintedB)?.entries[0].workspacePath).toBe(
+        "/b",
+      );
+      // Nothing is stranded under the null-draft key for either host.
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(nullDraftB)).toBeNull();
+    });
+
+    it("migrateKeyForAllHosts never clobbers a destination that already picked", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      const mintedA: WorktreeStagingKey = { ...nullDraftA, draftId: "minted" };
+      store.stageEntry(nullDraftA, localEntry("/from", true));
+      store.stageEntry(mintedA, localEntry("/already-there", true));
+
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKeyForAllHosts(nullDraftA, mintedA);
+
+      expect(readStagedWorktreeIntent(mintedA)?.entries[0].workspacePath).toBe(
+        "/already-there",
+      );
+      expect(
+        readStagedWorktreeIntent(nullDraftA)?.entries[0].workspacePath,
+      ).toBe("/from");
+    });
+  });
+
+  describe("migrateKeyForAllHosts", () => {
     const fromKey: WorktreeStagingKey = {
       surface: "landing",
       hostId: HOST_A,
@@ -205,7 +293,7 @@ describe("worktree-intent-staging-store", () => {
       const toRevisionBefore =
         useWorktreeIntentStagingStore.getState().revisionByKey[toId] ?? 0;
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       expect(readStagedWorktreeIntent(fromKey)).toBeNull();
       expect(readStagedWorktreeIntent(toKey)?.entries).toEqual([
@@ -235,7 +323,7 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(toKey, localEntry("/b", true));
       store.setSuspendedWorkspacePaths(fromKey, ["/a"]);
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       expect(readStagedWorktreeIntent(fromKey)?.entries).toEqual([
         worktreeEntry("/a"),
@@ -255,7 +343,7 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(toKey, localEntry("/b", true));
       const before = useWorktreeIntentStagingStore.getState();
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       const after = useWorktreeIntentStagingStore.getState();
       expect(after.intentByKey).toEqual(before.intentByKey);
@@ -270,7 +358,7 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(fromKey, worktreeEntry("/a"));
       const before = useWorktreeIntentStagingStore.getState();
 
-      store.migrateKey(fromKey, {
+      store.migrateKeyForAllHosts(fromKey, {
         surface: "landing",
         hostId: HOST_A,
         draftId: null,

@@ -558,8 +558,10 @@ export function NewConversationModalBody(props: {
     (state) => state.setComposerMode,
   );
   const clearDraft = useNewConversationModalStore((state) => state.clearDraft);
+  // The modal's host can change under an open session, so a SUBMIT consumes
+  // every host's copy of the slot - not just the one selected at submit.
   const clearStagedIntent = useWorktreeIntentStagingStore(
-    (state) => state.clear,
+    (state) => state.clearForAllHosts,
   );
   const rememberEpicIntent = useWorktreeIntentMemoryStore(
     (state) => state.setEpicIntent,

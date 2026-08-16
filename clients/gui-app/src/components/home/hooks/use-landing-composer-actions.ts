@@ -1103,7 +1103,10 @@ function clearConsumedLandingWorktreeIntent(
     hostId: workspaceContext.hostId,
     draftId: workspaceContext.draftId,
   };
-  useWorktreeIntentStagingStore.getState().clear(stagingKey);
+  // Every host's copy: the landing picker rebinds the app-wide host in
+  // place, so a pick staged on another host belongs to this same consumed
+  // session and must not survive into the next landing page.
+  useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
 }
 
 // Distinct image hashes referenced by the (hash-only) editor content. Base64

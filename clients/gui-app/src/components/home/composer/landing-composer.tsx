@@ -619,7 +619,7 @@ export function LandingComposer(props: LandingComposerProps) {
       // remounts and drops an in-progress edit.
       useWorktreeIntentStagingStore
         .getState()
-        .migrateKey(
+        .migrateKeyForAllHosts(
           { surface: "landing", hostId: activeHostId, draftId: null },
           { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
         );

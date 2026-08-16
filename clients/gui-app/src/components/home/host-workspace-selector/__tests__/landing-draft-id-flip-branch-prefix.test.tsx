@@ -360,7 +360,7 @@ function mintLandingDraftMidSetup(
 ): void {
   useWorktreeIntentStagingStore
     .getState()
-    .migrateKey(
+    .migrateKeyForAllHosts(
       { surface: "landing", hostId: "host-test", draftId: null },
       { surface: "landing", hostId: "host-test", draftId: mintedDraftId },
     );

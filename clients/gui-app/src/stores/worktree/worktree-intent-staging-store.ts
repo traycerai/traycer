@@ -30,8 +30,7 @@ import {
  * dialogs that are closed on reload, so a restored stale pick there would be
  * confusing - they re-seed fresh on reopen. Client-local only; intent carries
  * local paths and never enters the cloud-synced Chat Y.Doc.
- */
-/**
+ *
  * Every slot carries the HOST it stages for. A staged intent is a list of
  * host-local `workspacePath`s and branch names, and the surfaces that own the
  * non-owner slots switch hosts in place - the landing composer follows the
@@ -108,6 +107,25 @@ export function worktreeStagingKeyString(key: WorktreeStagingKey): string {
     return `new-conversation:${host}:${key.epicId}:${key.parentId ?? ""}`;
   }
   return `owner:${host}:${key.epicId}:${key.ownerKind}:${key.ownerId}`;
+}
+
+// One slot's identity with the host stripped, so every host's copy of the same
+// landing draft / modal / owner slot compares equal. Blanking the segment
+// rather than dropping it keeps the segment COUNT stable, so this can never
+// conflate two different surfaces' keys.
+function hostAgnosticStagingId(serializedKey: string): string {
+  const parts = serializedKey.split(":");
+  if (parts.length < 2) return serializedKey;
+  parts[1] = "";
+  return parts.join(":");
+}
+
+// `template`'s identity carrying `serializedKey`'s OWN host segment.
+function withStagingHostOf(template: string, serializedKey: string): string {
+  const parts = template.split(":");
+  if (parts.length < 2) return template;
+  parts[1] = serializedKey.split(":")[1] ?? "";
+  return parts.join(":");
 }
 
 // Compared in ENCODED form so no serialized key is ever decoded - a
@@ -251,8 +269,15 @@ interface WorktreeIntentStagingStore {
    * "nothing staged" and remounts. No-op when `fromKey` has nothing staged,
    * or when `toKey` already has its own staged intent (never clobber a real
    * pick the destination slot already made).
+   *
+   * Moves EVERY host's copy of the slot, each onto its own host's destination.
+   * What changes here is the draft id, not the host: a landing page the user
+   * staged on host A and then switched away from still owns A's slot, and
+   * moving only the currently-active host's copy would both lose that pick and
+   * strand it under the null-draft key - where the next brand-new landing page
+   * on A would inherit it.
    */
-  readonly migrateKey: (
+  readonly migrateKeyForAllHosts: (
     fromKey: WorktreeStagingKey,
     toKey: WorktreeStagingKey,
   ) => void;
@@ -285,6 +310,17 @@ interface WorktreeIntentStagingStore {
     workspacePaths: readonly string[],
   ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
+  /**
+   * `clear` for every host's copy of one slot identity - what CONSUMING a slot
+   * means on a surface whose host can change under it (the landing composer,
+   * the new-conversation modal). A send/create consumes the whole session, not
+   * just the host that happened to be selected at submit: leaving the other
+   * hosts' copies alive lets a reopened surface apply a stale pick from an
+   * already-consumed session over its fresh seed. Surfaces pinned to one host
+   * for life, and scratch slots that already clear per key on a host switch
+   * (the terminal-agent launcher), use plain `clear`.
+   */
+  readonly clearForAllHosts: (key: WorktreeStagingKey) => void;
   /**
    * Drops staged entries that reference just-removed worktrees across every
    * staging slot BELONGING TO `hostId`. Staged picks are deliberately never
@@ -413,35 +449,45 @@ export const useWorktreeIntentStagingStore =
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
-        migrateKey: (fromKey, toKey) =>
+        migrateKeyForAllHosts: (fromKey, toKey) =>
           set((state) => {
-            const fromId = worktreeStagingKeyString(fromKey);
-            const toId = worktreeStagingKeyString(toKey);
-            if (fromId === toId) return state;
-            const existing = state.intentByKey[fromId];
-            if (existing === undefined) return state;
-            if (state.intentByKey[toId] !== undefined) return state;
+            const fromIdentity = hostAgnosticStagingId(
+              worktreeStagingKeyString(fromKey),
+            );
+            const toTemplate = worktreeStagingKeyString(toKey);
+            if (fromIdentity === hostAgnosticStagingId(toTemplate))
+              return state;
 
             const intentByKey = { ...state.intentByKey };
-            delete intentByKey[fromId];
-            intentByKey[toId] = existing;
-
             const suspendedWorkspacePathsByKey = {
               ...state.suspendedWorkspacePathsByKey,
             };
-            const suspended = suspendedWorkspacePathsByKey[fromId];
-            if (suspended !== undefined) {
-              delete suspendedWorkspacePathsByKey[fromId];
-              suspendedWorkspacePathsByKey[toId] = suspended;
+            let revisionByKey = state.revisionByKey;
+            let changed = false;
+            for (const [fromId, existing] of Object.entries(
+              state.intentByKey,
+            )) {
+              if (existing === undefined) continue;
+              if (hostAgnosticStagingId(fromId) !== fromIdentity) continue;
+              // Each host's copy lands on ITS OWN host's destination slot.
+              const toId = withStagingHostOf(toTemplate, fromId);
+              // Never clobber a real pick the destination slot already made.
+              if (state.intentByKey[toId] !== undefined) continue;
+
+              delete intentByKey[fromId];
+              intentByKey[toId] = existing;
+              const suspended = suspendedWorkspacePathsByKey[fromId];
+              if (suspended !== undefined) {
+                delete suspendedWorkspacePathsByKey[fromId];
+                suspendedWorkspacePathsByKey[toId] = suspended;
+              }
+              revisionByKey = incrementStagingRevision(revisionByKey, fromId);
+              revisionByKey = incrementStagingRevision(revisionByKey, toId);
+              changed = true;
             }
-
-            let revisionByKey = incrementStagingRevision(
-              state.revisionByKey,
-              fromId,
-            );
-            revisionByKey = incrementStagingRevision(revisionByKey, toId);
-
-            return { intentByKey, suspendedWorkspacePathsByKey, revisionByKey };
+            return changed
+              ? { intentByKey, suspendedWorkspacePathsByKey, revisionByKey }
+              : state;
           }),
         stageScripts: (key, workspacePath, scripts) =>
           set((state) => {
@@ -511,6 +557,31 @@ export const useWorktreeIntentStagingStore =
               // old selection back.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
+          }),
+        clearForAllHosts: (key) =>
+          set((state) => {
+            const currentId = worktreeStagingKeyString(key);
+            const identity = hostAgnosticStagingId(currentId);
+            const ids = new Set(
+              [
+                ...Object.keys(state.intentByKey),
+                ...Object.keys(state.suspendedWorkspacePathsByKey),
+              ].filter((id) => hostAgnosticStagingId(id) === identity),
+            );
+            // The caller's own slot always clears, even holding nothing, so the
+            // revision bump still records the consume (matching `clear`).
+            ids.add(currentId);
+            const intentByKey = { ...state.intentByKey };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            let revisionByKey = state.revisionByKey;
+            for (const id of ids) {
+              delete intentByKey[id];
+              delete suspendedWorkspacePathsByKey[id];
+              revisionByKey = incrementStagingRevision(revisionByKey, id);
+            }
+            return { intentByKey, suspendedWorkspacePathsByKey, revisionByKey };
           }),
         purgeRemovedWorktreeIntents: (hostId, removed) =>
           set((state) => {
