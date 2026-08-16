@@ -456,6 +456,7 @@ import {
   hostCommunicationGraphCloudFeedSubscribeV10,
 } from "@traycer/protocol/host/epic/communication-graph";
 import { hostChatRecordsSubscribeV10 } from "@traycer/protocol/host/epic/chat-records";
+import { hostRemoteCapabilitiesSubscribeV10 } from "@traycer/protocol/host/remote/capabilities";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -8039,6 +8040,26 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: remote host capability
+  // discovery - a client opens a subscription for ONE remote `hostId` and
+  // receives exactly one REPLACE-WHOLE `snapshot` of that host's capability
+  // set, then `update` frames (full capability, never a patch) when the set
+  // changes. Text frames only. A host that predates it never advertises it,
+  // and the client's subscription degrades to `unsupported`, whose contract
+  // is simply that cross-host actions proceed WITHOUT a capability pre-flight
+  // (today's behavior) - the remote host's own per-method checks still apply.
+  // Never add it to the unary released floor - that list is fail-closed on
+  // the name set.
+  "host.remote.capabilities.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRemoteCapabilitiesSubscribeV10,
         },
       },
     },
