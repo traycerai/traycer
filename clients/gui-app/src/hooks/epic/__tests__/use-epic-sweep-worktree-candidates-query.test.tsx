@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useEpicSweepWorktreeCandidates } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
@@ -223,6 +223,55 @@ describe("useEpicSweepWorktreeCandidates", () => {
       disabled: false,
       note: "not-landed",
     });
+  });
+
+  it("re-runs the bounded proof on refresh and exposes the fresh host timestamp", async () => {
+    const base = entry({ worktreePath: "/wt/recheck" });
+    const before = entry({
+      worktreePath: "/wt/recheck",
+      resolvedAt: 100,
+    });
+    const after = entry({
+      worktreePath: "/wt/recheck",
+      prState: "merged",
+      mergedHeadShaMatches: true,
+      resolvedAt: 200,
+    });
+    let forcedProbeCount = 0;
+    mockHostClient.request.mockImplementation(
+      (_method: string, params: { readonly forceRefresh: boolean }) => {
+        if (!params.forceRefresh) {
+          return Promise.resolve({ worktrees: [base], nextCursor: null });
+        }
+        forcedProbeCount += 1;
+        return Promise.resolve({
+          worktrees: [forcedProbeCount === 1 ? before : after],
+          nextCursor: null,
+        });
+      },
+    );
+
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.rows[0]?.tier).toBe("review");
+    });
+    expect(result.current.checkedAt).toBe(100);
+    expect(result.current.canRefresh).toBe(true);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await waitFor(() => {
+      expect(result.current.rows[0]?.tier).toBe("merged");
+    });
+    expect(result.current.checkedAt).toBe(200);
+    expect(mockHostClient.request).toHaveBeenCalledTimes(4);
+    expect(mockHostClient.request).toHaveBeenNthCalledWith(
+      4,
+      "worktree.listAllForHost",
+      forcedProbeParams(["/wt/recheck"]),
+    );
   });
 
   it("marks shared rows checkable-unchecked and busy/unresolved rows disabled", async () => {
