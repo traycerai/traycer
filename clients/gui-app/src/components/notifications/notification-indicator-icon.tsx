@@ -4,6 +4,7 @@ import { BackgroundActivityGlyph } from "@/components/notifications/background-a
 import {
   attentionTone,
   DONE_TONE,
+  terminalFailureTone,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
@@ -37,10 +38,11 @@ interface NotificationIndicatorIconProps {
 
 /**
  * The single renderer for notification status icons. Notification state wins
- * over live activity: errors first, then unresolved prompts, followed by the
- * session-backed running indicator (turn spinner, or the muted background
- * variant) and unread completion. Producers suppress historical failures per
- * exact entity before aggregate state reaches this renderer.
+ * over live activity for high-attention states: chat/other failures first,
+ * then unresolved prompts, followed by the session-backed running indicator
+ * (turn spinner, or the muted background variant), unread completion, and
+ * finally terminal failure. Producers suppress historical failures per exact
+ * entity before aggregate state reaches this renderer.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
@@ -72,6 +74,12 @@ export function NotificationIndicatorIcon(
   if (props.state.unreadDone) {
     return (
       <IndicatorTonePresentation tone={DONE_TONE} indicatorProps={props} />
+    );
+  }
+  const terminalTone = terminalFailureTone(props.state);
+  if (terminalTone !== null) {
+    return (
+      <IndicatorTonePresentation tone={terminalTone} indicatorProps={props} />
     );
   }
   return props.defaultIcon;

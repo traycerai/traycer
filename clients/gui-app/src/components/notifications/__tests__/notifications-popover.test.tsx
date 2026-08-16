@@ -1015,6 +1015,8 @@ describe("NotificationsPopover", () => {
     ).toBeDefined();
     const row = screen.getByTestId("notification-entry");
     expect(row.dataset.notificationId).toMatch(/^app-local:terminal\.crashed:/);
+    expect(row.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(row.querySelector(".lucide-message-square-x")).toBeNull();
     fireEvent.click(activateButtonFor(row));
 
     await waitFor(() => {
@@ -1291,6 +1293,8 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const row = await screen.findByTestId("notification-entry");
+    expect(row.querySelector(".lucide-message-square-x")).not.toBeNull();
+    expect(row.querySelector(".lucide-square-terminal")).toBeNull();
     const acknowledge = within(row).getByTestId("notification-acknowledge");
     expect(acknowledge.getAttribute("aria-label")).toBe("Acknowledge");
     expect(acknowledge.hasAttribute("disabled")).toBe(false);

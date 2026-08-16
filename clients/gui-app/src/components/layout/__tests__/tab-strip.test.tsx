@@ -6,6 +6,10 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -550,6 +554,7 @@ describe("<TabStrip />", () => {
     toastTestState.actionLabel = null;
     toastTestState.undo = null;
     notificationIndicatorTestState.request = null;
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
@@ -558,6 +563,7 @@ describe("<TabStrip />", () => {
     queryClient.clear();
     headerActivityByEpic.clear();
     resetAgentActivity();
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
@@ -1000,6 +1006,48 @@ describe("<TabStrip />", () => {
     expect(
       await screen.findByTestId(`header-tab-title-generating-${EPIC_A.id}`),
     ).toBeDefined();
+  });
+
+  it("shows the chat error glyph on a task tab when chat and terminal failures coexist", async () => {
+    openEpicFixture(EPIC_A);
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "chat-failure",
+      updatedAt: 1,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-1",
+      payload: { kind: "chat", epicId: EPIC_A.id, chatId: "chat-1" },
+      message: "Chat failed",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-failure",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-1",
+      payload: {
+        kind: "terminal",
+        epicId: EPIC_A.id,
+        terminalId: "terminal-1",
+        tabId: EPIC_A.id,
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance-1",
+      },
+      message: "Terminal failed",
+      detail: null,
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const indicator = await screen.findByTestId(
+      `header-tab-failure-${EPIC_A.id}`,
+    );
+    expect(indicator.getAttribute("class")).toContain(
+      "lucide-message-square-x",
+    );
+    expect(screen.queryByTestId(`header-tab-done-${EPIC_A.id}`)).toBeNull();
   });
 
   it("shows a task activity spinner while any chat is active in the epic", async () => {

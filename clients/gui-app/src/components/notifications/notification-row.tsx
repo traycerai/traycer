@@ -15,6 +15,7 @@ import {
 import {
   FAILURE_TONE,
   notificationFeedTone,
+  TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -508,10 +509,12 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     return globalEventGlyph(row.globalEntry.event);
   }
   if (row.appLocalKind !== null) {
-    return {
-      icon: FAILURE_TONE.Icon,
-      colorClassName: FAILURE_TONE.className,
-    };
+    const tone =
+      row.appLocalKind === "terminal.closed" ||
+      row.appLocalKind === "terminal.crashed"
+        ? TERMINAL_FAILURE_TONE
+        : FAILURE_TONE;
+    return { icon: tone.Icon, colorClassName: tone.className };
   }
   const statusTone = notificationFeedTone(row);
   if (statusTone !== null) {
