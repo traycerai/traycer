@@ -220,6 +220,13 @@ export function HostSwitcher(props: {
    */
   readonly intent: HostPickIntent;
   /**
+   * Per-host reasons THIS surface cannot use a host, keyed by `hostId` — the
+   * fork dialog's "needs update" for a target that does not speak the fork RPC
+   * at the required minor. `NO_HOST_OPTION_REFUSALS` for every surface that has
+   * none, which is all of them but that one.
+   */
+  readonly refusalByHostId: ReadonlyMap<string, string>;
+  /**
    * The surface owns the selection right now — a submission is in flight, or it
    * is pinned to one host. The trigger goes inert rather than opening a list
    * whose every row would be refused.
@@ -375,6 +382,9 @@ export function HostSwitcher(props: {
                   scoped={selected !== null && host.hostId === selected.hostId}
                   active={host.hostId === props.activeHostId}
                   intent={props.intent}
+                  surfaceRefusal={
+                    props.refusalByHostId.get(host.hostId) ?? null
+                  }
                   onSelect={() => {
                     props.onSelect(host.hostId);
                     setOpen(false);
@@ -440,6 +450,8 @@ function HostSwitcherRow(props: {
   readonly scoped: boolean;
   readonly active: boolean;
   readonly intent: HostPickIntent;
+  /** This surface's own refusal for the host — see `HostSwitcher`'s prop. */
+  readonly surfaceRefusal: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
@@ -449,7 +461,9 @@ function HostSwitcherRow(props: {
       // One predicate, asked here exactly as the button list asks it, so a row
       // that explains why it cannot be picked is also a row that cannot be
       // picked — on both kinds of container.
-      disabled={!isHostOptionSelectable(host, props.intent)}
+      disabled={
+        !isHostOptionSelectable(host, props.intent, props.surfaceRefusal)
+      }
       keywords={[
         host.name,
         formatPlatform(host.platform) ?? "",
@@ -469,6 +483,7 @@ function HostSwitcherRow(props: {
         picked={props.scoped}
         active={props.active}
         intent={props.intent}
+        surfaceRefusal={props.surfaceRefusal}
       />
     </CommandItem>
   );

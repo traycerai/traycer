@@ -20,17 +20,36 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 export type HostPickIntent = "view" | "bind";
 
 /**
+ * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
+ * the one word the row shows for it ("needs update").
+ *
+ * `connectable` / `planRestricted` are facts about the host that every picker
+ * shares. This is the other kind: a reason THIS picker cannot use THIS host,
+ * which no other picker would state — the fork dialog's target must speak
+ * `epic.createChat` at the minor that carries the cross-host owner hint, and a
+ * host below it is perfectly fine everywhere else in the app.
+ *
+ * It travels as a map rather than a predicate so the picker chain stays
+ * referentially stable and a surface with nothing to say passes
+ * {@link NO_HOST_OPTION_REFUSALS} instead of a fresh closure per render.
+ */
+export const NO_HOST_OPTION_REFUSALS: ReadonlyMap<string, string> = new Map();
+
+/**
  * Whether choosing this row is a legal answer for that intent.
  *
  * Every container asks THIS, rather than re-deriving "can I click it" from
  * `connectable` beside its own copy of the reason word. A second gate written
  * as a hand-rolled subset of this one is how a row ends up inert with no
- * explanation, or explained but still clickable.
+ * explanation, or explained but still clickable — which is exactly why the
+ * surface refusal is an argument here and not a second `&&` at each container.
  */
 export function isHostOptionSelectable(
   host: HostScopeOption,
   intent: HostPickIntent,
+  surfaceRefusal: string | null,
 ): boolean {
+  if (surfaceRefusal !== null) return false;
   return intent === "view" || host.connectable;
 }
 
@@ -40,10 +59,20 @@ export function isHostOptionSelectable(
  * could only ever fail. Plan-gated is named apart from unreachable: the first
  * is fixed by an upgrade, the second maybe by waiting, and one word covering
  * both sends people debugging their network over a billing limit.
+ *
+ * Connectivity leads: a host there is no route to cannot also be described as
+ * out of date, because nothing this client holds about its build is current.
+ * The surface refusal speaks for a host that IS dialable and still cannot be
+ * used here.
  */
-export function hostOptionStatusWord(host: HostScopeOption): string | null {
-  if (host.connectable) return null;
-  return host.planRestricted ? "requires upgrade" : "unreachable";
+export function hostOptionStatusWord(
+  host: HostScopeOption,
+  surfaceRefusal: string | null,
+): string | null {
+  if (!host.connectable) {
+    return host.planRestricted ? "requires upgrade" : "unreachable";
+  }
+  return surfaceRefusal;
 }
 
 /**

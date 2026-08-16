@@ -36,9 +36,15 @@ export function HostOptionRow(props: {
   /** The app-wide active host — where new work lands. */
   readonly active: boolean;
   readonly intent: HostPickIntent;
+  /**
+   * This surface's own reason for refusing the host, or `null` when it has
+   * none — see `NO_HOST_OPTION_REFUSALS`. Rendered in the status word's slot so
+   * one row never carries two competing explanations.
+   */
+  readonly surfaceRefusal: string | null;
 }): ReactNode {
   const { host } = props;
-  const statusWord = hostOptionStatusWord(host);
+  const statusWord = hostOptionStatusWord(host, props.surfaceRefusal);
   // The ACTIVE tag exists to separate two marks that can disagree: what you are
   // VIEWING versus what this window runs on. Under `bind` they are the same
   // fact by definition, so the tag would restate the check it sits next to.

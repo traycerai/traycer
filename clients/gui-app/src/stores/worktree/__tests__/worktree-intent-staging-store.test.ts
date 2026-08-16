@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
+  forkChatStagingKeysForEpic,
   newConversationModalStagingKey,
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
@@ -246,7 +247,42 @@ describe("worktree-intent-staging-store", () => {
     // The launcher and the fork dialog are distinct slots within one epic.
     expect(
       worktreeStagingKeyString(pendingTerminalAgentStagingKey("epic-A")),
-    ).not.toBe(worktreeStagingKeyString(pendingForkChatStagingKey("epic-A")));
+    ).not.toBe(
+      worktreeStagingKeyString(pendingForkChatStagingKey("epic-A", "host-1")),
+    );
+  });
+
+  it("scopes the pending fork-chat key per target host (no cross-host bleed)", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    const hostA = pendingForkChatStagingKey("epic-A", "host-a");
+    const hostB = pendingForkChatStagingKey("epic-A", "host-b");
+    expect(worktreeStagingKeyString(hostA)).not.toBe(
+      worktreeStagingKeyString(hostB),
+    );
+    store.stageEntry(hostA, worktreeEntry("/a"));
+    expect(readStagedWorktreeIntent(hostB)).toBeNull();
+    expect(readStagedWorktreeIntent(hostA)).not.toBeNull();
+  });
+
+  it("enumerates every fork-chat slot for an epic, including snapshot-only extras", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    store.stageEntry(
+      pendingForkChatStagingKey("epic-A", "host-a"),
+      worktreeEntry("/a"),
+    );
+    const extraB = worktreeStagingKeyString(
+      pendingForkChatStagingKey("epic-A", "host-b"),
+    );
+    const otherEpic = worktreeStagingKeyString(
+      pendingForkChatStagingKey("epic-B", "host-c"),
+    );
+    const keys = forkChatStagingKeysForEpic("epic-A", [extraB, otherEpic]);
+    expect(keys.map(worktreeStagingKeyString).sort()).toEqual(
+      [
+        worktreeStagingKeyString(pendingForkChatStagingKey("epic-A", "host-a")),
+        extraB,
+      ].sort(),
+    );
   });
 
   it("scopes the per-parent child slot per parent (no concurrent-row collisions)", () => {

@@ -21,15 +21,21 @@ import {
 import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
+import { useHostClient } from "@/lib/host";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
@@ -39,18 +45,53 @@ import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
+import {
+  chatForkHostRefusals,
+  chatForkTargetSupport,
+  CROSS_HOST_CARRY_CHANGES_NOTICE,
+  CROSS_HOST_SHALLOW_FORK_NOTICE,
+  CROSS_HOST_WORKSPACE_NOTICE,
+  type ChatForkTargetSupport,
+} from "@/components/chat/chat-fork-target";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
-import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  type LandingDraftWorkspaceSnapshot,
+} from "@/stores/home/landing-draft-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
+
+/**
+ * The seed for a cross-host target this dialog has not retained a workspace for
+ * yet. One shared instance on purpose: the picker keys its re-seed on identity,
+ * and every host with nothing staged has the same nothing to show.
+ */
+const EMPTY_CROSS_HOST_WORKSPACE: LandingDraftWorkspaceSnapshot =
+  emptyLandingDraftWorkspaceSnapshot();
+
+/**
+ * The scratch slots one open fork dialog owns.
+ *
+ * There is one per target host now (see `pendingForkChatStagingKey`), so a
+ * dialog that retargets picks up slots as it goes and has to give all of them
+ * back when it closes — not just the one it happens to be sitting on. The owner
+ * symbol is what keeps a closing dialog from clearing a slot a second dialog
+ * (another tile, another split pane) has since claimed.
+ */
+interface ForkWorkspaceStagingSession {
+  readonly owner: symbol;
+  readonly touched: Map<string, WorktreeStagingKey>;
+}
 
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
@@ -109,28 +150,28 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
   );
 }
 
-// Coordinates dialog lifecycle, toolbar state, staged worktree state, seeded-
-// profile validation, and the fork mutation in one fixed hook order (mirrors
-// terminal-agent-fork-dialog.tsx's identical structure). Splitting this body
-// risks hiding the cross-field submit invariants without reducing user-facing
-// behavior.
+// Coordinates dialog lifecycle, the dialog-local target host, toolbar state,
+// staged worktree state, seeded-profile validation, and the fork mutation in
+// one fixed hook order (mirrors terminal-agent-fork-dialog.tsx's identical
+// structure). Splitting this body risks hiding the cross-field submit
+// invariants without reducing user-facing behavior.
 // eslint-disable-next-line complexity
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
   const activityEnabled = useSurfaceActivity();
-  const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
-  const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
+  // The host the SOURCE chat lives on. It seeds the picker and is the one host
+  // a fork can always be served by, since a same-host fork needs no cross-host
+  // contract from the target at all.
   const tabHostId = useTabHostId();
-  // The fork's `createChat` call runs on the TAB's host (see
-  // `useEpicCreateChatForHost` -> `useTabHostClient`), so the seeded-profile
-  // validation below must read that SAME host's `providers.list`, not the
-  // app-wide active host - they can genuinely diverge for a tab bound to a
-  // non-default host.
-  const tabHostClient = useTabHostClient();
-  const createChat = useEpicCreateChatForHost();
+  const [dialogState, setDialogState] = useState(() => ({
+    open,
+    title: "",
+    hostId: tabHostId,
+  }));
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
+  const stagingSessionRef = useRef<ForkWorkspaceStagingSession | null>(null);
 
   useEffect(() => {
     const openCancels = new Set<() => void>();
@@ -147,100 +188,317 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       ? ""
       : `${forkModeTitlePrefix(target.forkMode)} - ${displayChatTitle(target.sourceChatTitle)}`;
 
-  if (open !== titleState.open) {
-    setTitleState({
+  // Opening resets BOTH the title and the target host: a dialog reopened on a
+  // different message must not inherit the last fork's machine any more than it
+  // inherits the last fork's name.
+  if (open !== dialogState.open) {
+    setDialogState({
       open,
-      title: open && target !== null ? defaultTitle : titleState.title,
+      title: open && target !== null ? defaultTitle : dialogState.title,
+      hostId: open ? tabHostId : dialogState.hostId,
     });
   }
-  const title = titleState.title;
+  const title = dialogState.title;
+  const selectedHostId = dialogState.hostId;
   const setTitle = useCallback((nextTitle: string): void => {
-    setTitleState((current) => ({ ...current, title: nextTitle }));
+    setDialogState((current) => ({ ...current, title: nextTitle }));
   }, []);
+  const selectHostId = useCallback((nextHostId: string): void => {
+    setDialogState((current) => ({ ...current, hostId: nextHostId }));
+  }, []);
+  // A cross-host fork is a different operation: it cannot carry the source
+  // machine's working tree, its folder paths, or the provider's on-disk
+  // session. Everything below that changes shape keys on this one fact.
+  const isCrossHost = selectedHostId !== tabHostId;
+  // The target only exists as far as this dialog is concerned while it is
+  // OPEN. `target` outlives a close (the opener keeps the last one), so every
+  // read that costs something - the owner resolution's cloud-chat list, the
+  // staging-slot ownership below - hangs off this rather than off `target`,
+  // which would leave a closed dialog holding a query per chat tile.
+  const activeWorkspaceTarget = open ? target : null;
+
+  // EVERY host-derived read in this dialog hangs off this one client - the
+  // create call, the harness/model catalog, seeded-profile validation, folder
+  // resolution and worktree metadata - so a fork can never be configured
+  // against one machine and submitted to another. It is resolved from the
+  // dialog's OWN selection and never from the app-wide active host: routing the
+  // picker through `directory.selectById` is what made choosing a host here
+  // silently rebind the whole window while the fork still went to the tab's
+  // host.
+  const selectedHostClient = useHostClientForHostId(selectedHostId);
+  const createChat = useEpicCreateChatForHostClient(selectedHostClient);
+  const stagingKey = useMemo(
+    () => pendingForkChatStagingKey(epicId, selectedHostId),
+    [epicId, selectedHostId],
+  );
+
+  // Host rows are gated on the target's negotiated `epic.createChat` minor: a
+  // same-major downgrade Zod-strips the cross-host owner hint in silence, so a
+  // build that predates it would take the fork and quietly lose the transcript.
+  // The directory is the right list to ask about - a host with no directory
+  // entry has no route this client can dial, and its row is already inert for
+  // that reason rather than for its build.
+  const directoryList = useHostDirectoryList();
+  const directoryHostIds = useMemo(
+    () => (directoryList.data ?? []).map((entry) => entry.hostId),
+    [directoryList.data],
+  );
+  const createChatVersions = useHostNegotiatedMethodVersions(
+    directoryHostIds,
+    "epic.createChat",
+  );
+  const hostRefusals = useMemo(
+    () =>
+      chatForkHostRefusals({
+        versionByHostId: createChatVersions,
+        sourceHostId: tabHostId,
+      }),
+    [createChatVersions, tabHostId],
+  );
+  // Asked again for the SELECTED host rather than read off the map: the map
+  // exempts the source host (a same-host fork needs no contract), and a host
+  // picked before its first handshake is `unknown` here — permissive, and it
+  // resolves itself once its client answers anything at all.
+  const selectedHostSupport: ChatForkTargetSupport = isCrossHost
+    ? chatForkTargetSupport(createChatVersions.get(selectedHostId) ?? null)
+    : { kind: "supported" };
+
+  // A REFUSAL parks this dialog's host reads, which is the one consumer shape
+  // the manifest registry cannot heal on its own.
+  //
+  // The registry is written only by a completed handshake and never cleared, so
+  // a stale verdict normally dies on the surface's next RPC. Here there is no
+  // next RPC: the refusal disables create, the cross-host workspace is empty so
+  // folder resolution is disabled, and the toolbar's provider read and model
+  // catalogs answer from cache. A host upgraded in place under the same id
+  // would keep its "needs update" row for the whole session while the update it
+  // is asking for has already happened. This is exactly the deadlock
+  // `negotiated-manifest-registry.ts` documents, and the probe is the mechanism
+  // it names: one bounded read of a released-floor method, re-issued when the
+  // host's own incarnation changes, purely so the transport records a fresh
+  // manifest as a side effect. The response is deliberately unused.
+  const selectedDirectoryEntry = useMemo(
+    () =>
+      (directoryList.data ?? []).find(
+        (entry) => entry.hostId === selectedHostId,
+      ) ?? null,
+    [directoryList.data, selectedHostId],
+  );
+  const capabilityProbeIncarnation = useMemo(
+    () => [
+      selectedHostId,
+      selectedDirectoryEntry?.version ?? null,
+      selectedDirectoryEntry?.transportDialability ?? null,
+    ],
+    [selectedDirectoryEntry, selectedHostId],
+  );
+  useHostCapabilityProbe({
+    client: selectedHostClient,
+    // Gated on the dialog being OPEN as well as refused: `selectedHostId`
+    // survives a close, so probing on the refusal alone would leave a host read
+    // mounted per chat tile for a dialog nobody is looking at.
+    stale: open && selectedHostSupport.kind === "refused",
+    incarnation: capabilityProbeIncarnation,
+  });
 
   // A fork dialog has no send-time reauth gate of its own (unlike the main
   // composer), so a source chat's profileId that was tombstoned since the
-  // chat last ran must be caught before it reaches `createChat`.
-  // `useComposerToolbarStore` now validates every seed it receives against
-  // the SAME host's live `providers.list` (passing `tabHostClient` here -
-  // this fork's `createChat` call runs on the tab's host, per
-  // `useEpicCreateChatForHost` -> `useTabHostClient`), so no separate
-  // resolution is needed at this call site. Never authoritative (`fallback`/
-  // `none`): this dialog has no reauth gate of its own, so a genuinely-
-  // tombstoned source profile must be corrected to ambient here rather than
-  // silently submitted to `createChat`. The catalog reads through the same
-  // tab client, so the fork offers the tab host's harnesses/models.
+  // chat last ran must be caught before it reaches `createChat` - and a
+  // cross-host fork widens that from "tombstoned" to "never existed on this
+  // machine". `useComposerToolbarStore` validates every seed it receives
+  // against the SELECTED host's live `providers.list` and corrects a dead
+  // profile to ambient, and reads the harness/model catalog through the same
+  // client, so the fork offers the target host's harnesses and models.
   const toolbarStore = useComposerToolbarStore(
     null,
-    fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
+    fallbackSeedSource(target?.settingsSeed ?? null, selectedHostClient),
     null,
-    { hostClient: tabHostClient, tuiOnly: false },
+    { hostClient: selectedHostClient, tuiOnly: false },
   );
   const modelResolved = useStore(
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
   const modelPickerKey =
-    target === null ? "fork-dialog-closed" : forkDialogModelPickerKey(target);
+    target === null
+      ? "fork-dialog-closed"
+      : forkDialogModelPickerKey(target, selectedHostId);
   const trimmedTitle = title.trim();
   const stagedIntentForKey = useWorktreeIntentStagingStore(
     (state) => state.intentByKey[worktreeStagingKeyString(stagingKey)] ?? null,
   );
+  // The owner this dialog is RENDERING for the source chat - the host's
+  // anti-squatting expectation when it holds no registry facts of its own,
+  // which is exactly the cross-host case. Read through the app-wide client so
+  // it shares the cloud-chat list's query key with the sidebar and tab group;
+  // `null` when this client genuinely does not know, never a guess, because the
+  // host TRUSTS a value it is given.
+  const appWideClient = useHostClient();
+  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+    client: appWideClient,
+    epicId,
+    chatId: activeWorkspaceTarget?.sourceChatId ?? null,
+  });
+  // Cross-host, the workspace section resets to the target's own folder catalog
+  // with NO seed: the source chat's paths name directories on another machine,
+  // and submitting them would hand host B a tree it does not have.
+  //
+  // An EMPTY snapshot, not `null`: `null` drops the picker onto the app-wide
+  // global folder store (`useHomeWorkspaceSource`'s `usingSeededWorkspace`
+  // conjunct), which is the source machine's folder list AND shared app state
+  // this dialog has no business editing.
+  //
+  // The seed is READ BACK from the host-scoped snapshot store first, for EVERY
+  // target including the source host. That store already retains exactly this
+  // per (epic, host) — it is what `useHomeWorkspaceSource` mirrors its live
+  // folder state into, and what the staging session clears on close — so what a
+  // return to a host restores is that host's actual FOLDERS, not merely a
+  // stable identity.
+  //
+  // Retention has to be uniform, and the seeding rule below is only the
+  // FALLBACK for a host nothing has been staged against yet. A `useMemo`
+  // cannot do this job and a shared constant cannot either: the picker
+  // re-seeds on the seed's IDENTITY, so a memo (single-slot, recomputed on
+  // every dependency change) hands a host a *new* empty object each time the
+  // user comes back to it — B -> C -> B would reset B's live workspace and
+  // overwrite its snapshot with the empty one, silently deleting folders B
+  // already had — while one shared constant fails the opposite way, letting
+  // B's folders ride into C.
+  //
+  // Splitting the rule so only cross-host targets retained would have made
+  // A -> B -> A discard edits the user made on A while B kept its own, and
+  // would have left the session invariant below ("switching back returns to
+  // the picks you made there") true of most hosts rather than all of them.
+  // Re-deriving the source host's seed on every return buys nothing to pay for
+  // that: the source chat's workspace does not meaningfully change during the
+  // seconds this dialog is open, so it fetches nothing fresher and only
+  // discards the user's input.
+  //
+  // `EMPTY_CROSS_HOST_WORKSPACE` is safe to share across hosts precisely
+  // because it is only ever the seed for a host with nothing retained, and
+  // "nothing" is the same value on every machine.
+  const retainedWorkspace = useSeededWorkspaceSnapshotStore(
+    (state) =>
+      state.snapshotByKey[worktreeStagingKeyString(stagingKey)] ?? null,
+  );
+  const workspaceSeed: LandingDraftWorkspaceSnapshot | null =
+    retainedWorkspace ??
+    (isCrossHost
+      ? EMPTY_CROSS_HOST_WORKSPACE
+      : (target?.workspaceSeed.workspace ?? null));
+  const seedIntent = isCrossHost
+    ? null
+    : (target?.workspaceSeed.intent ?? null);
+  // "Carry changes" is withdrawn cross-host rather than reinterpreted: the
+  // uncommitted work it forks off lives on the source machine's disk.
+  const seedIntentOverride = isCrossHost
+    ? null
+    : (target?.seedIntentOverride ?? null);
   const canSubmit = canSubmitFork({
     target,
     trimmedTitle,
     modelResolved,
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
+    hostClientResolved: selectedHostClient !== null,
+    hostSupportsFork: selectedHostSupport.kind !== "refused",
+    // The A/B pre-selection gate waits for a staging round-trip that only
+    // happens when there IS a seed to override. Cross-host there is none, so
+    // keeping the gate would leave Fork permanently disabled.
+    requiresStagedPreselection:
+      target !== null && target.seedIntentOverride !== null && !isCrossHost,
   });
-  const activeWorkspaceTarget = open ? target : null;
 
+  // A new fork target is a new question, so it must not inherit the previous
+  // one's answer. `reset` is constructor-bound on the mutation observer and the
+  // observer is held in state, so this is a stable reference and the effect
+  // runs on a genuine target change rather than on every render.
+  const resetCreateChat = createChat.reset;
+  useEffect(() => {
+    resetCreateChat();
+  }, [activeWorkspaceTarget, resetCreateChat]);
+
+  // One session per open dialog: it owns every per-host scratch slot the dialog
+  // stages into, and hands them all back together.
   useEffect(() => {
     if (activeWorkspaceTarget === null) return;
-    const stagingKeyId = worktreeStagingKeyString(stagingKey);
-    const owner = Symbol(activeWorkspaceTarget.assistantMessageId);
-    activeChatForkWorkspaceOwnerByKey.set(stagingKeyId, owner);
-    return () => {
-      if (activeChatForkWorkspaceOwnerByKey.get(stagingKeyId) !== owner) {
-        return;
-      }
-      activeChatForkWorkspaceOwnerByKey.delete(stagingKeyId);
-      clearChatForkWorkspace(stagingKey);
+    const session: ForkWorkspaceStagingSession = {
+      owner: Symbol(activeWorkspaceTarget.assistantMessageId),
+      touched: new Map(),
     };
+    stagingSessionRef.current = session;
+    return () => {
+      stagingSessionRef.current = null;
+      releaseForkWorkspaceSession(session);
+    };
+  }, [activeWorkspaceTarget]);
+
+  // Claim the selected host's slot as the dialog moves onto it. Retargeting
+  // does NOT clear the slot being left: each host keeps its own staged folders
+  // for as long as this dialog is open, which — together with the uniform
+  // snapshot read above, on which this claim depends — is what makes switching
+  // back return to the picks you made there, on every host and not merely on
+  // the ones this dialog reached second.
+  useEffect(() => {
+    const session = stagingSessionRef.current;
+    if (session === null) return;
+    const stagingKeyId = worktreeStagingKeyString(stagingKey);
+    session.touched.set(stagingKeyId, stagingKey);
+    activeChatForkWorkspaceOwnerByKey.set(stagingKeyId, session.owner);
   }, [activeWorkspaceTarget, stagingKey]);
+
+  const clearForkWorkspaces = useCallback((): void => {
+    const session = stagingSessionRef.current;
+    if (session === null) return;
+    releaseForkWorkspaceSession(session);
+  }, []);
 
   const close = useCallback(() => {
     if (createChat.isPending) return;
-    clearChatForkWorkspace(stagingKey);
+    clearForkWorkspaces();
     onOpenChange(false);
-  }, [createChat.isPending, onOpenChange, stagingKey]);
+  }, [clearForkWorkspaces, createChat.isPending, onOpenChange]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen && createChat.isPending) return;
       if (!nextOpen) {
-        clearChatForkWorkspace(stagingKey);
+        clearForkWorkspaces();
       }
       onOpenChange(nextOpen);
     },
-    [createChat.isPending, onOpenChange, stagingKey],
+    [clearForkWorkspaces, createChat.isPending, onOpenChange],
   );
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
+    // Read back from the CLIENT, not from the picker's state: the request's
+    // `hostId` and the machine it travels to have to be the same fact, which is
+    // the invariant `useEpicCreateChatForHostClient`'s preflight enforces.
+    const hostId = selectedHostClient?.getActiveHostId() ?? null;
+    if (hostId === null) return;
     const chatId = uuidv4();
-    const hostId = tabHostId;
     const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
-      seedIntent: target.workspaceSeed.intent,
-      fallbackWorkspace: target.workspaceSeed.workspace,
+      seedIntent,
+      // The same snapshot the picker was given, so a cross-host submit that
+      // never touched the folder rows resolves to the empty workspace rather
+      // than falling through to this machine's global folder list.
+      fallbackWorkspace: workspaceSeed,
     });
     const workspaceMode = deriveWorkspaceMode(
       launchWorkspace.folderCount,
       launchWorkspace.worktreeIntent,
     );
     const worktreeIntent = launchWorkspace.worktreeIntent;
-    if (worktreeIntent !== null) {
+    // Same-host only. The per-epic memory is keyed by workspace PATH and holds
+    // no host of its own, so remembering a cross-host pick would offer another
+    // machine's branch/worktree choice to any later surface on this one that
+    // happens to have a folder at the same absolute path - two checkouts under
+    // the same `/home/user/project` is not an exotic case. The memory is a
+    // convenience; carrying one machine's answer onto another is not a trade
+    // worth making for it.
+    if (worktreeIntent !== null && !isCrossHost) {
       useWorktreeIntentMemoryStore
         .getState()
         .setEpicIntent(epicId, worktreeIntent, Date.now());
@@ -255,8 +513,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     createChat.mutate(
       {
         epicId,
-        // The fork runs on the TAB's host (`useEpicCreateChatForHost` ->
-        // `useTabHostClient`), and the forked chat is bound to it for life.
+        // The host the user picked in THIS dialog, which is the machine the
+        // fork is created on and the one the forked chat is bound to for life.
         hostId,
         parentId: target.parentId,
         title: trimmedTitle,
@@ -271,6 +529,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           assistantMessageId: target.assistantMessageId,
           interviewBlockId: target.interviewBlockId,
           carriedInterviews: target.carriedInterviews,
+          // The owner this dialog renders for the source chat (V12's hint), or
+          // `null` when it does not know. A target host with no registry facts
+          // of its own - the cross-host case - has nothing else to check the
+          // cloud publication's owner against, and treats a supplied value as
+          // the expectation, so it must never be invented.
+          sourceOwnerUserId,
         },
       },
       {
@@ -279,13 +543,17 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             source: "direct_ui",
             include_history: true,
           });
-          clearChatForkWorkspace(stagingKey);
+          clearForkWorkspaces();
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
               kind: "active-tile",
               epicId,
               tabId,
               chatId: result.chatId,
+              // The host the fork was actually created on. Binding the new tab
+              // to the ACTIVE host instead would leave it addressing a machine
+              // that has never heard of this chat, and waiting out the whole
+              // cross-host replication before anything appeared.
               hostId,
               source: "direct_ui",
             },
@@ -303,18 +571,55 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     );
   }, [
     canSubmit,
+    clearForkWorkspaces,
     createChat,
     epicId,
     navigateNestedFocus,
     onOpenChange,
+    seedIntent,
+    selectedHostClient,
+    sourceOwnerUserId,
     stagingKey,
-    tabHostId,
     tabId,
     target,
     toolbarStore,
     trimmedTitle,
+    workspaceSeed,
+    isCrossHost,
   ]);
   usePrimaryActionShortcut(activityEnabled, submit);
+
+  const workspaceHostScope = useMemo<HostWorkspaceControlsHostScope>(
+    () => ({
+      kind: "selected",
+      hostId: selectedHostId,
+      hostClient: selectedHostClient,
+      onSelect: selectHostId,
+      refusalByHostId: hostRefusals,
+    }),
+    [hostRefusals, selectHostId, selectedHostClient, selectedHostId],
+  );
+
+  // The retry prompt belongs to the REQUEST that was refused, not to the dialog.
+  //
+  // `ChatForkDialogBody` stays mounted for the life of the chat tile and the
+  // mutation key is constant, so `error` and `variables` outlive every
+  // transition this ticket made variable: retargeting to another host, and
+  // reopening the dialog on a different assistant message. Scoping by host
+  // alone fixed the first and left the second — turn M1's refusal rendering as
+  // "M2 is still syncing" before M2 had been attempted at all. So the notice
+  // asks the whole question: does the retained failure describe a request for
+  // exactly the (host, source chat, boundary) currently on screen?
+  //
+  // The mutation is also reset when the dialog moves to a new target below, so
+  // a fresh session never opens holding a previous one's evidence.
+  const failedForkSource = createChat.variables?.forkSource ?? null;
+  const boundaryNotPublished =
+    createChat.error?.code === "E_FORK_BOUNDARY_NOT_PUBLISHED" &&
+    createChat.variables?.hostId === selectedHostId &&
+    failedForkSource?.boundary === "assistantMessage" &&
+    failedForkSource.sourceChatId === target?.sourceChatId &&
+    failedForkSource.assistantMessageId === target.assistantMessageId;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -362,8 +667,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
                 registerActivation={false}
-                createProfileHostId={tabHostId}
-                runTargetHostId={tabHostId}
+                createProfileHostId={selectedHostId}
+                runTargetHostId={selectedHostId}
                 profileAdmission={null}
               />
             </div>
@@ -372,10 +677,18 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             disabled={false}
             stagingKey={stagingKey}
             layout="stacked"
-            workspaceSeed={target?.workspaceSeed.workspace ?? null}
-            seedIntent={target?.workspaceSeed.intent ?? null}
-            seedIntentOverride={target?.seedIntentOverride ?? null}
-            hostScope={{ kind: "active" }}
+            workspaceSeed={workspaceSeed}
+            seedIntent={seedIntent}
+            seedIntentOverride={seedIntentOverride}
+            hostScope={workspaceHostScope}
+          />
+          <ChatForkTargetNotices
+            isCrossHost={isCrossHost}
+            carriesChanges={
+              target !== null && target.seedIntentOverride !== null
+            }
+            support={selectedHostSupport}
+            boundaryNotPublished={boundaryNotPublished}
           />
         </div>
         <DialogFooter>
@@ -410,9 +723,81 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 }
 
-function clearChatForkWorkspace(stagingKey: WorktreeStagingKey): void {
-  useWorktreeIntentStagingStore.getState().clear(stagingKey);
-  useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
+/**
+ * Everything the dialog has to SAY about the target it is pointed at: what a
+ * cross-host fork gives up, why a host row is refused, and the one refusal that
+ * is a "try again in a moment" rather than a failure.
+ *
+ * Grouped in one place under the workspace section because they are all answers
+ * to the same question — what happens if I press Fork now — and because a
+ * cross-host fork can legitimately show several at once.
+ */
+function ChatForkTargetNotices(props: {
+  readonly isCrossHost: boolean;
+  /** The chosen fork mode forks off the source working tree ("A/B Fork"). */
+  readonly carriesChanges: boolean;
+  readonly support: ChatForkTargetSupport;
+  readonly boundaryNotPublished: boolean;
+}) {
+  const { support } = props;
+  if (!props.isCrossHost && !props.boundaryNotPublished) return null;
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-1"
+      data-testid="chat-fork-target-notices"
+    >
+      {props.boundaryNotPublished ? (
+        <p
+          className="text-ui-xs text-foreground/80"
+          data-testid="chat-fork-boundary-not-published"
+        >
+          Still syncing this turn to the cloud — retry shortly.
+        </p>
+      ) : null}
+      {support.kind === "refused" ? (
+        <p
+          className="text-ui-xs text-foreground/80"
+          data-testid="chat-fork-target-refused"
+        >
+          {support.detail}
+        </p>
+      ) : null}
+      {props.isCrossHost ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {CROSS_HOST_WORKSPACE_NOTICE}
+        </p>
+      ) : null}
+      {props.isCrossHost && props.carriesChanges ? (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="chat-fork-carry-changes-disabled"
+        >
+          {CROSS_HOST_CARRY_CHANGES_NOTICE}
+        </p>
+      ) : null}
+      {props.isCrossHost ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {CROSS_HOST_SHALLOW_FORK_NOTICE}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function releaseForkWorkspaceSession(
+  session: ForkWorkspaceStagingSession,
+): void {
+  for (const [stagingKeyId, stagingKey] of session.touched) {
+    // A slot a LATER dialog has claimed is that dialog's to clear. Without this
+    // check a background tile closing its fork dialog would wipe the folders
+    // someone is choosing in the foreground one.
+    if (activeChatForkWorkspaceOwnerByKey.get(stagingKeyId) !== session.owner) {
+      continue;
+    }
+    activeChatForkWorkspaceOwnerByKey.delete(stagingKeyId);
+    clearChatForkWorkspace(stagingKey);
+  }
+  session.touched.clear();
 }
 
 function displayChatTitle(title: string): string {
@@ -426,22 +811,28 @@ function displayChatTitle(title: string): string {
 // submitting before it lands would fall back to the source binding verbatim —
 // silently adopting the origin worktree instead of creating a new one (wrong
 // working copy, no setup script). So an override fork waits for the staged
-// pre-selection; verbatim (plain / cross-question) forks need no gate.
+// pre-selection; verbatim (plain / cross-question) forks need no gate, and
+// neither does a cross-host fork, which has no seed to override in the first
+// place (see `requiresStagedPreselection`).
 function canSubmitFork(input: {
   readonly target: ChatForkDialogTarget | null;
   readonly trimmedTitle: string;
   readonly modelResolved: boolean;
   readonly hasStagedPreselection: boolean;
   readonly createPending: boolean;
+  /** The selected host resolved to a client this app can actually dial. */
+  readonly hostClientResolved: boolean;
+  /** The selected host's build can serve this fork - see `chat-fork-target`. */
+  readonly hostSupportsFork: boolean;
+  readonly requiresStagedPreselection: boolean;
 }): boolean {
   if (input.target === null) return false;
   if (input.trimmedTitle.length === 0) return false;
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
-  if (
-    input.target.seedIntentOverride !== null &&
-    !input.hasStagedPreselection
-  ) {
+  if (!input.hostClientResolved) return false;
+  if (!input.hostSupportsFork) return false;
+  if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;
   }
   return true;
@@ -453,11 +844,23 @@ function forkModeTitlePrefix(mode: ChatForkMode): string {
   return "Fork";
 }
 
-function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {
+// Includes the selected host: the picker's harness/model choices are resolved
+// against THAT host's catalog, so retargeting has to remount it rather than
+// leave the previous machine's selection standing in a picker that can no
+// longer justify it.
+function forkDialogModelPickerKey(
+  target: ChatForkDialogTarget,
+  selectedHostId: string,
+): string {
   const seed = target.settingsSeed;
-  return [
+  // JSON, not a joined string: every part here is free-form (host ids, model
+  // slugs, profile ids), so any single-character separator is one some value
+  // could contain — and two different seeds collapsing onto one key would
+  // leave the picker mounted on a selection it can no longer justify.
+  return JSON.stringify([
     target.sourceChatId,
     target.assistantMessageId,
+    selectedHostId,
     seed.harnessId,
     seed.model,
     seed.permissionMode,
@@ -465,5 +868,5 @@ function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {
     seed.serviceTier ?? "",
     seed.agentMode,
     seed.profileId ?? "",
-  ].join("\u0000");
+  ]);
 }

@@ -21,6 +21,12 @@ interface HostSectionProps {
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
   /**
+   * Per-host reasons THIS surface cannot use a host — the chat fork dialog's
+   * "needs update" for a target whose build predates the cross-host fork
+   * contract. `NO_HOST_OPTION_REFUSALS` everywhere else.
+   */
+  readonly refusalByHostId: ReadonlyMap<string, string>;
+  /**
    * A pending submission (or a surface pinned to one host) owns the selection.
    * The control goes inert rather than accepting a click and discarding it.
    */
@@ -70,6 +76,7 @@ export function HostSection(props: HostSectionProps): ReactNode {
         selected={findHostOption(props.hosts, props.activeHostId)}
         activeHostId={props.activeHostId}
         onSelect={props.onSelect}
+        refusalByHostId={props.refusalByHostId}
         // Binding the window to a host it cannot dial is not a legal answer, so
         // those rows list with their reason and stay inert.
         intent="bind"

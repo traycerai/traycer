@@ -54,7 +54,12 @@ export type WorktreeStagingKey =
 export const WORKTREE_INTENT_STAGING_CAP = 100;
 
 const PENDING_TERMINAL_AGENT_OWNER_ID = "__pending_terminal_agent__";
-const PENDING_FORK_CHAT_OWNER_ID = "__pending_fork_chat__";
+// Per-TARGET-HOST fork-chat scratch slot. The fork dialog can retarget another
+// machine while it is open, and folder paths are per-machine facts: one shared
+// slot let folders staged from host B's filesystem reach a submit against host
+// A. Scoping the slot by the host it was staged against makes that structurally
+// impossible rather than something a reset has to keep catching up with.
+const PENDING_FORK_CHAT_OWNER_PREFIX = "__pending_fork_chat__:";
 // Per-parent child-launcher owner-id prefix. Each chat / terminal-agent row's
 // "+" submenu stages under `<prefix><parentId>` so concurrent rows never share
 // the single `__pending_terminal_agent__` slot (nor the panel-header root
@@ -132,15 +137,49 @@ export function pendingChildTerminalAgentStagingKey(
 /**
  * Scratch slot for the fork-chat dialog, which configures a worktree for a chat
  * that does not exist yet (its id is minted on submit). Scoped by the epic the
- * fork lands in for the same cross-epic isolation reason as the launcher above.
+ * fork lands in for the same cross-epic isolation reason as the launcher above,
+ * AND by the target host: the dialog picks where the fork lands, and a folder
+ * path staged against one machine is meaningless on another.
  */
-export function pendingForkChatStagingKey(epicId: string): WorktreeStagingKey {
+export function pendingForkChatStagingKey(
+  epicId: string,
+  hostId: string,
+): WorktreeStagingKey {
   return {
     surface: "owner",
     epicId,
     ownerKind: "chat",
-    ownerId: PENDING_FORK_CHAT_OWNER_ID,
+    ownerId: `${PENDING_FORK_CHAT_OWNER_PREFIX}${hostId}`,
   };
+}
+
+/**
+ * Every fork-chat scratch slot this epic has, whatever host each was staged
+ * against — what a caller needs to start (or finish) a fork dialog clean
+ * without knowing which hosts the last one visited.
+ *
+ * `extraSerializedKeyIds` lets a caller fold in the key space of a SIBLING
+ * store keyed by the same `WorktreeStagingKey` (the seeded-workspace snapshot
+ * store), so a slot that holds a snapshot but never got a staged intent is
+ * still found. Key serialization stays here rather than leaking to those
+ * callers.
+ */
+export function forkChatStagingKeysForEpic(
+  epicId: string,
+  extraSerializedKeyIds: readonly string[],
+): readonly WorktreeStagingKey[] {
+  const prefix = `owner:${epicId}:chat:${PENDING_FORK_CHAT_OWNER_PREFIX}`;
+  const state = useWorktreeIntentStagingStore.getState();
+  const serializedKeys = new Set([
+    ...Object.keys(state.intentByKey),
+    ...Object.keys(state.suspendedWorkspacePathsByKey),
+    ...extraSerializedKeyIds,
+  ]);
+  return [...serializedKeys].flatMap((serializedKey) =>
+    serializedKey.startsWith(prefix)
+      ? [pendingForkChatStagingKey(epicId, serializedKey.slice(prefix.length))]
+      : [],
+  );
 }
 
 export function pendingForkTerminalAgentStagingKey(
@@ -562,8 +601,8 @@ export function stagedWorktreeIntentIsSuspended(
 function isTransientStagingOwnerId(ownerId: string): boolean {
   return (
     ownerId === PENDING_TERMINAL_AGENT_OWNER_ID ||
-    ownerId === PENDING_FORK_CHAT_OWNER_ID ||
     ownerId === PENDING_FORK_TERMINAL_AGENT_OWNER_ID ||
+    ownerId.startsWith(PENDING_FORK_CHAT_OWNER_PREFIX) ||
     ownerId.startsWith(PENDING_CHILD_TERMINAL_AGENT_OWNER_PREFIX)
   );
 }
