@@ -407,6 +407,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
     // the tool reports no progress.
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -747,6 +748,7 @@ function A2ASendToolSegment(
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}

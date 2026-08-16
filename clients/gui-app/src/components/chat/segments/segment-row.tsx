@@ -12,6 +12,14 @@ interface SegmentRowProps {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   header: ReactNode;
+  /**
+   * A control that belongs to the row but not to its disclosure - rendered as
+   * a SIBLING of the trigger, never inside it. The trigger is a button, so a
+   * button placed in `header` would nest interactive controls: invalid HTML,
+   * and a click on it toggles the row instead of doing its own job. Null when
+   * the row has no such control (all but the shell cards today).
+   */
+  headerAction: ReactNode | null;
   body: ReactNode;
   tone: "default" | "destructive";
   stickyHeader: boolean;
@@ -44,20 +52,23 @@ export function SegmentRow(props: SegmentRowProps) {
   if (!expandable) {
     return (
       <div className={cn("group/work-row", className)}>
-        <div
-          data-row-header=""
-          data-chat-find-unit={headerFindUnitId ?? undefined}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-sm px-1 py-1 text-ui-sm",
-            tone === "destructive" && "text-destructive",
-          )}
-        >
-          {/* No leading spacer: with the caret moved to the trailing edge,
-              nothing occupies that column on an expandable sibling either, so
-              every row's icon starts flush at `px-1`. */}
-          <span className="relative flex min-w-0 flex-1 items-center gap-2">
-            {header}
-          </span>
+        <div className="flex w-full items-center">
+          <div
+            data-row-header=""
+            data-chat-find-unit={headerFindUnitId ?? undefined}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 text-ui-sm",
+              tone === "destructive" && "text-destructive",
+            )}
+          >
+            {/* No leading spacer: with the caret moved to the trailing edge,
+                nothing occupies that column on an expandable sibling either, so
+                every row's icon starts flush at `px-1`. */}
+            <span className="relative flex min-w-0 flex-1 items-center gap-2">
+              {header}
+            </span>
+          </div>
+          {props.headerAction}
         </div>
         {footer !== null ? (
           <div data-testid="segment-row-footer" className="ml-5 pb-1">
@@ -129,32 +140,35 @@ function PromotingSegmentRow(
   props: SegmentRowProps & { readonly promote: () => void },
 ) {
   const { header, tone, className, headerFindUnitId, footer } = props;
-  const { onOpenChange, promote } = props;
+  const { onOpenChange, promote, headerAction } = props;
   const handleClick = useCallback((): void => {
     onOpenChange(true);
     promote();
   }, [onOpenChange, promote]);
   return (
     <div className={cn("group/work-row", className)}>
-      <button
-        type="button"
-        onClick={handleClick}
-        data-row-header=""
-        data-activity-row-trigger=""
-        data-find-include="true"
-        data-chat-find-unit={headerFindUnitId ?? undefined}
-        data-testid="activity-row-promote"
-        className={cn(
-          "group/row-trigger flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors hover:bg-muted/40",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          tone === "destructive" && "text-destructive",
-        )}
-      >
-        <span className="relative flex min-w-0 flex-1 items-center gap-2">
-          {header}
-        </span>
-        <RowTrailingCaret rotateWhenOpen={false} />
-      </button>
+      <div className="flex w-full items-center">
+        <button
+          type="button"
+          onClick={handleClick}
+          data-row-header=""
+          data-activity-row-trigger=""
+          data-find-include="true"
+          data-chat-find-unit={headerFindUnitId ?? undefined}
+          data-testid="activity-row-promote"
+          className={cn(
+            "group/row-trigger flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors hover:bg-muted/40",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            tone === "destructive" && "text-destructive",
+          )}
+        >
+          <span className="relative flex min-w-0 flex-1 items-center gap-2">
+            {header}
+          </span>
+          <RowTrailingCaret rotateWhenOpen={false} />
+        </button>
+        {headerAction}
+      </div>
       {footer !== null ? (
         <div data-testid="segment-row-footer" className="ml-5 pb-1">
           {footer}
@@ -183,26 +197,29 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
       onOpenChange={onOpenChange}
       className={cn("group/work-row", className)}
     >
-      <CollapsibleTrigger
-        data-row-header=""
-        data-activity-row-trigger=""
-        data-find-include="true"
-        data-chat-find-unit={headerFindUnitId ?? undefined}
-        className={cn(
-          "group/row-trigger flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
-          // The sticky header floats over scrolled content, so its hover tint
-          // must stay opaque - a translucent bg lets the content bleed through.
-          stickyHeader && open
-            ? "sticky top-0 z-20 border-b border-border/40 bg-background shadow-sm hover:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
-            : "hover:bg-muted/40",
-          tone === "destructive" && "text-destructive",
-        )}
-      >
-        <span className="relative flex min-w-0 flex-1 items-center gap-2">
-          {header}
-        </span>
-        <RowTrailingCaret rotateWhenOpen />
-      </CollapsibleTrigger>
+      <div className="flex w-full items-center">
+        <CollapsibleTrigger
+          data-row-header=""
+          data-activity-row-trigger=""
+          data-find-include="true"
+          data-chat-find-unit={headerFindUnitId ?? undefined}
+          className={cn(
+            "group/row-trigger flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
+            // The sticky header floats over scrolled content, so its hover tint
+            // must stay opaque - a translucent bg lets the content bleed through.
+            stickyHeader && open
+              ? "sticky top-0 z-20 border-b border-border/40 bg-background shadow-sm hover:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
+              : "hover:bg-muted/40",
+            tone === "destructive" && "text-destructive",
+          )}
+        >
+          <span className="relative flex min-w-0 flex-1 items-center gap-2">
+            {header}
+          </span>
+          <RowTrailingCaret rotateWhenOpen />
+        </CollapsibleTrigger>
+        {props.headerAction}
+      </div>
       <CollapsibleContent>
         <div
           data-chat-find-unit={bodyFindUnitId ?? undefined}

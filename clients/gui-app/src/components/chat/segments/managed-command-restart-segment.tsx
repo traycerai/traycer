@@ -149,14 +149,13 @@ export function ManagedCommandRestartSegment(
   if (variant === "row") {
     return (
       <SegmentRow
+        // Sibling of the row's trigger, never inside it: the trigger is a
+        // button, so a door nested in `header` was a button in a button - and
+        // a click on the disabled one toggled the disclosure instead.
+        headerAction={headerAction}
         open={open}
         onOpenChange={setOpen}
-        header={
-          <>
-            {header}
-            {headerAction}
-          </>
-        }
+        header={header}
         body={body}
         // Never destructive, like the start card: a spawn failure is the red
         // dot beside the frozen outcome and nothing else.

@@ -3097,6 +3097,7 @@ export {
   collectOpenEpicIds,
   epicTabName,
   findOpenArtifactInTab,
+  findOpenTileInTab,
   getCanvasRootForTab,
   isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,

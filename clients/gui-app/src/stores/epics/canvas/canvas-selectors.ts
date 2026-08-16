@@ -18,7 +18,11 @@ import {
 import { isTileRefRecordBacked } from "./tile-schema";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
-import { findPaneTabByContentId, findPaneTabForRef } from "./actions";
+import {
+  findPaneTabByContentId,
+  findPaneTabForRef,
+  type TileIdentity,
+} from "./actions";
 import { EMPTY_RECORDS } from "./canvas-desktop-projection";
 import {
   resolveTabIdForEpic,
@@ -472,7 +476,7 @@ export function useOpenTileContentIds(
  */
 export function findOpenTileInTab(
   tabId: string,
-  node: EpicCanvasTileRef,
+  node: TileIdentity,
 ): { paneId: string; instanceId: string } | null {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
   if (canvas === undefined) return null;

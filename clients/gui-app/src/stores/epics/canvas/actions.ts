@@ -224,8 +224,19 @@ export function findPaneTabByContentId(
 }
 
 /** The bound host of a tile kind that has one; null for the rest. */
-function tileHostId(ref: EpicCanvasTileRef): string | null {
-  return "hostId" in ref ? ref.hostId : null;
+/**
+ * The identity a tab is deduped and looked up by: content id plus bound host,
+ * for the kinds that have one. Deliberately structural - callers that hold a
+ * ref-in-progress (a sidebar row about to open one) match on the same rule as
+ * callers holding a finished `EpicCanvasTileRef`.
+ */
+export interface TileIdentity {
+  readonly id: string;
+  readonly hostId?: string | null;
+}
+
+function tileHostId(ref: TileIdentity): string | null {
+  return ref.hostId ?? null;
 }
 
 /**
@@ -240,7 +251,7 @@ function tileHostId(ref: EpicCanvasTileRef): string | null {
  */
 export function findPaneTabForRef(
   state: EpicCanvasState,
-  node: EpicCanvasTileRef,
+  node: TileIdentity,
 ): PaneTabLocation | null {
   const hostId = tileHostId(node);
   for (const pane of collectPanes(state.root)) {

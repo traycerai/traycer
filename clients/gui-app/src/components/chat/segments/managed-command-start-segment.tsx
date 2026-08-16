@@ -171,14 +171,13 @@ export function ManagedCommandStartSegment(
   if (variant === "row") {
     return (
       <SegmentRow
+        // Sibling of the row's trigger, never inside it: the trigger is a
+        // button, so a door nested in `header` was a button in a button - and
+        // a click on the disabled one toggled the disclosure instead.
+        headerAction={headerAction}
         open={open}
         onOpenChange={setOpen}
-        header={
-          <>
-            {header}
-            {headerAction}
-          </>
-        }
+        header={header}
         body={body}
         // Never destructive. A non-zero exit is routine for a shell the agent
         // started on purpose; the red dot beside the label is the whole of the
