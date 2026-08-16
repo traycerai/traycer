@@ -159,7 +159,7 @@ function TemporaryDebugReminderRow(props: {
   const { pending, onFocusChange, onReset } = props;
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 px-4 py-2.5 text-ui-xs text-muted-foreground"
+      className="flex flex-wrap items-center justify-between gap-3 bg-foreground/3 px-4 py-2.5 text-ui-xs text-muted-foreground"
       data-testid="diagnostics-log-detail-reminder"
       onFocusCapture={() => onFocusChange(true)}
       onBlurCapture={(event) => {

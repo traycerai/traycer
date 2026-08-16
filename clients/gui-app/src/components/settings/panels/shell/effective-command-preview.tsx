@@ -15,7 +15,7 @@ export function EffectiveCommandPreview(props: {
       className="w-full overflow-hidden rounded-md border border-border bg-background font-mono text-code-sm text-foreground"
       aria-label="Effective shell command"
     >
-      <div className="flex items-center gap-1.5 border-b border-border bg-muted px-3 py-1.5">
+      <div className="flex items-center gap-1.5 border-b border-border bg-foreground/8 px-3 py-1.5">
         <span className="size-2.5 rounded-full bg-[var(--term-ansi-red)]" />
         <span className="size-2.5 rounded-full bg-[var(--term-ansi-yellow)]" />
         <span className="size-2.5 rounded-full bg-[var(--term-ansi-green)]" />

@@ -44,6 +44,7 @@ export interface ProviderRateLimitRefreshInput {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly hasCachedValue: boolean;
   readonly fetchEligible: boolean;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
@@ -53,6 +54,7 @@ export function useProviderRateLimitRefresh({
   providerId,
   profileId,
   usageUpdatedAt,
+  hasCachedValue,
   fetchEligible,
   isFetching,
   refetch,
@@ -63,16 +65,16 @@ export function useProviderRateLimitRefresh({
   const draining = useIsRateLimitQueueDraining();
   const queueScope = useRateLimitQueueScope();
   const lane = rateLimitFetchLane(providerId);
-  // Fresh-data-on-open for the ephemeralProcess lane, routed through the shared
-  // serial queue rather than TanStack's own (deliberately disabled)
-  // refetch-on-mount - see providerRateLimitQueryOptions' doc comment. No-ops
-  // for the httpFetch lane, which keeps TanStack's refetch-on-mount instead.
-  useRefreshProviderRateLimitsOnMount(
+  // Cold-start/recovery refresh for both lanes. Successful cached values leave
+  // freshness to the interval timer and manual refresh action.
+  useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
     usageUpdatedAt,
+    hasCachedValue,
     fetchEligible,
-  );
+    refetch,
+  });
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!fetchEligible) return;

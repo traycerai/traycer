@@ -138,7 +138,7 @@ function WorktreePrOverflow(props: {
       <Badge
         asChild
         variant="outline"
-        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
       >
         <PopoverTrigger
           aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}

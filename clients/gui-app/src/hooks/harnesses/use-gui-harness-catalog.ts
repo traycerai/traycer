@@ -42,17 +42,38 @@ import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-e
 // pays a respawn and resets the host's idle clock, which is what kept a spawned
 // server effectively unreapable.
 //
-// Models therefore refresh in exactly three places:
-//   - the app-load fill (`HarnessCatalogPrefetcher`), which populates the cache
-//     once per app session; every surface renders from that cache, including
-//     while a refresh is in flight (a background refetch keeps the previous
-//     data, so `isPending` stays false and no surface blanks);
+// `staleTime: Infinity` still leaves one hole: TanStack's NO-DATA path ignores
+// it, so a fan-out whose observers are enabled fetches every harness with no
+// cached entry. On the app-wide default host the prefetcher fills those slots
+// at app load and the hole never shows - but a composer pinned to another host
+// reads that HOST's cache slots, which nothing prefetched, so a picker or
+// palette subpage mounting there cold-started `listModels` for every available
+// harness at once: one spawned provider server per rail entry, on a host the
+// user had merely opened a picker on. `modelsFetch` (below) closes that hole:
+// only `"all-harnesses"` (the prefetcher's app-load fill) may fan out; every
+// other surface is `"cached-only"` and warms exactly the harness it is about
+// via its own targeted query on the shared cache slot.
+//
+// Models therefore refresh in exactly four places:
+//   - the app-load fill (`HarnessCatalogPrefetcher`), the ONLY fan-out
+//     (`modelsFetch: "all-harnesses"`), which populates the default host's
+//     cache once per app session; every surface renders from that cache,
+//     including while a refresh is in flight (a background refetch keeps the
+//     previous data, so `isPending` stays false and no surface blanks);
 //   - the picker's intent edges - popover open, harness selection - which
 //     refresh ONLY the selected harness, and only once its cached entry is
 //     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
 //     (`harnessCatalogEntryNeedsRefresh`);
+//   - targeted per-harness fetches on their surface's own gate: the picker's
+//     selected-harness and browsed-provider queries
+//     (`useGuiHarnessModelsQueryForClient`), and label surfaces warming their
+//     one subject harness (`useGuiHarnessModelsWarmup`) - each fetching a
+//     single harness's slot on the composer's / owner's host, never the rail;
 //   - the picker's manual refresh button (`useRefreshHarnessCatalog`), whose
-//     `invalidateQueries` beats `staleTime: Infinity` and re-fetches everything.
+//     `invalidateQueries` beats `staleTime: Infinity` and re-fetches every
+//     ACTIVE query (on a non-default host that is the picker's own targeted
+//     queries; a cached-only entry re-pulls when next browsed, since
+//     invalidation survives `staleTime: Infinity` at that enabled-mount edge).
 //
 // Matching that refresh threshold to the host's 15-min idle timeout is what
 // keeps the two clocks from fighting: a picker opened inside the window reuses
@@ -76,6 +97,7 @@ const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
 export interface HarnessCatalogEntryFreshness {
   readonly dataUpdatedAt: number;
   readonly isError: boolean;
+  readonly isFetching: boolean;
 }
 
 /**
@@ -86,6 +108,13 @@ export interface HarnessCatalogEntryFreshness {
  * `listModels` - and respawn a reaped OpenCode server - on every popover open,
  * however fresh the cache was.
  *
+ * A fetch already in flight is never due: it IS the fresh data coming, and the
+ * imperative `refetch()` defaults to `cancelRefetch: true`, so answering "due"
+ * would cancel and re-issue that request - a doubled RPC on exactly the cold
+ * edges where an enabled-transition fetch and an intent edge race (browsing a
+ * provider on a cold host commits the selection in the same commit that
+ * enables its first fetch).
+ *
  * An entry that never loaded (`dataUpdatedAt === 0`) or whose last fetch failed
  * is always due: with no background retry left, the intent edges are also the
  * error-recovery path.
@@ -93,6 +122,7 @@ export interface HarnessCatalogEntryFreshness {
 export function harnessCatalogEntryNeedsRefresh(
   entry: HarnessCatalogEntryFreshness,
 ): boolean {
+  if (entry.isFetching) return false;
   if (entry.isError || entry.dataUpdatedAt === 0) return true;
   return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
 }
@@ -106,6 +136,26 @@ export function harnessCatalogEntryNeedsRefresh(
 export interface QueryActivityOptions {
   readonly enabled: boolean;
   readonly subscribed: boolean;
+}
+
+/**
+ * Catalog activity: `QueryActivityOptions` plus the model fan-out scope.
+ *
+ * `modelsFetch` decides whether this observer may FETCH model lists it has no
+ * cache for - it never affects what the catalog SURFACES (cached entries render
+ * either way, and keep tracking cache updates):
+ *   - `"all-harnesses"`: the model fan-out fetches every available harness with
+ *     no cached entry. Reserved for the app-load fill; on a cold host this is
+ *     one spawned provider server per rail entry, so no user-facing surface
+ *     gets to be the trigger.
+ *   - `"cached-only"`: the fan-out never fetches - entries surface whatever the
+ *     shared cache slots hold. A surface that needs a specific harness resolved
+ *     on a cold host owns a targeted query for it
+ *     (`useGuiHarnessModelsQueryForClient` / `useGuiHarnessModelsWarmup`),
+ *     whose result lands in the same slot this catalog reads.
+ */
+export interface CatalogQueryActivityOptions extends QueryActivityOptions {
+  readonly modelsFetch: "all-harnesses" | "cached-only";
 }
 
 export interface GuiHarnessCatalogEntry extends GuiHarnessOption {
@@ -136,9 +186,22 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
 /**
  * The app-wide default host's client (`null` while unbound), factored out so
  * the `?.`/`??` fallback lives in one place instead of being repeated at
- * every call site below - and so callers outside this module (e.g. the model
- * picker's commands-prewarm query) can resolve the same default-host scope
- * without duplicating it inline.
+ * every call site below - and so callers outside this module can resolve the
+ * same default-host scope without duplicating it inline.
+ *
+ * App-wide surfaces (the app-load prefetcher, Settings, and the command
+ * palette WHEN NO COMPOSER IS FOCUSED) read the catalog through the
+ * default-host wrappers below. A COMPOSER never does: every composer surface
+ * has a target host - the tab's bound host, a fork dialog's fixed host, or
+ * the app-wide default followed through `null` (the landing page, whose
+ * picker rebinds that default, and the new-conversation modal opened from the
+ * sidebar's app-wide trigger) - and reads its catalog through the
+ * `...ForClient` variants with that host's client, so the harnesses, models
+ * and commands it offers are the ones the run will actually see. With a
+ * composer focused the palette follows it, reading through
+ * `FocusedComposerEntry.hostClient` - otherwise its Pick provider / Pick
+ * model subpages would list one host's catalog and dispatch into another
+ * host's composer store.
  */
 export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
   return useHostBinding()?.hostClient ?? null;
@@ -147,7 +210,19 @@ export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
 export function useGuiHarnessesQuery(
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
-  const client = useDefaultHostClient();
+  return useGuiHarnessesQueryForClient(useDefaultHostClient(), activity);
+}
+
+/**
+ * Client-scoped `agent.gui.listHarnesses`. `client === null` (a tab host the
+ * directory has not resolved yet, or an unbound runtime) disables the query
+ * rather than falling back to the default host - a composer must never offer
+ * another host's harnesses under its own host's name.
+ */
+export function useGuiHarnessesQueryForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  activity: QueryActivityOptions,
+): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
   return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
     cacheKeyIdentity: undefined,
     client,
@@ -166,7 +241,21 @@ export function useGuiHarnessModelsQuery(
   workingDirectory: string | null,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
-  const client = useDefaultHostClient();
+  return useGuiHarnessModelsQueryForClient(
+    useDefaultHostClient(),
+    harnessId,
+    workingDirectory,
+    activity,
+  );
+}
+
+/** Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`. */
+export function useGuiHarnessModelsQueryForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  harnessId: GuiHarnessId,
+  workingDirectory: string | null,
+  activity: QueryActivityOptions,
+): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
   const params = useMemo(
     () => ({ harnessId, workingDirectory }),
     [harnessId, workingDirectory],
@@ -188,6 +277,55 @@ export function useGuiHarnessModelsQuery(
       // must only detach the observer, not discard the last verified catalog.
       // A successful later listModels response replaces this cache entry and
       // is the authority for models that no longer exist.
+      gcTime: Infinity,
+    },
+  });
+}
+
+/**
+ * Targeted single-harness model warmup: fetches `agent.gui.listModels` for
+ * exactly one harness into the same cache slot the catalog's entries read,
+ * without the all-harness fan-out. For a label surface that pairs a
+ * `"cached-only"` catalog with one known subject harness (e.g. the worktree
+ * owner header labeling the tuple its owner runs), so that subject still
+ * resolves on a cold host at the cost of one provider - never the whole rail.
+ *
+ * Callers gate `enabled` on the subject's AVAILABILITY as well as their own
+ * activity (mirroring the picker's fetch gates and the fan-out, which only
+ * ever fetched available harnesses): a subject persisted by a historical
+ * chat/TUI agent can name a harness that is now disabled or unavailable, and
+ * an availability-blind warmup would hit that provider's `listModels` - and
+ * retry the failure on every later mount, since an errored query refetches on
+ * the next enabled mount.
+ *
+ * `harnessId === null` (no subject yet) mounts no query at all - deliberately
+ * not a disabled observer on a junk `null`-keyed slot; the result is then an
+ * empty array. Same cache-only contract as
+ * `useGuiHarnessModelsQueryForClient`: a warm slot is never re-pulled, and
+ * the last verified list is never garbage-collected.
+ */
+export function useGuiHarnessModelsWarmup(
+  client: HostClient<HostRpcRegistry> | null,
+  harnessId: GuiHarnessId | null,
+  activity: QueryActivityOptions,
+): Array<UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>> {
+  const requests = useMemo(() => {
+    if (harnessId === null) return EMPTY_GUI_MODEL_REQUESTS;
+    return [
+      {
+        method: "agent.gui.listModels" as const,
+        params: { harnessId, workingDirectory: null },
+      },
+    ];
+  }, [harnessId]);
+  return useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
+    client,
+    cacheKeyIdentity: undefined,
+    requests,
+    options: {
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+      staleTime: Infinity,
       gcTime: Infinity,
     },
   });
@@ -223,10 +361,26 @@ export function useGuiHarnessCommandsQuery(
 
 export function useGuiHarnessCatalog(
   workingDirectory: string | null,
-  activity: QueryActivityOptions,
+  activity: CatalogQueryActivityOptions,
 ): GuiHarnessCatalog {
-  const harnessesQuery = useGuiHarnessesQuery(activity);
-  const client = useDefaultHostClient();
+  return useGuiHarnessCatalogForClient(
+    useDefaultHostClient(),
+    workingDirectory,
+    activity,
+  );
+}
+
+/**
+ * Client-scoped harness + model catalog; see `useGuiHarnessesQueryForClient`.
+ * The model picker reads its rail/rows through this with the composer's
+ * run-target client.
+ */
+export function useGuiHarnessCatalogForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  workingDirectory: string | null,
+  activity: CatalogQueryActivityOptions,
+): GuiHarnessCatalog {
+  const harnessesQuery = useGuiHarnessesQueryForClient(client, activity);
   // Fetching is gated by `enabled` (inside the sub-query hooks); the projection
   // is gated by `subscribed` alone, so a cache-only reader
   // (`{ enabled: false, subscribed: true }`) still surfaces the cached catalog
@@ -257,7 +411,14 @@ export function useGuiHarnessCatalog(
     cacheKeyIdentity: undefined,
     requests,
     options: {
-      enabled: activity.enabled,
+      // Only the app-load fill may fan out (see `CatalogQueryActivityOptions`):
+      // TanStack's no-data path ignores `staleTime`, so an enabled observer on
+      // a cold host's cache slot IS a fetch - and on a non-default host every
+      // slot is cold, which made a picker/palette mount there spawn every
+      // provider's server at once. A `"cached-only"` observer never fetches;
+      // it still surfaces and tracks the shared slots, which the surface's own
+      // targeted per-harness queries fill.
+      enabled: activity.enabled && activity.modelsFetch === "all-harnesses",
       // Cache-only (see the module header). These observers are created and
       // destroyed as each surface activates, so a finite staleTime turned every
       // picker open / chat-tile reveal / palette subpage mount past the window
@@ -288,7 +449,13 @@ export function useGuiHarnessCatalog(
             return {
               ...harness,
               models: modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS,
-              modelsLoading: modelQuery?.isPending ?? false,
+              // "Loading" must mean a fetch is actually happening. Raw
+              // `isPending` is true for ANY no-data slot - including one a
+              // `"cached-only"` observer will never fetch - which would read
+              // as an eternal spinner. `isLoading` (`isPending && isFetching`)
+              // reflects the query's shared fetch state, so it also turns true
+              // while a surface's own targeted query fills this same slot.
+              modelsLoading: modelQuery?.isLoading ?? false,
               modelsError:
                 modelQuery?.error instanceof HostRpcError
                   ? modelQuery.error
@@ -298,19 +465,28 @@ export function useGuiHarnessCatalog(
         : EMPTY_GUI_HARNESS_CATALOG_ENTRIES,
     [attached, harnessesQuery.data, queryByHarnessId],
   );
+  // Same predicate as the per-entry flag above: a slot nothing will fetch is
+  // not "loading", however empty it is.
   const modelsLoading = useMemo(
-    () => modelQueries.some((query) => query.isPending),
+    () => modelQueries.some((query) => query.isLoading),
     [modelQueries],
   );
+  // "Loading" means a fetch is actually coming. With no client the harness
+  // query is disabled, and a disabled query with no cached data reports
+  // `isPending` forever - reading it raw would leave the picker's rail (and
+  // any other consumer) spinning for a fetch that will never start. The model
+  // fan-out needs no such gate: it only exists once harnesses loaded, which
+  // needs a client.
+  const harnessesLoading = client !== null && harnessesQuery.isPending;
 
   return useMemo(
     () => ({
       harnesses,
-      harnessesLoading: harnessesQuery.isPending,
+      harnessesLoading,
       harnessesError: harnessesQuery.error,
       modelsLoading,
     }),
-    [harnesses, harnessesQuery.error, harnessesQuery.isPending, modelsLoading],
+    [harnesses, harnessesQuery.error, harnessesLoading, modelsLoading],
   );
 }
 
@@ -331,10 +507,22 @@ const REFRESHABLE_CATALOG_METHODS = [
  * at spawn.)
  */
 export function useRefreshHarnessCatalog(): () => Promise<void> {
+  return useRefreshHarnessCatalogForClient(useHostClient());
+}
+
+/**
+ * Client-scoped catalog refresh: invalidates the catalog keys of the host
+ * `client` targets, so the picker's refresh button re-fetches the catalog of
+ * the host the composer runs on - never the app-wide active host's while a tab
+ * or dialog is bound elsewhere. A `null` client (host not resolved yet) is a
+ * no-op, matching the disabled queries it would otherwise refetch.
+ */
+export function useRefreshHarnessCatalogForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): () => Promise<void> {
   const queryClient = useQueryClient();
-  const client = useHostClient();
   return useCallback(async () => {
-    const hostId = client.getActiveHostId();
+    const hostId = client?.getActiveHostId() ?? null;
     if (hostId === null) return;
     getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
       hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(

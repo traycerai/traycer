@@ -3,6 +3,7 @@ import {
   MessageSquareCheck,
   MessageSquareWarning,
   MessageSquareX,
+  TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
 import { MessageSquareQuestionMark } from "@/components/notifications/message-square-question-mark";
@@ -16,12 +17,9 @@ import type {
  * Shared presentation metadata for the notification status tiers. Both the
  * per-row `NotificationIndicatorIcon` and the chat tree's descendant-status
  * rollup badge derive their glyph and color from these, so the two surfaces
- * cannot drift apart. `attentionTone` also encodes the attention-tier
- * precedence (failure > fork > interview > approval); the running and
- * unread-done tiers slot in below it at each consumer per its activity signal.
- * Producers resolve terminal chronology per entity before states reach this
- * renderer, so a mixed failure/done aggregate means different descendants
- * still need both tones represented and failure must win.
+ * cannot drift apart. `attentionTone` also encodes the high-attention tier
+ * precedence (non-terminal failure > fork > interview > approval); the running,
+ * unread-done, and terminal-failure tiers slot in below it at each consumer.
  */
 export type NotificationStatusKind =
   | "failure"
@@ -100,6 +98,12 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
 
 export const DONE_TONE = NOTIFICATION_STATUS_TONES.done;
 export const FAILURE_TONE = NOTIFICATION_STATUS_TONES.failure;
+export const TERMINAL_FAILURE_TONE: IndicatorTone = {
+  testId: "failure",
+  title: "Task needs attention",
+  className: FAILURE_TONE.className,
+  Icon: TerminalSquare,
+};
 export const FORK_TONE = NOTIFICATION_STATUS_TONES.fork;
 export const INTERVIEW_TONE = NOTIFICATION_STATUS_TONES.interview;
 export const APPROVAL_TONE = NOTIFICATION_STATUS_TONES.approval;
@@ -111,11 +115,22 @@ export const RESOLVED_APPROVAL_TONE =
 export function attentionTone(
   state: NotificationIndicatorState,
 ): IndicatorTone | null {
-  if (state.unreadFailure) return FAILURE_TONE;
+  const unreadNonTerminalFailure =
+    state.unreadNonTerminalFailure ??
+    (state.unreadFailure && state.unreadTerminalFailure !== true);
+  if (unreadNonTerminalFailure) return FAILURE_TONE;
   if (state.pendingFork) return FORK_TONE;
   if (state.pendingInterview) return INTERVIEW_TONE;
   if (state.pendingApproval) return APPROVAL_TONE;
   return null;
+}
+
+export function terminalFailureTone(
+  state: NotificationIndicatorState,
+): IndicatorTone | null {
+  return state.unreadFailure && state.unreadTerminalFailure === true
+    ? TERMINAL_FAILURE_TONE
+    : null;
 }
 
 interface NotificationFeedToneInput {

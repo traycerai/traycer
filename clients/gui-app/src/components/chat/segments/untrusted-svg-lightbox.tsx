@@ -40,7 +40,7 @@ export function UntrustedSvgLightbox(
   if (state.status === "loading") {
     return (
       <div
-        className="size-full animate-pulse rounded-lg bg-muted/60 motion-reduce:animate-none"
+        className="size-full animate-pulse rounded-lg bg-foreground/10 motion-reduce:animate-none"
         role="status"
         aria-label="Loading SVG"
       />
@@ -49,7 +49,7 @@ export function UntrustedSvgLightbox(
   if (state.status === "error") {
     return (
       <div
-        className="flex size-full items-center justify-center rounded-lg bg-muted/60 px-4 text-center text-ui-sm text-muted-foreground"
+        className="flex size-full items-center justify-center rounded-lg bg-foreground/6 px-4 text-center text-ui-sm text-muted-foreground"
         role="status"
         aria-label={
           props.alt.length > 0

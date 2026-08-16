@@ -23,7 +23,10 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
 );
 const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
   "border border-border bg-background text-foreground",
-  "hover:bg-muted",
+  // Not `hover:bg-muted`: the button is `bg-background`, and the five flat
+  // light presets define `--muted` as exactly that, so the hover was a no-op
+  // there. The fill IS the whole state change here - the border is static.
+  "hover:bg-foreground/5",
 );
 const INTERACTIVE_ELEMENT_SELECTOR =
   "button, a, input, textarea, select, [role='button']";

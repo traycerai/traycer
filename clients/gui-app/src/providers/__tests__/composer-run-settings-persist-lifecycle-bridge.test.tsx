@@ -64,6 +64,36 @@ function persistSnapshot(
   );
 }
 
+const HOST_ID = "host-a";
+const EPIC_ID = "epic-1";
+
+/**
+ * A CURRENT-version (v2) blob, so the live per-host buckets are populated
+ * rather than the migration-only legacy fallback that `persistSnapshot`
+ * exercises. Account scoping has to hold for the fields that actually carry
+ * settings today, not just the frozen v1 ones.
+ */
+function persistHostBucketSnapshot(
+  email: string,
+  hostId: string,
+  settings: ChatRunSettings,
+): void {
+  window.localStorage.setItem(
+    composerRunSettingsKey(email),
+    JSON.stringify({
+      state: {
+        globalLastRunSettingsByHostId: { [hostId]: settings },
+        epicRunSettingsByEpicHost: {
+          [`${EPIC_ID} ${hostId}`]: { settings, updatedAt: 1 },
+        },
+        legacyGlobalLastRunSettings: null,
+        legacyEpicRunSettingsByEpicId: {},
+      },
+      version: 2,
+    }),
+  );
+}
+
 describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -93,7 +123,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey("alice@example.com"),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(ALICE_SETTINGS);
     });
   });
@@ -114,7 +144,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(ALICE_SETTINGS);
     });
 
@@ -127,8 +157,50 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey("bob@example.com"),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toEqual(BOB_SETTINGS);
+    });
+  });
+
+  it("drops the previous account's per-host buckets when the next account has none", async () => {
+    // Only Alice has a stored blob. Both accounts sign in on the SAME machine,
+    // so `HOST_ID` is a key Bob's session would happily read - the account
+    // scoping, not the host scoping, is what has to keep them apart.
+    persistHostBucketSnapshot("alice@example.com", HOST_ID, ALICE_SETTINGS);
+
+    render(
+      <ComposerRunSettingsPersistLifecycleBridge>
+        <div />
+      </ComposerRunSettingsPersistLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      const state = useComposerRunSettingsStore.getState();
+      expect(state.globalLastRunSettingsByHostId).toEqual({
+        [HOST_ID]: ALICE_SETTINGS,
+      });
+      expect(state.getEpicRunSettings(EPIC_ID, HOST_ID)).toEqual(
+        ALICE_SETTINGS,
+      );
+    });
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com");
+    });
+
+    await waitFor(() => {
+      expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
+        composerRunSettingsKey("bob@example.com"),
+      );
+      const state = useComposerRunSettingsStore.getState();
+      expect(state.globalLastRunSettingsByHostId).toEqual({});
+      expect(state.epicRunSettingsByEpicHost).toEqual({});
+      expect(state.getGlobalRunSettings(HOST_ID)).toBeNull();
+      expect(state.getEpicRunSettings(EPIC_ID, HOST_ID)).toBeNull();
     });
   });
 
@@ -172,7 +244,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
         composerRunSettingsKey(null),
       );
       expect(
-        useComposerRunSettingsStore.getState().globalLastRunSettings,
+        useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
       ).toBeNull();
     });
 

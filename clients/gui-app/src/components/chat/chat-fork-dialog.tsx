@@ -118,10 +118,13 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
   const activityEnabled = useSurfaceActivity();
-  const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
   const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
   const tabHostId = useTabHostId();
+  const stagingKey = useMemo(
+    () => pendingForkChatStagingKey(tabHostId, epicId),
+    [tabHostId, epicId],
+  );
   // The fork's `createChat` call runs on the TAB's host (see
   // `useEpicCreateChatForHost` -> `useTabHostClient`), so the seeded-profile
   // validation below must read that SAME host's `providers.list`, not the
@@ -168,12 +171,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // resolution is needed at this call site. Never authoritative (`fallback`/
   // `none`): this dialog has no reauth gate of its own, so a genuinely-
   // tombstoned source profile must be corrected to ambient here rather than
-  // silently submitted to `createChat`.
+  // silently submitted to `createChat`. The catalog reads through the same
+  // tab client, so the fork offers the tab host's harnesses/models.
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
-    false,
+    { hostClient: tabHostClient, hostId: tabHostId, tuiOnly: false },
   );
   const modelResolved = useStore(
     toolbarStore,
@@ -233,6 +237,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagingKey,
       seedIntent: target.workspaceSeed.intent,
       fallbackWorkspace: target.workspaceSeed.workspace,
+      hostId,
     });
     const workspaceMode = deriveWorkspaceMode(
       launchWorkspace.folderCount,
@@ -242,7 +247,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
-        .setEpicIntent(epicId, worktreeIntent, Date.now());
+        .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
     }
     const toolbar = toolbarStore.getState();
     const settings = buildChatRunSettings({
@@ -374,7 +379,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
             seedIntent={target?.workspaceSeed.intent ?? null}
             seedIntentOverride={target?.seedIntentOverride ?? null}
-            hostScope={{ kind: "active" }}
+            hostScope={{
+              kind: "fixed",
+              hostId: tabHostId,
+              hostClient: tabHostClient,
+            }}
           />
         </div>
         <DialogFooter>

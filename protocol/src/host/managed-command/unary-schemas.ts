@@ -42,19 +42,42 @@ export const managedCommandStatusSchema = z.discriminatedUnion("state", [
 export type ManagedCommandStatus = z.infer<typeof managedCommandStatusSchema>;
 
 /**
+ * The cadence a monitoring shell's digests are paced at - the agent's own
+ * `debounceMs`/`maxWaitMs`/`throttleMs`, echoed back so a human can read why a
+ * watcher is quiet. Null on a shell that is not monitoring, where the timings
+ * govern nothing and reporting them would describe a policy with no effect.
+ */
+export const managedCommandCadenceSchema = z.object({
+  /** Quiet gap that completes a batch of output. */
+  debounceMs: z.number().int(),
+  /** Ceiling before output that never pauses is delivered anyway. */
+  maxWaitMs: z.number().int(),
+  /** Floor between consecutive deliveries from this one shell. */
+  throttleMs: z.number().int(),
+});
+export type ManagedCommandCadence = z.infer<typeof managedCommandCadenceSchema>;
+
+/**
  * One managed command as a human surface sees it: enough to render a row
- * ("Shell · deploy watcher"), a status dot, an activity ordering, and the
- * backlink to the chat that created it.
+ * ("Shell · deploy watcher"), a status dot, an activity ordering, the backlink
+ * to the chat that created it, and the details a person debugging one asks for.
  *
- * Deliberately narrower than the agent's view: no `command`, `cwd`,
- * `interpreter` or `logDirectory`. The UI neither authors nor edits commands
- * (that is the agent's job) and reads output through `subscribeOutput` rather
- * than off the filesystem, so carrying the spec would only widen what a viewer
- * learns about the host's disk.
+ * This used to be deliberately narrower than the agent's view, carrying no
+ * `command`, `cwd` or cadence on the reasoning that the UI neither authors nor
+ * edits commands. That held only while the human surface was a list of rows.
+ * The output window's details popover is the case it does not survive: someone
+ * reading a shell's log and asking "what exactly ran, and where?" is not
+ * authoring anything, and answering "open the agent's transcript and find the
+ * tool call" is the surface refusing to say what it plainly knows. Product
+ * decision, 2026-08-13.
  *
- * `monitoring` is the flag, never its tuning: the debounce/max-wait/throttle
- * timings that pace a monitoring shell's digests are the agent's business, and a
- * viewer renders what the shell IS, not the policy behind it.
+ * `interpreter` and `logDirectory` stay OUT, and that half of the original
+ * reasoning is unchanged: which shell binary resolved and where the log file
+ * sits are facts about the host's disk, not about the work, and no human
+ * surface has a question they answer.
+ *
+ * Everything added since the first shipped shape is DEFAULTED, so a host too
+ * old to send it still parses.
  */
 export const managedCommandSchema = z.object({
   id: z.string(),
@@ -62,6 +85,16 @@ export const managedCommandSchema = z.object({
   monitoring: z.boolean(),
   /** The command's human label, shown as the row title. */
   description: z.string(),
+  /**
+   * The command line as the agent wrote it, verbatim. Null - never `""` - when
+   * the host is too old to send it, so a surface can say "this host does not
+   * report it" instead of rendering an empty command line as fact.
+   */
+  command: z.string().nullable().default(null),
+  /** Absolute working directory the command runs in; null on an old host. */
+  cwd: z.string().nullable().default(null),
+  /** How digests are paced; null unless `monitoring`. */
+  cadence: managedCommandCadenceSchema.nullable().default(null),
   status: managedCommandStatusSchema,
   /**
    * The chat that created the command - the row's backlink. This is the
@@ -74,6 +107,24 @@ export const managedCommandSchema = z.object({
   updatedAtMs: z.number(),
 });
 export type ManagedCommand = z.infer<typeof managedCommandSchema>;
+
+/**
+ * Wire-freeze copy of `managedCommandSchema` from before the details widening
+ * (`command`/`cwd`/`cadence`). Bound to `chat.subscribe@1.6` - the released
+ * line the whole Shells surface arrived on - so that line can never observe the
+ * new fields. Hand-frozen, NOT derived from the live shape via `.omit()`, so a
+ * future field added to the live schema cannot silently leak onto it. Same
+ * discipline, and the same reason, as `toolCallBlockSchemaPreImage`.
+ */
+export const managedCommandSchemaPreImage = z.object({
+  id: z.string(),
+  monitoring: z.boolean(),
+  description: z.string(),
+  status: managedCommandStatusSchema,
+  chatId: z.string(),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+});
 
 /**
  * Every id-addressed control names its epic. Scoping is not advisory: a command

@@ -126,7 +126,7 @@ import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
-  useGuiHarnessCatalog,
+  useGuiHarnessCatalogForClient,
   type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
@@ -161,6 +161,8 @@ import {
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
 import {
+  selectEpicRunSettingsEntry,
+  selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
@@ -188,7 +190,6 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
-import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -1146,6 +1147,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, isActive, currentEpicId } = props;
+  const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
   // on screen = the pane is shown AND this tab is the pane's front tab. Pane
@@ -1213,17 +1215,30 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ),
   );
   const collaborators = useCachedCollaborators(currentEpicId);
-  // Label-only, cache-only projection: the focused composer's toolbar and the
-  // app-wide `HarnessCatalogPrefetcher` own the fetch; this reads the same
-  // host-keyed cache (never fetches) so ANY visible transcript — including a
-  // restored terminal-focused split with an inactive chat and no live catalog
-  // publisher — renders friendly model/reasoning labels immediately, and a
-  // host/user switch re-keys the query and swaps labels. Detaches when hidden.
-  const modelCatalog = useGuiHarnessCatalog(null, {
-    enabled: false,
-    subscribed: surfaceVisible,
-  });
-  const displayCatalog = modelCatalog.harnesses;
+  // Label-only, cache-only projection: this tile's own composer (which fetches
+  // the TAB host's catalog) owns the fetch; this reads that host-keyed cache
+  // (never fetches) so ANY visible transcript — including a restored
+  // terminal-focused split with an inactive chat and no live catalog publisher
+  // — renders friendly model/reasoning labels immediately, and a host/user
+  // switch re-keys the queries and swaps labels. Detaches when hidden.
+  //
+  // ONE slot, the tab host's - never layered over the default host's. This
+  // transcript describes turns that ran on the TAB host, so a slug that host
+  // does not advertise must degrade to the raw slug rather than borrow a label
+  // (or a reasoning-effort label, which is version-specific) from a host that
+  // never served the turn. On a default-host tab this is the slot the
+  // app-load prefetcher already filled, so nothing changes there; on a
+  // remote-host tab the labels appear as that host's per-harness slots warm —
+  // this tile's own composer warms its selected harness on mount, and its
+  // picker warms whatever the user browses (the catalog fan-out itself is
+  // `"cached-only"` everywhere but the app-load fill).
+  const tabHostCatalogClient = useTabHostClient();
+  const tabModelCatalog = useGuiHarnessCatalogForClient(
+    tabHostCatalogClient,
+    null,
+    { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
+  );
+  const displayCatalog = tabModelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(
     () =>
       new Map(
@@ -1289,11 +1304,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () =>
       worktreeStagingKeyString({
         surface: "owner",
+        hostId: viewModelHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
       }),
-    [currentEpicId, node.id],
+    [currentEpicId, node.id, viewModelHostId],
   );
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],
@@ -1357,6 +1373,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const linkResolutionRoots = useWorkspaceMentionRoots(
     mentionRoots,
     !isFolderlessWorkspace,
+    activeHostId,
   );
   // The exact roots the active composer resolves to for slash-command
   // discovery (`ChatComposerImpl` derives the same value internally from
@@ -1369,6 +1386,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const resolvedComposerMentionRoots = useWorkspaceMentionRoots(
     composerMentionRoots,
     !isFolderlessWorkspace,
+    activeHostId,
   );
   // The composer is runnable when the chat carries its own folder binding OR
   // when the epic has at least one workspace folder (the chat then runs local
@@ -2119,35 +2137,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // pinned strip. Per-folder Environment config lives inside the selected
   // Workspace panel.
   //
-  // The Shells menu rides the leading cell rather than becoming a third grid
-  // column: the usage chip's pinned strip spans the row via `col-span-full`,
-  // which only works while it is a direct child of `ComposerWorkspaceRow`'s
-  // two-column grid. `justify-between` parks the menu at that cell's trailing
-  // edge, so it reads as the chip's left-hand neighbour, and the selector -
-  // the only shrinkable thing here - gives up width first.
+  // No Shells menu here any more (product decision, 2026-08-15): a shell's
+  // own start card in the transcript carries its live status and the door to
+  // its output, the Background strip lists what is running, and the output
+  // window is where a shell is stopped, started or deleted. A second index
+  // over the same shells crowded the composer without adding a capability.
   const workspaceControls = useMemo(
     () => (
       <>
-        <div className="flex min-w-0 items-center justify-between gap-2 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           {hostWorkspaceSelector}
-          <ManagedCommandChatMenu
-            epicId={currentEpicId}
-            chatId={node.id}
-            hostId={activeHostId}
-            viewTabId={viewTabId}
-          />
         </div>
         {usageChip}
       </>
     ),
-    [
-      hostWorkspaceSelector,
-      usageChip,
-      currentEpicId,
-      node.id,
-      activeHostId,
-      viewTabId,
-    ],
+    [hostWorkspaceSelector, usageChip],
   );
 
   const lowerRuntime = useMemo(
@@ -2537,16 +2541,19 @@ function useChatTileComposerSettingsSeeds(input: {
   readonly persistedChatSettings: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
 }) {
+  // This tile's composer is bound to the TAB host for life, so its last-run
+  // fallback seeds read that host's buckets and the on-send write below lands
+  // in them - another host's remembered settings never leak into this tab.
+  const tabHostId = useTabHostId();
   const { globalLastRunSettings, epicRunSettingsEntry, setEpicRunSettings } =
     useComposerRunSettingsStore(
       useShallow((state) => ({
-        globalLastRunSettings: state.globalLastRunSettings,
-        epicRunSettingsEntry: Object.hasOwn(
-          state.epicRunSettingsByEpicId,
+        globalLastRunSettings: selectGlobalLastRunSettings(state, tabHostId),
+        epicRunSettingsEntry: selectEpicRunSettingsEntry(
+          state,
           input.currentEpicId,
-        )
-          ? state.epicRunSettingsByEpicId[input.currentEpicId]
-          : null,
+          tabHostId,
+        ),
         setEpicRunSettings: state.setEpicRunSettings,
       })),
     );
@@ -2564,13 +2571,20 @@ function useChatTileComposerSettingsSeeds(input: {
     globalLastRunSettings,
     defaultRunSettings: input.defaultRunSettings,
   });
+  // Consumers (the send/steer paths) keep the pre-host 3-param shape; the tab
+  // host is bound here, the single site that knows it.
+  const setEpicRunSettingsForTabHost = useCallback(
+    (epicId: string, settings: ChatRunSettings, updatedAt: number) =>
+      setEpicRunSettings(epicId, tabHostId, settings, updatedAt),
+    [setEpicRunSettings, tabHostId],
+  );
 
   return {
     composerFallbackSettingsSeed,
     epicRunSettings,
     globalLastRunSettings,
     initialComposerSettings,
-    setEpicRunSettings,
+    setEpicRunSettings: setEpicRunSettingsForTabHost,
   };
 }
 

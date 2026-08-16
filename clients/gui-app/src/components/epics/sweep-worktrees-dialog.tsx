@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { AlertTriangle, Paintbrush } from "lucide-react";
 import {
   describeReviewReasons,
@@ -9,6 +9,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Kbd } from "@/components/ui/kbd";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +32,12 @@ import {
   useEpicSweepWorktrees,
   useSweepingWorktreePaths,
 } from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
+import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
+import { useCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+
+const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
 
 interface SweepWorktreesDialogProps {
   /**
@@ -60,7 +66,7 @@ const TIER_PILL_CLASS: Record<WorktreeTier, string> = {
   review:
     "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:text-amber-300",
   orphaned: "border-border text-muted-foreground",
-  "in-use": "border-border bg-muted text-muted-foreground",
+  "in-use": "border-border bg-foreground/8 text-muted-foreground",
 };
 
 const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
@@ -84,10 +90,31 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
  */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const { epicIds, taskTitle, onOpenChange } = props;
-  const { hostId, rows, isPending, isError } =
-    useEpicSweepWorktreeCandidates(epicIds);
+  const {
+    hostId,
+    rows,
+    isPending,
+    isError,
+    checkedAt,
+    canRefresh,
+    refresh: refreshCandidates,
+  } = useEpicSweepWorktreeCandidates(epicIds);
   const taskCount = epicIds?.length ?? 0;
   const sweepMutation = useEpicSweepWorktrees();
+  const refresh = useRefreshSpinner({
+    onRefresh: refreshCandidates,
+    externalRefreshing: isPending,
+    timeoutMs: SWEEP_WORKTREES_REFRESH_TIMEOUT_MS,
+  });
+  const triggerRefresh = refresh.trigger;
+  const claimRefreshKey = useBareKeyClaimer("r", (event) => {
+    event.preventDefault();
+    triggerRefresh();
+  });
+  useEffect(
+    () => (taskCount > 0 && canRefresh ? claimRefreshKey() : undefined),
+    [canRefresh, claimRefreshKey, taskCount],
+  );
   // Explicit user toggles, cleared whenever the dialog retargets so a
   // reopened dialog starts from the per-row defaults again (the
   // React-recommended "adjust state during render" idiom).
@@ -163,7 +190,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
 
         <TooltipProvider>
           <section
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-muted/10 px-5 py-4"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
             data-testid="sweep-worktrees-candidates"
           >
             <SweepRowList
@@ -172,7 +199,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
               rows={rows}
               isRowChecked={isRowChecked}
               isRowSweeping={isRowSweeping}
-              interactionDisabled={isSweeping}
+              interactionDisabled={isSweeping || refresh.refreshing}
               onToggle={(path, checked) => {
                 setCheckOverrides((prev) => {
                   const next = new Map(prev);
@@ -181,10 +208,16 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
                 });
               }}
             />
+            <SweepWorktreesRefreshFooter
+              checkedAt={checkedAt}
+              refreshing={refresh.refreshing}
+              canRefresh={canRefresh}
+              onRefresh={triggerRefresh}
+            />
           </section>
         </TooltipProvider>
 
-        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-muted/20 px-5 py-3 sm:flex sm:justify-end">
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
           <Button
             type="button"
             variant="ghost"
@@ -200,7 +233,12 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             variant="destructive"
             size="sm"
             className="w-full sm:w-auto"
-            disabled={hostId === null || isSweeping || checkedRows.length === 0}
+            disabled={
+              hostId === null ||
+              isSweeping ||
+              refresh.refreshing ||
+              checkedRows.length === 0
+            }
             onClick={handleConfirm}
             data-testid="sweep-worktrees-confirm"
           >
@@ -216,6 +254,70 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SweepWorktreesRefreshFooter(props: {
+  readonly checkedAt: number | null;
+  readonly refreshing: boolean;
+  readonly canRefresh: boolean;
+  readonly onRefresh: () => void;
+}): ReactNode {
+  return (
+    <div
+      className="mt-3 flex shrink-0 items-center justify-between gap-2 border-t border-border/25 pt-1.5"
+      data-testid="sweep-worktrees-refresh-footer"
+    >
+      <SweepWorktreesCheckedAt
+        checkedAt={props.checkedAt}
+        refreshing={props.refreshing}
+      />
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost"
+        aria-label="Refresh worktree details"
+        aria-keyshortcuts="R"
+        disabled={!props.canRefresh || props.refreshing}
+        onClick={props.onRefresh}
+        data-testid="sweep-worktrees-refresh"
+      >
+        {props.refreshing ? (
+          <AgentSpinningDots
+            className="text-muted-foreground"
+            testId="sweep-worktrees-refresh-spinner"
+            variant={undefined}
+          />
+        ) : null}
+        Refresh
+        <Kbd className="ml-0.5 font-mono">R</Kbd>
+      </Button>
+    </div>
+  );
+}
+
+function SweepWorktreesCheckedAt(props: {
+  readonly checkedAt: number | null;
+  readonly refreshing: boolean;
+}): ReactNode {
+  if (props.refreshing) {
+    return <span className="text-ui-xs text-muted-foreground">Checking…</span>;
+  }
+  if (props.checkedAt === null) return <span />;
+  return <SweepWorktreesCheckedAtText checkedAt={props.checkedAt} />;
+}
+
+function SweepWorktreesCheckedAtText(props: {
+  readonly checkedAt: number;
+}): ReactNode {
+  const relative = useCompactRelativeTime(props.checkedAt);
+  return (
+    <span
+      className="text-ui-xs whitespace-nowrap text-muted-foreground"
+      data-testid="sweep-worktrees-checked-at"
+    >
+      Workspace snapshot · {relative}
+    </span>
   );
 }
 

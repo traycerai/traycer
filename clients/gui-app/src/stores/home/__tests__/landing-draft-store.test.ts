@@ -60,6 +60,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
+  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
@@ -71,6 +72,27 @@ import type {
 } from "@/lib/windows/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+
+// `readCurrentLandingDraftWorkspaceSnapshot` resolves the active host
+// imperatively via `getHostBindingSnapshot()?.hostClient.getActiveHostId()`
+// (see landing-draft-store.ts). No `<TabHostProvider>`/`<HostRuntimeProvider>`
+// is mounted in this suite, so left unmocked it always resolves `null` - only
+// `getHostBindingSnapshot` is overridden; every other export (the real
+// providers/hooks) is preserved via the `importOriginal` spread. The literal
+// below must stay a literal (not a reference to `HOST_A`, declared below) -
+// `vi.mock` factories are hoisted above every top-level variable, so a
+// closed-over outer const throws at runtime.
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () => ({
+      hostClient: { getActiveHostId: () => "host-a" },
+    }),
+  };
+});
+
+const HOST_A = "host-a";
 
 const HAIKU_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -115,11 +137,7 @@ function resetStore(): void {
     drafts: [],
     activeDraftId: null,
   });
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useSettingsStore.setState({
     composerMode: "chat",
   });
@@ -514,14 +532,24 @@ describe("useLandingDraftStore", () => {
 
   it("keeps workspace snapshots independent per draft", () => {
     useWorkspaceFoldersStore.setState({
-      folders: [WORKSPACE_A.path],
-      folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+      byHost: {
+        [HOST_A]: {
+          folders: [WORKSPACE_A.path],
+          folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+          primaryPath: WORKSPACE_A.path,
+        },
+      },
     });
     const draftA = useLandingDraftStore.getState().createDraft(null);
 
     useWorkspaceFoldersStore.setState({
-      folders: [WORKSPACE_B.path],
-      folderInfoByPath: { [WORKSPACE_B.path]: WORKSPACE_B },
+      byHost: {
+        [HOST_A]: {
+          folders: [WORKSPACE_B.path],
+          folderInfoByPath: { [WORKSPACE_B.path]: WORKSPACE_B },
+          primaryPath: WORKSPACE_B.path,
+        },
+      },
     });
     const draftB = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore
@@ -646,7 +674,10 @@ describe("useLandingDraftStore", () => {
     expect(draftWorkspace.primaryPath).toBe(WORKSPACE_B.path);
     // The global store was never touched by a draft-scoped mutation - it
     // has no folders at all in this test, so its primary stays null.
-    expect(useWorkspaceFoldersStore.getState().primaryPath).toBeNull();
+    expect(
+      selectWorkspaceFoldersBucket(useWorkspaceFoldersStore.getState(), HOST_A)
+        .primaryPath,
+    ).toBeNull();
   });
 
   it("a folder outside the draft's workspace is not settable as primary (no-op)", () => {

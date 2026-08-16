@@ -61,10 +61,12 @@ interface EpicAgentMentionEntryBase {
   readonly agentInterface: AgentMentionInterface;
   /**
    * Whether this Agent's RUNTIME supports agent-to-agent delivery at all - the
-   * surface/harness arm of the host's send gate (`canParticipateInA2A`). It is
+   * surface/harness arm of the host's send gate (`canReceiveA2AMessages`). It
+   * is
    * deliberately NOT a claim of actual routability: the host additionally
    * requires the receiver to be same-user and host-local (`agent.list`'s
-   * `capabilities.sendMessage` = `sameUser && isLocal && canParticipateInA2A`),
+   * `capabilities.sendMessage` = `sameUser && isLocal &&
+   * canReceiveA2AMessages`),
    * and the picker does not carry viewer host/user identity.
    *
    * So `false` is a definite "this runtime has no inbox" and is surfaced on the

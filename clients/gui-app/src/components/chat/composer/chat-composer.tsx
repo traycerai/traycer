@@ -230,13 +230,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
   } = props;
-  const resolvedMentionRoots = useWorkspaceMentionRoots(
-    mentionRoots,
-    fallbackToGlobalMentionRoots,
-  );
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    fallbackToGlobalMentionRoots,
+    tabHostId,
+  );
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
@@ -304,11 +305,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // catalog churn - stays inside the toolbar leaves and the submit path.
   // Only the focused top-level surface owns composer controls, automatic focus,
   // and their catalog subscriptions. Visible split partners retain their body.
+  // The catalog is the TAB host's (`hostClient`), like every other read in
+  // this composer - a tab bound to another host offers that host's harnesses
+  // and models, never the app-wide default's.
   const toolbarStore = useComposerToolbarStore(
     focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
-    false,
+    { hostClient, hostId: tabHostId, tuiOnly: false },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);

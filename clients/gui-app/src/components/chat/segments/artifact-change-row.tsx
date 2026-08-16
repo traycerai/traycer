@@ -105,6 +105,7 @@ export function ArtifactChangeRow(props: { row: ArtifactChangeRowModel }) {
 
   return (
     <SegmentRow
+      headerAction={null}
       open={open}
       onOpenChange={setOpen}
       header={header}

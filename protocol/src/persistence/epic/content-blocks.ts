@@ -1,5 +1,6 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import {
@@ -258,6 +259,101 @@ export const imageGenerationResultSchema = z.object({
 });
 export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
 
+/**
+ * The identity every shell-tool correlation carries. `description` and
+ * `monitoring` ride along even though the live record carries both, because
+ * they are exactly what survives the record's death: a deleted shell's card
+ * still names itself "Monitor · deploy watcher" instead of degrading to an
+ * anonymous row.
+ */
+const toolCallManagedCommandIdentityFields = {
+  commandId: z.string(),
+  description: z.string(),
+  monitoring: z.boolean(),
+};
+
+/**
+ * The shell a `traycer_run_shell` call created, stamped onto the call's own
+ * block so the transcript's start card can find it again.
+ *
+ * The id is the whole point and cannot be derived: it is minted by the host
+ * inside the call and comes back only in the tool RESULT, which is never
+ * persisted. Without it a start card can only guess which shell it is looking
+ * at - and, worse, cannot tell a DELETED shell (look it up, find nothing) from
+ * a block written before this field existed, which are the two states that must
+ * read differently. The live record wins over the identity fields whenever
+ * there is one - an agent can rename a shell or turn monitoring off, and the
+ * card follows.
+ *
+ * `event` is DEFAULTED: every block stamped before restarts were correlated
+ * carries only the identity, and it was always a start.
+ *
+ * `cwd` is the directory the successful call reported starting the shell in,
+ * frozen with the block - deliberately not the live record's `cwd`, which a
+ * later restart can move. The start card describes the call it is the record
+ * of. Null on blocks stamped before it existed.
+ */
+export const toolCallManagedCommandStartedSchema = z.object({
+  event: z.literal("started").default("started"),
+  ...toolCallManagedCommandIdentityFields,
+  cwd: z.string().nullable().default(null),
+});
+export type ToolCallManagedCommandStarted = z.infer<
+  typeof toolCallManagedCommandStartedSchema
+>;
+
+/**
+ * One successful `traycer_restart_shell`, stamped onto its own call's block as
+ * an immutable event. Never a second live card and never a mutation of the
+ * start card: a transcript with three restarts holds three of these, in order,
+ * and together they are the shell's spec history.
+ *
+ * Every field is a snapshot from the successful tool RESULT, not from the
+ * call's inputs. The inputs are optional and provider-shaped (a `command`
+ * given or omitted, a `cwd` equal to the stored one or not, explicit nulls);
+ * the result carries the EFFECTIVE spec the shell relaunched under and the
+ * host's own verdict on what changed against the spec before the call.
+ * `commandChanged`/`cwdChanged` therefore mean "differs from what the shell ran
+ * under before" - a restart naming the command already stored changed nothing,
+ * and says so.
+ *
+ * `outcome` is the status the result reported - `running`, or `exited` for a
+ * spawn failure - and is FROZEN: a restart card is history, and a live status
+ * on every one of them would mutate them all to the same present. The
+ * correlated start card stays the shell's one live card.
+ */
+export const toolCallManagedCommandRestartedSchema = z.object({
+  event: z.literal("restarted"),
+  ...toolCallManagedCommandIdentityFields,
+  effectiveCommand: z.string(),
+  effectiveCwd: z.string(),
+  commandChanged: z.boolean(),
+  cwdChanged: z.boolean(),
+  outcome: managedCommandStatusSchema,
+});
+export type ToolCallManagedCommandRestarted = z.infer<
+  typeof toolCallManagedCommandRestartedSchema
+>;
+
+/**
+ * What a shell-tool call did, stamped on its `tool_call` block. Nullable +
+ * defaulted on the block: every other tool call, and every block written
+ * before this existed, carries null.
+ *
+ * A plain union rather than `z.discriminatedUnion`: the started member's
+ * discriminator is defaulted so the identity-only shape every existing block
+ * carries still parses (a discriminated union refuses a missing
+ * discriminator), and the restarted member goes first because its literal is
+ * required - a legacy shape falls through to `started`.
+ */
+export const toolCallManagedCommandSchema = z.union([
+  toolCallManagedCommandRestartedSchema,
+  toolCallManagedCommandStartedSchema,
+]);
+export type ToolCallManagedCommand = z.infer<
+  typeof toolCallManagedCommandSchema
+>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -280,6 +376,9 @@ export const toolCallBlockSchema = z.object({
   taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
   error: z.string().nullable(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // The shell a `traycer_run_shell` call created - see
+  // `toolCallManagedCommandSchema`. Null for every other tool call.
+  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
   // Latest intermediate progress line for an in-flight call (replace-latest,
   // never an append-log). Shown by the GUI only while `status === "streaming"`.
   // Nullable + defaulted so blocks persisted before this field parse cleanly.

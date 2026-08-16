@@ -908,13 +908,19 @@ function McpCapabilityNotices(props: {
         </p>
       ) : null}
       {props.capabilities.stdioDegradeNotice ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+        <p
+          // muted-fill-ok: weak tint delimited by its own border-border/60
+          className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground"
+        >
           Stdio servers are config-only under this provider — live connect is
           unavailable in-session.
         </p>
       ) : null}
       {props.authInstruction !== null ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+        <p
+          // muted-fill-ok: weak tint delimited by its own border-border/60
+          className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground"
+        >
           {props.authInstruction}
         </p>
       ) : null}
@@ -1545,7 +1551,10 @@ function ServerToolsPanel(props: {
               No instructions from this server.
             </p>
           ) : (
-            <pre className="max-h-[min(40vh,20rem)] overflow-auto whitespace-pre-wrap rounded-md border border-border/40 bg-muted/20 p-3 text-ui-xs text-muted-foreground">
+            <pre
+              // muted-fill-ok: weak tint delimited by its own border-border/40
+              className="max-h-[min(40vh,20rem)] overflow-auto whitespace-pre-wrap rounded-md border border-border/40 bg-muted/20 p-3 text-ui-xs text-muted-foreground"
+            >
               {server.instructions}
             </pre>
           )}
@@ -1660,8 +1669,10 @@ function ToolChip(props: {
       className={cn(
         "w-full truncate rounded-md border border-border/60 px-2.5 py-1.5 text-left text-ui-xs transition-colors",
         tool.enabled
-          ? "bg-background text-foreground hover:bg-muted/40"
-          : "bg-muted/20 text-muted-foreground line-through",
+          ? "bg-background text-foreground hover:bg-foreground/5"
+          : // muted-fill-ok: the disabled state also carries line-through and
+            // border-border/60, so it survives a collapse of the tint
+            "bg-muted/20 text-muted-foreground line-through",
         readOnly ? "cursor-default" : "cursor-pointer",
         disabled ? "opacity-60" : null,
       )}

@@ -25,7 +25,7 @@ const MARKDOWN_EDITOR_EXTENSIONS = [
       caretColor: "var(--foreground)",
     },
     ".cm-gutters": {
-      backgroundColor: "color-mix(in oklab, var(--muted) 35%, transparent)",
+      backgroundColor: "color-mix(in oklab, var(--foreground) 5%, transparent)",
       border: "none",
       color: "var(--muted-foreground)",
     },

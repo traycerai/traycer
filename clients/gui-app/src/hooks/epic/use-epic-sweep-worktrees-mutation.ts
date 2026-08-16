@@ -92,7 +92,11 @@ export function useEpicSweepWorktrees(): UseMutationResult<
     },
     onSuccess: (result, variables) => {
       emitSweepSummaryToast(result);
-      purgeIntentsForRemovedWorktrees(variables.worktrees, result.removed);
+      purgeIntentsForRemovedWorktrees(
+        result.hostId,
+        variables.worktrees,
+        result.removed,
+      );
       invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
     },
     onError: (error) => {
@@ -107,8 +111,14 @@ export function useEpicSweepWorktrees(): UseMutationResult<
  * worktree still exists). Without this, a pick staged before the sweep keeps
  * offering the deleted worktree as an "existing worktree" in new chats: the
  * staged tier is deliberately never re-validated by the composer seeding.
+ *
+ * `hostId` is the host the removal ran on (the dialog's act-time proof, frozen
+ * in the variables). Both stores scope by it, so only that machine's staged
+ * slots and remembered defaults are touched - an identically-named path or
+ * branch on another host still materializes there and keeps its pick.
  */
 function purgeIntentsForRemovedWorktrees(
+  hostId: string,
   targets: ReadonlyArray<SweepTargetWorktree>,
   removedPaths: ReadonlyArray<string>,
 ): void {
@@ -122,8 +132,12 @@ function purgeIntentsForRemovedWorktrees(
         : [],
     ),
   };
-  useWorktreeIntentStagingStore.getState().purgeRemovedWorktreeIntents(removed);
-  useWorktreeIntentMemoryStore.getState().purgeRemovedWorktreeIntents(removed);
+  useWorktreeIntentStagingStore
+    .getState()
+    .purgeRemovedWorktreeIntents(hostId, removed);
+  useWorktreeIntentMemoryStore
+    .getState()
+    .purgeRemovedWorktreeIntents(hostId, removed);
 }
 
 /**

@@ -7,7 +7,13 @@ afterEach(cleanup);
 
 describe("UsageChartGroupByToggle", () => {
   it("renders both triggers", () => {
-    render(<UsageChartGroupByToggle groupBy="harness" onChange={vi.fn()} />);
+    render(
+      <UsageChartGroupByToggle
+        groupBy="harness"
+        onChange={vi.fn()}
+        triggerClassName={undefined}
+      />,
+    );
     expect(screen.getByRole("tab", { name: "Harness" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Model" })).toBeDefined();
   });
@@ -17,7 +23,13 @@ describe("UsageChartGroupByToggle", () => {
     // the full pointer sequence, matching real interaction.
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<UsageChartGroupByToggle groupBy="harness" onChange={onChange} />);
+    render(
+      <UsageChartGroupByToggle
+        groupBy="harness"
+        onChange={onChange}
+        triggerClassName={undefined}
+      />,
+    );
     await user.click(screen.getByRole("tab", { name: "Model" }));
     expect(onChange).toHaveBeenCalledWith("model");
   });

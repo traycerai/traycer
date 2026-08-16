@@ -7,25 +7,27 @@ import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
+const TEST_HOST_ID = "host-a";
+
+// Stamped with the host the hook targets: the store files a folder only in
+// the bucket of the host it was actually prepared on, so an unstamped fixture
+// would be silently dropped (and would not resemble anything the picker
+// produces).
 const FIRST: WorkspaceFolderInfo = {
   path: "/tmp/first-repo",
   name: "first-repo",
   repoIdentifier: null,
-  hostId: null,
+  hostId: TEST_HOST_ID,
 };
 const PINNED: WorkspaceFolderInfo = {
   path: "/tmp/pinned-repo",
   name: "pinned-repo",
   repoIdentifier: null,
-  hostId: null,
+  hostId: TEST_HOST_ID,
 };
 
 function resetStores(): void {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
 }
@@ -44,10 +46,11 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   it("resolves the pinned folder, not the first one (no active draft)", () => {
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId: null,
     };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {
@@ -64,9 +67,13 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
 
   it("resolves the pinned folder for the active landing draft", () => {
     const draftId = useLandingDraftStore.getState().createDraft(null);
-    const stagingKey: WorktreeStagingKey = { surface: "landing", draftId };
+    const stagingKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: TEST_HOST_ID,
+      draftId,
+    };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {
@@ -83,10 +90,11 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   it("falls back to the first folder when the pin names a removed folder", () => {
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId: null,
     };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
 
     act(() => {

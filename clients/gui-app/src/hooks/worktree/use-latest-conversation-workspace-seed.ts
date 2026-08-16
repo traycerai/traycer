@@ -72,11 +72,12 @@ export function useLatestConversationWorkspaceSeed(
     if (epicId === null || latestOwner === null) return null;
     return {
       surface: "owner",
+      hostId: seedHostId,
       epicId,
       ownerKind: latestOwner.ownerKind,
       ownerId: latestOwner.id,
     };
-  }, [epicId, latestOwner]);
+  }, [epicId, latestOwner, seedHostId]);
   const stagingKeyId =
     stagingKey === null ? null : worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore((state) =>

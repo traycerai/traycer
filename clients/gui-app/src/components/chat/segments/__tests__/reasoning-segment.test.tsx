@@ -385,6 +385,7 @@ describe("<ReasoningSegment />", () => {
           initiallyExpanded={false}
         />
         <SegmentRow
+          headerAction={null}
           open={false}
           onOpenChange={() => undefined}
           header={<span>Bash</span>}

@@ -56,6 +56,15 @@ export interface ComposerToolbarValues {
 }
 
 export interface ComposerToolbarCatalog {
+  /**
+   * The host this composer runs turns on - the same host the catalog below
+   * was fetched from. It keys every harness-memory read/write
+   * (`commitSelection` and the recording `onSettingsChange` wrapper read it
+   * from the store), so remembered provider/model/reasoning state stays
+   * per-host. `null` while the target host is still resolving: memory writes
+   * are dropped rather than attributed to the wrong host.
+   */
+  readonly hostId: string | null;
   /** `undefined` while the harness list is loading / the surface is inactive. */
   readonly harnesses: ReadonlyArray<HarnessOption> | undefined;
   /**
@@ -174,12 +183,15 @@ export interface CreateComposerToolbarStoreInput {
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** Seeds `catalog.tuiOnly`; kept in sync at runtime via `setCatalog`. */
   readonly tuiOnly: boolean;
+  /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
+  readonly hostId: string | null;
 }
 
 export function createComposerToolbarStore(
   input: CreateComposerToolbarStoreInput,
 ): ComposerToolbarStore {
   const initialCatalog: ComposerToolbarCatalog = {
+    hostId: input.hostId,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
     models: EMPTY_MODELS,
@@ -466,6 +478,9 @@ function sameCatalog(
   b: ComposerToolbarCatalog,
 ): boolean {
   return (
+    // A host switch with an otherwise-identical (cached) catalog must still
+    // land: `hostId` keys the memory reads/writes downstream of this store.
+    a.hostId === b.hostId &&
     a.harnesses === b.harnesses &&
     a.modelsHarnessId === b.modelsHarnessId &&
     a.models === b.models &&
