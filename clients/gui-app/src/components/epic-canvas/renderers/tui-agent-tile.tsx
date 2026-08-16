@@ -842,11 +842,20 @@ function TerminalAgentPreLaunchToolbar(
     const seed = buildForkWorkspaceSeed({
       binding,
       stagedIntent: sourceStagedIntent,
+      hostId: toolbarHostId,
     });
     return seed.intent === null
-      ? buildForkWorkspaceSeedFromWorkspaceFolders(props.agent.workspaceFolders)
+      ? buildForkWorkspaceSeedFromWorkspaceFolders(
+          props.agent.workspaceFolders,
+          toolbarHostId,
+        )
       : seed;
-  }, [binding, props.agent.workspaceFolders, sourceStagedIntent]);
+  }, [
+    binding,
+    props.agent.workspaceFolders,
+    sourceStagedIntent,
+    toolbarHostId,
+  ]);
   const forkDisabled =
     props.hostClient === null ||
     props.agent.harnessSessionId === null ||
