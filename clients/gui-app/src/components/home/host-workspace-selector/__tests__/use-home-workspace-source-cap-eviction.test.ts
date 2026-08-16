@@ -25,7 +25,11 @@ import {
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 const TEST_HOST_ID = "host-a";
-const STAGING_KEY: WorktreeStagingKey = { surface: "landing", draftId: null };
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "landing",
+  hostId: TEST_HOST_ID,
+  draftId: null,
+};
 const SCRIPTS = {
   setup: {
     default: "bun install",
@@ -168,6 +172,7 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
 
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId,
     };
     const { result } = renderHook(() =>

@@ -567,7 +567,7 @@ function advertiseSourceWithoutPublication(): void {
 }
 
 function seedHostSlot(hostId: string, path: string): void {
-  const stagingKey = pendingForkChatStagingKey("epic-test", hostId);
+  const stagingKey = pendingForkChatStagingKey(hostId, "epic-test");
   const folder = {
     path,
     name: path.split("/").pop() ?? path,

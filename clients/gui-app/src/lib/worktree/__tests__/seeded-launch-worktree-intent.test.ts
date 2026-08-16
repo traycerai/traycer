@@ -8,6 +8,7 @@ import { deriveWorkspaceMode } from "../workspace-mode";
 import { readSeededLaunchWorkspace } from "../seeded-launch-worktree-intent";
 
 const STAGING_KEY = {
+  hostId: "host-a",
   surface: "owner" as const,
   epicId: "epic-1",
   ownerKind: "chat" as const,

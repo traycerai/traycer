@@ -112,11 +112,40 @@ default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
 `useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
 a palette with no focused composer) — never inside a composer surface.
 
-Persisted "last used" state is per-host too: `composer-run-settings-store`,
-`composer-harness-memory-store`, and `workspace-folders-store` bucket by
+Persisted "last used" and pending state is per-host too:
+`composer-run-settings-store`, `composer-harness-memory-store`,
+`workspace-folders-store`, and `worktree-intent-memory-store` bucket by
 `hostId` (the toolbar store carries it in `catalog.hostId`; a `null` host
-drops the write). A new read/write of any of these must pass the composer's
-target host — never the flat pre-bucket shape.
+drops the write), and every `WorktreeStagingKey` carries the host its slot
+stages for. A new read/write of any of these must pass the composer's target
+host — never the flat pre-bucket shape.
+
+Anything keyed by a bare **local path** belongs in this set: the same string
+names a different directory on two machines, so an unbucketed map silently
+merges them. Do not reason that a key is "already host-bound" because its id
+happens to imply one host (a chat id, an owner id) — that holds only until
+someone adds a slot keyed by an epic or a draft, and nothing checks it. The
+migrated memory stores keep their pre-bucket data as a read-only `legacy*`
+fallback consulted per key, so a single-host install keeps its memory. That
+tier is **transitional**: the first host to act (write or sweep) adopts it
+wholesale into its own bucket and retires it, because an unattributed tier
+that several hosts read is the same leak in miniature — and one that never
+terminates, since a host that supersedes a legacy choice and later has that
+entry purged would fall back to the superseded one. Staging slots are pending
+picks, so their v1 data is dropped rather than carried.
+
+A host-scoped store also needs its **invalidations** scoped. A worktree sweep
+is one machine's filesystem event, so `purgeRemovedWorktreeIntents` (both
+stores) takes the swept `hostId` and touches only that host's slots — an
+identically-named path or branch on another host still materializes there.
+Contrast `clearEpicIntent`, which is account-wide: the epic is gone
+everywhere.
+
+`worktreeStagingKeyString` puts the host segment first and percent-encodes it,
+so a `:` in a host id can never split the key; an empty segment is the
+unresolved-host bucket. Anything that parses a serialized key (the
+persistability filter, the purge) counts segments from that layout — add a
+segment and both must move with it.
 
 **Deliberate exception — dictation.** `useDictationAvailability` /
 `useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a

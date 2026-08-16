@@ -1147,6 +1147,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, isActive, currentEpicId } = props;
+  const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
   // on screen = the pane is shown AND this tab is the pane's front tab. Pane
@@ -1303,11 +1304,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () =>
       worktreeStagingKeyString({
         surface: "owner",
+        hostId: viewModelHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
       }),
-    [currentEpicId, node.id],
+    [currentEpicId, node.id, viewModelHostId],
   );
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],

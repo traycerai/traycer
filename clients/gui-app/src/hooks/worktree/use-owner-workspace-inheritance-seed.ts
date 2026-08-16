@@ -52,6 +52,8 @@ export function resolveOwnerWorkspaceInheritanceSeed(input: {
 
 export function useOwnerWorkspaceInheritanceSeed(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
+  // Host the owner is bound to - the one whose staged slot this seed reads.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind | null;
@@ -78,11 +80,12 @@ export function useOwnerWorkspaceInheritanceSeed(args: {
     if (!args.enabled || args.ownerKind === null) return null;
     return {
       surface: "owner",
+      hostId: args.hostId,
       epicId: args.epicId,
       ownerKind: args.ownerKind,
       ownerId: args.ownerId,
     };
-  }, [args.enabled, args.epicId, args.ownerId, args.ownerKind]);
+  }, [args.enabled, args.epicId, args.hostId, args.ownerId, args.ownerKind]);
   const ownerStagingKeyId =
     ownerStagingKey === null ? null : worktreeStagingKeyString(ownerStagingKey);
   const stagedIntent = useWorktreeIntentStagingStore<WorktreeIntent | null>(

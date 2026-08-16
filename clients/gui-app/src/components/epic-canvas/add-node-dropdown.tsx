@@ -339,8 +339,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   // `undefined`, falling back to the shared epic-scoped launcher slot.
   const overrideStagingKey = props.terminalAgentStagingKey;
   const stagingKey = useMemo(
-    () => overrideStagingKey ?? pendingTerminalAgentStagingKey(epicId),
-    [overrideStagingKey, epicId],
+    () =>
+      overrideStagingKey ??
+      pendingTerminalAgentStagingKey(memoryHostId, epicId),
+    [overrideStagingKey, memoryHostId, epicId],
   );
   const launchDisabled = terminalAgentLaunchDisabled({
     modelSlug: selection.modelSlug,

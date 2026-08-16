@@ -41,6 +41,10 @@ export interface TerminalAgentWorktreeGate {
 export function useTerminalAgentWorktreeGate(
   epicId: string,
   tabId: string,
+  // Host the agent launches on. The remembered per-epic intent is host-local
+  // (its paths and branches only exist on one machine), so a `null` host - no
+  // resolved target - records nothing rather than stamping another host's.
+  hostId: string | null,
 ): TerminalAgentWorktreeGate {
   const terminalAgentCreate = useCreateTuiAgent();
 
@@ -50,11 +54,11 @@ export function useTerminalAgentWorktreeGate(
       if (worktreeIntent !== null && worktreeIntent.entries.length > 0) {
         useWorktreeIntentMemoryStore
           .getState()
-          .setEpicIntent(epicId, worktreeIntent, Date.now());
+          .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
       }
       useWorktreeIntentStagingStore
         .getState()
-        .clear(pendingTerminalAgentStagingKey(epicId));
+        .clear(pendingTerminalAgentStagingKey(hostId, epicId));
       void terminalAgentCreate.create({
         epicId,
         tabId,
@@ -74,7 +78,7 @@ export function useTerminalAgentWorktreeGate(
         profileId: input.profileId,
       });
     },
-    [epicId, tabId, terminalAgentCreate],
+    [epicId, hostId, tabId, terminalAgentCreate],
   );
 
   return {

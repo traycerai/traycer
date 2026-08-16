@@ -619,15 +619,15 @@ export function LandingComposer(props: LandingComposerProps) {
       // remounts and drops an in-progress edit.
       useWorktreeIntentStagingStore
         .getState()
-        .migrateKey(
-          { surface: "landing", draftId: null },
-          { surface: "landing", draftId: createdDraftId },
+        .migrateKeyForAllHosts(
+          { surface: "landing", hostId: activeHostId, draftId: null },
+          { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
         );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);
     },
-    [props.pendingCreateId, runtime, unboundRuntime],
+    [activeHostId, props.pendingCreateId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(

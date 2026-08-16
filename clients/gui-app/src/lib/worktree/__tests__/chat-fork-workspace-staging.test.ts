@@ -28,7 +28,7 @@ const FOLDER = {
 };
 
 function seedSlot(epicId: string, hostId: string): void {
-  const key = pendingForkChatStagingKey(epicId, hostId);
+  const key = pendingForkChatStagingKey(hostId, epicId);
   useSeededWorkspaceSnapshotStore.getState().setSnapshot(key, {
     folders: [FOLDER.path],
     folderInfoByPath: { [FOLDER.path]: FOLDER },
@@ -60,22 +60,22 @@ describe("chat-fork-workspace-staging", () => {
   it("clears one host slot's intent and snapshot together", () => {
     seedSlot(EPIC_A, HOST_1);
     seedSlot(EPIC_A, HOST_2);
-    clearChatForkWorkspace(pendingForkChatStagingKey(EPIC_A, HOST_1));
+    clearChatForkWorkspace(pendingForkChatStagingKey(HOST_1, EPIC_A));
 
     expect(
-      readStagedWorktreeIntent(pendingForkChatStagingKey(EPIC_A, HOST_1)),
+      readStagedWorktreeIntent(pendingForkChatStagingKey(HOST_1, EPIC_A)),
     ).toBeNull();
     expect(
-      readSeededWorkspaceSnapshot(pendingForkChatStagingKey(EPIC_A, HOST_1)),
+      readSeededWorkspaceSnapshot(pendingForkChatStagingKey(HOST_1, EPIC_A)),
     ).toBeNull();
     expect(
-      readStagedWorktreeIntent(pendingForkChatStagingKey(EPIC_A, HOST_2)),
+      readStagedWorktreeIntent(pendingForkChatStagingKey(HOST_2, EPIC_A)),
     ).not.toBeNull();
   });
 
   it("clears every host slot staged for an epic, including snapshot-only keys", () => {
     seedSlot(EPIC_A, HOST_1);
-    const snapshotOnly = pendingForkChatStagingKey(EPIC_A, HOST_2);
+    const snapshotOnly = pendingForkChatStagingKey(HOST_2, EPIC_A);
     useSeededWorkspaceSnapshotStore.getState().setSnapshot(snapshotOnly, {
       folders: [FOLDER.path],
       folderInfoByPath: { [FOLDER.path]: FOLDER },
@@ -85,7 +85,7 @@ describe("chat-fork-workspace-staging", () => {
 
     expect(seededWorkspaceSnapshotKeyIds()).toEqual(
       expect.arrayContaining([
-        worktreeStagingKeyString(pendingForkChatStagingKey(EPIC_A, HOST_1)),
+        worktreeStagingKeyString(pendingForkChatStagingKey(HOST_1, EPIC_A)),
         worktreeStagingKeyString(snapshotOnly),
       ]),
     );
@@ -93,11 +93,11 @@ describe("chat-fork-workspace-staging", () => {
     clearChatForkWorkspacesForEpic(EPIC_A);
 
     expect(
-      readStagedWorktreeIntent(pendingForkChatStagingKey(EPIC_A, HOST_1)),
+      readStagedWorktreeIntent(pendingForkChatStagingKey(HOST_1, EPIC_A)),
     ).toBeNull();
     expect(readSeededWorkspaceSnapshot(snapshotOnly)).toBeNull();
     expect(
-      readStagedWorktreeIntent(pendingForkChatStagingKey(EPIC_B, HOST_1)),
+      readStagedWorktreeIntent(pendingForkChatStagingKey(HOST_1, EPIC_B)),
     ).not.toBeNull();
   });
 });

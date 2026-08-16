@@ -154,7 +154,10 @@ function renderStacked(hostScope: HostWorkspaceControlsHostScope): void {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          // Scaffolding only — these cases assert on `hostScope`, never on
+          // staged state, so the slot sits in the unresolved-host bucket
+          // rather than claiming a host the assertions do not check.
+          stagingKey={{ surface: "landing", hostId: null, draftId: null }}
           workspaceSeed={{
             folders: [],
             folderInfoByPath: {},

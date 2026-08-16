@@ -491,12 +491,13 @@ export function NewConversationModalBody(props: {
   // `TabHostProvider` - so a pinned modal never follows an active-host swap.
   const reactiveActiveHostId = useReactiveActiveHostId();
   const memoryHostId = hostId ?? reactiveActiveHostId;
-  const latestWorkspaceSeed = useModalWorkspaceSeed(
+  const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
     parentId,
     hostId,
+    resolvedHostId: memoryHostId,
     hostClient,
-  );
+  });
   const seed = useNewConversationModalSeed(
     epicId,
     memoryHostId,
@@ -539,8 +540,8 @@ export function NewConversationModalBody(props: {
         ?.selection ?? null,
   );
   const stagingKey = useMemo(
-    () => newConversationModalStagingKey(epicId, parentId),
-    [epicId, parentId],
+    () => newConversationModalStagingKey(memoryHostId, epicId, parentId),
+    [epicId, memoryHostId, parentId],
   );
   const stagingKeyId = worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -557,8 +558,10 @@ export function NewConversationModalBody(props: {
     (state) => state.setComposerMode,
   );
   const clearDraft = useNewConversationModalStore((state) => state.clearDraft);
+  // The modal's host can change under an open session, so a SUBMIT consumes
+  // every host's copy of the slot - not just the one selected at submit.
   const clearStagedIntent = useWorktreeIntentStagingStore(
-    (state) => state.clear,
+    (state) => state.clearForAllHosts,
   );
   const rememberEpicIntent = useWorktreeIntentMemoryStore(
     (state) => state.setEpicIntent,
@@ -791,6 +794,36 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
+    // The staged intent this submit is about to read is keyed by
+    // `memoryHostId`, resolved at RENDER time; `activeHostId` above comes off
+    // the live client. For an unpinned modal those diverge in the window
+    // between the app-wide host changing and this component re-rendering, and
+    // a click landing there would read host A's staged pick and then create,
+    // key its run settings and remember its intent on host B. Fail closed, as
+    // the landing composer does: the modal stays open with its draft and
+    // staged pick intact, so a retry lands on the settled host.
+    //
+    // Inert in two cases that are NOT drift: a pinned modal, whose client
+    // reports its own pinned host, and a render-time host of `null` - the
+    // binding has not published one yet, so the staged slot is the
+    // unresolved-host bucket and the memory writes already no-op. Nothing
+    // host-specific was captured there to mis-file.
+    if (memoryHostId !== null && activeHostId !== memoryHostId) {
+      reportableErrorToast(
+        "Couldn't create the conversation.",
+        {
+          description:
+            "The active device changed while this was being prepared. Try again.",
+        },
+        {
+          title: "Could not create conversation",
+          message: "Active device changed mid-submission.",
+          code: null,
+          source: "Chat",
+        },
+      );
+      return;
+    }
     const content = buildSubmittedChatJSONContent(
       editor.getJSON(),
       pickerStore.getState().knownSlashCommands,
@@ -813,7 +846,7 @@ export function NewConversationModalBody(props: {
       worktreeIntent,
     );
     if (worktreeIntent !== null) {
-      rememberEpicIntent(epicId, worktreeIntent, now);
+      rememberEpicIntent(epicId, activeHostId, worktreeIntent, now);
     }
     useInitialChatHandoffStore.getState().register({
       hostId: activeHostId,
@@ -884,6 +917,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    memoryHostId,
     pickerStore,
     draftWorkspaceFolderCount,
     epicId,
@@ -904,7 +938,8 @@ export function NewConversationModalBody(props: {
       // can only reject - and the draft would already be gone, because
       // `cleanupAfterSubmit` runs before the async create. Keep the modal
       // open and the draft intact instead.
-      if ((hostClient?.getActiveHostId() ?? null) === null) {
+      const activeHostId = hostClient?.getActiveHostId() ?? null;
+      if (activeHostId === null) {
         reportableErrorToast(
           "Couldn't start the agent.",
           {
@@ -919,13 +954,30 @@ export function NewConversationModalBody(props: {
         );
         return;
       }
+      // Same render-time vs live host drift as `handleSubmit` - see there.
+      if (memoryHostId !== null && activeHostId !== memoryHostId) {
+        reportableErrorToast(
+          "Couldn't start the agent.",
+          {
+            description:
+              "The active device changed while this was being prepared. Try again.",
+          },
+          {
+            title: "Could not start agent",
+            message: "Active device changed mid-submission.",
+            code: null,
+            source: "Chat",
+          },
+        );
+        return;
+      }
       const worktreeIntent = worktreeIntentForSubmit();
       const workspaceMode = deriveWorkspaceMode(
         draftWorkspaceFolderCount,
         worktreeIntent,
       );
       if (worktreeIntent !== null) {
-        rememberEpicIntent(epicId, worktreeIntent, Date.now());
+        rememberEpicIntent(epicId, activeHostId, worktreeIntent, Date.now());
       }
       cleanupAfterSubmit();
       void terminalAgentCreate
@@ -952,6 +1004,7 @@ export function NewConversationModalBody(props: {
     [
       canMutate,
       cleanupAfterSubmit,
+      memoryHostId,
       draftWorkspaceFolderCount,
       epicId,
       hostClient,
@@ -1042,12 +1095,21 @@ export function NewConversationModalBody(props: {
  * adjust via the controls. For a top-level chat it uses the latest-conversation
  * seed.
  */
-function useModalWorkspaceSeed(
-  epicId: string,
-  parentId: string | null,
-  hostId: string | null,
-  hostClient: HostClient<HostRpcRegistry> | null,
-): LatestConversationWorkspaceSeed | null {
+function useModalWorkspaceSeed(args: {
+  readonly epicId: string;
+  readonly parentId: string | null;
+  // The REQUEST's host: `null` means "follow the app-wide active host". The
+  // latest-conversation seed reads it directly, because an unpinned modal
+  // deliberately skips that seed entirely.
+  readonly hostId: string | null;
+  // `hostId` resolved against the active host - the host `hostClient` actually
+  // speaks to. The parent's pending intent is staged under its CONCRETE host,
+  // so reading that slot with the nullable request field would land in the
+  // unresolved-host bucket and silently seed the child from the older binding.
+  readonly resolvedHostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+}): LatestConversationWorkspaceSeed | null {
+  const { epicId, parentId, hostId, resolvedHostId, hostClient } = args;
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
   // binding read entirely when adding a child. A pinned request reads the seed
@@ -1063,6 +1125,7 @@ function useModalWorkspaceSeed(
   const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
   const parentInheritance = useOwnerWorkspaceInheritanceSeed({
     client: hostClient,
+    hostId: resolvedHostId,
     epicId,
     ownerId: parentId ?? "",
     ownerKind: parentOwnerKind,

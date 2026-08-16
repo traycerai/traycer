@@ -236,7 +236,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const selectedHostClient = useHostClientForHostId(selectedHostId);
   const createChat = useEpicCreateChatForHostClient(selectedHostClient);
   const stagingKey = useMemo(
-    () => pendingForkChatStagingKey(epicId, selectedHostId),
+    () => pendingForkChatStagingKey(selectedHostId, epicId),
     [epicId, selectedHostId],
   );
 
@@ -574,7 +574,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     if (worktreeIntent !== null && !isCrossHost) {
       useWorktreeIntentMemoryStore
         .getState()
-        .setEpicIntent(epicId, worktreeIntent, Date.now());
+        .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
     }
     const toolbar = toolbarStore.getState();
     const settings = buildChatRunSettings({

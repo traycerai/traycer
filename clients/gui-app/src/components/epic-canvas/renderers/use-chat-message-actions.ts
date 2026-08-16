@@ -6,6 +6,7 @@ import type {
   ChatForkMode,
   ChatMessageActions,
 } from "@/components/chat/chat-message";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   buildAbForkWorkspaceSeed,
   buildForkWorkspaceSeed,
@@ -113,6 +114,9 @@ export interface ChatMessageActionsResult {
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {
+  // The chat is bound to this tab's host for life, so both its own staged
+  // slot and the fork scratch slot it seeds belong to that host.
+  const tabHostId = useTabHostId();
   const {
     dispatchUi,
     activeInlineEdit,
@@ -269,6 +273,7 @@ export function useChatMessageActions(
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
+        hostId: tabHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
@@ -287,8 +292,8 @@ export function useChatMessageActions(
       // this through the shared seedIntent -> seedEntryForFolder path the
       // terminal-agent launcher also uses; only the source owner differs (here,
       // the chat being forked).
-      // Every host slot, not one: the dialog's scratch state is per target
-      // host now, and a previous fork that retargeted another machine before
+      // Every host's slot, not just this tab's: the dialog can retarget while
+      // it is open, so a previous fork that moved to another machine before
       // closing would otherwise leave that machine's folders staged for the
       // next open.
       clearChatForkWorkspacesForEpic(currentEpicId);
@@ -312,6 +317,7 @@ export function useChatMessageActions(
     [
       chatParentId,
       chatTitle,
+      tabHostId,
       currentComposerSettings,
       currentEpicId,
       node.id,
