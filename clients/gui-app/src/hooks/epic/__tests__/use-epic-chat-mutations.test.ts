@@ -292,14 +292,14 @@ describe("useEpicCreateChat", () => {
       onSuccess: (
         data: CreateChatResponse,
         params: CreateChatMutationInput,
-        ctx: { hostId: string | null },
+        ctx: { hostId: string | null; ownerUserId: string | null },
       ) => void;
     };
 
     opts.onSuccess(
       { chatId: "host-chat" },
       { ...nonForkVariables, parentId: "parent-1", title: "Draft title" },
-      { hostId: "host-test" },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
     );
 
     // The id comes from the RESPONSE (client-minted, echoed back); the host,
@@ -310,6 +310,11 @@ describe("useEpicCreateChat", () => {
       hostId: "host-test",
       parentChatId: "parent-1",
       title: "Draft title",
+      // From `ctx`, not from the live profile: the owner is captured in
+      // `onMutate` so a profile switch mid-flight cannot refile the row. Asserted
+      // concretely because an omitted key here would match an `undefined` the
+      // hook never forwarded, and the assertion would hold with the wiring gone.
+      ownerUserId: "user-at-submit",
     });
   });
 
@@ -357,7 +362,7 @@ describe("useEpicCreateChatForHostClient", () => {
       onSuccess: (
         data: CreateChatResponse,
         params: CreateChatMutationInput,
-        ctx: { hostId: string | null },
+        ctx: { hostId: string | null; ownerUserId: string | null },
       ) => void;
     };
 
@@ -370,7 +375,7 @@ describe("useEpicCreateChatForHostClient", () => {
         parentId: null,
         title: "",
       },
-      { hostId: "host-test" },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
     );
 
     expect(beginPendingChatCreation).toHaveBeenCalledWith("e2", {
@@ -378,6 +383,7 @@ describe("useEpicCreateChatForHostClient", () => {
       hostId: "host-test",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-at-submit",
     });
   });
 

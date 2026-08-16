@@ -357,14 +357,6 @@ function retainCreatedChatUntilProjected(
 }
 
 /**
- * No record will ever arrive for this chat - the create failed. A no-op for the
- * hooks' own flow (which retains only on success) and the reason the registry's
- * failure arm exists at all: a surface that seeds a row BEFORE the answer, to
- * cover a long create, has exactly one way to take it back down. Runs for EVERY
- * failure, including the ones this hook deliberately does not toast (the clone
- * flow's recoverable fork refusals, which retry under a fresh chat id).
- */
-/**
  * The signed-in user, read at the moment of call.
  *
  * The same source the open-epic store reads for its own projection identity, so
@@ -376,6 +368,14 @@ function currentProfileUserId(): string | null {
   return useAuthStore.getState().profile?.userId ?? null;
 }
 
+/**
+ * No record will ever arrive for this chat - the create failed. A no-op for the
+ * hooks' own flow (which retains only on success) and the reason the registry's
+ * failure arm exists at all: a surface that seeds a row BEFORE the answer, to
+ * cover a long create, has exactly one way to take it back down. Runs for EVERY
+ * failure, including the ones this hook deliberately does not toast (the clone
+ * flow's recoverable fork refusals, which retry under a fresh chat id).
+ */
 function releaseCreatedChat(request: CreateChatMutationInput): void {
   clearPendingChatCreation(request.epicId, request.chatId);
 }

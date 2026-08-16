@@ -781,14 +781,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Optional host capability, read-only: does the source chat's publication
-  // cover a chosen fork boundary? No poll - the fork dialog asks once when it
-  // OPENS (and only when the account has a host other than the source, so a
-  // single-host user never pays for it), then lets the 5s stale window cover a
-  // reopen. A timer would keep asking on behalf of a dialog nobody has open,
-  // and the answer is not one that changes without a publish sweep.
+  // cover a chosen fork boundary? Asked when the fork dialog OPENS, and only
+  // when the account has a host other than the source, so a single-host user
+  // never pays for it.
   "epic.chatPublicationState": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
+    // A pure read with no ordering requirement, like every other read here.
+    ...LATEST_SCHEDULING,
     // Polled only while the answer is one the FORK DIALOG'S COPY promises will
     // resolve on its own - "It backs up automatically - try again shortly" and
     // "Still syncing this turn - retry shortly". `staleTime` alone only marks

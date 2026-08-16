@@ -31,9 +31,13 @@ import type { ChatProjection, ChatsSlice } from "./types";
 import { isChatVisibleToUser } from "./projection-helpers";
 
 /**
- * What a creation surface knows at submit time. Everything else a row needs is
- * stamped by the store (the owner, from the signed-in profile; the timestamps,
- * from the clock) so no caller can key a row on an identity of its own.
+ * What a creation surface knows at submit time, INCLUDING the owner it was
+ * authorized as - see `ownerUserId`. The store stamps only what it alone knows:
+ * the timestamps, from the clock.
+ *
+ * The owner used to be stamped here from the signed-in profile, which read the
+ * wrong moment: this runs when the host answers, and a profile change while the
+ * create was in flight refiled the row under a user who never made it.
  */
 export interface PendingChatCreation {
   /**

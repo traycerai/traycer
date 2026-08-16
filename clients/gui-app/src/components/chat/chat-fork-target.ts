@@ -222,14 +222,6 @@ export const BOUNDARY_SYNCING_NOTICE =
   "Still syncing this turn — retry shortly.";
 
 /**
- * The whole gate, for one highlighted target.
- *
- * `isCrossHost === false` short-circuits to allowed: a same-host fork is served
- * from the source host's own store tier, so it needs neither the V12 contract
- * nor any publication at all. Gating it on the chat's backup state would block
- * the one fork that cannot fail for that reason.
- */
-/**
  * What is true of EVERY remote target, independent of which host is currently
  * highlighted.
  *
@@ -275,6 +267,14 @@ export function remoteClassNotice(
   return state.kind === "open" ? null : state.notice;
 }
 
+/**
+ * The whole gate, for one highlighted target.
+ *
+ * `isCrossHost === false` short-circuits to allowed: a same-host fork is served
+ * from the source host's own store tier, so it needs neither the V12 contract
+ * nor any publication at all. Gating it on the chat's backup state would block
+ * the one fork that cannot fail for that reason.
+ */
 export function chatForkTargetVerdict(input: {
   readonly isCrossHost: boolean;
   readonly version: NegotiatedMethodVersion;
