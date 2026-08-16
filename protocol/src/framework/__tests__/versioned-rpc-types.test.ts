@@ -1,4 +1,4 @@
-import { describe, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
   defineDowngradePath,
@@ -8,7 +8,9 @@ import {
   defineUpgradePath,
   defineVersionedRpcRegistry,
   getLatestContract,
+  isRpcErrorCode,
   validateVersionedRpcRegistry,
+  RPC_ERROR_CODES,
   type DowngradeResult,
   type LatestContract,
   type RequestOf,
@@ -703,5 +705,19 @@ describe("Versioned RPC typing", () => {
     };
 
     expectTypeOf(assertCompileTime).toBeFunction();
+  });
+});
+
+describe("RPC_ERROR_CODES / isRpcErrorCode", () => {
+  it("carries E_FORK_BOUNDARY_NOT_PUBLISHED (cross-host fork ticket A1)", () => {
+    expect(RPC_ERROR_CODES).toContain("E_FORK_BOUNDARY_NOT_PUBLISHED");
+  });
+
+  it("isRpcErrorCode recognizes E_FORK_BOUNDARY_NOT_PUBLISHED", () => {
+    expect(isRpcErrorCode("E_FORK_BOUNDARY_NOT_PUBLISHED")).toBe(true);
+  });
+
+  it("isRpcErrorCode still narrows unknown codes to false", () => {
+    expect(isRpcErrorCode("E_TOTALLY_MADE_UP")).toBe(false);
   });
 });
