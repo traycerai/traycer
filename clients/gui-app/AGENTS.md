@@ -126,9 +126,13 @@ merges them. Do not reason that a key is "already host-bound" because its id
 happens to imply one host (a chat id, an owner id) — that holds only until
 someone adds a slot keyed by an epic or a draft, and nothing checks it. The
 migrated memory stores keep their pre-bucket data as a read-only `legacy*`
-fallback consulted per key, so a single-host install keeps its memory; only
-host buckets are ever written. Staging slots are pending picks, so their v1
-data is dropped rather than carried.
+fallback consulted per key, so a single-host install keeps its memory. That
+tier is **transitional**: the first host to act (write or sweep) adopts it
+wholesale into its own bucket and retires it, because an unattributed tier
+that several hosts read is the same leak in miniature — and one that never
+terminates, since a host that supersedes a legacy choice and later has that
+entry purged would fall back to the superseded one. Staging slots are pending
+picks, so their v1 data is dropped rather than carried.
 
 A host-scoped store also needs its **invalidations** scoped. A worktree sweep
 is one machine's filesystem event, so `purgeRemovedWorktreeIntents` (both

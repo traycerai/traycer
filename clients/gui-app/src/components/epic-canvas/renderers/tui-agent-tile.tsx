@@ -817,7 +817,9 @@ function TerminalAgentPreLaunchToolbar(
     poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
-  const toolbarHostId = useTabHostId();
+  // Same host the fork dialog below is handed, so the slot this toolbar
+  // stages into is the one that dialog reads back.
+  const toolbarHostId = props.hostId;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "owner",

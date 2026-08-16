@@ -379,7 +379,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
             seedIntent={target?.workspaceSeed.intent ?? null}
             seedIntentOverride={target?.seedIntentOverride ?? null}
-            hostScope={{ kind: "active" }}
+            hostScope={{
+              kind: "fixed",
+              hostId: tabHostId,
+              hostClient: tabHostClient,
+            }}
           />
         </div>
         <DialogFooter>

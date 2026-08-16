@@ -402,7 +402,7 @@ describe("worktree intent memory rehydration", () => {
     window.localStorage.clear();
   });
 
-  it("migrates a v1 blob and serves it as a per-key fallback until a host writes", async () => {
+  async function rehydrateV1Blob(): Promise<void> {
     window.localStorage.setItem(
       worktreeIntentMemoryKey(null),
       JSON.stringify({
@@ -413,6 +413,7 @@ describe("worktree intent memory rehydration", () => {
               intent: newWorktreeFolder("/repo", "main"),
               updatedAt: 1,
             },
+            "/other": { intent: localFolder("/other"), updatedAt: 1 },
           },
           epicIntentByEpicId: {
             "epic-a": { intent: localIntent("/repo"), updatedAt: 1 },
@@ -421,20 +422,88 @@ describe("worktree intent memory rehydration", () => {
       }),
     );
     await useWorktreeIntentMemoryStore.persist.rehydrate();
+  }
+
+  it("migrates a v1 blob and answers for any host until one acts", async () => {
+    await rehydrateV1Blob();
 
     const migrated = useWorktreeIntentMemoryStore.getState();
-    // Unattributed v1 data still answers for any host...
+    expect(migrated.byHost).toEqual({});
     expect(migrated.getFolderIntent(HOST_A, "/repo")?.kind).toBe("worktree");
     expect(migrated.getFolderIntent(HOST_B, "/repo")?.kind).toBe("worktree");
     expect(migrated.getEpicIntent("epic-a", HOST_B)).toEqual(
       localIntent("/repo"),
     );
+  });
 
-    // ...and is shadowed the moment that host records its own choice.
-    migrated.setFolderIntent(HOST_B, localFolder("/repo"), 2);
+  it("hands the whole legacy tier to the first host that records a choice", async () => {
+    await rehydrateV1Blob();
+    useWorktreeIntentMemoryStore
+      .getState()
+      .setFolderIntent(HOST_B, localFolder("/repo"), 2);
+
     const after = useWorktreeIntentMemoryStore.getState();
+    // The acting host keeps its own decision AND inherits the untouched keys.
     expect(after.getFolderIntent(HOST_B, "/repo")?.kind).toBe("local");
-    expect(after.getFolderIntent(HOST_A, "/repo")?.kind).toBe("worktree");
+    expect(after.getFolderIntent(HOST_B, "/other")?.kind).toBe("local");
+    expect(after.getEpicIntent("epic-a", HOST_B)).toEqual(localIntent("/repo"));
+    // The tier is retired, so no other host reads it again.
+    expect(after.legacyFolderIntentByPath).toEqual({});
+    expect(after.legacyEpicIntentByEpicId).toEqual({});
+    expect(after.getFolderIntent(HOST_A, "/repo")).toBeNull();
+    expect(after.getEpicIntent("epic-a", HOST_A)).toBeNull();
+  });
+
+  // Regression: with a shared legacy tier, purging the host entry that
+  // SUPERSEDED a legacy choice fell back to the superseded choice and
+  // silently re-seeded it.
+  it("never resurfaces a superseded legacy choice after a purge", async () => {
+    await rehydrateV1Blob();
+    const store = useWorktreeIntentMemoryStore.getState();
+    // Host A supersedes the legacy `/repo` choice with a branch of its own...
+    store.setFolderIntent(
+      HOST_A,
+      {
+        kind: "worktree",
+        scripts: null,
+        workspacePath: "/repo",
+        repoIdentifier: null,
+        isPrimary: true,
+        branch: { type: "existing", name: "feat/superseding" },
+      },
+      2,
+    );
+    // ...which a sweep then removes. The legacy entry named a DIFFERENT
+    // branch, so a predicate-based legacy purge would have left it readable.
+    useWorktreeIntentMemoryStore
+      .getState()
+      .purgeRemovedWorktreeIntents(HOST_A, {
+        worktreePaths: new Set(),
+        branches: [{ repoIdentifier: null, branch: "feat/superseding" }],
+      });
+
+    const after = useWorktreeIntentMemoryStore.getState();
+    expect(after.getFolderIntent(HOST_A, "/repo")).toBeNull();
+    expect(after.legacyFolderIntentByPath).toEqual({});
+  });
+
+  it("adopts the legacy tier into the swept host rather than dropping it", async () => {
+    await rehydrateV1Blob();
+    // No host has written yet; the sweep itself is the first act.
+    useWorktreeIntentMemoryStore
+      .getState()
+      .purgeRemovedWorktreeIntents(HOST_A, {
+        worktreePaths: new Set(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    const after = useWorktreeIntentMemoryStore.getState();
+    // `/repo` forked from the removed `main`, so it goes; `/other` is local
+    // and survives - in HOST_A's bucket, no longer readable by HOST_B.
+    expect(after.getFolderIntent(HOST_A, "/repo")).toBeNull();
+    expect(after.getFolderIntent(HOST_A, "/other")?.kind).toBe("local");
+    expect(after.getFolderIntent(HOST_B, "/other")).toBeNull();
+    expect(after.legacyFolderIntentByPath).toEqual({});
   });
 
   it("re-validates and re-caps a v2 payload on rehydration", async () => {

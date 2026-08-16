@@ -491,12 +491,13 @@ export function NewConversationModalBody(props: {
   // `TabHostProvider` - so a pinned modal never follows an active-host swap.
   const reactiveActiveHostId = useReactiveActiveHostId();
   const memoryHostId = hostId ?? reactiveActiveHostId;
-  const latestWorkspaceSeed = useModalWorkspaceSeed(
+  const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
     parentId,
     hostId,
+    resolvedHostId: memoryHostId,
     hostClient,
-  );
+  });
   const seed = useNewConversationModalSeed(
     epicId,
     memoryHostId,
@@ -1043,12 +1044,21 @@ export function NewConversationModalBody(props: {
  * adjust via the controls. For a top-level chat it uses the latest-conversation
  * seed.
  */
-function useModalWorkspaceSeed(
-  epicId: string,
-  parentId: string | null,
-  hostId: string | null,
-  hostClient: HostClient<HostRpcRegistry> | null,
-): LatestConversationWorkspaceSeed | null {
+function useModalWorkspaceSeed(args: {
+  readonly epicId: string;
+  readonly parentId: string | null;
+  // The REQUEST's host: `null` means "follow the app-wide active host". The
+  // latest-conversation seed reads it directly, because an unpinned modal
+  // deliberately skips that seed entirely.
+  readonly hostId: string | null;
+  // `hostId` resolved against the active host - the host `hostClient` actually
+  // speaks to. The parent's pending intent is staged under its CONCRETE host,
+  // so reading that slot with the nullable request field would land in the
+  // unresolved-host bucket and silently seed the child from the older binding.
+  readonly resolvedHostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+}): LatestConversationWorkspaceSeed | null {
+  const { epicId, parentId, hostId, resolvedHostId, hostClient } = args;
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
   // binding read entirely when adding a child. A pinned request reads the seed
@@ -1064,7 +1074,7 @@ function useModalWorkspaceSeed(
   const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
   const parentInheritance = useOwnerWorkspaceInheritanceSeed({
     client: hostClient,
-    hostId,
+    hostId: resolvedHostId,
     epicId,
     ownerId: parentId ?? "",
     ownerKind: parentOwnerKind,

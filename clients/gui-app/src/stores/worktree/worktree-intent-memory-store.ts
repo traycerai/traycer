@@ -66,15 +66,14 @@ export const EMPTY_WORKTREE_INTENT_MEMORY_BUCKET: WorktreeIntentMemoryHostBucket
 
 interface WorktreeIntentMemoryStore {
   byHost: Readonly<Record<string, WorktreeIntentMemoryHostBucket>>;
-  // Frozen pre-host-scoping (v1) data, kept as a read-only fallback so the
-  // common single-host install keeps its remembered defaults across the
-  // migration - a migration cannot know which host the flat data belonged to.
-  // Never written after migration; per-key reads prefer the host bucket and
-  // fall back here only when it has no entry, so the fallback decays as each
-  // host records its own choices. The cross-host read this leaves for a
-  // COLLIDING path is bounded by the seeder, which validates a remembered
-  // branch against the reading host's own branch list and falls back to a new
-  // worktree off the working tree when it does not resolve there.
+  // Frozen pre-host-scoping (v1) data, kept so the common single-host install
+  // keeps its remembered defaults across the migration - a migration cannot
+  // know which host the flat data belonged to. Read-only and per-key: a read
+  // prefers the host's bucket and falls back here only when it has no entry.
+  // The tier is TRANSITIONAL - the first host to act adopts it wholesale (see
+  // `adoptLegacyInto`), so the window in which several hosts can read the same
+  // unattributed entry lasts until the next write or sweep, and a superseded
+  // legacy choice can never resurface afterwards.
   legacyFolderIntentByPath: Readonly<Record<string, WorktreeFolderIntentEntry>>;
   legacyEpicIntentByEpicId: Readonly<Record<string, WorktreeEpicIntentEntry>>;
   // WRITE - `hostId === null` (no resolved target host) drops the write: a
@@ -111,12 +110,10 @@ interface WorktreeIntentMemoryStore {
    * Scoped to the host the removal actually happened on: a sweep on host A
    * says nothing about the identically-named path or branch on host B, and
    * purging B's entry would destroy a selection that still materializes there.
-   * The legacy fallback is host-unattributed, so it is purged too - the
-   * alternative is that a single-host install (whose live data IS the legacy
-   * tier until it writes again) keeps being re-offered the worktree it just
-   * swept, which is the bug this purge exists to fix. Purging it costs a
-   * not-yet-migrated host one remembered default, which the seeder replaces
-   * with a new worktree off the working tree.
+   * A completed sweep is also proof this host is live here, so it adopts any
+   * still-unattributed legacy tier first - otherwise a single-host install,
+   * whose live data IS that tier until it writes again, keeps being re-offered
+   * the worktree it just swept, which is the bug this purge exists to fix.
    */
   purgeRemovedWorktreeIntents: (
     hostId: string,
@@ -182,15 +179,16 @@ export const useWorktreeIntentMemoryStore = create<WorktreeIntentMemoryStore>()(
         // Always write - no value dedup. `updatedAt` is the recency key the cap
         // sorts on, so re-selecting the same choice must still refresh it.
         set((state) => {
-          const bucket = selectWorktreeIntentMemoryBucket(state, hostId);
+          const adopted = adoptLegacyInto(state, hostId);
           return {
+            ...adopted.clearedLegacy,
             byHost: {
               ...state.byHost,
               [hostId]: {
-                ...bucket,
+                ...adopted.bucket,
                 folderIntentByPath: cappedByUpdatedAt(
                   {
-                    ...bucket.folderIntentByPath,
+                    ...adopted.bucket.folderIntentByPath,
                     [intent.workspacePath]: {
                       intent: folderIntentForMemory(intent),
                       updatedAt,
@@ -211,15 +209,16 @@ export const useWorktreeIntentMemoryStore = create<WorktreeIntentMemoryStore>()(
         // sorts on, so even re-selecting the same intent must refresh it; a
         // just-touched epic must not be evicted as "least recently used".
         set((state) => {
-          const bucket = selectWorktreeIntentMemoryBucket(state, hostId);
+          const adopted = adoptLegacyInto(state, hostId);
           return {
+            ...adopted.clearedLegacy,
             byHost: {
               ...state.byHost,
               [hostId]: {
-                ...bucket,
+                ...adopted.bucket,
                 epicIntentByEpicId: cappedByUpdatedAt(
                   {
-                    ...bucket.epicIntentByEpicId,
+                    ...adopted.bucket.epicIntentByEpicId,
                     [epicId]: { intent: copyWorktreeIntent(intent), updatedAt },
                   },
                   WORKTREE_INTENT_MEMORY_EPIC_CAP,
@@ -261,32 +260,28 @@ export const useWorktreeIntentMemoryStore = create<WorktreeIntentMemoryStore>()(
       },
       purgeRemovedWorktreeIntents: (hostId, removed) => {
         set((state) => {
-          const bucket = selectWorktreeIntentMemoryBucket(state, hostId);
-          const nextBucket = purgeBucket(bucket, removed);
-          const legacyFolderIntentByPath = purgeFolderIntents(
-            state.legacyFolderIntentByPath,
-            removed,
-          );
-          const legacyEpicIntentByEpicId = purgeEpicIntents(
-            state.legacyEpicIntentByEpicId,
-            removed,
-          );
+          // A completed sweep is proof this host is live on this client, so it
+          // adopts the unattributed tier the same way a write does - and the
+          // purge then has a single, host-scoped tier to filter. This keeps
+          // MORE data than purging the legacy tier by the same predicate
+          // would: a legacy entry that survives the filter lands in this
+          // host's bucket instead of staying readable by every host.
+          const adopted = adoptLegacyInto(state, hostId);
+          const nextBucket = purgeBucket(adopted.bucket, removed);
           if (
-            nextBucket === bucket &&
-            legacyFolderIntentByPath === state.legacyFolderIntentByPath &&
-            legacyEpicIntentByEpicId === state.legacyEpicIntentByEpicId
+            nextBucket === adopted.bucket &&
+            adopted.bucket === selectWorktreeIntentMemoryBucket(state, hostId)
           ) {
             return state;
           }
           return {
-            // An unchanged bucket is never written back: an unknown host must
-            // not gain an empty bucket just by being swept.
+            ...adopted.clearedLegacy,
+            // An unchanged, still-empty bucket is never written back: an
+            // unknown host must not gain an empty bucket just by being swept.
             byHost:
-              nextBucket === bucket
+              nextBucket === EMPTY_WORKTREE_INTENT_MEMORY_BUCKET
                 ? state.byHost
                 : { ...state.byHost, [hostId]: nextBucket },
-            legacyFolderIntentByPath,
-            legacyEpicIntentByEpicId,
           };
         });
       },
@@ -462,6 +457,69 @@ function omitKeys<T>(
   return kept.length === Object.keys(entries).length
     ? entries
     : Object.fromEntries(kept);
+}
+
+interface AdoptedLegacy {
+  /** `hostId`'s bucket with any adopted entries folded in. */
+  readonly bucket: WorktreeIntentMemoryHostBucket;
+  /** Spread into the `set` result; empty object when nothing was adopted. */
+  readonly clearedLegacy: {
+    readonly legacyFolderIntentByPath?: Readonly<
+      Record<string, WorktreeFolderIntentEntry>
+    >;
+    readonly legacyEpicIntentByEpicId?: Readonly<
+      Record<string, WorktreeEpicIntentEntry>
+    >;
+  };
+}
+
+/**
+ * The first host to ACT after the migration adopts the frozen v1 memory into
+ * its own bucket, and the fallback is retired.
+ *
+ * Pre-host-scoping data came from an install that had one host in practice,
+ * and the host that acts first is the only one this client can show was live.
+ * Leaving the tier shared is the exact leak this store exists to prevent, and
+ * it never terminates: a host that supersedes a legacy choice and later has
+ * that entry swept would fall back to the superseded choice and silently
+ * re-seed a selection the user had already replaced.
+ *
+ * The bucket's own entries always win - an adopted value can only fill a key
+ * this host has not already decided for itself - and the caps are reapplied,
+ * so adopting a full legacy map cannot push a host over its budget.
+ */
+function adoptLegacyInto(
+  state: Pick<
+    WorktreeIntentMemoryStore,
+    "byHost" | "legacyFolderIntentByPath" | "legacyEpicIntentByEpicId"
+  >,
+  hostId: string,
+): AdoptedLegacy {
+  const bucket = selectWorktreeIntentMemoryBucket(state, hostId);
+  const legacyFolders = state.legacyFolderIntentByPath;
+  const legacyEpics = state.legacyEpicIntentByEpicId;
+  if (
+    Object.keys(legacyFolders).length === 0 &&
+    Object.keys(legacyEpics).length === 0
+  ) {
+    return { bucket, clearedLegacy: {} };
+  }
+  return {
+    bucket: {
+      folderIntentByPath: cappedByUpdatedAt(
+        { ...legacyFolders, ...bucket.folderIntentByPath },
+        WORKTREE_INTENT_MEMORY_FOLDER_CAP,
+      ),
+      epicIntentByEpicId: cappedByUpdatedAt(
+        { ...legacyEpics, ...bucket.epicIntentByEpicId },
+        WORKTREE_INTENT_MEMORY_EPIC_CAP,
+      ),
+    },
+    clearedLegacy: {
+      legacyFolderIntentByPath: {},
+      legacyEpicIntentByEpicId: {},
+    },
+  };
 }
 
 function purgeFolderIntents(
