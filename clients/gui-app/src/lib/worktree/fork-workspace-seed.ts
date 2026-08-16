@@ -66,6 +66,7 @@ export function buildAbForkWorkspaceSeed(input: {
 
 export function buildForkWorkspaceSeedFromWorkspaceFolders(
   workspaceFolders: readonly string[],
+  hostId: string | null,
 ): ForkWorkspaceSeed {
   const intent =
     workspaceFolders.length === 0
@@ -80,7 +81,7 @@ export function buildForkWorkspaceSeedFromWorkspaceFolders(
         };
   return {
     intent,
-    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent, null),
+    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent, hostId),
   };
 }
 

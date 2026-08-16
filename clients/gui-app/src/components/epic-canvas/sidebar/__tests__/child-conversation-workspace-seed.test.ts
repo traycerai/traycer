@@ -73,7 +73,7 @@ describe("child conversation workspace seed", () => {
       binding: null,
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/workspace/a", "/workspace/b"],
-      hostId: null,
+      hostId: "host-source",
     });
 
     expect(seed?.intent).toEqual({
@@ -92,6 +92,9 @@ describe("child conversation workspace seed", () => {
         },
       ],
     });
+    expect(seed?.workspace.folderInfoByPath["/workspace/a"]?.hostId).toBe(
+      "host-source",
+    );
   });
 
   it("ignores stale staged owner intent when no parent binding exists", () => {

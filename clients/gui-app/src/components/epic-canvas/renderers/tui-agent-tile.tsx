@@ -845,7 +845,10 @@ function TerminalAgentPreLaunchToolbar(
       hostId: toolbarHostId,
     });
     return seed.intent === null
-      ? buildForkWorkspaceSeedFromWorkspaceFolders(props.agent.workspaceFolders)
+      ? buildForkWorkspaceSeedFromWorkspaceFolders(
+          props.agent.workspaceFolders,
+          toolbarHostId,
+        )
       : seed;
   }, [
     binding,

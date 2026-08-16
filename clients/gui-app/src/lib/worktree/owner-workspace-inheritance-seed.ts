@@ -27,5 +27,6 @@ export function buildOwnerWorkspaceInheritanceSeed(input: {
   if (input.fallbackWorkspaceFolders.length === 0) return null;
   return buildForkWorkspaceSeedFromWorkspaceFolders(
     input.fallbackWorkspaceFolders,
+    input.hostId,
   );
 }
