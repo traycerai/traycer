@@ -1,10 +1,6 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { create } from "zustand";
-import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   selectHostActiveSurfaceRefs,
@@ -12,6 +8,7 @@ import {
 } from "@/stores/tabs/selectors";
 import { LandingTerminalPanel } from "./landing-terminal-panel";
 import { LandingTerminalGestureProvider } from "./landing-terminal-gesture-provider";
+import { resolveHostedLandingDraftId } from "./landing-terminal-surface-binding";
 
 interface LandingPaneAnchorState {
   readonly anchors: ReadonlyMap<string, HTMLElement>;
@@ -66,12 +63,24 @@ export function LandingTerminalPaneAnchor(props: {
  * single reader of live host/client/folder state and MUST keep its identity
  * while draft focus moves between split panes - it owns the opening-gesture
  * snapshot (captured host/cwd/generation) that reconciliation settles against.
- * Only the panel's presentation moves: it is portaled into the selected
- * draft's registered pane anchor, so the toggle, opened panel, and resize
- * behavior stay confined to that pane while provider state survives the move.
+ * Only the panel's presentation moves: it is portaled into the hosting draft's
+ * registered pane anchor, so the toggle, opened panel, and resize behavior stay
+ * confined to that pane while provider state survives the move.
+ *
+ * Existence follows the hosting page's ANCHOR, never the focused tab. Keying it
+ * on focus meant every switch to an epic tab unmounted the panel - and with it
+ * every terminal tile - so returning re-ran the whole attach (list -> measure ->
+ * subscribe -> snapshot replay) behind a "Starting terminal" skeleton, while the
+ * live PTYs were pushed into the release-linger pool where the warm cap could
+ * evict them outright. The start page itself was mounted the whole time; only
+ * the panel was not part of that retained tree.
+ *
+ * Staying mounted is exactly why the panel's outward-facing behavior (chords,
+ * focus grabs) must gate on `useLandingTerminalSurfaceActive()` instead of on
+ * being rendered.
  */
 export function LandingTerminalHost() {
-  const draftId = useTabsStore((state) => {
+  const focusedDraftId = useTabsStore((state) => {
     const focused = selectHostFocusedRef(state);
     if (focused?.kind === "draft") return focused.id;
     return (
@@ -79,18 +88,38 @@ export function LandingTerminalHost() {
         ?.id ?? null
     );
   });
-  const panelOpen = useLandingTerminalStore((state) =>
-    draftId === null
-      ? false
-      : landingTerminalLayoutFor(state, draftId).panelOpen,
-  );
-  const anchor = useLandingPaneAnchorStore((state) =>
-    draftId === null ? null : (state.anchors.get(draftId) ?? null),
-  );
+  const anchors = useLandingPaneAnchorStore((state) => state.anchors);
+  // Guarded adjust-state-during-render (same idiom as the canvas pane
+  // keep-alive): the resolution reads its own committed output, so it is a
+  // fixed point and converges in one extra pass. A ref read during render would
+  // violate the React Compiler's `react-hooks/refs`.
+  const [committedHostedDraftId, setCommittedHostedDraftId] = useState<
+    string | null
+  >(null);
+  const hostedDraftId = resolveHostedLandingDraftId({
+    focusedDraftId,
+    hostedDraftId: committedHostedDraftId,
+    anchors,
+  });
+  if (hostedDraftId !== committedHostedDraftId) {
+    setCommittedHostedDraftId(hostedDraftId);
+  }
 
-  if (draftId === null && !panelOpen) return null;
+  // The provider is bound to the hosting page, falling back to focus before any
+  // anchor has registered (first paint of a start page, and the split-chooser
+  // case where the focused side is not a tab). It exists whenever either says a
+  // start page is in play - that is the pre-existing contract, and it is what
+  // keeps the opening-gesture snapshot alive across an anchor appearing.
+  const boundDraftId = hostedDraftId ?? focusedDraftId;
+  if (boundDraftId === null) return null;
+  // No anchor means no pane to portal into, so the panel itself waits. (Keeping
+  // it mounted while its pane is gone - an MRU eviction rather than a tab close
+  // - would need a stable container of its own; see the deferred reparenting
+  // work.)
+  const anchor =
+    hostedDraftId === null ? null : (anchors.get(hostedDraftId) ?? null);
   return (
-    <LandingTerminalGestureProvider draftId={draftId}>
+    <LandingTerminalGestureProvider draftId={boundDraftId}>
       {anchor === null ? null : createPortal(<LandingTerminalPanel />, anchor)}
     </LandingTerminalGestureProvider>
   );
