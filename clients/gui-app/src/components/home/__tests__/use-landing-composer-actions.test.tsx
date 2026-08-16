@@ -731,6 +731,57 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  // The workspace context is read for the host active at submit; on the
+  // session-cold image path an IndexedDB await separates that read from the
+  // create, and `epic.create` dispatches to whichever host is active THEN.
+  // Creating on B with A's paths would bind the epic to a machine the user
+  // never composed against and file its remembered intent under a host that
+  // will never read it.
+  it("refuses to create when the active device changes mid-submission", async () => {
+    setSingleWorkspace();
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    const imageGate = deferred<Uint8Array | undefined>();
+    imageStoreMocks.getImageBytes.mockReturnValue(imageGate.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("hash-restored", "restored draft"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    // The host moves while the IndexedDB read is in flight.
+    landingMocks.getActiveHostId.mockReturnValue("host-switched");
+    await act(async () => {
+      imageGate.resolve(HELLO_BYTES);
+      await imageGate.promise;
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't create epic.",
+        expect.objectContaining({
+          description:
+            "The active device changed while this was being prepared. Try again.",
+        }),
+      );
+    });
+    expect(
+      landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+    ).toBe(false);
+
+    landingMocks.getActiveHostId.mockReturnValue(TEST_HOST_ID);
+    queryClient.clear();
+  });
+
   it("awaits IndexedDB for a restored (session-cold) image before sending", async () => {
     setSingleWorkspace();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);

@@ -336,6 +336,41 @@ export function useLandingComposerActions(): LandingComposerActions {
         draftRuntimeRegistry.complete(attempt);
         return;
       }
+      // The workspace context was read for the host that was active when the
+      // user hit submit. On the session-cold image path that read is separated
+      // from this one by an IndexedDB await, so the active host can move in
+      // between - and `createLandingEpic` / `useEpicCreate` both dispatch to
+      // whichever host is active NOW, not to the one the folders came from.
+      //
+      // Fail closed rather than reconcile. Creating on B with A's paths binds
+      // the epic to a machine the user never composed against (and files its
+      // remembered intent under a host that will never read it), while
+      // silently re-reading the workspace for B swaps a different machine's
+      // folders under a prompt written about A's code. The draft, its staged
+      // intent and the placement all survive, so a resubmit lands cleanly on
+      // whichever host is now selected. A context with no host of its own
+      // captured nothing host-specific (an unresolved host reads the empty
+      // folder bucket), so it is free to proceed.
+      if (
+        workspaceContext.hostId !== null &&
+        workspaceContext.hostId !== activeHostId
+      ) {
+        reportableErrorToast(
+          "Couldn't create epic.",
+          {
+            description:
+              "The active device changed while this was being prepared. Try again.",
+          },
+          {
+            title: "Could not create Epic",
+            message: "Active device changed mid-submission.",
+            code: null,
+            source: "Epic creation",
+          },
+        );
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
       const userId = profile?.userId ?? null;
       const initialMessage =
         userId !== null
