@@ -29,6 +29,7 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
+  reset: vi.fn<() => void>(),
 }));
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
@@ -135,6 +136,35 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
   }),
+  // The fork dialog creates on the SELECTED host's client, not the tab's, so
+  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
+  // only that wrapper left the spread's REAL client hook in place: the fork
+  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
+  // an undefined call.
+  //
+  // Unlike the wrapper above - which the tile tree reads for `mutate` and
+  // `isPending` alone - this hook has consumers that call `reset()` and read
+  // the result channel, so the stub carries the WHOLE `UseMutationResult`
+  // surface. A partial one type-checks (the factory is untyped) and then
+  // fails every case in the file at once on a member the test never mentions.
+  useEpicCreateChatForHostClient: () => ({
+    mutate: forkCreateTestState.mutate,
+    isPending: false,
+    reset: forkCreateTestState.reset,
+    error: null,
+    variables: null,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    isIdle: true,
+    status: "idle",
+    failureCount: 0,
+    failureReason: null,
+    isPaused: false,
+    submittedAt: 0,
+    context: null,
+    mutateAsync: () => Promise.resolve(undefined),
+  }),
 }));
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
@@ -146,8 +176,16 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 // production-legitimate value (useProvidersListForClient/useHostQuery own the
 // client === null disabled gate) so no consumer downstream needs a real
 // client here.
+//
+// The fork dialog is the exception, and only since it began creating on the
+// SELECTED host's client: its submit reads `getActiveHostId()` back off that
+// client and RETURNS EARLY when it cannot resolve one, so a blanket `null`
+// turned every fork submit in this file into a silent no-op. This suite's own
+// host therefore resolves; every other id still answers null, leaving the
+// gate's downstream queries disabled exactly as before.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
 }));
 
 // The chat registry now OWNS its transport (built in its factory) and drives
@@ -978,6 +1016,7 @@ describe("<ChatTile />", () => {
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
     forkCreateTestState.mutate.mockReset();
+    forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
