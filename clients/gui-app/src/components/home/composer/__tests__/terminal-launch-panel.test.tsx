@@ -83,11 +83,13 @@ function makeToolbarStore() {
     },
     onSettingsChange: null,
     tuiOnly: true,
+    hostId: "host-a",
   });
   // The Start gate reads the selected harness's runtime `modes` from the
   // catalog, so seed a loaded catalog where `claude` is TUI-capable - otherwise
   // Start stays disabled.
   store.getState().setCatalog({
+    hostId: "host-a",
     harnesses: [
       {
         id: "claude",
@@ -124,10 +126,12 @@ function makeGuiOnlyToolbarStore() {
     },
     onSettingsChange: null,
     tuiOnly: true,
+    hostId: "host-a",
   });
   // A GUI-only harness cannot back a terminal agent. The Start gate follows
   // the runtime `modes` advertised by the host.
   store.getState().setCatalog({
+    hostId: "host-a",
     harnesses: [
       {
         id: "traycer",

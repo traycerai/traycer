@@ -1136,6 +1136,8 @@ function ChatPane(props: {
         <div className="ml-auto max-w-[88%] rounded-lg rounded-br-sm bg-primary px-2.5 py-1.5 text-ui-xs text-primary-foreground">
           {userCopy}
         </div>
+        {/* muted-fill-ok: decorative diorama bubble on a literal bg-canvas
+            pane; --canvas never equals --muted */}
         <div className="mr-auto flex w-[82%] max-w-[88%] flex-col gap-1.5 rounded-lg rounded-bl-sm bg-muted px-2.5 py-2">
           <span className="h-1.5 w-full rounded-full bg-foreground/15" />
           <span className="h-1.5 w-4/5 rounded-full bg-foreground/15" />
@@ -1314,6 +1316,7 @@ function GuiMessage(props: {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease: EASE }}
+      // muted-fill-ok: decorative diorama bubble on a literal bg-canvas pane; --canvas never equals --muted
       className="mr-auto flex max-w-[92%] flex-col gap-1 rounded-lg rounded-bl-sm bg-muted px-2.5 py-1.5 text-ui-xs"
     >
       <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-muted-foreground">
@@ -1606,7 +1609,7 @@ function CommandPalette(props: { readonly reducedMotion: boolean }) {
         <span className="text-ui-sm text-muted-foreground">
           Type a command...
         </span>
-        <kbd className="ml-auto rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-overline text-muted-foreground">
+        <kbd className="ml-auto rounded border border-border bg-foreground/8 px-1.5 py-0.5 font-mono text-overline text-muted-foreground">
           Cmd K
         </kbd>
       </div>

@@ -60,7 +60,7 @@ const TIER_PILL_CLASS: Record<WorktreeTier, string> = {
   review:
     "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:text-amber-300",
   orphaned: "border-border text-muted-foreground",
-  "in-use": "border-border bg-muted text-muted-foreground",
+  "in-use": "border-border bg-foreground/8 text-muted-foreground",
 };
 
 const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
@@ -163,7 +163,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
 
         <TooltipProvider>
           <section
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-muted/10 px-5 py-4"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
             data-testid="sweep-worktrees-candidates"
           >
             <SweepRowList
@@ -184,7 +184,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           </section>
         </TooltipProvider>
 
-        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-muted/20 px-5 py-3 sm:flex sm:justify-end">
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
           <Button
             type="button"
             variant="ghost"

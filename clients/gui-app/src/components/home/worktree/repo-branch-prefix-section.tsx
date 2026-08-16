@@ -854,7 +854,7 @@ function ChoiceRow(props: {
         "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
         props.active
           ? "border-primary/50 bg-primary/5"
-          : "border-border/50 hover:bg-muted/30",
+          : "border-border/50 hover:bg-foreground/5",
       )}
     >
       <RadioGroupItem id={props.id} value={props.value} className="mt-0.5" />

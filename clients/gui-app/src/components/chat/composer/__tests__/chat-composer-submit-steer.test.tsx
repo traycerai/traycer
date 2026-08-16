@@ -644,6 +644,7 @@ function mountSubmit(input: MountSubmitInput): {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    hostId: null,
   });
 
   function resolveStatus(

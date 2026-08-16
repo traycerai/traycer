@@ -1054,7 +1054,7 @@ function RateLimitRail({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex min-h-0 flex-col items-center border-r bg-muted/20 p-1.5">
+    <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
       <div
         role="tablist"
         aria-label="Usage limit providers"
@@ -2104,7 +2104,7 @@ function UnscopedTraycerUsage(): ReactNode {
   const traycerSubscription = useTraycerSubscription();
   if (!traycerSubscription.eligible) return null;
   return (
-    <div className="w-full max-w-full rounded-md border border-border/60 bg-muted/20 p-3">
+    <div className="w-full max-w-full rounded-md border border-border/60 bg-foreground/3 p-3">
       <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
     </div>
   );
@@ -2366,12 +2366,10 @@ function RateLimitErrorMessage({
  * the eventual window layout, not a spinner replacing the panel (Core Flows -
  * a deliberate difference from the Settings card's spinner).
  *
- * Each block overrides `Skeleton`'s default `bg-muted` fill with
- * `bg-foreground/15`, same reasoning as `MeterRow`'s track: several dark
- * theme presets set `--muted` equal to `--popover`, so a plain `bg-muted`
- * skeleton can end up the same color as the popover background and read as
- * an empty section instead of a loading one. An opacity overlay on
- * `--foreground` contrasts against any background without needing a border.
+ * The per-block `bg-foreground/15` overrides these carried are gone: the
+ * `Skeleton` primitive now defaults to a foreground-alpha fill for exactly
+ * the reason discovered here (see `ui/skeleton.tsx`), so the default is
+ * already correct on this popover.
  */
 function RateLimitDetailSkeleton(): ReactNode {
   return (
@@ -2382,10 +2380,10 @@ function RateLimitDetailSkeleton(): ReactNode {
       {[0, 1].map((row) => (
         <div key={row} className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <Skeleton className="h-3 w-16 bg-foreground/15" />
-            <Skeleton className="h-3 w-10 bg-foreground/15" />
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-10" />
           </div>
-          <Skeleton className="h-1.5 w-full rounded-full bg-foreground/15" />
+          <Skeleton className="h-1.5 w-full rounded-full" />
         </div>
       ))}
     </div>

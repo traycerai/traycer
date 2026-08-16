@@ -62,7 +62,10 @@ import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import {
+  selectGlobalLastRunSettings,
+  useComposerRunSettingsStore,
+} from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
@@ -88,6 +91,8 @@ import {
 } from "@/components/home/data/landing-options";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useHostBinding, useHostClient } from "@/lib/host";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
@@ -184,8 +189,12 @@ export function LandingComposer(props: LandingComposerProps) {
     markLandingEditorMounted();
   }, []);
 
-  const globalLastRunSettings = useComposerRunSettingsStore(
-    (state) => state.globalLastRunSettings,
+  // The landing composer follows the app-wide active host (its picker rebinds
+  // that default), so its remembered last-run settings are the ACTIVE host's
+  // bucket - switching hosts re-seeds the toolbar from the new host's memory.
+  const activeHostId = useReactiveActiveHostId();
+  const globalLastRunSettings = useComposerRunSettingsStore((state) =>
+    selectGlobalLastRunSettings(state, activeHostId),
   );
   const setGlobalRunSettings = useComposerRunSettingsStore(
     (state) => state.setGlobalRunSettings,
@@ -195,12 +204,12 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      setGlobalRunSettings(settings, Date.now());
+      setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
     },
-    [draftId, setDraftSettings, setGlobalRunSettings],
+    [activeHostId, draftId, setDraftSettings, setGlobalRunSettings],
   );
   const settingsSeed = useMemo(
     () =>
@@ -227,7 +236,7 @@ export function LandingComposer(props: LandingComposerProps) {
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, tuiOnly: composerMode === "terminal" },
+    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -285,6 +294,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     defaultHostClient,
+    activeHostId,
   );
   const workspaceAvailability = useMemo(
     () =>
@@ -593,7 +603,11 @@ export function LandingComposer(props: LandingComposerProps) {
         .getState()
         .createDraftWithId(
           props.pendingCreateId ?? uuidv4(),
-          useComposerRunSettingsStore.getState().globalLastRunSettings,
+          useComposerRunSettingsStore
+            .getState()
+            .getGlobalRunSettings(
+              getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+            ),
         );
       createdUnboundDraftIdRef.current = createdDraftId;
       // The workspace picker's staging key is keyed by this draft id

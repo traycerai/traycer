@@ -54,14 +54,14 @@ export function StopChildrenDialog(props: {
               <span className="block min-w-0 flex-1 truncate text-foreground/85">
                 {agent.title}
               </span>
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+              <span className="shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
                 {agent.surface}
               </span>
             </li>
           ))}
         </ul>
 
-        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-muted/10 px-6 py-4">
+        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
           <Button
             type="button"
             variant="ghost"

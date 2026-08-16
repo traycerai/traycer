@@ -160,6 +160,8 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
         size="icon-xs"
         aria-expanded={!collapsed}
         aria-label={`${collapsed ? "Expand" : "Collapse"} ${props.panel.title}`}
+        // muted-fill-ok: canvas-scoped sidebar chrome, and hover also swings
+        // the icon to text-foreground
         className="-ml-1 size-5 text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground hover:bg-muted hover:text-foreground"
         onClick={(event) => {
           event.stopPropagation();

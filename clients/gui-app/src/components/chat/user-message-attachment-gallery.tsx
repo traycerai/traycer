@@ -115,11 +115,13 @@ function ImageAttachmentThumb({
   let thumbnail: ReactNode;
   if (image.status === "loading") {
     thumbnail = (
+      // muted-fill-ok: fills the timeline trigger below, same non-raised chat surface
       <div className="size-full animate-pulse bg-muted/60" aria-hidden />
     );
   } else if (image.status === "unavailable") {
     thumbnail = (
       <div
+        // muted-fill-ok: fills the timeline trigger above, same non-raised chat surface
         className="flex size-full items-center justify-center bg-muted/60 text-muted-foreground"
         data-user-message-image-unavailable
         aria-hidden
@@ -142,14 +144,14 @@ function ImageAttachmentThumb({
   if (image.status === "loading") {
     dialogBody = (
       <div
-        className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
+        className="aspect-video w-full animate-pulse rounded-lg bg-foreground/10"
         aria-hidden
       />
     );
   } else if (image.status === "unavailable") {
     dialogBody = (
       <div
-        className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg bg-muted/40 px-4 py-8 text-center text-muted-foreground"
+        className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg bg-foreground/5 px-4 py-8 text-center text-muted-foreground"
         role="status"
       >
         <ImageOff className="size-8" aria-hidden />
@@ -179,6 +181,7 @@ function ImageAttachmentThumb({
           <button
             type="button"
             aria-label={triggerAriaLabel}
+            // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
             className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span

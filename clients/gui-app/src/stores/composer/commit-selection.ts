@@ -25,17 +25,21 @@ export function commitSelection(
   modelSlug: string | null,
   profileId: string | null,
 ): void {
+  // The composer's target host keys every memory read/write below - the
+  // toolbar store carries it in its catalog scope, so the picker and the
+  // palette funnel through the identical host without threading it.
+  const hostId = store.getState().catalog.hostId;
   const memory = useComposerHarnessMemoryStore.getState();
   // Profile memory is independent of model memory. Record the explicit choice
   // immediately so header usage previews can follow it even while the target
   // harness's model catalog is still resolving (and before a settings emit).
-  memory.recordProfileSelection(harnessId, profileId);
+  memory.recordProfileSelection(hostId, harnessId, profileId);
   const resolved =
     modelSlug === null
-      ? memory.resolveHarnessSwitch(harnessId)
+      ? memory.resolveHarnessSwitch(hostId, harnessId)
       : {
           modelSlug,
-          ...memory.resolveModelSelection(harnessId, modelSlug),
+          ...memory.resolveModelSelection(hostId, harnessId, modelSlug),
         };
   store.getState().applyComposerSelection({
     selection: { harnessId, profileId, modelSlug: resolved.modelSlug },
@@ -61,6 +65,10 @@ export function commitProfileSelection(
   const selection = { ...state.selection, profileId };
   useComposerHarnessMemoryStore
     .getState()
-    .recordProfileSelection(selection.harnessId, profileId);
+    .recordProfileSelection(
+      state.catalog.hostId,
+      selection.harnessId,
+      profileId,
+    );
   state.setSelection(selection);
 }

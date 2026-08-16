@@ -54,3 +54,15 @@ export const useHostDirectory = runtime.useHostDirectory;
 export const useAuthService = runtime.useAuthService;
 export const useHostBinding = runtime.useHostBinding;
 export const getHostBindingSnapshot = runtime.getBindingSnapshot;
+
+/**
+ * The app-wide active host id, imperatively, for callers outside React (the
+ * command palette's actions, tab navigation). `null` when nothing is bound
+ * yet - the same "follow the app-wide default, and there isn't one" case the
+ * host-scoped stores treat as a no-op. Lives here so the binding-snapshot
+ * guard has ONE home: the per-host stores are read from several non-hook
+ * call sites, and a later fix to this chain must not land in only some.
+ */
+export function activeHostIdOrNull(): string | null {
+  return getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null;
+}

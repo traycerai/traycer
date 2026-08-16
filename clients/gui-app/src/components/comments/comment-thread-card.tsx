@@ -155,7 +155,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
       className={cn(
         "flex flex-col gap-2 rounded-md border border-border bg-card p-3 transition-colors",
         "data-[resolved=true]:opacity-70",
-        isExpanded ? "ring-1 ring-ring/40" : "hover:bg-muted/40",
+        isExpanded ? "ring-1 ring-ring/40" : "hover:bg-foreground/5",
       )}
     >
       <button
