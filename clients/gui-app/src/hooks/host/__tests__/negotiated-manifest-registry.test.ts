@@ -95,6 +95,39 @@ describe("negotiated-manifest-registry", () => {
     ).toBeNull();
   });
 
+  it("notifies but keeps the method set stable when only a VERSION changes", () => {
+    // The branch the fork dialog's capability healing rides on: a host upgraded
+    // in place answers the same methods at a higher minor, so `methodsChanged`
+    // is false and `versionsChanged` is true. `recordNegotiatedHostManifest`
+    // handles the two independently - it must still notify (or the gate never
+    // re-reads and the row keeps its stale "needs update" word), while leaving
+    // the method Set's REFERENCE alone (or every presence consumer's
+    // `getSnapshot` churns for a change that did not touch presence).
+    recordNegotiatedHostManifest("host-1", {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    const first = getNegotiatedHostMethods("host-1");
+    expect(first).not.toBeNull();
+
+    const listener = vi.fn();
+    const unsubscribe = subscribeNegotiatedManifests(listener);
+
+    recordNegotiatedHostManifest("host-1", {
+      "epic.createChat": { major: 1, minor: 2 },
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getNegotiatedHostMethods("host-1")).toBe(first);
+    expect(getNegotiatedHostMethodVersion("host-1", "epic.createChat")).toEqual(
+      {
+        major: 1,
+        minor: 2,
+      },
+    );
+
+    unsubscribe();
+  });
+
   it("also records method presence so existing presence consumers keep working", () => {
     recordNegotiatedHostManifest("host-1", {
       "epic.listChats": { major: 1, minor: 0 },

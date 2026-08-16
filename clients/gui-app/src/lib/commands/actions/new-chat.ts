@@ -25,6 +25,7 @@ import { displayTitle } from "@/lib/display-title";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
+import { appLogger } from "@/lib/logger";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
@@ -234,7 +235,7 @@ function openCreatedChatWhenProjectedInternal(
   timeoutId = window.setTimeout(() => {
     if (cancelled) return;
     cleanup();
-    reportChatProjectionWaitExpired();
+    reportChatProjectionWaitExpired(intent);
   }, CHAT_PROJECTION_WAIT_MS);
   return cleanup;
 }
@@ -245,8 +246,21 @@ function openCreatedChatWhenProjectedInternal(
  * the user's click produced a real chat on a real host, and the only thing that
  * failed is this client's view of it, which is exactly the distinction a silent
  * expiry destroyed.
+ *
+ * Logged as well as toasted, and the split is deliberate: the report context
+ * below carries no ids, because an issue report is a privacy-safe payload and
+ * naming the epic, chat and host in it would leak the user's workspace into
+ * something they send to us. The renderer's own log is not that payload - it is
+ * this device's console dump - so it is where the correlation belongs. Without
+ * it a support engineer receives "an agent never arrived" and has no way to tie
+ * it to which agent, on which host.
  */
-function reportChatProjectionWaitExpired(): void {
+function reportChatProjectionWaitExpired(intent: CreatedChatOpenIntent): void {
+  appLogger.warn("[new-chat] created chat never reached this device", {
+    epicId: intent.epicId,
+    chatId: intent.chatId,
+    hostId: intent.hostId,
+  });
   reportableWarningToast(
     "Your new agent hasn't shown up here yet.",
     {

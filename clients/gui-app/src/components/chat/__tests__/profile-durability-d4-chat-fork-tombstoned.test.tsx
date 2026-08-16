@@ -236,7 +236,14 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
 // The tab's own host client (`useHostClientForHostId("tab-host-id")`'s
 // mocked result) - the client the default same-host fork's `createChat`
 // call and the seeded-profile validation are supposed to read from.
-const TAB_HOST_CLIENT = buildHostClient("tab-host");
+//
+// Bound to the SAME id it is registered under. `submit` sends
+// `selectedHostClient.getActiveHostId()` as the request's `hostId`, and
+// `useEpicCreateChatForHostClient`'s preflight rejects the create when that
+// disagrees with the selected host - so a client bound to anything else stands
+// in for a state production refuses to reach, and only the mocked mutation
+// hides it.
+const TAB_HOST_CLIENT = buildHostClient("tab-host-id");
 // A decoy standing in for "the app-wide active host" - something the dialog
 // must NEVER read profiles from. Never returned by any mocked hook below.
 const DECOY_ACTIVE_HOST_CLIENT = buildHostClient("decoy-active-host");
