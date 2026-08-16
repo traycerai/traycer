@@ -26,9 +26,12 @@ import type { PolicyEvaluationRequest } from "./contracts";
  *   actions (`agent.stop`, `agent.fork`, `agent.archive`) and
  *   `tool.execute` (medium impact, wider blast radius; the condition defers
  *   an exempt-tool allowlist to the resolver).
- * - `auto_accept_edits` - baseline + a REQUIRE_APPROVAL override for
- *   `agent.stop` on an agent when the target is not the acting agent (the
- *   self-stop exemption is a resolver-side condition refinement).
+ * - `auto_accept_edits` - baseline + REQUIRE_APPROVAL overrides for
+ *   `agent.stop` across EVERY resource class when the target is not the
+ *   acting agent (the self-stop exemption is a resolver-side condition
+ *   refinement). `agent.stop` is high-impact regardless of the resource
+ *   class the request names, so an exotic `agent.stop` request must not
+ *   slip past the approval gate merely by targeting a non-agent resource.
  *
  * `condition` strings are opaque to the protocol (see `types.ts`): the pure
  * helpers match on `action` + `resource` only, so an override whose condition
@@ -120,18 +123,31 @@ const SUPERVISED_DENY_RULES: readonly PolicyRule[] = [
 /**
  * `auto_accept_edits` override: stopping ANOTHER agent is a high-impact,
  * possibly irreversible action, so it requires approval even though most
- * actions are auto-accepted. The condition defers the self-stop exemption
- * (target IS the acting agent) to the resolver.
+ * actions are auto-accepted. The override covers EVERY resource class:
+ * `agent.stop` stays high-impact no matter what the request names as its
+ * target class, so gating only the `agent` resource would let an exotic
+ * `agent.stop` request through the baseline allow-all. The condition defers
+ * the self-stop exemption (target IS the acting agent) to the resolver.
+ *
+ * The `agent` resource keeps the original bare ruleId
+ * (`default:auto_accept_edits:require_approval:agent.stop`); the other
+ * resource classes append `:<resource>` so existing ruleId references stay
+ * stable.
  */
-const AUTO_ACCEPT_EDITS_STOP_RULE: PolicyRule = {
-  ruleId: "default:auto_accept_edits:require_approval:agent.stop",
-  action: "agent.stop",
-  resource: "agent",
-  impact: "high",
-  condition: "target agent differs from the acting agent",
-  mode: "require_approval",
-  priority: OVERRIDE_PRIORITY,
-};
+const AUTO_ACCEPT_EDITS_STOP_RULES: readonly PolicyRule[] = ALL_RESOURCES.map(
+  (resource) => ({
+    ruleId:
+      resource === "agent"
+        ? "default:auto_accept_edits:require_approval:agent.stop"
+        : `default:auto_accept_edits:require_approval:agent.stop:${resource}`,
+    action: "agent.stop",
+    resource,
+    impact: "high",
+    condition: "target agent differs from the acting agent",
+    mode: "require_approval",
+    priority: OVERRIDE_PRIORITY,
+  }),
+);
 
 /** Canonical default rule set per permission mode. */
 export const DEFAULT_POLICY_RULES_BY_MODE: Record<
@@ -140,7 +156,7 @@ export const DEFAULT_POLICY_RULES_BY_MODE: Record<
 > = {
   full_access: allowAllRules(),
   supervised: [...allowAllRules(), ...SUPERVISED_DENY_RULES],
-  auto_accept_edits: [...allowAllRules(), AUTO_ACCEPT_EDITS_STOP_RULE],
+  auto_accept_edits: [...allowAllRules(), ...AUTO_ACCEPT_EDITS_STOP_RULES],
 };
 
 /** The default rule set for one permission mode (a fresh array each call). */
