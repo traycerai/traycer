@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
   subscribeNegotiatedManifests,
@@ -66,5 +68,40 @@ describe("negotiated-manifest-registry", () => {
     expect(second?.has("epic.setChatArchived")).toBe(true);
 
     unsubscribe();
+  });
+
+  it("reads an unknown host's method version as not-yet-known (null)", () => {
+    expect(
+      getNegotiatedHostMethodVersion("host-unknown", "epic.listChats"),
+    ).toBeNull();
+  });
+
+  it("records the exact per-method negotiated version from a manifest", () => {
+    recordNegotiatedHostManifest("host-1", {
+      "epic.listChats": { major: 2, minor: 3 },
+      "epic.setChatArchived": { major: 1, minor: 0 },
+    });
+
+    expect(getNegotiatedHostMethodVersion("host-1", "epic.listChats")).toEqual({
+      major: 2,
+      minor: 3,
+    });
+    expect(
+      getNegotiatedHostMethodVersion("host-1", "epic.setChatArchived"),
+    ).toEqual({ major: 1, minor: 0 });
+    // Still unknown for a method absent from the manifest.
+    expect(
+      getNegotiatedHostMethodVersion("host-1", "epic.missingMethod"),
+    ).toBeNull();
+  });
+
+  it("also records method presence so existing presence consumers keep working", () => {
+    recordNegotiatedHostManifest("host-1", {
+      "epic.listChats": { major: 1, minor: 0 },
+    });
+
+    const methods = getNegotiatedHostMethods("host-1");
+    expect(methods).not.toBeNull();
+    expect(methods?.has("epic.listChats")).toBe(true);
   });
 });
