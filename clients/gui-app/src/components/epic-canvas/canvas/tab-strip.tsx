@@ -809,7 +809,7 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           data-testid={`tab-close-${tabInstanceId}`}
           className={cn(
             "pointer-events-none absolute right-2 inline-flex size-4 items-center justify-center rounded-sm opacity-0 transition-[background-color,color,opacity] focus-visible:opacity-100",
-            "hover:bg-muted",
+            "hover:bg-foreground/5",
             "group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
           )}
         >

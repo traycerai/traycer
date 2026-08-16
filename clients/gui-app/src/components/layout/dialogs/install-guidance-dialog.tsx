@@ -54,7 +54,7 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
             </ol>
 
             {guidance.command === null ? null : (
-              <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-foreground/5 px-3 py-2">
                 <code
                   className="min-w-0 flex-1 truncate font-mono text-code-xs"
                   data-testid="install-guidance-command"
@@ -72,7 +72,7 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+        <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="link"

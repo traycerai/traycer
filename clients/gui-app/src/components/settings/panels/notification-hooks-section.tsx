@@ -211,7 +211,7 @@ function HooksToolbar(props: {
 function ConfigPathAccess(props: { readonly configPath: string }) {
   return (
     <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-      <code className="min-w-0 flex-1 truncate rounded bg-muted/60 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
+      <code className="min-w-0 flex-1 truncate rounded bg-foreground/8 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
         {props.configPath}
       </code>
       <Button

@@ -172,6 +172,8 @@ function CollabTileSkeleton(props: {
       data-artifact-room-availability={props.bodyAvailability}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >
+      {/* muted-fill-ok: tile body renders on the epic canvas, and --canvas
+          never equals --muted in any theme */}
       <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
       <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
       <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />

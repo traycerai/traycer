@@ -679,7 +679,7 @@ function PluginRow({
         {/* Badge rides the trailing edge, matching the skills tab: names vary
             in length, so status anchored here reads as a column. */}
         {sourceBadge !== null ? (
-          <span className="whitespace-nowrap rounded bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+          <span className="whitespace-nowrap rounded bg-foreground/8 px-1.5 py-0.5 text-ui-xs text-muted-foreground">
             {sourceBadge}
           </span>
         ) : null}

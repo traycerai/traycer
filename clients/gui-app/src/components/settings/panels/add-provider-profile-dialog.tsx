@@ -359,7 +359,7 @@ export function AddProviderProfileDialog({
         </div>
 
         {flow.state.kind === "start" ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
             <Button
               type="button"
               size="sm"
@@ -371,7 +371,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {naming !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
             <Button
               type="button"
               size="sm"
@@ -385,7 +385,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {duplicateProfile !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
             <Button
               type="button"
               size="sm"
@@ -453,7 +453,7 @@ function AddProfileAccountSection({
       <button
         type="button"
         aria-label="Link account"
-        className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+        className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={linkDisabled}
         onClick={onLink}
       >
@@ -505,7 +505,7 @@ function AddProfileAccountSection({
 
   if (flowState.kind === "cancelled") {
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-ui-sm text-muted-foreground">
+      <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
         <MutedAgentSpinner />
         <span>Cancelling sign-in</span>
       </div>
@@ -539,7 +539,7 @@ function AddProfileAccountSection({
   }
 
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-ui-sm text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
       <span>{finalizing ? "Finishing profile setup" : "Account linked"}</span>
     </div>
@@ -772,7 +772,7 @@ export function AddProfileIdentityStep({
   }
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+      <div className="rounded-md border border-border/60 bg-foreground/3 p-3">
         <div className="text-ui-xs font-medium uppercase text-muted-foreground">
           Signed in as
         </div>

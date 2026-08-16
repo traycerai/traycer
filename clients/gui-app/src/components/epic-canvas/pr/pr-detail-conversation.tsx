@@ -326,6 +326,7 @@ function PrResolvedThreadRow(props: {
           }}
           aria-expanded={false}
           data-testid="pr-detail-resolved-thread"
+          // muted-fill-ok: resolved-thread row paints on PrSurfaceCard bg-canvas section
           className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
         >
           <ChevronRight
@@ -335,6 +336,7 @@ function PrResolvedThreadRow(props: {
           <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
             {anchor.label}
           </StartTruncatedText>
+          {/* muted-fill-ok: pill on the canvas-surface resolved row below */}
           <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
             Resolved
           </span>
@@ -360,6 +362,7 @@ function PrReviewThreadCard(props: {
   return (
     <div
       className={cn(
+        // muted-fill-ok: thread card sits in PrSurfaceCard bg-canvas section, not a card/popover
         "min-w-0 rounded-lg border border-border/60 bg-muted/20",
         thread.isResolved && "opacity-70",
       )}
@@ -399,12 +402,14 @@ function PrReviewThreadCard(props: {
             sideOffset={6}
             align="center"
           >
+            {/* muted-fill-ok: pill inside the canvas-surface thread card below */}
             <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
               Outdated
             </span>
           </TooltipWrapper>
         ) : null}
         {thread.isResolved ? (
+          // muted-fill-ok: pill inside the canvas-surface thread card below
           <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
             Resolved
           </span>
@@ -579,6 +584,7 @@ function PrSurfaceCard(props: {
         props.tone === "none" && "border-border/60",
       )}
     >
+      {/* muted-fill-ok: PrSurfaceCard header band paints on that section own bg-canvas */}
       <div className="group/header flex min-w-0 items-center gap-2 border-b border-border/50 bg-muted/25 px-3 py-2 text-ui-xs text-muted-foreground">
         {props.header}
       </div>

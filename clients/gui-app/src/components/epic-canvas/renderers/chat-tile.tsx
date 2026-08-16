@@ -161,6 +161,8 @@ import {
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
 import {
+  selectEpicRunSettingsEntry,
+  selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
@@ -1370,6 +1372,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const linkResolutionRoots = useWorkspaceMentionRoots(
     mentionRoots,
     !isFolderlessWorkspace,
+    activeHostId,
   );
   // The exact roots the active composer resolves to for slash-command
   // discovery (`ChatComposerImpl` derives the same value internally from
@@ -1382,6 +1385,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const resolvedComposerMentionRoots = useWorkspaceMentionRoots(
     composerMentionRoots,
     !isFolderlessWorkspace,
+    activeHostId,
   );
   // The composer is runnable when the chat carries its own folder binding OR
   // when the epic has at least one workspace folder (the chat then runs local
@@ -2550,16 +2554,19 @@ function useChatTileComposerSettingsSeeds(input: {
   readonly persistedChatSettings: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
 }) {
+  // This tile's composer is bound to the TAB host for life, so its last-run
+  // fallback seeds read that host's buckets and the on-send write below lands
+  // in them - another host's remembered settings never leak into this tab.
+  const tabHostId = useTabHostId();
   const { globalLastRunSettings, epicRunSettingsEntry, setEpicRunSettings } =
     useComposerRunSettingsStore(
       useShallow((state) => ({
-        globalLastRunSettings: state.globalLastRunSettings,
-        epicRunSettingsEntry: Object.hasOwn(
-          state.epicRunSettingsByEpicId,
+        globalLastRunSettings: selectGlobalLastRunSettings(state, tabHostId),
+        epicRunSettingsEntry: selectEpicRunSettingsEntry(
+          state,
           input.currentEpicId,
-        )
-          ? state.epicRunSettingsByEpicId[input.currentEpicId]
-          : null,
+          tabHostId,
+        ),
         setEpicRunSettings: state.setEpicRunSettings,
       })),
     );
@@ -2577,13 +2584,20 @@ function useChatTileComposerSettingsSeeds(input: {
     globalLastRunSettings,
     defaultRunSettings: input.defaultRunSettings,
   });
+  // Consumers (the send/steer paths) keep the pre-host 3-param shape; the tab
+  // host is bound here, the single site that knows it.
+  const setEpicRunSettingsForTabHost = useCallback(
+    (epicId: string, settings: ChatRunSettings, updatedAt: number) =>
+      setEpicRunSettings(epicId, tabHostId, settings, updatedAt),
+    [setEpicRunSettings, tabHostId],
+  );
 
   return {
     composerFallbackSettingsSeed,
     epicRunSettings,
     globalLastRunSettings,
     initialComposerSettings,
-    setEpicRunSettings,
+    setEpicRunSettings: setEpicRunSettingsForTabHost,
   };
 }
 

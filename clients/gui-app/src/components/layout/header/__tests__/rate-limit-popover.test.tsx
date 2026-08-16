@@ -1354,7 +1354,7 @@ describe("<RateLimitPopover /> rail", () => {
     );
   });
 
-  it("enqueues open-time refresh only for stale multi-profile rows", async () => {
+  it("does not enqueue open-time refresh for stale multi-profile rows with cached values", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -1384,12 +1384,7 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    await waitFor(() => expect(mocks.enqueue).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: false, profileId: "work-profile" },
-    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
@@ -1811,15 +1806,17 @@ describe("<RateLimitPopover /> per-provider states", () => {
     renderPopover();
     const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
     expect(skeleton).toBeTruthy();
-    // Regression: several dark theme presets set `--muted` equal to
+    // Regression: every dark theme preset sets `--muted` equal to
     // `--popover`, so a plain `bg-muted` skeleton block is the same color as
     // the popover background and reads as an empty section, not a loading
-    // one. Each block overrides that with `bg-foreground/15`, which contrasts
-    // against any background without needing a border.
+    // one. This popover used to carry its own `bg-foreground/15` override;
+    // the fill now comes from the `Skeleton` primitive itself, so what has
+    // to hold here is that no block falls back to a muted-valued fill.
     const blocks = skeleton.querySelectorAll('[data-slot="skeleton"]');
     expect(blocks.length).toBeGreaterThan(0);
     blocks.forEach((block) => {
-      expect(block.className).toContain("bg-foreground/15");
+      expect(block.className).toContain("bg-foreground/");
+      expect(block.className).not.toContain("bg-muted");
     });
   });
 

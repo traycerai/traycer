@@ -285,6 +285,7 @@ function IndicatorStyleControl(props: {
     <div
       role="radiogroup"
       aria-label="Indicator style"
+      // muted-fill-ok: segmented track on bg-canvas (tile-canvas canvas-token-scope); --canvas never equals --muted
       className="relative flex items-center rounded-md bg-muted p-0.5"
     >
       <div

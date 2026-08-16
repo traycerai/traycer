@@ -73,7 +73,7 @@ export function DeviceCodeProgress(props: {
             "flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-3 py-2 text-ui-xs",
             props.isHero
               ? "border-white/10 bg-black/[0.18] text-white/[0.65]"
-              : "border-border/70 bg-muted/30 text-muted-foreground",
+              : "border-border/70 bg-foreground/3 text-muted-foreground",
           )}
         >
           {isExpired ? (

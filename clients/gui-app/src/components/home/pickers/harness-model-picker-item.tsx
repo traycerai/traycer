@@ -91,7 +91,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           </Badge>
         ) : null}
         {capacityLabel === null ? null : (
-          <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+          <span className="shrink-0 rounded-md bg-foreground/8 px-1.5 py-0.5 text-ui-xs text-muted-foreground">
             {capacityLabel}
           </span>
         )}

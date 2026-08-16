@@ -27,6 +27,7 @@ import {
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
@@ -1513,7 +1514,11 @@ export class TabNavigationController {
     const activation = this.activateExternalTarget({
       kind: "draft",
       draftId: null,
-      settings: useComposerRunSettingsStore.getState().globalLastRunSettings,
+      // The draft opens on the landing surface (app-wide active host), so
+      // seed it from that host's last-run bucket.
+      settings: useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(activeHostIdOrNull()),
       create: true,
     });
     if (activation === null || activation.ref.kind !== "draft") {

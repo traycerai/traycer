@@ -10,7 +10,10 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -50,6 +53,21 @@ vi.mock("@/lib/host", () => ({
     getActiveHostId: landingMocks.getActiveHostId,
     getActiveHost: landingMocks.getActiveHost,
     getRequestContextUserId: landingMocks.getRequestContextUserId,
+  }),
+}));
+
+// `landing-draft-store.ts` (real, unmocked - `createDraft` reads the global
+// workspace snapshot through it) and `use-landing-composer-actions.ts` itself
+// (the imperative "create draft" path) both resolve the per-host
+// workspace-folder / run-settings buckets through this imperative snapshot,
+// not through a hook. Left unmocked it falls back to the real (unbound)
+// implementation, which always reports `null` - so every fixture below would
+// seed a host bucket the code never reads. Pin it to the SAME host id
+// `landingMocks.getActiveHostId()` returns, so the two ways this suite's
+// production code resolves "the active host" agree.
+vi.mock("@/lib/host/runtime", () => ({
+  getHostBindingSnapshot: () => ({
+    hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),
 }));
 
@@ -119,6 +137,38 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+// Every workspace-folder / run-settings bucket in this suite is keyed by
+// this host id, matching `landingMocks.getActiveHostId()`'s default return
+// value - the same id `client.getActiveHostId()` resolves to via the mocked
+// `@/lib/host` client.
+const TEST_HOST_ID = "host-landing";
+
+function setGlobalWorkspaceFolders(input: {
+  readonly folders: ReadonlyArray<string>;
+  readonly folderInfoByPath: Readonly<
+    Record<
+      string,
+      {
+        readonly path: string;
+        readonly name: string;
+        readonly repoIdentifier: { owner: string; repo: string } | null;
+        readonly hostId: string | null;
+      }
+    >
+  >;
+  readonly primaryPath?: string | null;
+}): void {
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [TEST_HOST_ID]: {
+        folders: input.folders,
+        folderInfoByPath: input.folderInfoByPath,
+        primaryPath: input.primaryPath ?? null,
+      },
+    },
+  });
+}
+
 describe("useLandingComposerActions", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
@@ -148,11 +198,7 @@ describe("useLandingComposerActions", () => {
     imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabsStore.setState({
@@ -180,11 +226,7 @@ describe("useLandingComposerActions", () => {
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabsStore.setState({
@@ -365,7 +407,8 @@ describe("useLandingComposerActions", () => {
     // run-settings store unconditionally (independent of the initial-message
     // path, which needs a signed-in profile this suite doesn't mock).
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings?.profileId,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID)
+        ?.profileId,
     ).toBe("work-profile");
 
     queryClient.clear();
@@ -453,14 +496,14 @@ describe("useLandingComposerActions", () => {
   });
 
   it("blocks epic creation while the model slug is unresolved", () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
@@ -486,7 +529,7 @@ describe("useLandingComposerActions", () => {
     expect(landingMocks.request).not.toHaveBeenCalled();
     expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toBeNull();
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
 
@@ -494,14 +537,14 @@ describe("useLandingComposerActions", () => {
   });
 
   it("creates an epic with workspace paths and repo identifiers, then navigates", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
@@ -567,12 +610,12 @@ describe("useLandingComposerActions", () => {
       profileId: null,
     };
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual(expectedSettings);
     expect(
       useComposerRunSettingsStore
         .getState()
-        .getEpicRunSettings(firstTab.epicId),
+        .getEpicRunSettings(firstTab.epicId, TEST_HOST_ID),
     ).toEqual(expectedSettings);
 
     queryClient.clear();
@@ -790,14 +833,14 @@ describe("useLandingComposerActions", () => {
   });
 
   it("marks the first valid optimistic workspace binding as primary", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [UNKNOWN_WORKSPACE_PATH, WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
@@ -848,20 +891,20 @@ describe("useLandingComposerActions", () => {
 
   it("emits associations primary-first and restamps the outgoing intent when the explicit primary isn't the first folder", async () => {
     const SECOND_PATH = "/tmp/second-workspace";
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH, SECOND_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
         [SECOND_PATH]: {
           path: SECOND_PATH,
           name: "second",
           repoIdentifier: null,
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
       // The user explicitly switched primary to the SECOND folder.
@@ -936,10 +979,12 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
-    expect(useWorkspaceFoldersStore.getState().folders).toEqual([
-      WORKSPACE_PATH,
-      SECOND_PATH,
-    ]);
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        TEST_HOST_ID,
+      ).folders,
+    ).toEqual([WORKSPACE_PATH, SECOND_PATH]);
 
     queryClient.clear();
   });
@@ -961,6 +1006,7 @@ describe("useLandingComposerActions", () => {
               path: WORKSPACE_PATH,
               name: "traycer",
               repoIdentifier: { owner: "traycerai", repo: "traycer" },
+              hostId: TEST_HOST_ID,
             },
           },
           primaryPath: "/tmp/ghost",
@@ -1037,20 +1083,20 @@ describe("useLandingComposerActions", () => {
     // so the launch boundary MUST synthesize a `local` entry for it, or the
     // outgoing intent carries zero primaries.
     const NON_GIT_PATH = "/tmp/non-git-workspace";
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH, NON_GIT_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
         [NON_GIT_PATH]: {
           path: NON_GIT_PATH,
           name: "non-git",
           repoIdentifier: null,
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
       // The user clicked the pin on the NON-GIT folder.
@@ -1146,14 +1192,14 @@ describe("useLandingComposerActions", () => {
 
   it("clears pre-seeded epic settings when epic creation fails", async () => {
     landingMocks.request.mockRejectedValue(new Error("create failed"));
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [WORKSPACE_PATH],
       folderInfoByPath: {
         [WORKSPACE_PATH]: {
           path: WORKSPACE_PATH,
           name: "traycer",
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
@@ -1182,7 +1228,7 @@ describe("useLandingComposerActions", () => {
     // rejected request leaves no optimistic result to clean up.
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual({
       harnessId: "codex",
       model: "gpt-5-codex",
@@ -1302,26 +1348,26 @@ describe("useLandingComposerActions", () => {
   });
 
   it("creates an epic from the active draft workspace instead of the global workspace", async () => {
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [DRAFT_WORKSPACE_PATH],
       folderInfoByPath: {
         [DRAFT_WORKSPACE_PATH]: {
           path: DRAFT_WORKSPACE_PATH,
           name: "draft-workspace",
           repoIdentifier: { owner: "traycerai", repo: "draft-workspace" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
     const draftId = useLandingDraftStore.getState().createDraft(null);
-    useWorkspaceFoldersStore.setState({
+    setGlobalWorkspaceFolders({
       folders: [GLOBAL_WORKSPACE_PATH],
       folderInfoByPath: {
         [GLOBAL_WORKSPACE_PATH]: {
           path: GLOBAL_WORKSPACE_PATH,
           name: "global-workspace",
           repoIdentifier: { owner: "traycerai", repo: "global-workspace" },
-          hostId: null,
+          hostId: TEST_HOST_ID,
         },
       },
     });
@@ -2087,14 +2133,14 @@ function setSingleWorkspace(): void {
 }
 
 function setWorkspace(path: string, name: string): void {
-  useWorkspaceFoldersStore.setState({
+  setGlobalWorkspaceFolders({
     folders: [path],
     folderInfoByPath: {
       [path]: {
         path,
         name,
         repoIdentifier: { owner: "traycerai", repo: name },
-        hostId: null,
+        hostId: TEST_HOST_ID,
       },
     },
   });
