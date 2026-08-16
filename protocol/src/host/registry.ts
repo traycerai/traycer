@@ -452,6 +452,7 @@ import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-d
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
+  epicCommunicationGraphSubscribeV11,
   hostCommunicationGraphCloudFeedSubscribeV10,
 } from "@traycer/protocol/host/epic/communication-graph";
 import { hostChatRecordsSubscribeV10 } from "@traycer/protocol/host/epic/chat-records";
@@ -7985,12 +7986,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `unsupported` and that host's agents render with a "no edge data"
   // affordance while every other host in the epic keeps streaming. Never add
   // it to the unary released floor - that list is fail-closed on the name set.
+  //
+  // @1.1 adds the `tool_call` / `approval` / `lifecycle` / `resource_event`
+  // kinds and their nullable per-kind fields. @1.0 stays installed and
+  // FROZEN: a peer that negotiated it receives resolver-projected rows of the
+  // three original kinds only (new-kind rows are skipped under the
+  // representability policy), and the resolver gates emission on the
+  // negotiated version - streams have no bridges, so projection is the whole
+  // compat mechanism (see `git.subscribeStatus@1.1` and the module doc).
   "epic.communicationGraph.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+        1: {
+          contract: epicCommunicationGraphSubscribeV11,
         },
       },
     },

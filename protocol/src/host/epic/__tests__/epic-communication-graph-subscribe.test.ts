@@ -6,15 +6,20 @@ import {
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  downgradeEpicCommunicationGraphEventV11ToV10,
   epicCommunicationGraphEventSchema,
+  epicCommunicationGraphEventSchemaV11,
   epicCommunicationGraphSubscribeClientFrameSchema,
   epicCommunicationGraphSubscribeOpenRequestSchema,
   epicCommunicationGraphSubscribeServerFrameSchema,
+  epicCommunicationGraphSubscribeServerFrameSchemaV11,
   epicCommunicationGraphSubscribeV10,
+  epicCommunicationGraphSubscribeV11,
+  upgradeEpicCommunicationGraphEventV10ToV11,
 } from "@traycer/protocol/host/epic/communication-graph";
 
 /**
- * `epic.communicationGraph.subscribe@1.0` contract fixtures + the
+ * `epic.communicationGraph.subscribe@1.0`/`@1.1` contract fixtures + the
  * optional-method degrade guard.
  *
  * The degrade case is the load-bearing one: this method ships AFTER
@@ -27,6 +32,12 @@ import {
  * backlog, so frame kind carries no activity semantics - these fixtures are
  * written to reflect that rather than the older "snapshot = everything, events
  * = live" reading.
+ *
+ * On the minors: `@1.1` adds four event kinds and their nullable per-kind
+ * fields; `@1.0` stays FROZEN and INSTALLED, and the resolver projects each
+ * subscription to the minor it negotiated (streams have no version bridges -
+ * see the module doc). The tests below pin both the `@1.0` freeze and the
+ * `@1.1` additive shape.
  */
 
 const METHOD = "epic.communicationGraph.subscribe";
@@ -47,16 +58,23 @@ const A2A_MESSAGE_EVENT = {
   originRefId: "block-7",
 } as const;
 
-describe("epic.communicationGraph.subscribe@1.0 contract", () => {
-  it("declares the method at 1.0 and registers it in the stream registry", () => {
+describe("epic.communicationGraph.subscribe contract minors", () => {
+  it("keeps @1.0 frozen at 1.0 while the registry's latest minor is 1.1", () => {
     expect(epicCommunicationGraphSubscribeV10.method).toBe(METHOD);
     expect(epicCommunicationGraphSubscribeV10.schemaVersion).toEqual({
       major: 1,
       minor: 0,
     });
+    expect(epicCommunicationGraphSubscribeV11.method).toBe(METHOD);
+    expect(epicCommunicationGraphSubscribeV11.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
+    // The manifest advertises the LATEST installed minor; `@1.0` peers still
+    // connect - the host serves them resolver-projected `@1.0` frames.
     expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
       major: 1,
-      minor: 0,
+      minor: 1,
     });
   });
 
@@ -229,6 +247,384 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
         kind: "artifact_write",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("epic.communicationGraph.subscribe@1.1 rows", () => {
+  // The @1.1 event is the frozen @1.0 object plus 17 required-nullable
+  // per-kind fields. `V11_EMPTY_EVENT` is the "@1.0 row upgraded" baseline;
+  // each fixture below fills only the fields its kind owns.
+  const V11_EMPTY_EVENT = {
+    ...A2A_MESSAGE_EVENT,
+    toolName: null,
+    toolInput: null,
+    durationMs: null,
+    success: null,
+    tokenCost: null,
+    approvalId: null,
+    status: null,
+    targetAction: null,
+    agentId: null,
+    previousState: null,
+    newState: null,
+    trigger: null,
+    hostId: null,
+    resourceType: null,
+    metricValue: null,
+    threshold: null,
+    breach: null,
+  } as const;
+
+  it("parses a tool_call row with its per-kind fields populated", () => {
+    const row = epicCommunicationGraphEventSchemaV11.parse({
+      ...V11_EMPTY_EVENT,
+      id: 101,
+      kind: "tool_call",
+      senderAgentId: "agent-builder",
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      toolName: "read_file",
+      toolInput: "read protocol/src/host/epic/communication-graph.ts",
+      durationMs: 312,
+      success: true,
+      tokenCost: 1542,
+    });
+    expect(row.kind).toBe("tool_call");
+    expect(row.toolName).toBe("read_file");
+    expect(row.durationMs).toBe(312);
+    expect(row.success).toBe(true);
+    expect(row.tokenCost).toBe(1542);
+    // Fields owned by other kinds stay null on this row.
+    expect(row.approvalId).toBeNull();
+    expect(row.hostId).toBeNull();
+    expect(row.agentId).toBeNull();
+  });
+
+  it("parses an approval row with its per-kind fields populated", () => {
+    const row = epicCommunicationGraphEventSchemaV11.parse({
+      ...V11_EMPTY_EVENT,
+      id: 102,
+      kind: "approval",
+      senderAgentId: "agent-builder",
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      approvalId: "approval-9",
+      status: "granted",
+      targetAction: "agent.stop",
+      originKind: "gui_message",
+      originChatId: "chat-1",
+      originRefId: "block-9",
+    });
+    expect(row.kind).toBe("approval");
+    expect(row.approvalId).toBe("approval-9");
+    expect(row.status).toBe("granted");
+    expect(row.targetAction).toBe("agent.stop");
+    // Source traceability rides the existing origin fields.
+    expect(row.originRefId).toBe("block-9");
+  });
+
+  it("parses a lifecycle row with its per-kind fields populated", () => {
+    const row = epicCommunicationGraphEventSchemaV11.parse({
+      ...V11_EMPTY_EVENT,
+      id: 103,
+      kind: "lifecycle",
+      senderAgentId: null,
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      agentId: "agent-reviewer",
+      previousState: "active",
+      newState: "stopped",
+      trigger: "user",
+    });
+    expect(row.kind).toBe("lifecycle");
+    expect(row.agentId).toBe("agent-reviewer");
+    expect(row.previousState).toBe("active");
+    expect(row.newState).toBe("stopped");
+    expect(row.trigger).toBe("user");
+  });
+
+  it("parses a resource_event row with its per-kind fields populated", () => {
+    const row = epicCommunicationGraphEventSchemaV11.parse({
+      ...V11_EMPTY_EVENT,
+      id: 104,
+      kind: "resource_event",
+      senderAgentId: null,
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      hostId: "host-1",
+      resourceType: "memory",
+      metricValue: 87.4,
+      threshold: 80,
+      breach: true,
+    });
+    expect(row.kind).toBe("resource_event");
+    expect(row.hostId).toBe("host-1");
+    expect(row.resourceType).toBe("memory");
+    expect(row.metricValue).toBe(87.4);
+    expect(row.threshold).toBe(80);
+    expect(row.breach).toBe(true);
+  });
+
+  it("still parses a @1.0-shaped row once the @1.1 fields are present as nulls", () => {
+    // The upgrade transform's output - the "every @1.0 row is a valid @1.1
+    // row" property that makes the minor purely additive at the data level.
+    const row = epicCommunicationGraphEventSchemaV11.parse(V11_EMPTY_EVENT);
+    expect(row.kind).toBe("a2a_message");
+    expect(row.messageText).toBe("Review the protocol contract.");
+    expect(row.toolName).toBeNull();
+    expect(row.breach).toBeNull();
+  });
+
+  it("accepts a status value invented after the minor froze (open string)", () => {
+    // Same historical-log argument as `noticeReason`: `status`/`trigger`/
+    // `resourceType` annotate a row whose kind already renders, so unknown
+    // values degrade to raw strings instead of unreadable rows.
+    expect(
+      epicCommunicationGraphEventSchemaV11.parse({
+        ...V11_EMPTY_EVENT,
+        kind: "approval",
+        approvalId: "approval-9",
+        status: "escalated",
+        targetAction: "agent.stop",
+      }).status,
+    ).toBe("escalated");
+  });
+
+  it("requires every @1.1 field, per the required-nullable convention", () => {
+    const { toolName: _omittedToolName, ...withoutToolName } = V11_EMPTY_EVENT;
+    expect(
+      epicCommunicationGraphEventSchemaV11.safeParse(withoutToolName).success,
+    ).toBe(false);
+  });
+
+  it("keeps the @1.0 schema closed: it still rejects every new kind", () => {
+    for (const kind of ["tool_call", "approval", "lifecycle", "resource_event"]) {
+      expect(
+        epicCommunicationGraphEventSchema.safeParse({
+          ...A2A_MESSAGE_EVENT,
+          kind,
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("epic.communicationGraph.subscribe@1.1 frames", () => {
+  const V11_TOOL_CALL_EVENT = {
+    id: 101,
+    kind: "tool_call",
+    timestamp: 1_753_000_000_001,
+    senderAgentId: "agent-builder",
+    receiverAgentId: null,
+    responseId: null,
+    inReplyTo: null,
+    expectReply: null,
+    messageText: null,
+    noticeReason: null,
+    originKind: null,
+    originChatId: null,
+    originRefId: null,
+    toolName: "read_file",
+    toolInput: null,
+    durationMs: 312,
+    success: true,
+    tokenCost: 1542,
+    approvalId: null,
+    status: null,
+    targetAction: null,
+    agentId: null,
+    previousState: null,
+    newState: null,
+    trigger: null,
+    hostId: null,
+    resourceType: null,
+    metricValue: null,
+    threshold: null,
+    breach: null,
+  } as const;
+
+  it("parses a snapshot frame carrying a new-kind row", () => {
+    const parsed = epicCommunicationGraphSubscribeServerFrameSchemaV11.parse({
+      kind: "snapshot",
+      epicId: "epic-1",
+      events: [V11_TOOL_CALL_EVENT],
+      headId: V11_TOOL_CALL_EVENT.id,
+      hasBinaryPayload: false,
+    });
+
+    expect(parsed.kind).toBe("snapshot");
+    if (parsed.kind === "snapshot") {
+      expect(parsed.events[0].kind).toBe("tool_call");
+      expect(parsed.events[0].toolName).toBe("read_file");
+    }
+  });
+
+  it("parses an event frame carrying a new-kind row", () => {
+    const parsed = epicCommunicationGraphSubscribeServerFrameSchemaV11.parse({
+      kind: "event",
+      epicId: "epic-1",
+      event: V11_TOOL_CALL_EVENT,
+      hasBinaryPayload: false,
+    });
+
+    expect(parsed.kind).toBe("event");
+    if (parsed.kind === "event") {
+      expect(parsed.event.kind).toBe("tool_call");
+    }
+  });
+
+  it("reuses the @1.0 open request and client frames verbatim", () => {
+    expect(epicCommunicationGraphSubscribeV11.openRequestSchema).toBe(
+      epicCommunicationGraphSubscribeOpenRequestSchema,
+    );
+    expect(epicCommunicationGraphSubscribeV11.clientFrameSchema).toBe(
+      epicCommunicationGraphSubscribeClientFrameSchema,
+    );
+  });
+});
+
+describe("epic.communicationGraph.subscribe@1.0 ↔ @1.1 row transforms", () => {
+  it("upgrades a @1.0 row to @1.1 by filling the new fields with null", () => {
+    const upgraded = upgradeEpicCommunicationGraphEventV10ToV11(
+      epicCommunicationGraphEventSchema.parse(A2A_MESSAGE_EVENT),
+    );
+
+    expect(epicCommunicationGraphEventSchemaV11.parse(upgraded).kind).toBe(
+      "a2a_message",
+    );
+    expect(upgraded.id).toBe(A2A_MESSAGE_EVENT.id);
+    expect(upgraded.messageText).toBe("Review the protocol contract.");
+    expect(upgraded.toolName).toBeNull();
+    expect(upgraded.breach).toBeNull();
+  });
+
+  it("downgrades a representable @1.1 row by stripping the @1.1 fields", () => {
+    const upgraded = upgradeEpicCommunicationGraphEventV10ToV11(
+      epicCommunicationGraphEventSchema.parse(A2A_MESSAGE_EVENT),
+    );
+    const result = downgradeEpicCommunicationGraphEventV11ToV10(upgraded);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Stripped shape parses under the FROZEN @1.0 schema.
+      expect(epicCommunicationGraphEventSchema.parse(result.value).kind).toBe(
+        "a2a_message",
+      );
+      expect(result.value).not.toHaveProperty("toolName");
+      expect(result.value).not.toHaveProperty("breach");
+      expect(result.value.id).toBe(A2A_MESSAGE_EVENT.id);
+    }
+  });
+
+  it("refuses to downgrade a new-kind row: the @1.0 peer must SKIP it", () => {
+    const toolCall = epicCommunicationGraphEventSchemaV11.parse({
+      id: 101,
+      kind: "tool_call",
+      timestamp: 1_753_000_000_001,
+      senderAgentId: "agent-builder",
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      noticeReason: null,
+      originKind: null,
+      originChatId: null,
+      originRefId: null,
+      toolName: "read_file",
+      toolInput: null,
+      durationMs: 312,
+      success: true,
+      tokenCost: 1542,
+      approvalId: null,
+      status: null,
+      targetAction: null,
+      agentId: null,
+      previousState: null,
+      newState: null,
+      trigger: null,
+      hostId: null,
+      resourceType: null,
+      metricValue: null,
+      threshold: null,
+      breach: null,
+    });
+
+    const result = downgradeEpicCommunicationGraphEventV11ToV10(toolCall);
+    expect(result).toEqual({ ok: false, reason: "unrepresentable-kind" });
+  });
+});
+
+describe("epic.communicationGraph.subscribe@1.1 negotiated-minor compat", () => {
+  it("keeps a @1.0 peer compatible: the @1.0 minor stays installed", () => {
+    // The host's registry manifests 1.1; a client whose manifest still says
+    // 1.0 must connect. The host serves it resolver-projected @1.0 frames
+    // (streams have no bridges - compat is installed-minor negotiation).
+    const hostManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const clientManifest = { ...hostManifest, [METHOD]: { major: 1, minor: 0 } };
+
+    expect(
+      checkStreamMethodCompatibility(
+        hostStreamRpcRegistry,
+        hostManifest,
+        clientManifest,
+        "host",
+        METHOD,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("skips new-kind rows for a @1.0 peer instead of failing the stream", () => {
+    // The resolver's projection path: for every stored row it consults the
+    // downgrade; `unrepresentable-kind` means skip (cursor advances, nothing
+    // is held back) - exactly the representability policy's contract.
+    const newKindEvent = epicCommunicationGraphEventSchemaV11.parse({
+      id: 101,
+      kind: "resource_event",
+      timestamp: 1_753_000_000_001,
+      senderAgentId: null,
+      receiverAgentId: null,
+      responseId: null,
+      inReplyTo: null,
+      expectReply: null,
+      messageText: null,
+      noticeReason: null,
+      originKind: null,
+      originChatId: null,
+      originRefId: null,
+      toolName: null,
+      toolInput: null,
+      durationMs: null,
+      success: null,
+      tokenCost: null,
+      approvalId: null,
+      status: null,
+      targetAction: null,
+      agentId: null,
+      previousState: null,
+      newState: null,
+      trigger: null,
+      hostId: "host-1",
+      resourceType: "cpu",
+      metricValue: 92,
+      threshold: 90,
+      breach: true,
+    });
+
+    const result = downgradeEpicCommunicationGraphEventV11ToV10(newKindEvent);
+    expect(result).toEqual({ ok: false, reason: "unrepresentable-kind" });
   });
 });
 

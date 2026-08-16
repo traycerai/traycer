@@ -46,6 +46,36 @@
  * on it; the skip is the interim behaviour that keeps an old client working
  * against a newer host, not a substitute for that minor.
  *
+ * @1.1 (minor 1) does exactly that: it adds four event kinds - `tool_call`,
+ * `approval`, `lifecycle`, `resource_event` - to the closed set, plus the
+ * nullable per-kind fields that carry them. Compat is the standard stream
+ * minor story, with the representability skip applied by NEGOTIATED VERSION
+ * rather than by schema failure:
+ *
+ *   - The `@1.0` schema tree stays FROZEN and INSTALLED (a `@1.0` peer must
+ *     keep rejecting the new kinds - that rejection is what the resolver
+ *     keys on). The `@1.1` schema is purely additive at the DATA level:
+ *     every `@1.0` row upgrades to a valid `@1.1` row by filling the new
+ *     fields with null, and the host emits each connection the frozen shape
+ *     of the minor it negotiated - a `@1.0` peer never receives a `@1.1`
+ *     frame and a `@1.1` peer always does (the required-nullable convention
+ *     pins this, exactly like `git.subscribeStatus@1.1`).
+ *   - The resolver projects each subscription to the minor it negotiated: a
+ *     `@1.0` peer receives only the three original kinds, with the `@1.1`
+ *     fields stripped (the downgrade below); a `@1.1` peer receives
+ *     everything. A new-kind row is never "downgraded" into an old kind -
+ *     it is skipped for the `@1.0` peer, exactly as the representability
+ *     policy dictates for rows the peer has no schema for.
+ *
+ * Streams have no version bridges (see `framework/versioned-stream-rpc.ts`:
+ * compat is installed-minor negotiation + resolver-side projection, the
+ * `git.subscribeStatus@1.1` precedent), so the @1.0↔@1.1 row transforms
+ * live in this module as plain typed helpers
+ * (`upgradeEpicCommunicationGraphEventV10ToV11` /
+ * `downgradeEpicCommunicationGraphEventV11ToV10`) for the resolver to call
+ * during projection. They are NOT registered with the framework - there is
+ * no bridge slot in the stream registry to register them in.
+ *
  * FRAME KIND CARRIES NO ACTIVITY SEMANTICS. An `event` frame does NOT mean
  * "something just happened": it is equally how a reconnect gap-fill and how
  * snapshot overflow (pre-existing backlog past the snapshot's bound) reach the
@@ -120,7 +150,9 @@ const textFrameFields = {
  * unknown kind has no way to render it at all. A stored row whose kind the
  * serving host cannot represent here is therefore skipped outright (see the
  * representability exception in the module doc), and adding a kind is a NEW
- * MINOR, never a silent widening.
+ * MINOR, never a silent widening. `@1.1` does that in
+ * `epicCommunicationGraphEventKindSchemaV11` below; this `@1.0` set must
+ * stay frozen so a `@1.0` peer keeps rejecting the new kinds.
  */
 export const epicCommunicationGraphEventKindSchema = z.enum([
   "a2a_message",
@@ -129,6 +161,39 @@ export const epicCommunicationGraphEventKindSchema = z.enum([
 ]);
 export type EpicCommunicationGraphEventKind = z.infer<
   typeof epicCommunicationGraphEventKindSchema
+>;
+
+/**
+ * `@1.1` kind set - the frozen `@1.0` set plus the four kinds Phase 0 adds:
+ *
+ * - `tool_call`      - an agent invoked a tool (captured at the host's tool
+ *   dispatch choke point). `senderAgentId` is the invoking agent.
+ * - `approval`       - an approval was requested or resolved (granted /
+ *   denied). `senderAgentId` is the REQUESTER.
+ * - `lifecycle`      - an agent's lifecycle state changed (created, forked,
+ *   stopped, archived, errored).
+ * - `resource_event` - a host resource-pressure reading crossed a threshold
+ *   (CPU, memory, disk, rate-limit).
+ *
+ * Closed, exactly like the `@1.0` set: `kind` still decides which fields on
+ * the row mean anything, so a client handed an unknown kind cannot render
+ * it at all. This is a NEW enum object, never a mutation of the frozen
+ * `@1.0` schema - a `@1.0` peer must keep rejecting the new kinds so the
+ * resolver can project by negotiated version (see the module doc). If the
+ * set ever grows again, it grows in yet another minor, never by widening
+ * this one.
+ */
+export const epicCommunicationGraphEventKindSchemaV11 = z.enum([
+  "a2a_message",
+  "a2a_notice",
+  "agent_created",
+  "tool_call",
+  "approval",
+  "lifecycle",
+  "resource_event",
+]);
+export type EpicCommunicationGraphEventKindV11 = z.infer<
+  typeof epicCommunicationGraphEventKindSchemaV11
 >;
 
 /**
@@ -221,6 +286,84 @@ export const epicCommunicationGraphEventSchema = z.object({
 });
 export type EpicCommunicationGraphEvent = z.infer<
   typeof epicCommunicationGraphEventSchema
+>;
+
+/**
+ * `@1.1` row shape - the frozen `@1.0` object plus the nullable per-kind
+ * fields Phase 0 adds. Same flat single-object discipline as `@1.0`: no
+ * discriminated union per row, one uniform type for the client's merged
+ * timeline, and the resolver projects a stored row to the negotiated
+ * minor's shape (see the module doc). Which of the new fields are populated
+ * follows from `kind`:
+ *
+ * - `tool_call`      - `toolName`, `toolInput` (summary/ref; the full input
+ *   lives in the chat transcript), `durationMs`, `success`, `tokenCost`.
+ * - `approval`       - `approvalId`, `status` (`pending` | `granted` |
+ *   `denied`), `targetAction`.
+ * - `lifecycle`      - `agentId` (the agent whose state transitioned),
+ *   `previousState`, `newState`, `trigger` (`user` | `auto` | `timeout` |
+ *   `error`).
+ * - `resource_event` - `hostId` (the host that reported the reading),
+ *   `resourceType` (`cpu` | `memory` | `disk` | `rate-limit`),
+ *   `metricValue`, `threshold`, `breach`.
+ *
+ * `status`, `trigger`, and `resourceType` are deliberately open `string`s,
+ * NOT closed enums - the same historical-log argument as `noticeReason`
+ * above: a value added after this minor froze must not make old rows
+ * unreadable. Consumers switch on the values they know and fall back to
+ * showing the raw string. Every new kind also uses the existing
+ * `originKind`/`originChatId`/`originRefId` fields for source traceability.
+ *
+ * Built with `.extend()` over the frozen `@1.0` object (the `agentInbox`
+ * `@1.2` precedent) so the shared fields cannot drift.
+ */
+export const epicCommunicationGraphEventSchemaV11 =
+  epicCommunicationGraphEventSchema.extend({
+    kind: epicCommunicationGraphEventKindSchemaV11,
+    /** `tool_call` ONLY: the tool the agent invoked (e.g. `read_file`). */
+    toolName: z.string().nullable(),
+    /** `tool_call` ONLY: summary or reference to the tool input. The full
+     * payload lives in the chat transcript / session log; this log carries
+     * metadata, never the payload. */
+    toolInput: z.string().nullable(),
+    /** `tool_call` ONLY: elapsed wall time of the invocation, millis. */
+    durationMs: z.number().nonnegative().nullable(),
+    /** `tool_call` ONLY: whether the invocation completed successfully. */
+    success: z.boolean().nullable(),
+    /** `tool_call` ONLY: token cost of the invocation, when the host can
+     * attribute it. */
+    tokenCost: z.number().nonnegative().nullable(),
+    /** `approval` ONLY: the broker-minted approval request id. */
+    approvalId: z.string().nullable(),
+    /** `approval` ONLY: `pending` | `granted` | `denied`. Open string (see
+     * the schema doc above for why). */
+    status: z.string().nullable(),
+    /** `approval` ONLY: the action the approval gates (e.g. `agent.create`,
+     * `agent.stop`). */
+    targetAction: z.string().nullable(),
+    /** `lifecycle` ONLY: the agent whose state transitioned. */
+    agentId: z.string().nullable(),
+    /** `lifecycle` ONLY: the state the agent left. */
+    previousState: z.string().nullable(),
+    /** `lifecycle` ONLY: the state the agent entered. */
+    newState: z.string().nullable(),
+    /** `lifecycle` ONLY: `user` | `auto` | `timeout` | `error`. Open string
+     * (see the schema doc above for why). */
+    trigger: z.string().nullable(),
+    /** `resource_event` ONLY: the host that reported the pressure reading. */
+    hostId: z.string().nullable(),
+    /** `resource_event` ONLY: `cpu` | `memory` | `disk` | `rate-limit`.
+     * Open string (see the schema doc above for why). */
+    resourceType: z.string().nullable(),
+    /** `resource_event` ONLY: the measured value of the metric. */
+    metricValue: z.number().nullable(),
+    /** `resource_event` ONLY: the threshold the reading is compared against. */
+    threshold: z.number().nullable(),
+    /** `resource_event` ONLY: true when the reading crossed the threshold. */
+    breach: z.boolean().nullable(),
+  });
+export type EpicCommunicationGraphEventV11 = z.infer<
+  typeof epicCommunicationGraphEventSchemaV11
 >;
 
 export const epicCommunicationGraphSubscribeOpenRequestSchema = z.object({
@@ -333,6 +476,142 @@ export const epicCommunicationGraphSubscribeV10 = defineStreamRpcContract({
   serverFrameSchema: epicCommunicationGraphSubscribeServerFrameSchema,
   clientFrameSchema: epicCommunicationGraphSubscribeClientFrameSchema,
 });
+
+/**
+ * `@1.1` server frames - the identical snapshot/event/pong shape with the
+ * `@1.1` row schema inside. The open request and client frames are the
+ * `@1.0` schemas VERBATIM (the `git.subscribeStatus@1.1` precedent): there
+ * is no client knob to add - the host always computes the full row and the
+ * resolver projects each frame to the connection's negotiated minor.
+ */
+export const epicCommunicationGraphSubscribeServerFrameSchemaV11 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      epicId: z.string(),
+      events: z.array(epicCommunicationGraphEventSchemaV11),
+      headId: z.number().int().positive().nullable(),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("event"),
+      epicId: z.string(),
+      event: epicCommunicationGraphEventSchemaV11,
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type EpicCommunicationGraphSubscribeServerFrameV11 = z.infer<
+  typeof epicCommunicationGraphSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * `epic.communicationGraph.subscribe@1.1` - additive minor that grows the
+ * closed event-kind set to include `tool_call`, `approval`, `lifecycle`,
+ * and `resource_event`, plus their nullable per-kind fields. Registered
+ * alongside the FROZEN `@1.0` contract in the stream registry: a peer that
+ * negotiated `@1.0` receives resolver-projected rows of the three original
+ * kinds only (new-kind rows are skipped per the representability policy),
+ * and a `@1.1` peer receives everything. Streams have no version bridges -
+ * see the module doc and `git-contracts.ts` - so compat is negotiation +
+ * projection, with the row transforms below as the projection primitives.
+ */
+export const epicCommunicationGraphSubscribeV11 = defineStreamRpcContract({
+  method: "epic.communicationGraph.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicCommunicationGraphSubscribeOpenRequestSchema,
+  serverFrameSchema: epicCommunicationGraphSubscribeServerFrameSchemaV11,
+  clientFrameSchema: epicCommunicationGraphSubscribeClientFrameSchema,
+});
+
+/**
+ * True when `kind` is representable in the frozen `@1.0` set. The resolver
+ * uses this to decide whether a stored row may be projected down for a
+ * `@1.0` peer - a new-kind row fails the guard and is SKIPPED under the
+ * representability policy, never relabelled into an old kind.
+ */
+export function isEpicCommunicationGraphEventKindV10(
+  kind: EpicCommunicationGraphEventKindV11,
+): kind is EpicCommunicationGraphEventKind {
+  return epicCommunicationGraphEventKindSchema.safeParse(kind).success;
+}
+
+/**
+ * Result of projecting a `@1.1` row down to the `@1.0` shape.
+ * `unrepresentable-kind` means the row's `kind` has no `@1.0` meaning at
+ * all - the resolver must SKIP it for that peer, not fail the stream.
+ */
+export type EpicCommunicationGraphEventV11ToV10Result =
+  | { ok: true; value: EpicCommunicationGraphEvent }
+  | { ok: false; reason: "unrepresentable-kind" };
+
+/**
+ * `@1.0` → `@1.1` row transform: the `@1.1` schema is purely additive, so
+ * every `@1.0` row upgrades by filling the new per-kind fields with null.
+ * (Streams have no framework bridges - this is the resolver projection
+ * primitive, not a registered upgrade path; see the module doc.)
+ */
+export function upgradeEpicCommunicationGraphEventV10ToV11(
+  event: EpicCommunicationGraphEvent,
+): EpicCommunicationGraphEventV11 {
+  return {
+    ...event,
+    toolName: null,
+    toolInput: null,
+    durationMs: null,
+    success: null,
+    tokenCost: null,
+    approvalId: null,
+    status: null,
+    targetAction: null,
+    agentId: null,
+    previousState: null,
+    newState: null,
+    trigger: null,
+    hostId: null,
+    resourceType: null,
+    metricValue: null,
+    threshold: null,
+    breach: null,
+  };
+}
+
+/**
+ * `@1.1` → `@1.0` row transform: for a row whose kind the `@1.0` set can
+ * represent, strip the `@1.1`-only fields (a `@1.0` peer must never see
+ * them - its schema rejects the new kinds and ignores unknown fields, and
+ * the resolver must not rely on either). For a new-kind row, return
+ * `{ ok: false, reason: "unrepresentable-kind" }` so the resolver skips it
+ * per the representability policy.
+ */
+export function downgradeEpicCommunicationGraphEventV11ToV10(
+  event: EpicCommunicationGraphEventV11,
+): EpicCommunicationGraphEventV11ToV10Result {
+  if (!isEpicCommunicationGraphEventKindV10(event.kind)) {
+    return { ok: false, reason: "unrepresentable-kind" };
+  }
+  return {
+    ok: true,
+    value: {
+      id: event.id,
+      kind: event.kind,
+      timestamp: event.timestamp,
+      senderAgentId: event.senderAgentId,
+      receiverAgentId: event.receiverAgentId,
+      responseId: event.responseId,
+      inReplyTo: event.inReplyTo,
+      expectReply: event.expectReply,
+      messageText: event.messageText,
+      noticeReason: event.noticeReason,
+      originKind: event.originKind,
+      originChatId: event.originChatId,
+      originRefId: event.originRefId,
+    },
+  };
+}
 
 /**
  * `host.communicationGraph.subscribe@1.0` - the CLOUD-relayed
