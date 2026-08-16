@@ -356,6 +356,16 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
   "tile.find.replace": () => openActiveTileFindWithReplace(),
+  "nav.back": (r) => {
+    if (!r.isHistoryNavAvailable() || !r.canGoBack()) return false;
+    r.goBack();
+    return true;
+  },
+  "nav.forward": (r) => {
+    if (!r.isHistoryNavAvailable() || !r.canGoForward()) return false;
+    r.goForward();
+    return true;
+  },
   "app.history.open": (r) => {
     r.navigateToEpicList();
     return true;
@@ -370,9 +380,6 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
   "composer.stash": () => stashActivePrompt(),
-  // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
-  // chord (see ACTION_META). The palette + header buttons call the shared
-  // `goBack`/`goForward` actions directly via the router seam.
 };
 
 export function dispatchAction(

@@ -58,6 +58,27 @@ import type {
   DesktopProcessMetric,
   DesktopProcessMetricsSnapshot,
 } from "@/lib/resources/desktop-app-resource-usage";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+
+const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
 
 const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
@@ -803,6 +824,23 @@ afterEach(() => {
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("opens through the Resource Monitor keybinding action", () => {
+    installStubFactory();
+    renderPopover();
+
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+    act(() => {
+      expect(dispatchAction("app.resources.open", DYNAMIC_ACTION_ROUTER)).toBe(
+        true,
+      );
+    });
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+  });
+
   it("focuses resource search when the popover opens", () => {
     installStubFactory();
     renderPopover();
@@ -811,6 +849,17 @@ describe("ResourceMonitorPopover", () => {
 
     expect(document.activeElement).toBe(
       screen.getByRole("searchbox", { name: "Search resources" }),
+    );
+  });
+
+  it("shows the current Resource Monitor shortcut in its tooltip", async () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.focus(screen.getByRole("button", { name: "Resources" }));
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      `Resources (${formatChordForDisplay("shift+escape")})`,
     );
   });
 
@@ -1467,6 +1516,53 @@ describe("ResourceMonitorPopover", () => {
       hostId: "host-1",
       pids: [100],
     });
+  });
+
+  it("cycles search results, opens with Enter, and confirms a kill with a distinct key", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+    const ownerRow = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Terminal Alpha/,
+    });
+
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(ownerRow);
+
+    // Delete arms but does not run; Escape dismisses the inline switch.
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.keyDown(ownerRow, { key: "Delete" });
+    const firstConfirm = screen.getByRole("button", {
+      name: "Confirm kill Terminal Alpha",
+    });
+    expect(document.activeElement).toBe(firstConfirm);
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+    fireEvent.keyDown(firstConfirm, { key: "Escape" });
+    expect(
+      screen.queryByRole("button", { name: "Confirm kill Terminal Alpha" }),
+    ).toBeNull();
+
+    // Backspace uses the same arm path; Enter is the separate confirmation.
+    fireEvent.keyDown(ownerRow, { key: "Backspace" });
+    const secondConfirm = screen.getByRole("button", {
+      name: "Confirm kill Terminal Alpha",
+    });
+    fireEvent.keyDown(secondConfirm, { key: "Enter" });
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
+
+    // The panel stays open after the action; Enter on the selected result
+    // follows its owner and closes the popover.
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(ownerRow, { key: "Enter" });
+    expect(navigateNestedMock).toHaveBeenCalled();
   });
 
   it("enters multi-select mode and reveals row checkboxes", () => {
@@ -3384,6 +3480,11 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
 
     fireEvent.click(
       screen.getByRole("button", { name: "Stop Monitor · deploy watcher" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Confirm stop Monitor · deploy watcher",
+      }),
     );
 
     expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({

@@ -12,6 +12,7 @@ import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
   ensureHistoryTab,
   ensureSettingsTab,
@@ -913,6 +914,23 @@ describe("<TabStrip />", () => {
     expect(tabCluster.className).toContain("flex-[0_1_auto]");
     expect(tabCluster.className).not.toContain("flex-1");
     expect(newTabButton.className).toContain("shrink-0");
+  });
+
+  it("shows the New task shortcut on the trailing button", async () => {
+    openEpicFixture(EPIC_A);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const newTaskButton = await screen.findByRole("button", {
+      name: "Start Page",
+    });
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+n")})`),
+    ).toBe(true);
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+t")})`),
+    ).toBe(false);
+    expect(newTaskButton).toBeDefined();
   });
 
   it("scrolls the active header tab into view after any route activation", async () => {
