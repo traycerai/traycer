@@ -4,7 +4,7 @@ import { displayTitle } from "@/lib/display-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
+import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -44,7 +44,18 @@ export function ManagedCommandChatBacklink(
   const label = displayTitle(chat.title, "agent");
 
   const open = () => {
-    const found = findOpenArtifactInTab(tabId, chatId);
+    // The chat's OWN host when the projection knows it, else the surface's
+    // bound host. Carried into both the lookup and the open, so a clone that
+    // holds two tabs for one copied chat id activates the one this window
+    // actually belongs to rather than whichever came first.
+    const chatRef = makeOpenableNodeRef({
+      id: chatId,
+      instanceId: uuidv4(),
+      type: "chat",
+      name: label,
+      hostId: chat.hostId ?? props.fallbackHostId,
+    });
+    const found = findOpenTileInTab(tabId, chatRef);
     if (found !== null) {
       navigateNested(epicId, tabId, () =>
         prepareSetActiveTileTabFocusTarget(
@@ -56,16 +67,7 @@ export function ManagedCommandChatBacklink(
       return;
     }
     navigateNested(epicId, tabId, () =>
-      prepareOpenTileInTabFocusTarget(
-        tabId,
-        makeOpenableNodeRef({
-          id: chatId,
-          instanceId: uuidv4(),
-          type: "chat",
-          name: label,
-          hostId: chat.hostId ?? props.fallbackHostId,
-        }),
-      ),
+      prepareOpenTileInTabFocusTarget(tabId, chatRef),
     );
   };
 
