@@ -1,0 +1,23 @@
+diff --git a/dist/editor/editor.js b/dist/editor/editor.js
+--- a/dist/editor/editor.js
++++ b/dist/editor/editor.js
+@@ -1527,7 +1527,8 @@ class Editor {
+ 		}
+ 		if (this.#selections !== void 0 || this.#matches !== void 0 || this.#markerRenderer !== void 0) {
+ 			this.#updateSelections(this.#selections ?? []);
+-			if (this.#selections !== void 0 && this.#contentHasFocus) this.focus();
++			// Local patch: preserve the viewport while retaining focus; upstream context: https://github.com/pierrecomputer/pierre/pull/1017
++			if (this.#selections !== void 0 && this.#contentHasFocus) this.#scrollToPrimaryCaret();
+ 		}
+ 		this.#markerRenderer?.removePopover();
+ 		this.#computeContentOffset(this.#contentElement);
+@@ -2691,8 +2692,7 @@ class Editor {
+ 		if (cachedY !== void 0) return cachedY;
+ 		const lineElement = this.#getLineElement(line);
+ 		if (lineElement === void 0) return -1;
+-		let y = lineElement.offsetTop + this.#metrics.paddingTop;
+-		y += this.#activeContentOffset?.top ?? 0;
++		const y = lineElement.offsetTop + (this.#activeContentOffset?.top ?? this.#metrics.paddingTop);
+ 		this.#lineYCache.set(line, y);
+ 		return y;
+ 	}
