@@ -40,6 +40,7 @@ import {
   WsRpcClient,
 } from "../ws-rpc-client";
 import {
+  getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "../negotiated-manifest-registry";
@@ -3102,5 +3103,52 @@ describe("WsRpcClient negotiated-manifest publication", () => {
     expect(
       [...(getNegotiatedHostMethods(mockLocalHostEntry.hostId) ?? [])].sort(),
     ).toEqual(["host.echo", "host.status"]);
+  });
+
+  /**
+   * The version half of the same publish. A2/critique finding 5: a V12
+   * request to a V11 host Zod-strips `sourceOwnerUserId` silently, so a
+   * caller needs the EXACT negotiated `{major, minor}` per method, not just
+   * presence, to gate on same-major feature support.
+   */
+  it("records the exact negotiated version from the openAck manifest", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-1",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.echo"),
+    ).toBeNull();
+
+    const pending = client.request("host.echo", { message: "hi" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 2, minor: 3 }));
+    await flush();
+
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.echo"),
+    ).toEqual({ major: 2, minor: 3 });
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.status"),
+    ).toEqual({ major: 1, minor: 0 });
+
+    stub.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
+  forkChatStagingKeysForEpic,
   newConversationModalStagingKey,
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
@@ -421,6 +422,55 @@ describe("worktree-intent-staging-store", () => {
     ).not.toBe(
       worktreeStagingKeyString(pendingForkChatStagingKey(HOST_A, "epic-A")),
     );
+  });
+
+  // The fork slot is the one `owner` slot whose host is a live choice rather
+  // than a property of its owner: the dialog can retarget while open.
+  it("scopes the pending fork-chat key per target host (no cross-host bleed)", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    const hostA = pendingForkChatStagingKey("host-a", "epic-A");
+    const hostB = pendingForkChatStagingKey("host-b", "epic-A");
+    expect(worktreeStagingKeyString(hostA)).not.toBe(
+      worktreeStagingKeyString(hostB),
+    );
+    store.stageEntry(hostA, worktreeEntry("/a"));
+    expect(readStagedWorktreeIntent(hostB)).toBeNull();
+    expect(readStagedWorktreeIntent(hostA)).not.toBeNull();
+  });
+
+  it("enumerates every fork-chat slot for an epic, including snapshot-only extras", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    store.stageEntry(
+      pendingForkChatStagingKey("host-a", "epic-A"),
+      worktreeEntry("/a"),
+    );
+    const extraB = worktreeStagingKeyString(
+      pendingForkChatStagingKey("host-b", "epic-A"),
+    );
+    const otherEpic = worktreeStagingKeyString(
+      pendingForkChatStagingKey("host-c", "epic-B"),
+    );
+    const keys = forkChatStagingKeysForEpic("epic-A", [extraB, otherEpic]);
+    expect(keys.map(worktreeStagingKeyString).sort()).toEqual(
+      [
+        worktreeStagingKeyString(pendingForkChatStagingKey("host-a", "epic-A")),
+        extraB,
+      ].sort(),
+    );
+  });
+
+  // A host id containing the key separator must survive the round trip the
+  // enumeration does - it is the only place a serialized key is decoded.
+  it("recovers a fork-chat host id that contains the key separator", () => {
+    const weird = "host:with:colons";
+    const store = useWorktreeIntentStagingStore.getState();
+    store.stageEntry(
+      pendingForkChatStagingKey(weird, "epic-A"),
+      worktreeEntry("/a"),
+    );
+    const keys = forkChatStagingKeysForEpic("epic-A", []);
+    expect(keys).toHaveLength(1);
+    expect(keys[0].hostId).toBe(weird);
   });
 
   it("scopes the per-parent child slot per parent (no concurrent-row collisions)", () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
 /**
@@ -27,6 +28,8 @@ function renderEmpty(props: {
 }): void {
   render(
     <HostSwitcher
+      refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
       hosts={[]}
       selected={null}
       activeHostId={null}
@@ -97,6 +100,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
     // A background refetch failure must not blank a working picker.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -127,6 +132,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
     const onRetryLists = vi.fn();
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -158,6 +165,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
     // debugging their network over a billing limit.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[
           hostScopeOptionFixture({
             hostId: "host-gated",
@@ -200,6 +209,8 @@ describe("<HostSwitcher /> trailing action", () => {
     const onSelect = vi.fn();
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -233,6 +244,8 @@ describe("<HostSwitcher /> trailing action", () => {
     // third ending.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[]}
         selected={null}
         activeHostId={null}

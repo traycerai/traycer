@@ -28,8 +28,10 @@ import type {
 } from "@traycer/protocol/host";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import {
+  DRIFT_RETRY_BASE_DELAY_MS,
   useGitDiffEditing,
   type EditableDiffFiles,
+  type GitDiffEditingModel,
 } from "@/components/epic-canvas/git-diff/git-diff-editing";
 
 const state = vi.hoisted(() => ({
@@ -97,6 +99,102 @@ const CURRENT_DIFF: GitGetFileDiffResponse = {
 
 const SURFACE_ID = "surface-edit-stability";
 
+const EDIT_IDENTITY = {
+  userId: null,
+  hostId: "host-A",
+  workspacePath: "/work/repo",
+  filePath: "src/app.ts",
+};
+
+interface GitContentsRefetchSuccess {
+  readonly error: null;
+  readonly data: {
+    readonly runningDir: string;
+    readonly filePath: string;
+    readonly oldFile: { readonly name: string; readonly contents: string };
+    readonly newFile: { readonly name: string; readonly contents: string };
+    readonly worktreeFile: { readonly name: string; readonly contents: string };
+    readonly error: null;
+  };
+}
+
+function contentsSuccess(): GitContentsRefetchSuccess {
+  return {
+    error: null,
+    data: {
+      runningDir: "/work/repo",
+      filePath: "src/app.ts",
+      oldFile: { name: "src/app.ts", contents: "const value = 0;\n" },
+      newFile: {
+        name: "src/app.ts",
+        contents: state.worktreeContent,
+      },
+      worktreeFile: {
+        name: "src/app.ts",
+        contents: state.worktreeContent,
+      },
+      error: null,
+    },
+  };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function createDeferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise = (value: T): void => {
+    void value;
+  };
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => {
+      resolvePromise(value);
+    },
+  };
+}
+
+async function activateEditing(result: {
+  readonly current: GitDiffEditingModel;
+}): Promise<void> {
+  const lineElement = document.createElement("div");
+  lineElement.append("const value = 1;");
+  document.body.append(lineElement);
+  onTestFinished(() => {
+    lineElement.remove();
+  });
+
+  await act(async () => {
+    result.current.editAdapter.diffOptions.onLineClick?.({
+      type: "diff-line",
+      annotationSide: "additions",
+      lineType: "change-addition",
+      lineNumber: 1,
+      lineElement,
+      numberElement: document.createElement("div"),
+      numberColumn: false,
+      event: new PointerEvent("click", { button: 0, clientX: 4 }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(result.current.active).toBe(true);
+    expect(result.current.hydrated).toBe(true);
+    expect(result.current.editableFiles).not.toBeNull();
+  });
+}
+
 describe("useGitDiffEditing editableFiles stability", () => {
   let queryClient: QueryClient;
 
@@ -108,27 +206,13 @@ describe("useGitDiffEditing editableFiles stability", () => {
     state.worktreeContent = "const value = 1;\n";
     state.refetchContents.mockReset();
     state.refetchContents.mockImplementation(() =>
-      Promise.resolve({
-        error: null,
-        data: {
-          runningDir: "/work/repo",
-          filePath: "src/app.ts",
-          oldFile: { name: "src/app.ts", contents: "const value = 0;\n" },
-          newFile: {
-            name: "src/app.ts",
-            contents: state.worktreeContent,
-          },
-          worktreeFile: {
-            name: "src/app.ts",
-            contents: state.worktreeContent,
-          },
-          error: null,
-        },
-      }),
+      Promise.resolve(contentsSuccess()),
     );
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    state.worktreeContent = "const value = 1;\n";
     cleanup();
     fileEditRuntimeRegistry.resetForTesting();
     queryClient.clear();
@@ -158,35 +242,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
 
     expect(result.current.canOfferEdit).toBe(true);
     expect(result.current.editableFiles).toBeNull();
-
-    const lineElement = document.createElement("div");
-    lineElement.append("const value = 1;");
-    document.body.append(lineElement);
-    onTestFinished(() => {
-      lineElement.remove();
-    });
-
-    await act(async () => {
-      result.current.editAdapter.diffOptions.onLineClick?.({
-        type: "diff-line",
-        annotationSide: "additions",
-        lineType: "change-addition",
-        lineNumber: 1,
-        lineElement,
-        numberElement: document.createElement("div"),
-        numberColumn: false,
-        event: new PointerEvent("click", { button: 0, clientX: 4 }),
-      });
-      // onActivate is fire-and-forget; flush its promise chain.
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(result.current.active).toBe(true);
-      expect(result.current.hydrated).toBe(true);
-      expect(result.current.editableFiles).not.toBeNull();
-    });
+    await activateEditing(result);
 
     const initial = result.current.editableFiles as EditableDiffFiles;
     expect(initial.oldFile?.contents).toBe("const value = 0;\n");
@@ -246,6 +302,274 @@ describe("useGitDiffEditing editableFiles stability", () => {
     });
     expect(result.current.editableFiles).toBe(initial);
     expect(result.current.editableFiles?.newFile).toBe(initial.newFile);
+  });
+
+  it("keeps editableFiles identity stable when comparison identity is acknowledged after refetch", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    let comparisonIdentity = "cmp-1";
+    const { result, rerender } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: comparisonIdentity,
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    await activateEditing(result);
+
+    const initial = result.current.editableFiles as EditableDiffFiles;
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    comparisonIdentity = "cmp-2";
+    act(() => {
+      rerender();
+    });
+
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(2);
+    });
+    await flushMicrotasks();
+
+    expect(result.current.editableFiles).toBe(initial);
+    expect(result.current.editableFiles?.newFile).toBe(initial.newFile);
+    expect(result.current.editableFiles?.oldFile).toBe(initial.oldFile);
+  });
+
+  it("refetches and marks stale when identity returns to activation after a later identity was acknowledged against a new baseline", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    let comparisonIdentity = "cmp-1";
+    const { result, rerender } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: comparisonIdentity,
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    await activateEditing(result);
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+    expect(result.current.stale).toBe(false);
+
+    const runtime = fileEditRuntimeRegistry.get(EDIT_IDENTITY);
+    expect(runtime).not.toBeNull();
+    const savedB = "const value = saved-B;\n";
+    act(() => {
+      runtime?.store.setState({
+        baselineContent: savedB,
+        lastSavedAt: Date.now(),
+      });
+    });
+
+    state.worktreeContent = savedB;
+    comparisonIdentity = "cmp-2";
+    act(() => {
+      rerender();
+    });
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(2);
+    });
+    await flushMicrotasks();
+    expect(result.current.stale).toBe(false);
+
+    state.worktreeContent = "const value = 1;\n";
+    comparisonIdentity = "cmp-1";
+    act(() => {
+      rerender();
+    });
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(3);
+    });
+    await flushMicrotasks();
+    expect(result.current.stale).toBe(true);
+  });
+
+  it("refetches and marks stale when identity returns to A while a B check is still in flight", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    let comparisonIdentity = "cmp-1";
+    const { result, rerender } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: comparisonIdentity,
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    await activateEditing(result);
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+    expect(result.current.stale).toBe(false);
+
+    const runtime = fileEditRuntimeRegistry.get(EDIT_IDENTITY);
+    expect(runtime).not.toBeNull();
+    const savedB = "const value = saved-B;\n";
+    act(() => {
+      runtime?.store.setState({
+        baselineContent: savedB,
+        lastSavedAt: Date.now(),
+      });
+    });
+
+    const pendingB = createDeferred<GitContentsRefetchSuccess>();
+    let serveDeferredB = false;
+    state.refetchContents.mockImplementation(() => {
+      if (serveDeferredB) {
+        serveDeferredB = false;
+        return pendingB.promise;
+      }
+      return Promise.resolve(contentsSuccess());
+    });
+
+    state.worktreeContent = savedB;
+    serveDeferredB = true;
+    comparisonIdentity = "cmp-2";
+    act(() => {
+      rerender();
+    });
+    await flushMicrotasks();
+    expect(state.refetchContents).toHaveBeenCalledTimes(2);
+
+    state.worktreeContent = "const value = 1;\n";
+    comparisonIdentity = "cmp-1";
+    act(() => {
+      rerender();
+    });
+    await waitFor(() => {
+      expect(state.refetchContents).toHaveBeenCalledTimes(3);
+    });
+    await flushMicrotasks();
+    expect(result.current.stale).toBe(true);
+
+    await act(async () => {
+      pendingB.resolve({
+        error: null,
+        data: {
+          runningDir: "/work/repo",
+          filePath: "src/app.ts",
+          oldFile: { name: "src/app.ts", contents: "const value = 0;\n" },
+          newFile: { name: "src/app.ts", contents: savedB },
+          worktreeFile: { name: "src/app.ts", contents: savedB },
+          error: null,
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.stale).toBe(true);
+  });
+
+  it("keeps a newer identity single-flight when an older retry timer fires", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    let comparisonIdentity = "cmp-1";
+    const { result, rerender } = renderHook(
+      () =>
+        useGitDiffEditing({
+          client: null,
+          hostId: "host-A",
+          runningDir: "/work/repo",
+          file: FILE,
+          surfaceId: SURFACE_ID,
+          isActive: true,
+          interactionEnabled: true,
+          currentDiff: CURRENT_DIFF,
+          currentComparisonIdentity: comparisonIdentity,
+          resumeDetachedDraft: false,
+        }),
+      { wrapper },
+    );
+
+    await activateEditing(result);
+    expect(state.refetchContents).toHaveBeenCalledTimes(1);
+
+    let failNext = false;
+    const pendingB = createDeferred<GitContentsRefetchSuccess>();
+    let holdB = false;
+    state.refetchContents.mockImplementation(() => {
+      if (failNext) {
+        return Promise.resolve({
+          error: { message: "unreachable" },
+          data: undefined,
+        });
+      }
+      if (holdB) return pendingB.promise;
+      return Promise.resolve(contentsSuccess());
+    });
+
+    vi.useFakeTimers();
+    // Emulate a retry callback already queued while identity supersession
+    // races its cleanup, so the callback's own identity guard is exercised.
+    const clearTimeoutSpy = vi
+      .spyOn(window, "clearTimeout")
+      .mockImplementation(() => undefined);
+    onTestFinished(() => {
+      clearTimeoutSpy.mockRestore();
+    });
+    failNext = true;
+    comparisonIdentity = "cmp-A";
+    act(() => {
+      rerender();
+    });
+    await flushMicrotasks();
+    expect(state.refetchContents).toHaveBeenCalledTimes(2);
+
+    failNext = false;
+    holdB = true;
+    comparisonIdentity = "cmp-B";
+    act(() => {
+      rerender();
+    });
+    await flushMicrotasks();
+    expect(state.refetchContents).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      vi.advanceTimersByTime(DRIFT_RETRY_BASE_DELAY_MS);
+    });
+    expect(state.refetchContents).toHaveBeenCalledTimes(3);
+
+    const resolvedB = contentsSuccess();
+    await act(async () => {
+      pendingB.resolve(resolvedB);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.stale).toBe(false);
   });
 
   it("captures the same seed under Strict Mode's double-invoked render", async () => {

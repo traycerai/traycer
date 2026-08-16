@@ -11,6 +11,7 @@ import {
   createArtifactResponseSchema,
   createChatRequestSchema,
   createChatRequestSchemaV11,
+  createChatRequestSchemaV12,
   createChatResponseSchema,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
@@ -76,6 +77,8 @@ import {
   recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  chatPublicationStateRequestSchema,
+  chatPublicationStateResponseSchema,
   setChatArchivedRequestSchema,
   setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
@@ -383,6 +386,61 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+// v1.2 widens the PRECISE-boundary fork source with the `sourceOwnerUserId`
+// hint v1.1 already gave the latest-checkpoint one (cross-host fork, ticket
+// A1): the target host of a cross-host fork holds no registry facts about the
+// source chat, so the cloud tier's anti-squatting guard has nothing to check
+// the resolved publication's owner against and refuses to seed. A NEW MINOR
+// for the same reason v1.1 was one - `epic.createChat@1.1` is already in
+// released hosts. See `createChatForkSourceAssistantBoundarySchemaV12`'s doc
+// in `unary-schemas.ts`.
+export const epicCreateChatV12 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: createChatRequestSchemaV12,
+  responseSchema: createChatResponseSchema,
+});
+
+// A v1.1 caller has no owner hint to give - the field did not exist on its
+// precise-boundary variant - so the upgrade fills the honest `null`
+// ("the client genuinely does not know"), which the host reads as
+// "no hint" and falls back to its own registry facts exactly as before.
+// The `latest` variant is byte-identical between the two minors and passes
+// through; `null`/`undefined` forkSource means no fork was requested. The
+// response is identical between the two minors.
+export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicCreateChatV11,
+  typeof epicCreateChatV12
+>({
+  from: epicCreateChatV11.schemaVersion,
+  to: epicCreateChatV12.schemaVersion,
+  upgradeRequest: (request) => {
+    const forkSource = request.forkSource;
+    if (forkSource === null || forkSource === undefined) {
+      return { ...request, forkSource };
+    }
+    if (forkSource.boundary === "latest") {
+      return { ...request, forkSource };
+    }
+    // Named fields rather than a spread, for the same reason the v1.0 -> v1.1
+    // upgrade names them: the widened variant's field set is a fact of
+    // `unary-schemas.ts`, and writing it out here keeps this correct if that
+    // file grows a field this bridge should NOT be forwarding blindly.
+    return {
+      ...request,
+      forkSource: {
+        boundary: "assistantMessage" as const,
+        sourceChatId: forkSource.sourceChatId,
+        assistantMessageId: forkSource.assistantMessageId,
+        interviewBlockId: forkSource.interviewBlockId,
+        carriedInterviews: forkSource.carriedInterviews,
+        sourceOwnerUserId: null,
+      },
+    };
+  },
+  upgradeResponse: (response) => response,
+});
+
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -458,6 +516,19 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability - see the registry entry for why a new method
+ * NAME may only ride the optional channel. Old source hosts simply do not
+ * advertise it, the caller gets `E_HOST_UNSUPPORTED` for this call alone, and
+ * the fork dialog treats that as "unknown" rather than as "unpublished".
+ */
+export const epicChatPublicationStateV10 = defineRpcContract({
+  method: "epic.chatPublicationState",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatPublicationStateRequestSchema,
+  responseSchema: chatPublicationStateResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({

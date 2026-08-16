@@ -14,7 +14,10 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -355,6 +358,7 @@ interface SnapshotFrameInput {
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+  readonly heldUpdates?: ReadonlyArray<HeldManagedCommandUpdate>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
 }
 
@@ -399,6 +403,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
       pendingFileEditApprovals: [...input.pendingFileEditApprovals],
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
+      heldUpdates: [...(input.heldUpdates ?? [])],
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
@@ -445,6 +450,7 @@ function emitSnapshotWithWorktree(
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
       worktreeBinding,
       missingWorktreePaths: [],
     },
@@ -3857,6 +3863,7 @@ describe("createChatSessionStore", () => {
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
         managedCommands: [],
+        heldUpdates: [],
       },
     });
     callbacks.onTurnStateChanged({
@@ -4026,6 +4033,7 @@ describe("createChatSessionStore", () => {
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
         managedCommands: [],
+        heldUpdates: [],
       },
     });
 
@@ -6206,6 +6214,159 @@ describe("the chat's managed commands", () => {
     expect(
       harness.handle.store.getState().managedCommands.map((c) => c.id),
     ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+});
+
+describe("the chat's held updates", () => {
+  function held(
+    over: Partial<HeldManagedCommandUpdate>,
+  ): HeldManagedCommandUpdate {
+    return {
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      heldAtMs: 10,
+      ...over,
+    };
+  }
+
+  function seededHarness(
+    heldUpdates: ReadonlyArray<HeldManagedCommandUpdate>,
+  ): Harness {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      heldUpdates,
+    });
+    return harness;
+  }
+
+  it("reads as an empty set before the host has said anything", () => {
+    const harness = createHarness();
+
+    expect(harness.handle.store.getState().heldUpdates).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("takes the set from the snapshot", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the whole set on a heldUpdatesChanged frame - a shrink drops the stale row", () => {
+    const harness = seededHarness([
+      held({ commandId: "cmd-1" }),
+      held({ commandId: "cmd-2" }),
+    ]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-2" })],
+    });
+
+    // The frame is the set, not a delta: `cmd-1` is gone, and it is gone
+    // because the host stopped naming it - no stale row can survive a shrink.
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-2"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another chat", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: "some-other-chat",
+      heldUpdates: [],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another epic", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: "some-other-epic",
+      chatId: CHAT_ID,
+      heldUpdates: [],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  // The chat and epic guards above both pass for a frame from the RIGHT chat
+  // on a stream this store has already replaced, which is the one a retry
+  // produces: the old client is torn down but its in-flight frames still land.
+  // A hold is durable state a human acts on, so a stale set installing rows
+  // here would offer a Deliver for holds the new stream never named - or, on a
+  // stale empty frame, quietly take a live one off screen.
+  it("ignores a held-updates frame from a superseded stream", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+    const staleCallbacks = harness.callbacks();
+
+    harness.handle.store.getState().retry();
+
+    // The empty frame is the sharp one: a retry cancels nothing, so the hold
+    // is still standing, and honouring a stale "nothing is held" would take
+    // the Deliver affordance off screen while the hold outlived the socket.
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-stale" })],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    // ...and the live stream is still heard, so this is a generation guard
+    // rather than a store that stopped listening.
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-live" })],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-live"]);
     harness.handle.dispose();
   });
 });

@@ -148,6 +148,7 @@ import type {
   EpicNodeRef,
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
@@ -872,6 +873,8 @@ function ResourceMonitorHostPickerRow(props: {
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Managing hosts - adding, renaming, updating, removing - is Settings'
         // job, with its own dialogs and failure states; this popover watches
         // processes. So the list ends in one link to where that work already

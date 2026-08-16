@@ -45,9 +45,15 @@ import {
  * host there are no resolved folders to pick), and exists so a surface can key
  * a slot before its host settles.
  *
- * An `owner` slot's `ownerId` already implies one host for life, so its host
+ * MOST `owner` slots' `ownerId` implies one host for life, so their host
  * segment is redundant for isolation - it is carried anyway so the purge can
  * scope by host without asking each slot's owner which host it belongs to.
+ *
+ * The fork-chat scratch slot is the exception, and the reason this is worded as
+ * "most" rather than "every": the fork dialog lets the user retarget another
+ * machine while it is open, so that slot's host is a live choice rather than a
+ * property of its owner, and the segment is its ONLY isolation. Treat a new
+ * scratch slot as this case unless its owner id is minted per host.
  */
 export type WorktreeStagingKey =
   | {
@@ -198,6 +204,13 @@ export function pendingChildTerminalAgentStagingKey(
  * Scratch slot for the fork-chat dialog, which configures a worktree for a chat
  * that does not exist yet (its id is minted on submit). Scoped by the epic the
  * fork lands in for the same cross-epic isolation reason as the launcher above.
+ *
+ * This is the one `owner` slot whose host segment is NOT redundant. The type's
+ * own doc notes that an `ownerId` usually implies one host for life — true of
+ * every other owner slot, and false here: the fork dialog lets the user retarget
+ * another machine while it is open, so this slot's host is a live choice rather
+ * than a property of its owner. The host coordinate is what keeps folders staged
+ * against one machine out of a submit against another.
  */
 export function pendingForkChatStagingKey(
   hostId: string | null,
@@ -210,6 +223,64 @@ export function pendingForkChatStagingKey(
     ownerKind: "chat",
     ownerId: PENDING_FORK_CHAT_OWNER_ID,
   };
+}
+
+/**
+ * Every fork-chat scratch slot in this epic, whatever host each was staged
+ * against — what a caller needs to start (or finish) a fork dialog clean
+ * without knowing which hosts the last one visited.
+ *
+ * Because the dialog can retarget, "clear the fork scratch state" is not a
+ * single key a caller can name: an opener that cleared only its own tab's host
+ * would leave a previous dialog's other-machine folders staged for the next
+ * open.
+ *
+ * `extraSerializedKeyIds` folds in the key space of a SIBLING store keyed by the
+ * same `WorktreeStagingKey` (the seeded-workspace snapshot store), so a slot
+ * holding a snapshot but no staged intent is still found. Key serialization
+ * stays here rather than leaking to those callers.
+ */
+export function forkChatStagingKeysForEpic(
+  epicId: string,
+  extraSerializedKeyIds: readonly string[],
+): readonly WorktreeStagingKey[] {
+  const state = useWorktreeIntentStagingStore.getState();
+  const serializedKeys = new Set([
+    ...Object.keys(state.intentByKey),
+    ...Object.keys(state.suspendedWorkspacePathsByKey),
+    ...extraSerializedKeyIds,
+  ]);
+  const hostIds = new Set<string | null>();
+  for (const serializedKey of serializedKeys) {
+    // Parsed against `owner:<host>:<epic>:<ownerKind>:<ownerId>` - the same
+    // segment layout the persistability filter and the purge count from, so a
+    // new segment moves all three together.
+    const parts = serializedKey.split(":");
+    if (parts.length !== 5) continue;
+    if (parts[0] !== "owner" || parts[2] !== epicId) continue;
+    if (parts[3] !== "chat" || parts[4] !== PENDING_FORK_CHAT_OWNER_ID)
+      continue;
+    const hostSegment = parts[1] ?? "";
+    if (hostSegment.length === 0) {
+      hostIds.add(null);
+      continue;
+    }
+    // The only decode in this file. Everywhere else compares in ENCODED form to
+    // stay safe against a malformed escape in a hand-edited payload; here the
+    // hostId has to come back out to rebuild a typed key. These slots are
+    // transient and never persisted, so the only writer is
+    // `worktreeStagingKeyString` itself and the round trip is lossless - but a
+    // malformed segment is skipped rather than thrown, since a caller clearing
+    // scratch state must not be taken down by one unparseable key.
+    try {
+      hostIds.add(decodeURIComponent(hostSegment));
+    } catch {
+      continue;
+    }
+  }
+  return [...hostIds].map((hostId) =>
+    pendingForkChatStagingKey(hostId, epicId),
+  );
 }
 
 export function pendingForkTerminalAgentStagingKey(

@@ -12,11 +12,10 @@ import {
   buildForkWorkspaceSeed,
 } from "@/lib/worktree/fork-workspace-seed";
 import {
-  pendingForkChatStagingKey,
   readStagedWorktreeIntent,
-  useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
@@ -286,16 +285,21 @@ export function useChatMessageActions(
       const workspaceSeed =
         mode === "ab-worktree"
           ? buildAbForkWorkspaceSeed(seedInput)
-          : buildForkWorkspaceSeed(seedInput);
+          : buildForkWorkspaceSeed({
+              ...seedInput,
+              hostId: tabHostId,
+            });
       // Seed the fork dialog's picker from the source chat's currently visible
       // workspace (its binding overlaid with any unsent staged choices) so it
       // opens exactly where the source chat's composer is. The dialog applies
       // this through the shared seedIntent -> seedEntryForFolder path the
       // terminal-agent launcher also uses; only the source owner differs (here,
       // the chat being forked).
-      useWorktreeIntentStagingStore
-        .getState()
-        .clear(pendingForkChatStagingKey(tabHostId, currentEpicId));
+      // Every host's slot, not just this tab's: the dialog can retarget while
+      // it is open, so a previous fork that moved to another machine before
+      // closing would otherwise leave that machine's folders staged for the
+      // next open.
+      clearChatForkWorkspacesForEpic(currentEpicId);
       setForkTarget({
         sourceChatId: node.id,
         sourceChatTitle: chatTitle ?? node.name,

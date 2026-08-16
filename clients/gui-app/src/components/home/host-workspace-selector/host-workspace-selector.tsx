@@ -116,7 +116,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import type { HostWorkspaceControlsHostScope } from "./host-workspace-controls-scope";
+import {
+  hostWorkspaceControlsScopeHostId,
+  hostWorkspaceControlsScopeRefusals,
+  type HostWorkspaceControlsHostScope,
+} from "./host-workspace-controls-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { CloneOnHostSwitchDialog } from "./clone-on-host-switch-dialog";
@@ -362,21 +366,18 @@ export function ActiveHostWorkspaceControls(
   const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
   const reactiveActiveHostId = useReactiveActiveHostId();
-  const activeHostId =
-    props.hostScope.kind === "fixed"
-      ? props.hostScope.hostId
-      : reactiveActiveHostId;
+  const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
+  const activeHostId = scopeHostId ?? reactiveActiveHostId;
   const activeEntry =
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
   const hostLabel =
-    activeEntry?.label ??
-    (props.hostScope.kind === "fixed" ? "Unavailable" : "Local");
+    activeEntry?.label ?? (scopeHostId === null ? "Local" : "Unavailable");
   const binding = useHostBinding();
   const defaultHostClient = useHostClient();
   const activeHostClient =
-    props.hostScope.kind === "fixed"
-      ? props.hostScope.hostClient
-      : defaultHostClient;
+    props.hostScope.kind === "active"
+      ? defaultHostClient
+      : props.hostScope.hostClient;
   // The picker's rows come from the merged host list, not from the directory
   // this component reads for the chip label: a host the account owns but this
   // client cannot dial belongs in the list (named, with its reason, inert),
@@ -425,9 +426,24 @@ export function ActiveHostWorkspaceControls(
     activeHostClient,
     activeHostId,
   );
+  const refusalByHostId = hostWorkspaceControlsScopeRefusals(props.hostScope);
+  // A surface-level blocker: every row but the named one goes inert, and none
+  // of them says why, because the reason is not about them. The surface owns
+  // that sentence.
+  const unselectableExceptHostId =
+    props.hostScope.kind === "selected"
+      ? props.hostScope.unselectableExceptHostId
+      : null;
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
+    // A `selected` scope owns the choice itself. The app-wide rebind below is
+    // NOT a fallback for it: routing a dialog-local target through the
+    // directory is the bug this scope exists to remove.
+    if (props.hostScope.kind === "selected") {
+      props.hostScope.onSelect(hostId);
+      return;
+    }
     if (binding === null) return;
     binding.directory.selectById(hostId);
   };
@@ -443,10 +459,14 @@ export function ActiveHostWorkspaceControls(
           hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
+          refusalByHostId={refusalByHostId}
+          inertExceptHostId={unselectableExceptHostId}
           // A FIXED scope cannot change hosts — `handleSelectHost` returns
           // early there. Saying so on the row instead of swallowing the click
           // is the same rule the section already applies to a busy submission:
-          // a row that accepts a click and does nothing reads as broken.
+          // a row that accepts a click and does nothing reads as broken. A
+          // SELECTED scope is the opposite case: the rows are live, they just
+          // write to the caller's state instead of the directory.
           disabled={disabled || props.hostScope.kind === "fixed"}
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}

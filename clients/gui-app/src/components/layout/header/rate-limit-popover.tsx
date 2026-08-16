@@ -114,6 +114,7 @@ import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-host
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { cn } from "@/lib/utils";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -914,6 +915,8 @@ function RateLimitHostPickerRow({
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Managing hosts — adding, renaming, updating, removing — is Settings'
         // job, with its own dialogs and failure states; this popover reports
         // usage. So the list ends in the same gear the model picker offers for
