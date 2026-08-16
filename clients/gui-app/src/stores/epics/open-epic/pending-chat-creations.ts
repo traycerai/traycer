@@ -46,6 +46,16 @@ export interface PendingChatCreation {
   readonly parentChatId: string | null;
   /** The submitted title, normally `""` ("no title yet"). */
   readonly title: string;
+  /**
+   * The signed-in user the create was authorized as, captured by the caller when
+   * the request left - NOT whoever is signed in when it is retained.
+   *
+   * Supplied rather than read here because only the caller knows that moment.
+   * The registry keys every retirement decision by owner, so a row filed under
+   * the wrong identity is one the real record can never retire; `null` means the
+   * caller had no signed-in user, and the registration is dropped.
+   */
+  readonly ownerUserId: string | null;
 }
 
 /** A pending creation as retained: the caller's facts plus the store's stamp. */

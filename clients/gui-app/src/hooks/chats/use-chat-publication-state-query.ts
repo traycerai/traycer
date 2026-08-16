@@ -90,6 +90,13 @@ export function useChatPublicationState(args: {
       // within a publish sweep, and reopening the dialog re-reads. A long
       // window would keep telling the user to retry after it had resolved.
       staleTime: 5_000,
+      // The waiting answers re-ask on their own, via the CONDITION LANE this
+      // method carries in `host-method-policy-table.ts` — cadence lives there,
+      // never here (`refetchInterval` is `Omit`ted from these options precisely
+      // so it cannot be set per call site). `staleTime` alone only marks the
+      // cache stale and issues nothing for a mounted, idle observer, so without
+      // that lane an open dialog would sit forever on copy that promises the
+      // wait resolves itself.
     },
   });
   // Not asking, asking and failing, and asking again are ALL "nothing is known"

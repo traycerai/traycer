@@ -775,6 +775,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.allIds.slice().sort()).toEqual([
       "existing",
@@ -806,6 +807,7 @@ describe("pending chat creations", () => {
       hostId: "submit-host",
       parentChatId: "parent-x",
       title: "",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.byId["just-created"].hostId).toBe(
       "submit-host",
@@ -841,6 +843,7 @@ describe("pending chat creations", () => {
       hostId: "submit-host",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
 
     store.getState().applyChatRecordDelta({
@@ -877,6 +880,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
 
     store.getState().applyChatRecordDelta({
@@ -913,6 +917,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.allIds).toEqual(["doomed"]);
 
@@ -938,6 +943,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.allIds).toEqual(["doomed"]);
 
@@ -955,6 +961,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "retry",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.allIds).toEqual([]);
     session.handle.dispose();
@@ -972,6 +979,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     expect(store.getState().chats.allIds).toEqual(["mine"]);
 
@@ -1002,6 +1010,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     const theirs = record({
       chatId: "c",
@@ -1063,6 +1072,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: "user-a",
     });
     // Retained, but SHADOWED: while the real row is there it wins every field.
     expect(store.getState().chats.allIds).toEqual(["c"]);
@@ -1082,13 +1092,47 @@ describe("pending chat creations", () => {
     session.handle.dispose();
   });
 
-  it("refuses to retain a creation while no user is signed in", () => {
+  it("files the stand-in under the CAPTURED owner, not whoever is signed in when it lands", () => {
+    // The create was authorized as user-a; the profile changed while it was in
+    // flight, and the host's answer arrives with user-b signed in. Reading the
+    // profile here would file user-a's chat under user-b - visible to a user who
+    // never made it, and unretirable by user-a's real record, which arrives
+    // under its actual owner and so never matches the row.
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+
+    signedInAs("user-b");
+    store.getState().beginPendingChatCreation({
+      chatId: "created-as-a",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+
+    // Invisible to the user now signed in...
+    expect(store.getState().chats.allIds).toEqual([]);
+
+    // ...and still user-a's when they come back, where its own record retires it.
+    signedInAs("user-a");
+    expect(store.getState().chats.allIds).toEqual(["created-as-a"]);
+    store.getState().applyChatRecords([record({ chatId: "created-as-a" })]);
+    expect(store.getState().chats.byId["created-as-a"].userId).toBe("user-a");
+    session.handle.dispose();
+  });
+
+  it("refuses to retain a creation the caller could not attribute", () => {
     // A stand-in has to say whose it is: the registry keys on
     // `(ownerUserId, chatId)`, and an unattributed row could be retired by a
     // stranger's same-id record or rendered to whoever signs in next. Refusing
     // degrades to the behavior that existed before this registry - the chat
     // surfaces when its own record arrives - which is why every test above
-    // signs in first.
+    // names an owner.
+    //
+    // `null` is how the CALLER reports "nobody was signed in when the request
+    // left". The store no longer reads the profile itself, so this is the whole
+    // of the unattributed case rather than a stand-in for an empty auth store.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
 
@@ -1097,6 +1141,7 @@ describe("pending chat creations", () => {
       hostId: "host-1",
       parentChatId: null,
       title: "",
+      ownerUserId: null,
     });
 
     expect(store.getState().chats.allIds).toEqual([]);

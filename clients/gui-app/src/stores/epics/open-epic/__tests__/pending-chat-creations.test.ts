@@ -25,6 +25,7 @@ function pendingCreation(
     hostId: "host-1",
     parentChatId: null,
     title: "",
+    ownerUserId: "user-1",
     ...overrides,
   };
 }

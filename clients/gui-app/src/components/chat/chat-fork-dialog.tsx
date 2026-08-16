@@ -32,6 +32,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -342,29 +343,38 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // it names: one bounded read of a released-floor method, re-issued when the
   // host's own incarnation changes, purely so the transport records a fresh
   // manifest as a side effect. The response is deliberately unused.
-  const selectedDirectoryEntry = useMemo(
+  // Every candidate whose verdict is not already `supported` — NOT just the
+  // selected one.
+  //
+  // A refused row is `aria-disabled` (`isHostOptionSelectable` requires an
+  // `available` surface state), so it can never BECOME `selectedHostId`. A probe
+  // gated on the selected host's refusal is therefore unreachable for the row it
+  // is about: it could only ever re-ask about the source host, while the target
+  // wearing the "needs update" word is precisely the one it never touches.
+  // Updating that host in place would leave its verdict stale indefinitely,
+  // because the reads that would re-handshake are the ones its own refusal
+  // turned off — the deadlock `use-host-capability-probe.ts` documents, arrived
+  // at from the other side.
+  //
+  // `unknown` is included as well as `refused`, and that is what keeps a
+  // cached-`supported` host honest too: a target rolled back or reinstalled at
+  // an older build under the same `hostId` changes the version the directory
+  // reports, which is part of each probe's incarnation, so the re-handshake
+  // happens on the incarnation change rather than waiting for `epic.createChat`
+  // itself to discover the downgrade.
+  //
+  // The source host is exempt for the same reason it is exempt from
+  // `hostRefusals`: a same-host fork needs no V12 at all.
+  const capabilityProbeEntries = useMemo(
     () =>
-      (directoryList.data ?? []).find(
-        (entry) => entry.hostId === selectedHostId,
-      ) ?? null,
-    [directoryList.data, selectedHostId],
+      (directoryList.data ?? []).filter(
+        (entry) =>
+          entry.hostId !== tabHostId &&
+          chatForkTargetSupport(createChatVersions.get(entry.hostId) ?? null)
+            .kind !== "supported",
+      ),
+    [createChatVersions, directoryList.data, tabHostId],
   );
-  const capabilityProbeIncarnation = useMemo(
-    () => [
-      selectedHostId,
-      selectedDirectoryEntry?.version ?? null,
-      selectedDirectoryEntry?.transportDialability ?? null,
-    ],
-    [selectedDirectoryEntry, selectedHostId],
-  );
-  useHostCapabilityProbe({
-    client: selectedHostClient,
-    // Gated on the dialog being OPEN as well as refused: `selectedHostId`
-    // survives a close, so probing on the refusal alone would leave a host read
-    // mounted per chat tile for a dialog nobody is looking at.
-    stale: open && selectedHostSupport.kind === "refused",
-    incarnation: capabilityProbeIncarnation,
-  });
 
   // A fork dialog has no send-time reauth gate of its own (unlike the main
   // composer), so a source chat's profileId that was tombstoned since the
@@ -384,9 +394,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // the target's bucket, never the source tab's.
     { hostClient: selectedHostClient, hostId: selectedHostId, tuiOnly: false },
   );
+  // Catalog-CONFIRMED, not merely non-empty. The toolbar store retains the
+  // previous host's slug across a retarget while the new target's harness and
+  // model queries are still loading, so a slug-length check would leave Fork
+  // enabled long enough to submit a model the selected host may not provide.
+  // `selectionCatalogConfirmed` is false until the catalog for THIS
+  // `catalog.hostId` covers the resolved slug, which is the question the gate
+  // is actually asking.
   const modelResolved = useStore(
     toolbarStore,
-    (s) => s.selection.modelSlug.length > 0,
+    (s) => s.selectionCatalogConfirmed,
   );
   const modelPickerKey =
     target === null
@@ -720,6 +737,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           }
         }}
       >
+        {/*
+          Mounted INSIDE `DialogContent` so the probes live exactly as long as
+          the dialog is on screen. `selectedHostId` and this body both survive a
+          close, so hanging the reads off either would leave one mounted per chat
+          tile for a dialog nobody is looking at.
+        */}
+        {capabilityProbeEntries.map((entry) => (
+          <ChatForkHostCapabilityProbe key={entry.hostId} entry={entry} />
+        ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
@@ -759,7 +785,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </div>
           </section>
           <ActiveHostWorkspaceControls
-            disabled={false}
+            // Locked while the create is in flight, like every other control in
+            // this dialog. The host picker is LIVE here (`kind: "selected"`), so
+            // an unlocked retarget would move `selectedHostId` out from under a
+            // request already dispatched to the previous client - and the
+            // refusal notice below, which asks whether the retained failure
+            // describes the target currently on screen, would then answer "no"
+            // and render nothing at all. The user would see the fork fail
+            // silently.
+            disabled={createChat.isPending}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={workspaceSeed}
@@ -919,6 +953,37 @@ function displayChatTitle(title: string): string {
 // pre-selection; verbatim (plain / cross-question) forks need no gate, and
 // neither does a cross-host fork, which has no seed to override in the first
 // place (see `requiresStagedPreselection`).
+/**
+ * One mounted capability probe for one host the dialog cannot select.
+ *
+ * A component rather than a loop because `useHostClientForHostId` and
+ * `useHostCapabilityProbe` are hooks: mounting one of these per candidate is the
+ * only way to hold N clients at once, and it makes the candidate set itself the
+ * gate — a host that becomes `supported` stops being rendered, which unmounts
+ * its read. `useHostQueries` is not an alternative here; it batches N requests
+ * to ONE client, and this needs one request to each of N clients.
+ *
+ * Renders nothing. The handshake the read provokes is the entire point, exactly
+ * as `use-host-capability-probe.ts` describes — the response is unused.
+ */
+function ChatForkHostCapabilityProbe(props: {
+  readonly entry: HostDirectoryEntry;
+}): null {
+  const client = useHostClientForHostId(props.entry.hostId);
+  useHostCapabilityProbe({
+    client,
+    // Unconditional: this component is only rendered for a host whose verdict is
+    // not `supported`, so being mounted IS the staleness condition.
+    stale: true,
+    incarnation: [
+      props.entry.hostId,
+      props.entry.version,
+      props.entry.transportDialability,
+    ],
+  });
+  return null;
+}
+
 function canSubmitFork(input: {
   readonly target: ChatForkDialogTarget | null;
   readonly trimmedTitle: string;

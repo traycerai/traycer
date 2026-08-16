@@ -39,6 +39,7 @@ import {
   clearPendingChatCreation,
 } from "@/lib/chats/pending-chat-creations";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Variables for `useEpicCreateChat.mutate`/`mutateAsync`.
@@ -59,6 +60,20 @@ import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persiste
 export type CreateChatMutationInput = CreateChatRequestV12;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
+  /**
+   * The signed-in user the create was AUTHORIZED as, captured at mutate time.
+   *
+   * The retained stand-in is identity-bearing - `chatId` is not globally unique,
+   * so the registry keys every retirement decision by owner - and the request
+   * was made under whoever was signed in when it left. Reading the profile back
+   * in `onSuccess` would stamp a chat created by user A onto user B whenever the
+   * profile changed while the create was in flight: the store survives and
+   * reprojects across a user switch, so B would see and could navigate to A's
+   * chat, and A's real record could never retire a row filed under B.
+   *
+   * Same capture-at-mutate rule as `hostId`, for the same reason.
+   */
+  readonly ownerUserId: string | null;
 }
 
 interface DeleteChatMutationContext {
@@ -131,9 +146,12 @@ export function useEpicCreateChat(): UseMutationResult<
       return params;
     },
     options: {
-      onMutate: () => ({ hostId: activeHostId }),
+      onMutate: () => ({
+        hostId: activeHostId,
+        ownerUserId: currentProfileUserId(),
+      }),
       onSuccess: (data, params, ctx) => {
-        retainCreatedChatUntilProjected(data, params);
+        retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
         // The created chat lands in the host's chat DATABASE and nowhere the
         // renderer already listens (chat-sync-v2 ticket 19 stopped the doc
@@ -260,9 +278,12 @@ export function useEpicCreateChatForHostClient(
     },
     options: {
       mutationKey: epicMutationKeys.createChat(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => ({
+        hostId: client?.getActiveHostId() ?? null,
+        ownerUserId: currentProfileUserId(),
+      }),
       onSuccess: (data, params, ctx) => {
-        retainCreatedChatUntilProjected(data, params);
+        retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
         // Same reason as the app-wide hook above, and NOT optional here: this
         // is the variant the in-Epic new-conversation modal and the fork
@@ -303,6 +324,12 @@ export function useEpicCreateChatForHostClient(
  * unmounts - and every one of these surfaces closes itself the moment it
  * submits.
  *
+ * The OWNER, by contrast, is captured at mutate time and handed in - see
+ * {@link CreateChatMutationContext.ownerUserId}. Only the row's TIMING belongs
+ * on success; the identity it is filed under belongs to the request, and reading
+ * it back here would attribute the chat to whoever happens to be signed in when
+ * the answer lands.
+ *
  * On SUCCESS, deliberately, not at mutate time: until the host answers, the
  * chat exists nowhere, and a row for it would advance the initial-chat
  * handoff's projection machine (and disarm its orphan deadline) for a chat that
@@ -318,12 +345,14 @@ export function useEpicCreateChatForHostClient(
 function retainCreatedChatUntilProjected(
   response: CreateChatResponse,
   request: CreateChatMutationInput,
+  ownerUserId: string | null,
 ): void {
   beginPendingChatCreation(request.epicId, {
     chatId: response.chatId,
     hostId: request.hostId,
     parentChatId: request.parentId,
     title: request.title,
+    ownerUserId,
   });
 }
 
@@ -335,6 +364,18 @@ function retainCreatedChatUntilProjected(
  * failure, including the ones this hook deliberately does not toast (the clone
  * flow's recoverable fork refusals, which retry under a fresh chat id).
  */
+/**
+ * The signed-in user, read at the moment of call.
+ *
+ * The same source the open-epic store reads for its own projection identity, so
+ * a captured value and a store-side read can never disagree about who "current"
+ * means - they only ever disagree about WHEN, which is the entire point of
+ * capturing it.
+ */
+function currentProfileUserId(): string | null {
+  return useAuthStore.getState().profile?.userId ?? null;
+}
+
 function releaseCreatedChat(request: CreateChatMutationInput): void {
   clearPendingChatCreation(request.epicId, request.chatId);
 }
@@ -657,6 +698,18 @@ export function useEpicDeleteChat(): UseMutationResult<
           epicId: variables.epicId,
           chatId: variables.chatId,
         });
+        // A chat deleted before any real record retired its stand-in would
+        // otherwise stay on screen forever. Absence is precisely what
+        // `applyChatRecords` PRESERVES a pending creation through - that is the
+        // disappearance guard working as designed - so the refetch below cannot
+        // clear it: the correct snapshot omits the chat, and omission is the one
+        // signal the registry is built to ignore. Only an explicit retirement
+        // ends it, and a successful delete is exactly that.
+        //
+        // Most reproducible where no record was ever going to arrive on its own:
+        // a host without the optional `host.chatRecords.subscribe` stream, or a
+        // cross-host target whose stream this window does not mount.
+        clearPendingChatCreation(variables.epicId, variables.chatId);
         // The registry tombstones the chat, and its absence from the record
         // list is what removes the row here - a doc-side removal no longer
         // happens for a chat whose entry the sweep already took.

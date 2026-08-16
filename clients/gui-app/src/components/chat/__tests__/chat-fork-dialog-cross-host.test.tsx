@@ -89,7 +89,15 @@ const dialogMocks = vi.hoisted(() => ({
     dialogMocks.createError = null;
     dialogMocks.createVariables = null;
   }),
-  capabilityProbeEnabled: false,
+  /**
+   * Which hosts have a live capability probe this render.
+   *
+   * A set rather than a single boolean, because the dialog mounts one probe per
+   * non-supported candidate: "is SOME probe on" cannot distinguish the row that
+   * healed from the ones still refused, and would read `true` for the wrong
+   * reason after an upgrade.
+   */
+  capabilityProbeHostIds: new Set<string>(),
   publicationQuery: { data: undefined as PublicationStateResponse | undefined },
   publicationQueryEnabled: false,
   publicationQueryIsError: false,
@@ -167,10 +175,18 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly method?: string;
+    readonly client?: unknown;
     readonly options?: { readonly enabled?: boolean } | null;
   }) => {
     if (args.method === "host.status") {
-      dialogMocks.capabilityProbeEnabled = args.options?.enabled ?? false;
+      const enabled = args.options?.enabled ?? false;
+      // Reverse the client back to its host so the set says WHICH rows are
+      // being re-asked about, not merely that something is.
+      for (const [hostId, client] of dialogMocks.clientsByHostId) {
+        if (client !== args.client) continue;
+        if (enabled) dialogMocks.capabilityProbeHostIds.add(hostId);
+        else dialogMocks.capabilityProbeHostIds.delete(hostId);
+      }
       return { data: undefined };
     }
     if (args.method === "providers.list") {
@@ -604,7 +620,7 @@ describe("ChatForkDialog cross-host routing", () => {
       dialogMocks.createError = null;
       dialogMocks.createVariables = null;
     });
-    dialogMocks.capabilityProbeEnabled = false;
+    dialogMocks.capabilityProbeHostIds.clear();
     dialogMocks.publicationQuery = { data: undefined };
     dialogMocks.publicationQueryEnabled = false;
     dialogMocks.publicationQueryIsError = false;
@@ -864,10 +880,24 @@ describe("ChatForkDialog cross-host routing", () => {
     });
   });
 
-  it("a 1.1 refusal flips to selectable after the host is recorded at 1.2", () => {
+  it("a 1.1 refusal flips to selectable after the host is recorded at 1.2, with no interaction", () => {
     renderDialog(forkTarget({}), ignoreOpenChange);
     fillTitle();
-    expect(dialogMocks.capabilityProbeEnabled).toBe(false);
+
+    // Live from the moment the dialog opens, against a row nobody selected.
+    //
+    // This is the whole fix: a refused row is `aria-disabled`, so it can NEVER
+    // become `selectedHostId` - a probe gated on the selected host's refusal
+    // could only ever re-ask about the source host, and the target wearing the
+    // "needs update" word would keep it forever, because the reads that would
+    // re-handshake are the ones its own refusal turned off. The previous
+    // spelling of this test had to reach past the UI and call `onSelect`
+    // directly to see the probe at all, which was the defect stated as a
+    // workaround.
+    expect(dialogMocks.capabilityProbeHostIds.has(OLD_HOST_ID)).toBe(true);
+    // The 1.2 host is not re-asked about - only the ones with something to
+    // learn - so this is a bounded refresh rather than a read per row.
+    expect(dialogMocks.capabilityProbeHostIds.has(OTHER_HOST_ID)).toBe(false);
 
     const oldRow = screen.getByTestId(`fork-host-${OLD_HOST_ID}`);
     expect(oldRow instanceof HTMLButtonElement && oldRow.disabled).toBe(true);
@@ -875,19 +905,11 @@ describe("ChatForkDialog cross-host routing", () => {
       screen.getByTestId(`fork-host-refusal-${OLD_HOST_ID}`).textContent,
     ).toContain("needs update");
 
-    // A disabled row does not receive the click. Select through the same
-    // `onSelect` the row would have called, so we can observe the refused
-    // selected-host state (Fork disabled, probe on).
-    const scope = dialogMocks.lastWorkspace?.hostScope;
-    expect(scope?.kind).toBe("selected");
-    if (scope?.kind === "selected") {
-      act(() => {
-        scope.onSelect(OLD_HOST_ID);
-      });
-    }
-    expect(forkButton().disabled).toBe(true);
-    expect(dialogMocks.capabilityProbeEnabled).toBe(true);
-
+    // Cleared so the next render's probes repopulate it, and the assertions
+    // below describe what is live AFTER the upgrade rather than ever having
+    // been live. Unmounting cannot retract an entry on its own: a probe that
+    // stops rendering simply stops calling the mocked hook.
+    dialogMocks.capabilityProbeHostIds.clear();
     act(() => {
       recordNegotiatedHostManifest(OLD_HOST_ID, {
         "epic.createChat": { major: 1, minor: 2 },
@@ -900,7 +922,11 @@ describe("ChatForkDialog cross-host routing", () => {
     );
     expect(screen.queryByTestId(`fork-host-refusal-${OLD_HOST_ID}`)).toBeNull();
     expect(forkButton().disabled).toBe(false);
-    expect(dialogMocks.capabilityProbeEnabled).toBe(false);
+    // The healed row stops being re-asked about; the still-refused one does not.
+    // A single "is any probe live" flag could not tell these apart, and would
+    // read as `true` here for the wrong reason.
+    expect(dialogMocks.capabilityProbeHostIds.has(OLD_HOST_ID)).toBe(false);
+    expect(dialogMocks.capabilityProbeHostIds.has(ABSENT_HOST_ID)).toBe(true);
   });
 
   it("keeps the dialog open on E_FORK_BOUNDARY_NOT_PUBLISHED and scopes the notice to that host", () => {

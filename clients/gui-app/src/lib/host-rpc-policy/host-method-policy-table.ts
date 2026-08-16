@@ -289,6 +289,20 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
  * genuinely absent, and the first ok answer revives the region and ends the
  * lane.
  */
+/**
+ * A fork boundary waiting on the publisher: the chat has not been backed up
+ * yet, or the chosen turn is not covered by the last receipt.
+ *
+ * Backs off because the thing being waited on is a publish sweep rather than a
+ * transport fault - it lands when it lands, and the dialog is a foreground
+ * surface someone is looking at, so the first few asks are the ones worth
+ * making promptly.
+ */
+export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
+  id: "epic-chat-publication-state.waiting",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
 export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   id: "host-update-check.cli-recovery",
   initialDelayMs: 5 * SECOND_MS,
@@ -775,7 +789,28 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.chatPublicationState": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
-    poll: null,
+    // Polled only while the answer is one the FORK DIALOG'S COPY promises will
+    // resolve on its own - "It backs up automatically - try again shortly" and
+    // "Still syncing this turn - retry shortly". `staleTime` alone only marks
+    // the cache stale and issues nothing for a mounted, idle observer, so an
+    // open dialog sitting on either answer would wait forever on a sentence
+    // that told the user waiting was enough.
+    //
+    // `false` for a covered chat: that is terminal for this boundary, and a
+    // host too old to answer at all never gets here (the read is gated on
+    // `useHostSupportsMethod`).
+    poll: defineConditionPolicy("epic.chatPublicationState", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (!data.published) return CHAT_PUBLICATION_WAIT_POLL_LANE;
+        return data.boundaryCovered === false
+          ? CHAT_PUBLICATION_WAIT_POLL_LANE
+          : false;
+      },
+      initialErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      staleDataErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
   },
   // Archiving a chat or terminal-agent record persists its archived flag
   // (optional host capability).

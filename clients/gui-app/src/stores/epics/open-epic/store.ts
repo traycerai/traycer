@@ -3044,7 +3044,14 @@ export function createOpenEpicStore(
             // stranger's same-id row, or rendered to whoever signs in next. The
             // chat still surfaces when its own record arrives - i.e. exactly the
             // behavior that existed before this registry.
-            const ownerUserId = getCurrentChatProjectionUserId();
+            //
+            // Taken from the CALLER, who captured it when the request left,
+            // rather than read live here. This runs when the host answers, and a
+            // profile change while the create was in flight would otherwise file
+            // a chat authorized as user A under user B - visible to B, and
+            // unretirable by A's real record when it arrives under its actual
+            // owner. See `CreateChatMutationContext.ownerUserId`.
+            const ownerUserId = pending.ownerUserId;
             if (ownerUserId === null) return;
             // NOT gated on whether a served row for this chat is already held.
             // It can be - the owning host pushes its record the moment it

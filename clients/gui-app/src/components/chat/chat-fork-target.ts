@@ -5,11 +5,18 @@ import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-m
  * the `epic.createChat` version it negotiated.
  *
  * A cross-host fork rides `sourceOwnerUserId` on the precise-boundary
- * `forkSource` arm, added in v1.2. A same-MAJOR downgrade Zod-STRIPS an unknown
- * field silently, so against a v1.1 host the request succeeds with the hint
- * gone and the cloud tier quietly refuses to seed the transcript - a fork that
- * looks fine and lost its history. That silence is why this is gated up front
- * rather than left to the host's refusal.
+ * `forkSource` arm, added in v1.2 (v1.1 carries the field on the `"latest"` arm
+ * only). A same-MAJOR downgrade Zod-STRIPS an unknown field silently, so against
+ * a v1.1 host the request arrives with the hint gone.
+ *
+ * What that host then does is LOUD, not silent: `buildForkSeed` walls every
+ * precise-boundary fork on `storageAPI.hasChat(sourceChatId)` before it reaches
+ * any tier, and a cross-host target does not have the source chat - so it throws
+ * `E_FORK_CHECKPOINT_UNAVAILABLE` and the user sees an error. This gate exists
+ * to replace that error with a legible up-front refusal on the row itself, NOT
+ * to prevent a silently-historyless fork. Getting that backwards is what makes
+ * the `unknown` verdict below look like a hole; it is not one, and the variant's
+ * own note explains why being permissive there is right.
  */
 export type ChatForkTargetSupport =
   | { readonly kind: "supported" }
