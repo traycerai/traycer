@@ -78,6 +78,9 @@ describe("managed-command output tile schema", () => {
       hostId: HOST,
       monitoring: true,
       description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: "/work/repo",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
       status: { state: "running", pid: 4410, startedAtMs: 1 },
       name: "Shell · deploy watcher",
     });

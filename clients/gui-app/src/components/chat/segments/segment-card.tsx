@@ -33,6 +33,20 @@ const TONE_CLASS: Record<SegmentCardProps["tone"], string> = {
 };
 
 /**
+ * The cell a `headerAction` sits in: the header row is `items-stretch` (so
+ * the whole header stays one click target), so a bare icon button dropped in
+ * as the action rides its top edge. This centres it. No divider - the button
+ * reads as part of the same card, and a rule there only adds noise.
+ */
+export function SegmentCardHeaderActionCell(props: {
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="flex shrink-0 items-center px-1.5">{props.children}</div>
+  );
+}
+
+/**
  * Shared segment shell - chip→card chrome with a collapsible body. Header is
  * always visible; body slides in/out via Radix Collapsible. Does not render
  * its own toggle button - the entire header is the click target.

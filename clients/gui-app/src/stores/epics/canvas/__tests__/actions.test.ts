@@ -52,6 +52,7 @@ import {
   rootGroup,
   rootPane,
 } from "./canvas-test-fixtures";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 
 /** Permanent (pinned) open - `openTile` with `preview: false`. */
 function openPinned(
@@ -1071,6 +1072,34 @@ describe("instanceId / content-id decoupling", () => {
     expect(pane.tabInstanceIds).toHaveLength(1);
     expect(pane.tabInstanceIds[0]).toBe("inst-1");
     expect(pane.activeTabId).toBe("inst-1");
+  });
+
+  it("keeps one tab per host for the same host-minted content id", () => {
+    // Host-minted ids (a chat, a shell) are unique per host, not globally: a
+    // cross-host clone carries the source's ids verbatim. Dedup on the id
+    // alone handed the second host back a tab bound to the FIRST - a window
+    // onto a machine that does not own that content and cannot stream it.
+    const onHostA = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: TEST_HOST_ID,
+    });
+    const onHostB = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: "other-host",
+    });
+
+    let state = openPinned(createEmptyCanvas(), onHostA);
+    state = openPinned(state, onHostB);
+
+    expect(rootPane(state).tabInstanceIds).toEqual([
+      onHostA.instanceId,
+      onHostB.instanceId,
+    ]);
+
+    // ...while re-opening a host's own window still focuses the tab it has.
+    const reopened = openPinned(state, onHostA);
+    expect(rootPane(reopened).tabInstanceIds).toHaveLength(2);
+    expect(rootPane(reopened).activeTabId).toBe(onHostA.instanceId);
   });
 
   it("setActiveTab resolves by instanceId; content id is a no-op", () => {

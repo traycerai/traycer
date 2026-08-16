@@ -190,7 +190,6 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
-import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -2138,35 +2137,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // pinned strip. Per-folder Environment config lives inside the selected
   // Workspace panel.
   //
-  // The Shells menu rides the leading cell rather than becoming a third grid
-  // column: the usage chip's pinned strip spans the row via `col-span-full`,
-  // which only works while it is a direct child of `ComposerWorkspaceRow`'s
-  // two-column grid. `justify-between` parks the menu at that cell's trailing
-  // edge, so it reads as the chip's left-hand neighbour, and the selector -
-  // the only shrinkable thing here - gives up width first.
+  // No Shells menu here any more (product decision, 2026-08-15): a shell's
+  // own start card in the transcript carries its live status and the door to
+  // its output, the Background strip lists what is running, and the output
+  // window is where a shell is stopped, started or deleted. A second index
+  // over the same shells crowded the composer without adding a capability.
   const workspaceControls = useMemo(
     () => (
       <>
-        <div className="flex min-w-0 items-center justify-between gap-2 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           {hostWorkspaceSelector}
-          <ManagedCommandChatMenu
-            epicId={currentEpicId}
-            chatId={node.id}
-            hostId={activeHostId}
-            viewTabId={viewTabId}
-          />
         </div>
         {usageChip}
       </>
     ),
-    [
-      hostWorkspaceSelector,
-      usageChip,
-      currentEpicId,
-      node.id,
-      activeHostId,
-      viewTabId,
-    ],
+    [hostWorkspaceSelector, usageChip],
   );
 
   const lowerRuntime = useMemo(

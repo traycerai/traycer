@@ -36,6 +36,7 @@ import {
 } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   disposeManagedCommandChatSessions,
   installManagedCommandChatSession,
@@ -113,6 +114,9 @@ function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
     id: "cmd-default",
     monitoring: true,
     description: "deploy watcher",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_A,
     createdAtMs: T0,
@@ -210,6 +214,17 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
 }
 
 /** Panes across the whole canvas currently holding this command's window. */
+/**
+ * The instance id the pane is currently holding as its PREVIEW tab, if any -
+ * the one an italic tab title and the next preview's eviction both read.
+ */
+function previewInstanceIdFor(tabId: string, paneId: string): string | null {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+  if (canvas === undefined) return null;
+  const pane = findPaneById(canvas.root, paneId);
+  return pane === null ? null : pane.previewTabId;
+}
+
 function openWindowCountFor(commandId: string): number {
   const canvasByTabId = useEpicCanvasStore.getState().canvasByTabId;
   return Object.values(canvasByTabId).reduce((count, canvas) => {
@@ -376,7 +391,7 @@ describe("S7 · doors", () => {
     expect(screen.getByText("Monitor failed")).toBeTruthy();
   });
 
-  it("S7d: the divider is a door — 'View output' opens the named shell's window", () => {
+  it("S7d: the divider is a door — Open in tab opens the named shell's window", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
@@ -387,7 +402,11 @@ describe("S7 · doors", () => {
         ]}
       />,
     );
-    fireEvent.click(screen.getByTestId("resume-managed-command-door-blk-door"));
+    const door = screen.getByTestId("resume-managed-command-door-blk-door");
+    // The same Open-in-Tab affordance every other shell surface offers, rather
+    // than this divider's own words for it.
+    expect(door.getAttribute("aria-label")).toBe("Open in tab");
+    fireEvent.click(door);
     expect(findOpenArtifactInTab(TAB_ID, "cmd-divider")).not.toBeNull();
   });
 
@@ -448,5 +467,33 @@ describe("S7 · doors", () => {
     // And the same door twice does not stack a second pane either.
     fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
     expect(openWindowCountFor("cmd-one")).toBe(1);
+  });
+
+  it("S7h: a door opens a PREVIEW tab, and the next shell replaces it", () => {
+    renderBackgroundPanelInChat(null);
+    emitCommands(
+      [makeCommand({ id: "cmd-first" }), makeCommand({ id: "cmd-second" })],
+      CHAT_A,
+    );
+
+    fireEvent.click(
+      screen.getByTestId("managed-command-background-row-cmd-first"),
+    );
+    const first = findOpenArtifactInTab(TAB_ID, "cmd-first");
+    expect(first).not.toBeNull();
+    if (first === null) throw new Error("first window never opened");
+    // Every door here is a glance, so the strip holds it as a preview rather
+    // than keeping a log tab nobody asked for.
+    expect(previewInstanceIdFor(TAB_ID, first.paneId)).toBe(first.instanceId);
+
+    fireEvent.click(
+      screen.getByTestId("managed-command-background-row-cmd-second"),
+    );
+    const second = findOpenArtifactInTab(TAB_ID, "cmd-second");
+    expect(second).not.toBeNull();
+    if (second === null) throw new Error("second window never opened");
+    expect(previewInstanceIdFor(TAB_ID, second.paneId)).toBe(second.instanceId);
+    // Standard preview eviction: the glance the reader moved on from goes.
+    expect(findOpenArtifactInTab(TAB_ID, "cmd-first")).toBeNull();
   });
 });

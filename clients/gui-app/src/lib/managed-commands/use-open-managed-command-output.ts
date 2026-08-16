@@ -13,16 +13,22 @@ export type OpenManagedCommandOutput = (args: {
  * running-work strip row.
  *
  * One window per command (`UI.md` §9) falls out of the canvas itself: the
- * tile's content id IS the command id, and `openTileInEpic` focuses an already
- * open tab for the same content instead of opening a second one.
+ * tile's content id IS the command id, and the epic-level open focuses an
+ * already open tab for the same content instead of opening a second one.
+ *
+ * Opened as a PREVIEW tab. Every door here is a glance - "what is that shell
+ * printing?" - taken from a row or a chip the reader is passing through, and a
+ * permanent tab per glance silts up the strip with logs nobody asked to keep.
+ * The standard promotion rules make the keeper: double-click the tab, re-open
+ * it deliberately, or start dragging it.
  */
 export function useOpenManagedCommandOutput(
   epicId: string,
 ): OpenManagedCommandOutput {
-  const { openTileInEpic } = useEpicTileNavigation();
+  const { openTilePreviewInEpic } = useEpicTileNavigation();
   return useCallback(
     (args) => {
-      openTileInEpic(
+      openTilePreviewInEpic(
         epicId,
         makeManagedCommandOutputTileRef({
           commandId: args.commandId,
@@ -30,6 +36,6 @@ export function useOpenManagedCommandOutput(
         }),
       );
     },
-    [epicId, openTileInEpic],
+    [epicId, openTilePreviewInEpic],
   );
 }

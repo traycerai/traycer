@@ -2316,6 +2316,8 @@ describe("ResourceMonitorPopover", () => {
             hostId: "host-1",
             cwd: "/work/background",
           },
+          // A tile the human kept once already: reopening it is a return.
+          preview: false,
         },
       }),
     );

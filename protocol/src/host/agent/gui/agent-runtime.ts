@@ -26,6 +26,7 @@ import {
   providerNoticeKindSchema,
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
+  toolCallManagedCommandSchema,
   workflowActivityEntrySchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
@@ -375,6 +376,15 @@ export const toolCallCompletedEventSchema = z.object({
   type: z.literal("tool_call.completed"),
   toolName: z.string(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // The shell a `traycer_run_shell` call created. Carried on COMPLETION rather
+  // than on `started` because the id does not exist until the host has minted
+  // it - the call's input names a command to run, not a shell that already is.
+  // Optional rather than defaulted, like `backgroundOutput` beside it: most
+  // adapters have no opinion about shells and omit it, and an omission must
+  // read as "nothing to say" rather than as "definitely not a shell", so a
+  // re-completion cannot erase what a first one established. See
+  // `toolCallManagedCommandSchema`.
+  managedCommand: toolCallManagedCommandSchema.nullable().optional(),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
   // For detached background command/Monitor completion, this is the SDK task's
   // own start time from BackgroundItem, not the short foreground spawn call.

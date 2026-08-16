@@ -409,11 +409,11 @@ function backgroundHeaderSummary(input: {
  *
  * Stop and nothing else. This is a "running right now" surface, so a row here
  * is a passing status rather than a durable object; deleting a shell - which
- * destroys its whole output history - belongs to the chat's Shells menu and
- * the output window, where the shell itself is the subject.
+ * destroys its whole output history - belongs to the output window, where
+ * the shell itself is the subject.
  *
- * The row drags out onto the canvas, on the same payload the Shells menu's
- * rows use, so the canvas needs to know nothing about where the gesture
+ * The row drags out onto the canvas, on the same payload the transcript
+ * cards' doors use, so the canvas needs to know nothing about where the gesture
  * started. Clicking still opens the window wherever the door puts it; dragging
  * is how a person says WHERE, and having to find the same shell in a second
  * menu to place it deliberately was the only reason to go there.

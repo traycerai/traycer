@@ -71,7 +71,7 @@ import { ManagedCommandStopButton } from "@/components/managed-commands/managed-
 import { useManagedCommandStop } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import {
   MANAGED_COMMAND_NOUN,
-  managedCommandNoun,
+  managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
@@ -2743,7 +2743,6 @@ function OwnerTreeRow(props: {
                   props.row.snapshot.harnessId,
                   owner.kind,
                   props.row.snapshot.activeProcessName,
-                  props.row.snapshot.managedCommand,
                 )}
               </span>
             </div>
@@ -3511,12 +3510,11 @@ function ownerMetadataSearchTerms(
   const snapshot = row.snapshot;
   return [
     label,
-    ownerKindLabel(snapshot.owner.kind, snapshot.managedCommand),
+    ownerKindLabel(snapshot.owner.kind),
     harnessProviderSubtitle(
       snapshot.harnessId,
       snapshot.owner.kind,
       snapshot.activeProcessName,
-      snapshot.managedCommand,
     ),
     snapshot.owner.ownerId,
     snapshot.owner.hostId,
@@ -4141,7 +4139,9 @@ function openResourceOwner(args: {
       tabId: closedTile.tabId,
       name: undefined,
       focus: focusForOwner(snapshot),
-      preparation: { kind: "open-tile", node: closedTile.node },
+      // A preserved tile the human already chose to keep once: reopening it is
+      // a return to their own tab, not a glance at a new one.
+      preparation: { kind: "open-tile", node: closedTile.node, preview: false },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
       activeEpicId: args.activeEpicId,
@@ -4166,6 +4166,10 @@ function openResourceOwner(args: {
           commandId: snapshot.owner.ownerId,
           hostId: snapshot.owner.hostId,
         }),
+        // Same glance every other shell door is (see
+        // `useOpenManagedCommandOutput`): jumping from a resource row to the
+        // log is a look, and the strip should not keep it unasked.
+        preview: true,
       },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
@@ -4200,6 +4204,7 @@ function openResourceOwner(args: {
         name: record.name,
         hostId: record.hostId,
       },
+      preview: false,
     },
     navigate: args.navigate,
     navigateNested: args.navigateNested,
@@ -4266,7 +4271,9 @@ function prepareResourceTarget(
 ): NestedFocusTarget | null {
   const canvas = useEpicCanvasStore.getState();
   if (preparation.kind === "open-tile") {
-    return canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+    return preparation.preview
+      ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
+      : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
   }
   return canvas.prepareSetActiveTileTabFocusTarget(
     tabId,
@@ -4364,10 +4371,7 @@ function isResourceSortOption(value: string): value is ResourceSortOption {
   );
 }
 
-function ownerKindLabel(
-  kind: ResourceOwnerKindWireV14,
-  managedCommand: ManagedCommandOwnerWire | null,
-): string {
+function ownerKindLabel(kind: ResourceOwnerKindWireV14): string {
   // Several owner kinds render side by side here, so a raw Terminal has to stay
   // distinguishable from an Agent using the Terminal interface - qualification
   // is warranted. It uses the interface axis rather than coining "Chat agent" /
@@ -4378,10 +4382,8 @@ function ownerKindLabel(
   if (kind === "managed-command") {
     // The KIND, not this shell's name: it sits in a column of classes
     // ("Terminal", "Agent (Chat)"), and a monitor is a shell. The row title
-    // beside it is where the monitor flag speaks. "Managed command" is the
-    // fallback for a host that sent the owner without naming it, which
-    // nothing does today.
-    return managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN;
+    // beside it is where the monitor flag speaks.
+    return MANAGED_COMMAND_NOUN;
   }
   return "Agent (Chat)";
 }
@@ -4391,17 +4393,17 @@ function ownerKindLabel(
  * has - it is not a canvas node, so none of the tile/record fallbacks the
  * other owner kinds walk apply to it.
  *
- * Named by the monitor flag, exactly as the Shells list names the same shell:
- * the owner frame carries `monitoring` precisely so one process tree is not
- * labelled two different ways.
+ * Straight through `managedCommandTitle`, exactly as the Shells list names the
+ * same shell: the owner frame carries `monitoring` precisely so one process
+ * tree is not labelled two different ways. An owner the host sent without
+ * naming (nothing does today) falls back to the umbrella noun rather than to a
+ * third one - "Managed command" is the term the UI does not use.
  */
 function managedCommandLabel(
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
-  if (managedCommand === null) return "Managed command";
-  const noun = managedCommandNoun(managedCommand.monitoring);
-  const description = managedCommand.description;
-  return description === "" ? noun : `${noun} · ${description}`;
+  if (managedCommand === null) return MANAGED_COMMAND_NOUN;
+  return managedCommandTitle(managedCommand);
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits
@@ -4412,21 +4414,15 @@ function harnessProviderSubtitle(
   harnessId: string | null,
   kind: ResourceOwnerKindWireV14,
   activeProcessName: string | null,
-  managedCommand: ManagedCommandOwnerWire | null,
 ): string {
   // A managed command already names itself in the row title, so its subtitle
   // spends the width on what is actually running instead of repeating it.
   if (kind === "managed-command") {
-    return (
-      activeProcessName ??
-      (managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN)
-    );
+    return activeProcessName ?? MANAGED_COMMAND_NOUN;
   }
   const providerId = harnessId === null ? null : normalizeProviderId(harnessId);
   const base =
-    providerId === null
-      ? ownerKindLabel(kind, managedCommand)
-      : agentProviderLabel(providerId);
+    providerId === null ? ownerKindLabel(kind) : agentProviderLabel(providerId);
   return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
 }
 
@@ -4474,7 +4470,7 @@ function ownerLabel(
   if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (ref !== null) return ref.name;
   if (record !== null) return record.name;
-  return ownerKindLabel(snapshot.owner.kind, snapshot.managedCommand);
+  return ownerKindLabel(snapshot.owner.kind);
 }
 
 function canOpenOwner(

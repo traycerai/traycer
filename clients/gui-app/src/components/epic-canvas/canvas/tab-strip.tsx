@@ -10,7 +10,6 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
-  Activity,
   FileDiff,
   FilePlus,
   GitPullRequest,
@@ -67,6 +66,8 @@ import {
   isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -428,6 +429,11 @@ interface TabItemProps {
 // Ticket 12's chat cost line: the tab's own overflow (this context menu),
 // never the header. `null` for every non-chat tab kind and for a chat whose
 // host hasn't negotiated `host.usage.summary` - "unsupported chats show
+/** The tab's bound host, for the tile kinds that have one. */
+function tabHostId(tab: EpicCanvasTileRef): string | null {
+  return "hostId" in tab ? tab.hostId : null;
+}
+
 // nothing" applied to the menu item itself rather than opening a dialog that
 // would then show a capability notice. Extracted out of `TabItem` to keep
 // that component's branching under the complexity budget.
@@ -435,8 +441,7 @@ function useChatUsageMenuHandler(
   tab: EpicCanvasTileRef,
   chatTitle: string,
 ): (() => void) | null {
-  const usageChatHostId =
-    tab.type === "chat" && "hostId" in tab ? tab.hostId : null;
+  const usageChatHostId = tab.type === "chat" ? tabHostId(tab) : null;
   const usageSupported = useUsageSummarySupported(usageChatHostId);
   const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
   return useMemo(() => {
@@ -518,7 +523,7 @@ function TabItem(props: TabItemProps) {
   // null everywhere, keeping their terminal.list observer disabled.
   const isTerminalTab = tab.type === "terminal";
   const resolvedHostClient = useHostClientForHostId(
-    isTerminalTab && "hostId" in tab ? tab.hostId : null,
+    isTerminalTab ? tabHostId(tab) : null,
   );
   const terminalHostClient = isTerminalTab ? resolvedHostClient : null;
   const displayTitle = useEpicTabDisplayTitle(
@@ -526,6 +531,7 @@ function TabItem(props: TabItemProps) {
       id: tab.id,
       name: tab.name,
       type: tab.type,
+      hostId: tabHostId(tab),
     },
     epicId,
     terminalHostClient,
@@ -1002,6 +1008,16 @@ function TabIcon(props: {
   const boundHostReachability = useHostReachability(
     props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
+  // glyph and the name in one tab can never disagree about whether the shell is
+  // watching. Unconditional for hook order; an empty id resolves to null.
+  const managedCommand = useManagedCommandOnHost({
+    epicId: props.epicId,
+    // Scoped to the tab's own bound host: a clone's tab must never wear the
+    // source host's shell (same rule the card's presence follows).
+    hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
+    commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
+  });
   if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
@@ -1014,7 +1030,16 @@ function TabIcon(props: {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isManagedCommandOutputTileRef(props.tab)) {
-    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
+    // A tab opened for a shell whose chat has no live session yet resolves to
+    // nothing; the quiet glyph is the honest guess, since a watcher announces
+    // itself the moment its record lands.
+    return (
+      <ManagedCommandMonitorIcon
+        monitoring={managedCommand !== null && managedCommand.monitoring}
+        decorative
+        className="size-3.5"
+      />
+    );
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;
