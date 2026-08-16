@@ -6316,4 +6316,57 @@ describe("the chat's held updates", () => {
     ).toEqual(["cmd-1"]);
     harness.handle.dispose();
   });
+
+  // The chat and epic guards above both pass for a frame from the RIGHT chat
+  // on a stream this store has already replaced, which is the one a retry
+  // produces: the old client is torn down but its in-flight frames still land.
+  // A hold is durable state a human acts on, so a stale set installing rows
+  // here would offer a Deliver for holds the new stream never named - or, on a
+  // stale empty frame, quietly take a live one off screen.
+  it("ignores a held-updates frame from a superseded stream", () => {
+    const harness = seededHarness([held({ commandId: "cmd-1" })]);
+    const staleCallbacks = harness.callbacks();
+
+    harness.handle.store.getState().retry();
+
+    // The empty frame is the sharp one: a retry cancels nothing, so the hold
+    // is still standing, and honouring a stale "nothing is held" would take
+    // the Deliver affordance off screen while the hold outlived the socket.
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    staleCallbacks.onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-stale" })],
+    });
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-1"]);
+
+    // ...and the live stream is still heard, so this is a generation guard
+    // rather than a store that stopped listening.
+    harness.callbacks().onHeldUpdatesChanged({
+      kind: "heldUpdatesChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      heldUpdates: [held({ commandId: "cmd-live" })],
+    });
+
+    expect(
+      harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
+    ).toEqual(["cmd-live"]);
+    harness.handle.dispose();
+  });
 });

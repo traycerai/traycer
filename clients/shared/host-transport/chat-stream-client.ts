@@ -339,6 +339,16 @@ export class ChatStreamClient {
       case "pong": {
         return;
       }
+      default: {
+        // Exhaustiveness check, matching `epic-stream-client`: adding a new
+        // ChatSubscribeServerFrame kind to the Zod schema without wiring it
+        // here is a compile-time error rather than a silent no-op that leaves
+        // the renderer stale with no diagnostic. `heldUpdatesChanged` was added
+        // without this arm present, so nothing would have caught the omission.
+        const _exhaustive: never = frame;
+        void _exhaustive;
+        return;
+      }
     }
   }
 }

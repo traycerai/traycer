@@ -10,6 +10,10 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  ManagedCommandHeldReleaseFailure,
+  ManagedCommandHeldReleaseUnattributed,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   useHostClient,
   useHostDirectory,
@@ -222,6 +226,97 @@ export function useManagedCommandDelete(): UseMutationResult<
   );
 }
 
+/**
+ * The Deliver outcome, as copy.
+ *
+ * Read in the order the response schema mandates, and `unattributed` FIRST for
+ * a reason that is not stylistic: a non-empty one means the host proved NOTHING
+ * about this chat, so `released` and `held` are empty because nothing was
+ * determined rather than because nothing was there. Reporting it as a shell
+ * count - or letting the empty `held` beside it read as "nothing is held" -
+ * tells a person their holds are gone when every one of them still stands.
+ *
+ * The host's `message` is rendered verbatim as the toast's description wherever
+ * a single failure is the whole story, because it is the ONLY field that
+ * distinguishes the two remedies `retryable: false` covers: a delivery row a
+ * newer build wrote (upgrade this host) and a boot record that failed to load
+ * (restart it). Copy composed from the boolean alone can only name both and
+ * settle neither, which is what "Restarting or updating it may help" was.
+ */
+function reportDeliverHeldOutcome(
+  response: ResponseOfMethod<HostRpcRegistry, "managedCommand.deliverHeld">,
+): void {
+  if (response.unattributed.length > 0) {
+    reportUnattributedDeliverFailure(response.unattributed);
+    return;
+  }
+  if (response.unresolved.length === 0) return;
+  reportUnresolvedDeliverHolds(response.unresolved);
+}
+
+/**
+ * A failure that belongs to the CALL. Never phrased as a count of shells: one
+ * of these is produced whether the chat holds one shell or four, so any number
+ * here would be a number of internal proof arms rather than of anything a
+ * person can see.
+ */
+function reportUnattributedDeliverFailure(
+  failures: readonly ManagedCommandHeldReleaseUnattributed[],
+): void {
+  const detail =
+    failures.length === 1 ? { description: failures[0].message } : undefined;
+  if (failures.every((failure) => !failure.retryable)) {
+    toast.error(
+      "Nothing was delivered — this host can't tell what it's holding for this chat.",
+      detail,
+    );
+    return;
+  }
+  toast.warning("Nothing was delivered. Try again in a moment.", detail);
+}
+
+/**
+ * The per-command split. `unresolved.length` is a true shell count, so it is
+ * safe to render as one - but only within a group that shares a remedy. The
+ * mixed case used to count the permanent failures into "N shells are still
+ * held. Try again in a moment.", which told a person to retry the very shells
+ * where retrying can never work; it reports the split instead.
+ */
+function reportUnresolvedDeliverHolds(
+  failures: readonly ManagedCommandHeldReleaseFailure[],
+): void {
+  const permanent = failures.filter((failure) => !failure.retryable);
+  const retryable = failures.filter((failure) => failure.retryable);
+  if (retryable.length === 0) {
+    toast.error(
+      permanent.length === 1
+        ? "That shell's output can't be delivered by this host."
+        : `${permanent.length} shells' output can't be delivered by this host.`,
+      permanent.length === 1
+        ? { description: permanent[0].message }
+        : undefined,
+    );
+    return;
+  }
+  if (permanent.length === 0) {
+    toast.warning(
+      retryable.length === 1
+        ? "One shell is still held. Try again in a moment."
+        : `${retryable.length} shells are still held. Try again in a moment.`,
+      retryable.length === 1
+        ? { description: retryable[0].message }
+        : undefined,
+    );
+    return;
+  }
+  // Mixed: the two halves have different remedies and no single `message`
+  // stands for both, so the count is the honest report and it is reported per
+  // half rather than summed under the retryable half's advice.
+  toast.warning(
+    `${failures.length} shells are still held: ${retryable.length} can be delivered on a retry, ${permanent.length} can't be delivered by this host.`,
+  );
+}
+
 export interface ManagedCommandDeliverHeldVariables {
   readonly hostId: string;
   readonly epicId: string;
@@ -290,29 +385,7 @@ export function useManagedCommandDeliverHeld(
               variables.commandIds === null ? null : [...variables.commandIds],
           });
         }),
-      onSuccess: (response) => {
-        if (response.unresolved.length === 0) return;
-        // Every remaining hold is stuck for the SAME reason only when they
-        // agree; otherwise the honest summary is the count. `retryable` is the
-        // one field a client may branch on - a false means retrying against
-        // this host can never work, so say that instead of implying a retry.
-        const permanent = response.unresolved.filter(
-          (failure) => !failure.retryable,
-        );
-        if (permanent.length === response.unresolved.length) {
-          toast.error(
-            permanent.length === 1
-              ? "That shell's output can't be delivered by this host. Restarting or updating it may help."
-              : `${permanent.length} shells' output can't be delivered by this host. Restarting or updating it may help.`,
-          );
-          return;
-        }
-        toast.warning(
-          response.unresolved.length === 1
-            ? "One shell is still held. Try again in a moment."
-            : `${response.unresolved.length} shells are still held. Try again in a moment.`,
-        );
-      },
+      onSuccess: reportDeliverHeldOutcome,
       onError: (error: HostRpcError) =>
         toastFromHostError(error, "Couldn't deliver it."),
     }),

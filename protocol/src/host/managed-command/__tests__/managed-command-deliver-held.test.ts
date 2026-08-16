@@ -5,6 +5,7 @@ import {
   managedCommandDeliverHeldRequestSchema,
   managedCommandDeliverHeldResponseSchema,
   managedCommandHeldReleaseFailureSchema,
+  managedCommandHeldReleaseUnattributedSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -59,6 +60,29 @@ describe("managedCommand.deliverHeld@1.0 request", () => {
       }),
     ).toThrow();
   });
+
+  // An empty array used to parse as "deliver nothing" and resolve as an
+  // empty, fully-successful response - indistinguishable on the wire from a
+  // real delivery. Nothing a person can do produces it; it is what a caller
+  // that meant `null` gets from building the array off an empty selection.
+  it("rejects an empty commandIds array rather than accepting it as \"deliver nothing\"", () => {
+    expect(() =>
+      managedCommandDeliverHeldRequestSchema.parse({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        commandIds: [],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a single-element commandIds array", () => {
+    const parsed = managedCommandDeliverHeldRequestSchema.parse({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      commandIds: ["a"],
+    });
+    expect(parsed.commandIds).toEqual(["a"]);
+  });
 });
 
 describe("managedCommand.deliverHeld@1.0 response", () => {
@@ -66,9 +90,15 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
     const parsed = managedCommandDeliverHeldResponseSchema.parse({
       released: [],
       unresolved: [],
+      unattributed: [],
       held: [],
     });
-    expect(parsed).toEqual({ released: [], unresolved: [], held: [] });
+    expect(parsed).toEqual({
+      released: [],
+      unresolved: [],
+      unattributed: [],
+      held: [],
+    });
   });
 
   it("parses partial success - one released and one unresolved together", () => {
@@ -82,10 +112,12 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
           message: "written by a newer host build",
         },
       ],
+      unattributed: [],
       held: [HELD],
     });
     expect(parsed.released).toEqual(["cmd-released"]);
     expect(parsed.unresolved).toHaveLength(1);
+    expect(parsed.unattributed).toEqual([]);
     expect(parsed.held).toEqual([HELD]);
   });
 
@@ -95,6 +127,20 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
         commandId: "cmd-1",
         code: "boot_record_load_failed",
         message: "no retryable flag",
+      }),
+    ).toThrow();
+  });
+
+  // `commandId` is required on the per-command failure - a failure the host
+  // cannot attribute to one command belongs in `unattributed` instead, so
+  // that `unresolved.length` is always a count of shells.
+  it("requires commandId on a per-command failure - no longer nullable", () => {
+    expect(() =>
+      managedCommandHeldReleaseFailureSchema.parse({
+        commandId: null,
+        code: "still_held",
+        retryable: true,
+        message: "held under a newer Stop",
       }),
     ).toThrow();
   });
@@ -110,6 +156,59 @@ describe("managedCommand.deliverHeld@1.0 response", () => {
       message: "a reason nobody wrote down yet",
     });
     expect(parsed.code).toBe("some_future_failure_mode_never_enumerated_here");
+  });
+});
+
+describe("managedCommand.deliverHeld@1.0 response - unattributed failures", () => {
+  // The proof arms that fail before anything is enumerated (a disposed
+  // router, an unreadable delivery-state table, a failed boot record load)
+  // have no command to name - this is where THAT goes, distinct from
+  // `unresolved`, so a chat holding four commands does not get reported as
+  // "1 shell can't be delivered".
+  it("carries no commandId - only code, retryable, message", () => {
+    const parsed = managedCommandHeldReleaseUnattributedSchema.parse({
+      code: "command_records_unavailable",
+      retryable: false,
+      message: "the host's command records failed to load",
+    });
+    expect(parsed).toEqual({
+      code: "command_records_unavailable",
+      retryable: false,
+      message: "the host's command records failed to load",
+    });
+    expect(Object.hasOwn(parsed, "commandId")).toBe(false);
+  });
+
+  it("rejects a commandId field on the unattributed shape", () => {
+    // Zod's default (non-strict) object parsing drops unknown keys rather
+    // than rejecting them, so this only proves the field does not survive a
+    // parse - not that providing it throws. That is the property this test
+    // actually needs: a caller cannot smuggle a commandId through this shape.
+    const parsed = managedCommandHeldReleaseUnattributedSchema.parse({
+      commandId: "should-not-survive",
+      code: "delivery_state_unreadable",
+      retryable: true,
+      message: "the delivery-state table could not be read",
+    });
+    expect(Object.hasOwn(parsed, "commandId")).toBe(false);
+  });
+
+  it("parses a response whose unattributed failure disarms the rest, all empty", () => {
+    const parsed = managedCommandDeliverHeldResponseSchema.parse({
+      released: [],
+      unresolved: [],
+      unattributed: [
+        {
+          code: "router_disposed",
+          retryable: false,
+          message: "the delivery router was disposed",
+        },
+      ],
+      held: [],
+    });
+    expect(parsed.unattributed).toHaveLength(1);
+    expect(parsed.released).toEqual([]);
+    expect(parsed.held).toEqual([]);
   });
 });
 

@@ -21,6 +21,16 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
  * holds is a RESOLVED success, never a rejection - that split is the whole
  * point of the response shape (see `unary-schemas.ts`), and a test asserting
  * the opposite would undo the design.
+ *
+ * Every `message` below is a fixture written HERE, deliberately never copied
+ * from the host that authors them in production. The two live in different
+ * repositories, so pinning the host's exact sentence would make each future
+ * copy edit a two-repo change - and this suite is about what the client does
+ * with a message, not about which words the host chose. The fixtures are kept
+ * REPRESENTATIVE of real host copy (whole sentences naming a remedy, no raw
+ * ids) so a reader can see the surface the assertions describe; what they pin
+ * is that the string arrives verbatim as the toast's description, whatever it
+ * says.
  */
 
 const { toastError, toastWarning } = vi.hoisted(() => ({
@@ -53,10 +63,18 @@ import {
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 
+/**
+ * The un-attributed headline, named so the "says nothing about shells" guard
+ * below asserts against the same string the expectation pins.
+ */
+const UNATTRIBUTED_PERMANENT_TITLE =
+  "Nothing was delivered — this host can't tell what it's holding for this chat.";
+
 /** The response the mock host answers `managedCommand.deliverHeld` with. */
 let deliverResponse: ManagedCommandDeliverHeldResponse = {
   released: [],
   unresolved: [],
+  unattributed: [],
   held: [],
 };
 /** The last request the mock host actually received. */
@@ -80,7 +98,12 @@ beforeEach(() => {
   toastError.mockClear();
   toastWarning.mockClear();
   directoryState.available = true;
-  deliverResponse = { released: [], unresolved: [], held: [] };
+  deliverResponse = {
+    released: [],
+    unresolved: [],
+    unattributed: [],
+    held: [],
+  };
   lastRequestCommandIds = undefined;
   deliverGate = null;
   releaseDeliverGate = null;
@@ -148,9 +171,10 @@ describe("useManagedCommandDeliverHeld", () => {
           commandId: "cmd-2",
           code: "delivery_row_not_materialized",
           retryable: true,
-          message: "reconcile pass has not run yet",
+          message: "The reconcile pass has not run for this shell yet.",
         },
       ],
+      unattributed: [],
       held: [{ commandId: "cmd-2", description: "db migration", heldAtMs: 1 }],
     };
     const { result } = renderHook(() => useManagedCommandDeliverHeld(CHAT_ID), {
@@ -173,7 +197,26 @@ describe("useManagedCommandDeliverHeld", () => {
     expect(result.current.data).toEqual(deliverResponse);
   });
 
-  it("tells the user to try again when at least one unresolved hold is retryable", async () => {
+  /** One Deliver against the mock host, settled - the shape every copy test
+   *  shares, so each of them is only its fixture and its expectation. */
+  async function deliverAndSettle(): Promise<void> {
+    const { result } = renderHook(() => useManagedCommandDeliverHeld(CHAT_ID), {
+      wrapper,
+    });
+    act(() => {
+      result.current.mutate({
+        hostId: mockLocalHostEntry.hostId,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        commandIds: null,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+  }
+
+  it("reports the split rather than counting permanent failures into 'try again'", async () => {
     deliverResponse = {
       released: [],
       unresolved: [
@@ -181,73 +224,202 @@ describe("useManagedCommandDeliverHeld", () => {
           commandId: "cmd-1",
           code: "delivery_row_not_materialized",
           retryable: true,
-          message: "reconcile pass has not run yet",
+          message: "The reconcile pass has not run for this shell yet.",
         },
         {
           commandId: "cmd-2",
-          code: "boot_record_load_failed",
+          code: "delivery_row_undecodable",
           retryable: false,
-          message: "this host cannot decode it",
+          message:
+            "This shell's output was saved by a newer version of Traycer than this host runs.",
         },
       ],
+      unattributed: [],
       held: [],
     };
-    const { result } = renderHook(() => useManagedCommandDeliverHeld(CHAT_ID), {
-      wrapper,
-    });
 
-    act(() => {
-      result.current.mutate({
-        hostId: mockLocalHostEntry.hostId,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        commandIds: null,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
+    await deliverAndSettle();
 
+    // The old copy said "2 shells are still held. Try again in a moment.",
+    // which told the user to retry the one shell where retrying can never
+    // work. Each half is now reported under its own remedy.
     expect(toastWarning).toHaveBeenCalledTimes(1);
     expect(toastWarning).toHaveBeenCalledWith(
-      "2 shells are still held. Try again in a moment.",
+      "2 shells are still held: 1 can be delivered on a retry, 1 can't be delivered by this host.",
     );
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("tells the user it cannot be retried against this host when every unresolved hold is permanent", async () => {
+  it("shows the host's own message when one permanent failure is the whole story", async () => {
     deliverResponse = {
       released: [],
       unresolved: [
         {
           commandId: "cmd-1",
+          code: "delivery_row_written_by_newer_build",
+          retryable: false,
+          message: "This shell's output was written by a newer Traycer host.",
+        },
+      ],
+      unattributed: [],
+      held: [],
+    };
+
+    await deliverAndSettle();
+
+    // `retryable: false` covers two different remedies - upgrade this host, or
+    // restart it - and `message` is the only field that says which. Copy
+    // composed from the boolean could only hedge across both.
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith(
+      "That shell's output can't be delivered by this host.",
+      {
+        description: "This shell's output was written by a newer Traycer host.",
+      },
+    );
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a count when several permanent failures each have their own message", async () => {
+    deliverResponse = {
+      released: [],
+      unresolved: [
+        {
+          commandId: "cmd-1",
+          code: "delivery_row_written_by_newer_build",
+          retryable: false,
+          message: "This shell's output was written by a newer Traycer host.",
+        },
+        {
+          commandId: "cmd-2",
           code: "boot_record_load_failed",
           retryable: false,
-          message: "this host cannot decode it",
+          message: "This host couldn't load its delivery records; restart it.",
+        },
+      ],
+      unattributed: [],
+      held: [],
+    };
+
+    await deliverAndSettle();
+
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith(
+      "2 shells' output can't be delivered by this host.",
+      undefined,
+    );
+  });
+
+  it("shows the host's message on a lone retryable hold too", async () => {
+    deliverResponse = {
+      released: ["cmd-1"],
+      unresolved: [
+        {
+          commandId: "cmd-2",
+          code: "delivery_row_not_materialized",
+          retryable: true,
+          message: "The reconcile pass has not run for this shell yet.",
+        },
+      ],
+      unattributed: [],
+      held: [{ commandId: "cmd-2", description: "db migration", heldAtMs: 1 }],
+    };
+
+    await deliverAndSettle();
+
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+    expect(toastWarning).toHaveBeenCalledWith(
+      "One shell is still held. Try again in a moment.",
+      { description: "The reconcile pass has not run for this shell yet." },
+    );
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("reports an un-attributed failure as proving nothing, never as a shell count", async () => {
+    deliverResponse = {
+      released: [],
+      unresolved: [],
+      unattributed: [
+        {
+          code: "boot_record_load_failed",
+          retryable: false,
+          message: "This host couldn't load its delivery records; restart it.",
         },
       ],
       held: [],
     };
-    const { result } = renderHook(() => useManagedCommandDeliverHeld(CHAT_ID), {
-      wrapper,
-    });
 
-    act(() => {
-      result.current.mutate({
-        hostId: mockLocalHostEntry.hostId,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        commandIds: null,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
+    await deliverAndSettle();
 
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalledWith(
-      "That shell's output can't be delivered by this host. Restarting or updating it may help.",
+    expect(toastError).toHaveBeenCalledWith(UNATTRIBUTED_PERMANENT_TITLE, {
+      description: "This host couldn't load its delivery records; restart it.",
+    });
+    // One of these is produced whether the chat holds one shell or four, so
+    // any number in this copy would count nothing a person can see. Asserted
+    // against the constant the expectation above pins, so a rewrite that
+    // reintroduces a shell count has to trip it.
+    expect(UNATTRIBUTED_PERMANENT_TITLE).not.toContain("shell");
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("offers a retry for an un-attributed failure the host says is transient", async () => {
+    deliverResponse = {
+      released: [],
+      unresolved: [],
+      unattributed: [
+        {
+          code: "router_disposed",
+          retryable: true,
+          message: "The host was shutting down this chat's router.",
+        },
+      ],
+      held: [],
+    };
+
+    await deliverAndSettle();
+
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+    expect(toastWarning).toHaveBeenCalledWith(
+      "Nothing was delivered. Try again in a moment.",
+      { description: "The host was shutting down this chat's router." },
     );
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("reads un-attributed FIRST, so a released id beside it never reads as progress", async () => {
+    // The host cannot produce this - `released` is empty whenever nothing was
+    // determined - and that is exactly why the client must not depend on it.
+    // The ordering is the contract; a client that read `released`/`held` first
+    // would report a delivery the host never proved.
+    deliverResponse = {
+      released: ["cmd-1"],
+      unresolved: [
+        {
+          commandId: "cmd-2",
+          code: "delivery_row_not_materialized",
+          retryable: true,
+          message: "The reconcile pass has not run for this shell yet.",
+        },
+      ],
+      unattributed: [
+        {
+          code: "delivery_state_unreadable",
+          retryable: false,
+          message: "This host couldn't read its delivery state.",
+        },
+      ],
+      held: [],
+    };
+
+    await deliverAndSettle();
+
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith(UNATTRIBUTED_PERMANENT_TITLE, {
+      description: "This host couldn't read its delivery state.",
+    });
+    // ...and the per-command split is NOT also reported: it describes rows the
+    // call never got far enough to judge.
     expect(toastWarning).not.toHaveBeenCalled();
   });
 

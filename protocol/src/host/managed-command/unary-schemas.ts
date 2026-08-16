@@ -184,6 +184,15 @@ export type ManagedCommandDeleteResponse = z.infer<
  * The delivery-state revision carrying the hold is deliberately NOT here, for
  * the reason `managedCommandStatusSchema` leaves out `pidStartTimeMs`: it
  * settles an internal write race and is nothing a viewer can act on.
+ *
+ * SHARED BY TWO FAMILIES - `chat.subscribe` (snapshot + `heldUpdatesChanged`)
+ * and `managedCommand.deliverHeld` both reference this object, so a field added
+ * here lands on both surfaces at once. `chat.subscribe` freezes its released
+ * minors against hand-written pre-images; when the next one freezes, this
+ * object must be inlined into that pre-image rather than referenced, or the
+ * freeze tracks this definition and stops being a freeze. That is exactly how
+ * the 1.6 details widening leaked, and it is the reason the pre-image files are
+ * literals rather than imports.
  */
 export const heldManagedCommandUpdateSchema = z.object({
   commandId: z.string(),
@@ -203,12 +212,25 @@ export type HeldManagedCommandUpdate = z.infer<
  * shells; null means every hold this chat owns.
  *
  * `epicId` is named for the same reason the id-addressed controls name it - a
- * chat in another epic is answered exactly as one that never existed.
+ * chat in another epic is answered exactly as one that never existed. It is
+ * also load-bearing for AUTHORIZATION: the host proves this chat belongs to
+ * this epic before it scans, because the durable rows carry the chat and no
+ * epic, so a scan keyed on the chat alone would answer for a chat the caller
+ * named but has no rights to.
  */
 export const managedCommandDeliverHeldRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),
-  commandIds: z.array(z.string()).nullable(),
+  /**
+   * The holds to deliver; null means every hold this chat owns.
+   *
+   * An EMPTY array is rejected rather than accepted as "deliver nothing".
+   * Nothing a person can do produces it, so in practice it is a caller that
+   * meant `null` and built the array from an empty selection - and answering
+   * that with an empty, fully-successful response reads identically to a real
+   * delivery. The narrow branch is the dangerous one to make silent.
+   */
+  commandIds: z.array(z.string()).min(1).nullable(),
 });
 export type ManagedCommandDeliverHeldRequest = z.infer<
   typeof managedCommandDeliverHeldRequestSchema
@@ -249,21 +271,11 @@ export type ManagedCommandDeliverHeldRequest = z.infer<
  */
 export const managedCommandHeldReleaseFailureSchema = z.object({
   /**
-   * NULL when the host could not attribute the failure to any one command,
-   * which is a real state and not a degenerate one: three of the host's proof
-   * arms - a disposed router, a delivery-state table it could not read, and a
-   * boot record load that failed - fail BEFORE anything is enumerated, so there
-   * is no id to name. The last is the sharp one: with `commandIds: null` the
-   * in-scope set IS the owned-record set, which is exactly what the failed load
-   * did not produce.
-   *
-   * Nullable rather than rejecting the call, because rejecting would throw away
-   * `retryable` - the one bit the surface needs - into an error channel a client
-   * cannot branch on. An un-attributed entry means "this Deliver proved
-   * nothing"; a surface must NOT read the response's empty `released`/`held` as
-   * "there was nothing held".
+   * The command this entry is about. Always present: a failure the host cannot
+   * attribute to one command is reported in `unattributed` instead, so that
+   * `unresolved.length` is always a count of SHELLS and can be rendered as one.
    */
-  commandId: z.string().nullable(),
+  commandId: z.string(),
   /** Stable identifier for logs and telemetry. Never branch on this. */
   code: z.string(),
   /** Whether retrying against THIS host process could ever succeed. */
@@ -282,6 +294,43 @@ export type ManagedCommandHeldReleaseFailure = z.infer<
 >;
 
 /**
+ * A failure that belongs to the CALL, not to any one command.
+ *
+ * Three of the host's proof arms - a disposed router, a delivery-state table it
+ * could not read, and a boot record load that failed - fail BEFORE anything is
+ * enumerated, so there is no id to name. The last is the sharp one: with
+ * `commandIds: null` the in-scope set IS the owned-record set, which is exactly
+ * what the failed load did not produce.
+ *
+ * This is its own field rather than a null `commandId` inside `unresolved`
+ * because the two answer different questions and callers kept conflating them.
+ * `unresolved` is "which shells are stuck", and its length is a shell count a
+ * surface can put in a sentence. An un-attributed failure is "this Deliver
+ * proved NOTHING about this chat" - it says nothing about how many holds stand,
+ * and a chat with four holds produces exactly one of these. Sharing one array
+ * made `unresolved.length` mean neither reliably, and the first client to read
+ * it got "1 shell can't be delivered" for a chat holding four.
+ *
+ * A non-empty `unattributed` also disarms the rest of the response: `released`
+ * and `held` are empty because nothing could be determined, NOT because there
+ * was nothing to determine. Never render an empty `held` as "nothing is held"
+ * without checking this field first.
+ *
+ * Same `retryable`/`code`/`message` contract as the per-command failure.
+ */
+export const managedCommandHeldReleaseUnattributedSchema = z.object({
+  /** Stable identifier for logs and telemetry. Never branch on this. */
+  code: z.string(),
+  /** Whether retrying against THIS host process could ever succeed. */
+  retryable: z.boolean(),
+  /** Host-authored detail. Show it verbatim; see the per-command note. */
+  message: z.string(),
+});
+export type ManagedCommandHeldReleaseUnattributed = z.infer<
+  typeof managedCommandHeldReleaseUnattributedSchema
+>;
+
+/**
  * Deliver answers with what actually happened, per command, and RESOLVES even
  * when part of it failed. A non-empty `unresolved` is a normal, expected
  * outcome - not an error channel - so a caller can render "3 delivered, 1 still
@@ -293,15 +342,29 @@ export type ManagedCommandHeldReleaseFailure = z.infer<
  * command's post-transition state: the chat's REMAINING holds after the call.
  * On a fully successful Deliver of every hold it is empty. It is not derivable
  * from `released` + `unresolved` - a hold installed by a Stop that landed
- * concurrently belongs in it and in neither of the others - so the caller that
- * pressed the button settles its own list from this rather than re-deriving it
- * and waiting for the stream to correct it.
+ * concurrently belongs in it and in neither of the others - which is why it is
+ * reported at all rather than left to the stream. Read it as the host's best
+ * current view, NOT as authority to clear a row you did not name; the field's
+ * own note says why, and this sentence used to say the opposite.
+ *
+ * Read the fields in this order: `unattributed` first (a non-empty one means
+ * nothing else here was determined), then `released`/`unresolved` for the rows
+ * you named, then `held` as context.
  */
 export const managedCommandDeliverHeldResponseSchema = z.object({
   /** Command ids whose hold this call proved gone. */
   released: z.array(z.string()),
-  /** In-scope commands whose release could not be proven. */
+  /**
+   * In-scope commands whose release could not be proven, one entry per command.
+   * `unresolved.length` is a SHELL COUNT and safe to render as one.
+   */
   unresolved: z.array(managedCommandHeldReleaseFailureSchema),
+  /**
+   * Failures belonging to the call rather than to any command. Check this
+   * BEFORE reading anything else: while it is non-empty, `released` and `held`
+   * are empty because nothing was determined, not because nothing was there.
+   */
+  unattributed: z.array(managedCommandHeldReleaseUnattributedSchema),
   /**
    * The holds the chat still owns once this call settled, as far as the host
    * can SEE them - not a proof of completeness, and the difference matters.
