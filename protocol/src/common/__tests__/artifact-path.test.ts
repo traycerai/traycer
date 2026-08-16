@@ -172,19 +172,50 @@ describe("artifactLayoutFromChain", () => {
     expect(artifactLayoutFromChain([])).toBeNull();
   });
 
-  it("returns null for a dot-prefixed segment in the last position", () => {
+  it("returns null for `.comments` in the last position", () => {
     expect(artifactLayoutFromChain(["auth", ".comments"])).toBeNull();
   });
 
-  it("returns null for a dot-prefixed segment in a middle/parent position", () => {
+  it("returns null for `.comments` in a middle/parent position", () => {
     expect(artifactLayoutFromChain([".comments", "auth"])).toBeNull();
   });
 
-  it("returns null for a plain dotfile-ish single-segment chain", () => {
-    expect(artifactLayoutFromChain([".hidden"])).toBeNull();
+  /**
+   * The reservation is exactly one name wide, and these two cases are why.
+   *
+   * An earlier revision rejected EVERY dot-prefixed segment, on the stated
+   * ground that folder names are minted as `^[a-z0-9]` slugs so nothing
+   * legitimate could be dot-prefixed. Minting is not the only way in: a
+   * folderName that arrived by disk ingest is stored as a bare `z.string()`,
+   * so a `.draft/` artifact can already exist in a live epic. The wide gate
+   * silently stranded it - the GUI link pre-check stopped resolving it, and
+   * edits to its `index.md` stopped being ingested and were reverted by the
+   * next projection pass.
+   *
+   * `images` is the mirror image: a name the gate must NOT take, because
+   * `slugify("Images")` mints it, so reserving it would break a legitimately
+   * named artifact. The `images/` collision predates this gate and is
+   * deliberately left as it was.
+   */
+  it("still resolves an unrelated dot-prefixed folder (a pre-existing `.draft` artifact keeps working)", () => {
+    expect(artifactLayoutFromChain([".draft"])).toEqual({
+      folderName: ".draft",
+      parentSegments: [],
+    });
+    expect(artifactLayoutFromChain(["auth", ".hidden"])).toEqual({
+      folderName: ".hidden",
+      parentSegments: ["auth"],
+    });
   });
 
-  it("still resolves a normal chain with no dot-prefixed segment", () => {
+  it("still resolves `images`, which is a mintable slug and so must not be reserved", () => {
+    expect(artifactLayoutFromChain(["auth", "images"])).toEqual({
+      folderName: "images",
+      parentSegments: ["auth"],
+    });
+  });
+
+  it("still resolves a normal chain", () => {
     expect(artifactLayoutFromChain(["auth", "sub-spec"])).toEqual({
       folderName: "sub-spec",
       parentSegments: ["auth"],
@@ -192,7 +223,7 @@ describe("artifactLayoutFromChain", () => {
   });
 });
 
-describe("deriveArtifactPathLayoutRootAgnostic - dot-prefixed chain segments rejected", () => {
+describe("deriveArtifactPathLayoutRootAgnostic - the reserved `.comments` segment is rejected", () => {
   it("returns null for a `.comments/index.md` nested under a real artifact folder, with a pinned expectedEpicId", () => {
     expect(
       deriveArtifactPathLayoutRootAgnostic(
@@ -218,6 +249,19 @@ describe("deriveArtifactPathLayoutRootAgnostic - dot-prefixed chain segments rej
         EPIC,
       ),
     ).toEqual({ epicId: EPIC, folderName: "auth", parentSegments: [] });
+  });
+
+  // This is the surface that made the wide gate a regression rather than a
+  // theoretical one: the GUI's artifact-link pre-check
+  // (`artifact-link-path.ts`) resolves hrefs through this exact function with
+  // a null epicId, so a `null` here is a link that stops opening.
+  it("still resolves a pre-existing dot-prefixed artifact through the GUI link pre-check path", () => {
+    expect(
+      deriveArtifactPathLayoutRootAgnostic(
+        `/x/epics/${EPIC}/artifacts/.draft/index.md`,
+        null,
+      ),
+    ).toEqual({ epicId: EPIC, folderName: ".draft", parentSegments: [] });
   });
 });
 
