@@ -87,9 +87,11 @@ describe("A2A capability predicates", () => {
   });
 
   it("a GUI target is always capable regardless of an unrecognized/null harnessId", () => {
-    const target: A2ACapabilityTarget = { surface: "gui", harnessId: null };
-    expect(canUseA2ATools(target)).toBe(true);
-    expect(canReceiveA2AMessages(target)).toBe(true);
+    for (const harnessId of [null, "some-future-harness"]) {
+      const target: A2ACapabilityTarget = { surface: "gui", harnessId };
+      expect(canUseA2ATools(target)).toBe(true);
+      expect(canReceiveA2AMessages(target)).toBe(true);
+    }
   });
 
   it("an unrecognized TUI harnessId gets neither capability", () => {
