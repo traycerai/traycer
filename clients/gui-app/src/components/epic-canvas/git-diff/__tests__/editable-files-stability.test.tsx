@@ -212,6 +212,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    state.worktreeContent = "const value = 1;\n";
     cleanup();
     fileEditRuntimeRegistry.resetForTesting();
     queryClient.clear();

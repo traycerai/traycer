@@ -481,7 +481,7 @@ async function typeKey(client, key) {
 }
 
 async function snapshot(client) {
-  return await evaluate(
+  const result = await evaluate(
     client,
     `(() => {
       const host = document.querySelector("diffs-container");
@@ -520,4 +520,10 @@ async function snapshot(client) {
       };
     })()`,
   );
+  if (result === null) {
+    throw new Error(
+      "Could not capture diff editor snapshot: diffs-container, target line, caret, viewport, or #test-state is missing",
+    );
+  }
+  return result;
 }
