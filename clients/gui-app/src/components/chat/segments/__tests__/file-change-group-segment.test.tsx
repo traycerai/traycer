@@ -415,9 +415,15 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     if (fileHeader === null) throw new Error("Missing file-change row header");
     fireEvent.click(fileHeader);
 
-    expect(fileHeader.className).toContain("sticky");
-    expect(fileHeader.className).toContain("bg-background");
-    expect(fileHeader.className).not.toContain("backdrop-blur");
+    // The sticky treatment sits on the header WRAPPER, not the trigger: the
+    // trigger's containing block is only as tall as the header, so a sticky
+    // trigger would have nothing to travel within. The wrapper's containing
+    // block is the row, whose body is what scrolls past.
+    const stickyHeader = fileHeader.parentElement;
+    if (stickyHeader === null) throw new Error("Missing sticky header wrapper");
+    expect(stickyHeader.className).toContain("sticky");
+    expect(stickyHeader.className).toContain("bg-background");
+    expect(stickyHeader.className).not.toContain("backdrop-blur");
     const diff = screen.getByTestId("inline-diff");
     expect(diff.getAttribute("data-backgrounds")).toBe("true");
     expect(diff.getAttribute("data-line-numbers")).toBe("false");

@@ -197,7 +197,23 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
       onOpenChange={onOpenChange}
       className={cn("group/work-row", className)}
     >
-      <div className="flex w-full items-center">
+      {/* The sticky treatment lives on the WRAPPER, not the trigger. Sticky
+          resolves against the nearest scrollable ancestor but is confined to
+          its containing block, and the trigger's containing block is this
+          wrapper - exactly as tall as the header, so a sticky trigger would
+          have no room to travel and would not pin at all. On the wrapper the
+          containing block is the row, whose `CollapsibleContent` is what
+          scrolls past. */}
+      <div
+        className={cn(
+          "flex w-full items-center",
+          // Opaque background: the pinned header floats over scrolled content,
+          // and a translucent one lets that content bleed through.
+          stickyHeader &&
+            open &&
+            "sticky top-0 z-20 border-b border-border/40 bg-background shadow-sm",
+        )}
+      >
         <CollapsibleTrigger
           data-row-header=""
           data-activity-row-trigger=""
@@ -205,10 +221,10 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
             "group/row-trigger flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
-            // The sticky header floats over scrolled content, so its hover tint
-            // must stay opaque - a translucent bg lets the content bleed through.
+            // Hover stays on the trigger so the action slot beside it keeps its
+            // own hover, and it paints over the wrapper's opaque background.
             stickyHeader && open
-              ? "sticky top-0 z-20 border-b border-border/40 bg-background shadow-sm hover:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
+              ? "hover:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
               : "hover:bg-muted/40",
             tone === "destructive" && "text-destructive",
           )}
