@@ -93,7 +93,15 @@ describe("chatPublicationStateResponseSchema", () => {
       boundaryCovered: true,
       publishedThroughTs: 1_700_000_000_000,
     };
-    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
+    // `wire` omits `definitive` on purpose: that is what a host that
+    // predates the field sends. The schema's `.default(null)` is what lets
+    // a new client read that absence as "no terminal cause known" instead
+    // of failing the parse, so the parsed side gains a key the wire side
+    // never had.
+    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual({
+      ...wire,
+      definitive: null,
+    });
   });
 
   it("round-trips an unpublished response", () => {
@@ -102,7 +110,13 @@ describe("chatPublicationStateResponseSchema", () => {
       boundaryCovered: null,
       publishedThroughTs: null,
     };
-    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
+    // Same reasoning as above: an old-host payload has no `definitive` key,
+    // and the parsed result defaults it to `null` rather than leaving it
+    // absent.
+    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual({
+      ...wire,
+      definitive: null,
+    });
   });
 
   it("preserves boundaryCovered: null as null, never as false", () => {
@@ -140,6 +154,46 @@ describe("chatPublicationStateResponseSchema", () => {
       chatPublicationStateResponseSchema.safeParse({
         published: true,
         publishedThroughTs: null,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chatPublicationStateResponseSchema definitive", () => {
+  // `definitive` is the "stop polling, this will never resolve" mechanism:
+  // any caller that treats an unrecognised value as `null` reintroduces the
+  // infinite wait, so this coverage pins the round-trip for every known
+  // reason plus the explicit-null and rejection cases.
+  const base = {
+    published: false,
+    boundaryCovered: null,
+    publishedThroughTs: null,
+  };
+
+  it.each([
+    "chat-deleted",
+    "lineage-superseded",
+    "backup-halted",
+  ] as const)("round-trips definitive: %s", (reason) => {
+    const wire = { ...base, definitive: reason };
+    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
+  });
+
+  it("keeps an explicitly-sent null as null", () => {
+    const wire = { ...base, definitive: null };
+    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
+  });
+
+  // z.enum(...).nullable().default(null) only substitutes the default when
+  // the field is UNDEFINED (see the omitted-key round-trips above). A
+  // present-but-unrecognised string is neither a member of the enum nor
+  // `null`, so it fails validation outright rather than being coerced to
+  // `null` - verified here rather than assumed.
+  it("rejects an unrecognized definitive reason", () => {
+    expect(
+      chatPublicationStateResponseSchema.safeParse({
+        ...base,
+        definitive: "some-future-reason",
       }).success,
     ).toBe(false);
   });

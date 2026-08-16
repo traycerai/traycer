@@ -1149,7 +1149,16 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(dialogMocks.createMutate).not.toHaveBeenCalled();
   });
 
-  it("boundarySyncing: notice speaks, rows stay selectable, submit stays enabled", async () => {
+  it("boundarySyncing: notice speaks, rows stay selectable, submit is blocked", () => {
+    // Clicking OTHER_HOST_ID makes this a CROSS-HOST fork, and
+    // `chatForkTargetVerdict` only reaches the `boundaryUncovered` arm (→
+    // `boundarySyncing`) when `isCrossHost` is true — a same-host fork
+    // short-circuits to `allowed` before this check ever runs (see the
+    // sibling first-paint test below, which stays same-host). `boundarySyncing`
+    // is no longer exempt from `verdictAllowsSubmit`: the host's coverage
+    // check is presence-only, so an uncovered boundary can be ACCEPTED and
+    // seed a truncated turn, and submit must block on it like every other
+    // refusal now.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1165,26 +1174,38 @@ describe("ChatForkDialog cross-host routing", () => {
 
     const notice = screen.getByTestId("chat-fork-publication-notice");
     expect(notice.textContent).toContain(
-      "Still syncing this turn — retry shortly.",
+      "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.",
     );
     expect(selectedUnselectableExceptHostId()).toBeNull();
     expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
 
+    // The distinction this state carries is over the ROW, not the button:
+    // the row stays selectable because nothing is wrong with the host and
+    // the wait is seconds long, so killing the row would throw away the
+    // configuration the user is about to be allowed to submit.
     const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
     expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
       false,
     );
-    expect(forkButton().disabled).toBe(false);
+    expect(forkButton().disabled).toBe(true);
 
-    const request = await submitFork();
-    expect(request.hostId).toBe(OTHER_HOST_ID);
+    fireEvent.click(forkButton());
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
   });
 
   it("boundarySyncing sentence is on first paint with no host selected", () => {
     // Sibling of the unpublished first-paint case. The class resolver
-    // returns `syncing` with no `isCrossHost` input, so the sentence must
-    // not wait for a highlight. The post-click test above would still pass
-    // if it did.
+    // (`chatForkRemoteClassState`) returns `syncing` with no `isCrossHost`
+    // input, so the sentence must not wait for a highlight.
+    //
+    // No host is selected here, so the highlighted target is the tab's own
+    // host and this is a SAME-HOST fork. `chatForkTargetVerdict` short-
+    // circuits `!isCrossHost` to `{ kind: "allowed" }` before it ever looks
+    // at `publication` (chat-fork-target.ts:403), so the submit gate never
+    // sees `boundarySyncing` here and the button stays enabled — unlike the
+    // sibling test above, which selects OTHER_HOST_ID, makes the fork
+    // cross-host, and gets blocked. The two are not contradicting each
+    // other: this pair is what pins the same-host exemption.
     advertiseSourcePublication();
     dialogMocks.publicationQuery = {
       data: {
@@ -1198,7 +1219,7 @@ describe("ChatForkDialog cross-host routing", () => {
 
     const notice = screen.getByTestId("chat-fork-publication-notice");
     expect(notice.textContent).toContain(
-      "Still syncing this turn — retry shortly.",
+      "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.",
     );
     expect(selectedUnselectableExceptHostId()).toBeNull();
     const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
