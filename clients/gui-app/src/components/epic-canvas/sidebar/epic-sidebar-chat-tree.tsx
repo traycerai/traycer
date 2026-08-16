@@ -1520,7 +1520,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     epicId,
     isRenaming,
     navigateNested,
-    nodeId,
     openableType,
     prepareOpenTileInTabFocusTarget,
     promotePreviewInTab,
