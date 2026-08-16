@@ -191,6 +191,7 @@ describe("ActiveHostWorkspaceControls selected scope", () => {
       hostClient: null,
       onSelect: mocks.onSelect,
       refusalByHostId: NO_HOST_OPTION_REFUSALS,
+      unselectableExceptHostId: null,
     });
 
     pickOtherHost();
@@ -205,6 +206,26 @@ describe("ActiveHostWorkspaceControls selected scope", () => {
     pickOtherHost();
 
     expect(mocks.selectById).toHaveBeenCalledWith("other-host-id");
+    expect(mocks.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("unselectableExceptHostId makes every other row inert with no word", () => {
+    renderStacked({
+      kind: "selected",
+      hostId: "tab-host-id",
+      hostClient: null,
+      onSelect: mocks.onSelect,
+      refusalByHostId: NO_HOST_OPTION_REFUSALS,
+      unselectableExceptHostId: "tab-host-id",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
+
+    const otherRow = screen.getByTestId(
+      "settings-host-switcher-option-other-host-id",
+    );
+    expect(otherRow.getAttribute("aria-disabled")).toBe("true");
+    expect(otherRow.textContent).not.toContain("needs update");
     expect(mocks.onSelect).not.toHaveBeenCalled();
   });
 });

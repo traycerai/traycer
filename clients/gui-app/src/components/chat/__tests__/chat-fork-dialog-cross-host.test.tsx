@@ -70,6 +70,12 @@ interface CapturedWorkspaceProps {
   readonly hostScope: HostWorkspaceControlsHostScope;
 }
 
+interface PublicationStateResponse {
+  readonly published: boolean;
+  readonly boundaryCovered: boolean | null;
+  readonly publishedThroughTs: number | null;
+}
+
 const dialogMocks = vi.hoisted(() => ({
   createMutate:
     vi.fn<
@@ -84,6 +90,10 @@ const dialogMocks = vi.hoisted(() => ({
     dialogMocks.createVariables = null;
   }),
   capabilityProbeEnabled: false,
+  publicationQuery: { data: undefined as PublicationStateResponse | undefined },
+  publicationQueryEnabled: false,
+  publicationQueryIsError: false,
+  publicationQueryIsFetching: false,
   selectById: vi.fn<(hostId: string) => void>(),
   clientsByHostId: new Map<string, unknown>(),
   directoryHosts: [] as HostDirectoryEntry[],
@@ -163,63 +173,79 @@ vi.mock("@/hooks/host/use-host-query", () => ({
       dialogMocks.capabilityProbeEnabled = args.options?.enabled ?? false;
       return { data: undefined };
     }
-    return {
-      data: {
-        providers: [
-          {
-            providerId: "claude-code",
-            enabled: true,
-            disabledBy: null,
-            selected: { kind: "bundled" },
-            candidates: [],
-            auth: {
-              status: "authenticated",
-              badgeText: null,
-              label: null,
-              detail: null,
-            },
-            authPending: false,
-            checkedAt: null,
-            apiKey: { supported: false, configured: false, source: null },
-            terminalAgentArgs: "",
-            envOverrides: [],
-            loginCapability: null,
-            availabilityPending: false,
-            nativeCapabilities: {
-              supportedTabs: ["general", "env", "usage"],
-              mcp: null,
-              plugins: null,
-              skills: null,
-              modelProviders: null,
-            },
-            managedInstallState: null,
-            versionVisibility: null,
-            advisory: null,
-            profiles: [
-              {
-                profileId: "ambient",
-                kind: "ambient",
-                authType: "oauth",
-                label: "Terminal account",
-                auth: {
-                  status: "authenticated",
-                  badgeText: null,
-                  label: null,
-                  detail: null,
-                },
-                identity: null,
-                usageUpdatedAt: null,
-                rateLimitStatus: "unknown",
-                rateLimitLimitedScopes: null,
-                duplicateOfProfileId: null,
-                accentColor: null,
-                ambientDriftNotice: null,
+    if (args.method === "providers.list") {
+      return {
+        data: {
+          providers: [
+            {
+              providerId: "claude-code",
+              enabled: true,
+              disabledBy: null,
+              selected: { kind: "bundled" },
+              candidates: [],
+              auth: {
+                status: "authenticated",
+                badgeText: null,
+                label: null,
+                detail: null,
               },
-            ],
-          },
-        ],
-      },
-    };
+              authPending: false,
+              checkedAt: null,
+              apiKey: { supported: false, configured: false, source: null },
+              terminalAgentArgs: "",
+              envOverrides: [],
+              loginCapability: null,
+              availabilityPending: false,
+              nativeCapabilities: {
+                supportedTabs: ["general", "env", "usage"],
+                mcp: null,
+                plugins: null,
+                skills: null,
+                modelProviders: null,
+              },
+              managedInstallState: null,
+              versionVisibility: null,
+              advisory: null,
+              profiles: [
+                {
+                  profileId: "ambient",
+                  kind: "ambient",
+                  authType: "oauth",
+                  label: "Terminal account",
+                  auth: {
+                    status: "authenticated",
+                    badgeText: null,
+                    label: null,
+                    detail: null,
+                  },
+                  identity: null,
+                  usageUpdatedAt: null,
+                  rateLimitStatus: "unknown",
+                  rateLimitLimitedScopes: null,
+                  duplicateOfProfileId: null,
+                  accentColor: null,
+                  ambientDriftNotice: null,
+                },
+              ],
+            },
+          ],
+        },
+      };
+    }
+    if (args.method === "epic.chatPublicationState") {
+      const enabled = args.options?.enabled ?? false;
+      dialogMocks.publicationQueryEnabled = enabled;
+      // TanStack retains cached data when the observer is disabled, the
+      // refetch errors, OR a stale query is refetching. The hook, not
+      // the query object, must treat those as unknown — handing
+      // `undefined` here would make those gates untestable.
+      return {
+        data: dialogMocks.publicationQuery.data,
+        isError: dialogMocks.publicationQueryIsError,
+        isFetching: dialogMocks.publicationQueryIsFetching,
+      };
+    }
+    return { data: undefined };
   },
 }));
 
@@ -248,18 +274,30 @@ vi.mock(
         props.hostScope.kind === "selected"
           ? props.hostScope.refusalByHostId
           : new Map<string, string>();
+      const unselectableExceptHostId =
+        props.hostScope.kind === "selected"
+          ? props.hostScope.unselectableExceptHostId
+          : null;
       const hosts = dialogMocks.directoryHosts;
       return (
         <div data-testid="fork-workspace-controls">
           {hosts.map((entry) => {
             const refusal = refusals.get(entry.hostId) ?? null;
+            const inert =
+              unselectableExceptHostId !== null &&
+              entry.hostId !== unselectableExceptHostId;
+            const disabled = refusal !== null || inert;
+            // Inert leads: a class-level silence and a per-host word
+            // cannot both be true of one row.
+            const showRefusal = refusal !== null && !inert;
             return (
               <button
                 key={entry.hostId}
                 type="button"
                 data-testid={`fork-host-${entry.hostId}`}
-                disabled={refusal !== null}
+                disabled={disabled}
                 onClick={() => {
+                  if (disabled) return;
                   // If the dialog regresses to `kind: "active"`, a pick must
                   // hit the directory spy — that is the reported bug.
                   if (props.hostScope.kind === "selected") {
@@ -272,7 +310,7 @@ vi.mock(
                 }}
               >
                 {entry.label}
-                {refusal !== null ? (
+                {showRefusal ? (
                   <span data-testid={`fork-host-refusal-${entry.hostId}`}>
                     {refusal}
                   </span>
@@ -501,6 +539,33 @@ async function submitFork(): Promise<ChatForkCreateInput> {
   return dialogMocks.createMutate.mock.calls[0][0];
 }
 
+function selectedUnselectableExceptHostId(): string | null | undefined {
+  const scope = dialogMocks.lastWorkspace?.hostScope;
+  return scope?.kind === "selected"
+    ? scope.unselectableExceptHostId
+    : undefined;
+}
+
+function selectedRefusalWord(hostId: string): string | undefined {
+  const scope = dialogMocks.lastWorkspace?.hostScope;
+  return scope?.kind === "selected"
+    ? scope.refusalByHostId.get(hostId)
+    : undefined;
+}
+
+function advertiseSourcePublication(): void {
+  recordNegotiatedHostManifest(TAB_HOST_ID, {
+    "epic.createChat": { major: 1, minor: 2 },
+    "epic.chatPublicationState": { major: 1, minor: 0 },
+  });
+}
+
+function advertiseSourceWithoutPublication(): void {
+  recordNegotiatedHostManifest(TAB_HOST_ID, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
+}
+
 function seedHostSlot(hostId: string, path: string): void {
   const stagingKey = pendingForkChatStagingKey("epic-test", hostId);
   const folder = {
@@ -540,6 +605,10 @@ describe("ChatForkDialog cross-host routing", () => {
       dialogMocks.createVariables = null;
     });
     dialogMocks.capabilityProbeEnabled = false;
+    dialogMocks.publicationQuery = { data: undefined };
+    dialogMocks.publicationQueryEnabled = false;
+    dialogMocks.publicationQueryIsError = false;
+    dialogMocks.publicationQueryIsFetching = false;
     dialogMocks.lastWorkspace = null;
     dialogMocks.cloneOwnerCalls = [];
     dialogMocks.clientsByHostId.clear();
@@ -635,6 +704,10 @@ describe("ChatForkDialog cross-host routing", () => {
       screen.getByTestId(`fork-host-refusal-${ABSENT_HOST_ID}`).textContent,
     ).toContain("needs update");
     expect(forkButton().disabled).toBe(false);
+    // hostRefused is per-row: the remote CLASS stays selectable. Folding
+    // this into unselectableExceptHostId would disable every remote for one
+    // old host.
+    expect(selectedUnselectableExceptHostId()).toBeNull();
   });
 
   it("folders staged against host A never reach a submit against host B", async () => {
@@ -962,5 +1035,296 @@ describe("ChatForkDialog cross-host routing", () => {
     );
     fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
     expect(screen.queryByTestId("chat-fork-boundary-not-published")).toBeNull();
+  });
+
+  it("unpublished chat: one dialog notice, silent remote rows, class inert, inert click is a no-op", () => {
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
+    const notices = screen.getAllByTestId("chat-fork-publication-notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain(
+      "This chat hasn't been backed up yet, so another machine can't read its history.",
+    );
+
+    // Ablation: the class-level inertness is NOT a per-row refusal. If the
+    // notice were stamped onto each host, this would fail.
+    expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
+    expect(selectedRefusalWord(UNKNOWN_HOST_ID)).toBeUndefined();
+    expect(
+      screen.queryByTestId(`fork-host-refusal-${OTHER_HOST_ID}`),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(`fork-host-refusal-${UNKNOWN_HOST_ID}`),
+    ).toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBe(TAB_HOST_ID);
+
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    const unknownRow = screen.getByTestId(`fork-host-${UNKNOWN_HOST_ID}`);
+    const tabRow = screen.getByTestId(`fork-host-${TAB_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      true,
+    );
+    expect(unknownRow instanceof HTMLButtonElement && unknownRow.disabled).toBe(
+      true,
+    );
+    expect(tabRow instanceof HTMLButtonElement && tabRow.disabled).toBe(false);
+    // Selection is still the tab host. A local fork is served from the store
+    // tier, so Fork stays enabled — blocking it would be a cloud fact
+    // refusing a local submit.
+    expect(forkButton().disabled).toBe(false);
+
+    // An inert remote cannot become the target. fireEvent still delivers
+    // the click; the mock must refuse it the way a real row would.
+    fireEvent.click(otherRow);
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind === "selected" ? scope.hostId : null).toBe(TAB_HOST_ID);
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+  });
+
+  it("boundarySyncing: notice speaks, rows stay selectable, submit stays enabled", async () => {
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: true,
+        boundaryCovered: false,
+        publishedThroughTs: 1_700_000_000_000,
+      },
+    };
+    renderDialog(forkTarget({}), ignoreOpenChange);
+
+    fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+    fillTitle();
+
+    const notice = screen.getByTestId("chat-fork-publication-notice");
+    expect(notice.textContent).toContain(
+      "Still syncing this turn — retry shortly.",
+    );
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+    expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
+
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      false,
+    );
+    expect(forkButton().disabled).toBe(false);
+
+    const request = await submitFork();
+    expect(request.hostId).toBe(OTHER_HOST_ID);
+  });
+
+  it("boundarySyncing sentence is on first paint with no host selected", () => {
+    // Sibling of the unpublished first-paint case. The class resolver
+    // returns `syncing` with no `isCrossHost` input, so the sentence must
+    // not wait for a highlight. The post-click test above would still pass
+    // if it did.
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: true,
+        boundaryCovered: false,
+        publishedThroughTs: 1_700_000_000_000,
+      },
+    };
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
+    const notice = screen.getByTestId("chat-fork-publication-notice");
+    expect(notice.textContent).toContain(
+      "Still syncing this turn — retry shortly.",
+    );
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      false,
+    );
+    expect(forkButton().disabled).toBe(false);
+  });
+
+  it("a source host that does not advertise the method issues no request and stays post-A4", async () => {
+    // Ablation: the mock is primed with unpublished. If a request were
+    // issued, remotes would go inert and this submit would fail. Passing
+    // therefore credits the capability gate, not "data happened to be unknown".
+    advertiseSourceWithoutPublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    renderDialog(forkTarget({}), ignoreOpenChange);
+
+    fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+    fillTitle();
+
+    expect(dialogMocks.publicationQueryEnabled).toBe(false);
+    expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      false,
+    );
+    expect(forkButton().disabled).toBe(false);
+
+    const request = await submitFork();
+    expect(request.hostId).toBe(OTHER_HOST_ID);
+  });
+
+  it("unpublished is known on first paint with no remote host selected", () => {
+    // Ablation: the old gate keyed `enabled` on `isCrossHost`, so this
+    // moment — default selection is the tab host — would have
+    // `publicationQueryEnabled === false` and no notice. Passing here
+    // credits `hasRemoteHostOption`, not a later click.
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    renderDialog(forkTarget({}), ignoreOpenChange);
+
+    expect(dialogMocks.publicationQueryEnabled).toBe(true);
+    const notices = screen.getAllByTestId("chat-fork-publication-notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toContain(
+      "This chat hasn't been backed up yet, so another machine can't read its history.",
+    );
+    expect(selectedUnselectableExceptHostId()).toBe(TAB_HOST_ID);
+    expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
+    expect(
+      screen.queryByTestId(`fork-host-refusal-${OTHER_HOST_ID}`),
+    ).toBeNull();
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      true,
+    );
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind === "selected" ? scope.hostId : null).toBe(TAB_HOST_ID);
+
+    // F2: a 1.1 / negotiated-absent row is still in the directory. Inert
+    // leads, so those rows must not also carry "needs update".
+    const oldRow = screen.getByTestId(`fork-host-${OLD_HOST_ID}`);
+    const absentRow = screen.getByTestId(`fork-host-${ABSENT_HOST_ID}`);
+    expect(oldRow instanceof HTMLButtonElement && oldRow.disabled).toBe(true);
+    expect(absentRow instanceof HTMLButtonElement && absentRow.disabled).toBe(
+      true,
+    );
+    expect(screen.queryByTestId(`fork-host-refusal-${OLD_HOST_ID}`)).toBeNull();
+    expect(
+      screen.queryByTestId(`fork-host-refusal-${ABSENT_HOST_ID}`),
+    ).toBeNull();
+  });
+
+  it("a single-host account does not ask publication and does not inert anything", () => {
+    // Ablation: primed unpublished. If `enabled` were only
+    // `activeWorkspaceTarget !== null`, the query would fire and this
+    // would still look quiet only because the same-host verdict
+    // short-circuits — `publicationQueryEnabled === false` is the
+    // half that pins the RPC staying off.
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    dialogMocks.directoryHosts = [directoryEntry(TAB_HOST_ID, "Tab host")];
+    renderDialog(forkTarget({}), ignoreOpenChange);
+
+    expect(dialogMocks.publicationQueryEnabled).toBe(false);
+    expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+    const tabRow = screen.getByTestId(`fork-host-${TAB_HOST_ID}`);
+    expect(tabRow instanceof HTMLButtonElement && tabRow.disabled).toBe(false);
+  });
+
+  it("a cached unpublished answer is unknown once the query is disabled or errors", () => {
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    const target = forkTarget({});
+    const view = renderDialog(target, ignoreOpenChange);
+    expect(screen.getByTestId("chat-fork-publication-notice")).not.toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBe(TAB_HOST_ID);
+
+    dialogMocks.publicationQueryIsError = true;
+    view.rerender(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
+    );
+
+    expect(dialogMocks.publicationQuery.data?.published).toBe(false);
+    expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      false,
+    );
+  });
+
+  it("selecting a remote then learning unpublished disables Fork", () => {
+    advertiseSourcePublication();
+    const target = forkTarget({});
+    const view = renderDialog(target, ignoreOpenChange);
+
+    fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+    fillTitle();
+    expect(forkButton().disabled).toBe(false);
+
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    view.rerender(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
+    );
+
+    expect(forkButton().disabled).toBe(true);
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind === "selected" ? scope.hostId : null).toBe(
+      OTHER_HOST_ID,
+    );
+  });
+
+  it("a cached unpublished answer is unknown while the query is fetching", () => {
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: false,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    dialogMocks.publicationQueryIsFetching = true;
+    renderDialog(forkTarget({}), ignoreOpenChange);
+
+    expect(dialogMocks.publicationQueryEnabled).toBe(true);
+    expect(dialogMocks.publicationQuery.data?.published).toBe(false);
+    expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
+    expect(selectedUnselectableExceptHostId()).toBeNull();
+    const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
+    expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
+      false,
+    );
   });
 });

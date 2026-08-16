@@ -35,6 +35,8 @@ import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
+import { useChatPublicationState } from "@/hooks/chats/use-chat-publication-state-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostClient } from "@/lib/host";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
@@ -52,6 +54,12 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
   chatForkTargetSupport,
+  chatForkRemoteClassState,
+  chatForkTargetVerdict,
+  remoteClassIsUnreachable,
+  remoteClassNotice,
+  verdictAllowsSubmit,
+  type ChatForkTargetVerdict,
   CROSS_HOST_CARRY_CHANGES_NOTICE,
   CROSS_HOST_SHALLOW_FORK_NOTICE,
   CROSS_HOST_WORKSPACE_NOTICE,
@@ -263,6 +271,63 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     ? chatForkTargetSupport(createChatVersions.get(selectedHostId) ?? null)
     : { kind: "supported" };
 
+  // Is there any host this fork could go to OTHER than the source? Read from
+  // the same directory the version gate uses: a host with no directory entry
+  // has no route this client can dial, so it is not a fork target either.
+  const hasRemoteHostOption = useMemo(
+    () => directoryHostIds.some((hostId) => hostId !== tabHostId),
+    [directoryHostIds, tabHostId],
+  );
+  // Layer 1: does the SOURCE chat's publication let ANY remote host serve this
+  // fork? Read through the TAB client, which addresses the owning host by
+  // construction - the dialog lives inside the source chat's tile - so this is
+  // one fresh RPC on a connection already held, never a replicated value.
+  //
+  // It is deliberately NOT part of `hostRefusals`: publication is a fact about
+  // the chat, identical for every remote row and unchanged by picking a
+  // different machine. Routing it through the per-row refusal seam would stamp
+  // one chat problem onto four hosts and invite a retry that cannot help.
+  const tabHostClient = useTabHostClient();
+  const publication = useChatPublicationState({
+    client: tabHostClient,
+    hostId: tabHostId,
+    epicId,
+    chatId: activeWorkspaceTarget?.sourceChatId ?? null,
+    boundaryMessageId: activeWorkspaceTarget?.assistantMessageId ?? null,
+    // Asked on OPEN, not on selection.
+    //
+    // Publication is a fact about the SOURCE CHAT, so gating the read on
+    // whether a cross-host target is currently highlighted would key it to a
+    // different subject entirely. The cost of that mismatch is user-visible and
+    // worse than latency: the user picks host B and only THEN do the rows go
+    // inert with a notice, which reads as "my click broke it". The answer is
+    // knowable the moment the dialog opens and should be true on first paint,
+    // so nobody reaches for a host that could never have worked.
+    //
+    // Still not unconditional: an account with no remote host has no row this
+    // could gate, so asking would be pure waste for the single-host case. One
+    // RPC on a surface that already issues catalog and profile reads on open.
+    enabled: activeWorkspaceTarget !== null && hasRemoteHostOption,
+  });
+  // ONE verdict from BOTH gates, so the nine (version x publication) cells and
+  // their precedence live in one place instead of at each render site.
+  const targetVerdict: ChatForkTargetVerdict = chatForkTargetVerdict({
+    isCrossHost,
+    version: createChatVersions.get(selectedHostId) ?? null,
+    publication,
+  });
+  // Read from the CLASS resolver, not from the selection verdict: publication
+  // is a fact about the source chat, so it must be true on first paint rather
+  // than waiting for the user to highlight a remote host. Deriving it from the
+  // selected target is what made picking a host look like the thing that broke
+  // the picker - the read was moved to dialog open, but the presentation was
+  // still keyed to the selection.
+  const remoteClass = chatForkRemoteClassState(publication);
+  const publicationNotice = remoteClassNotice(remoteClass);
+  // The remote CLASS goes unselectable on an unpublished chat - no remote host
+  // can serve it - while the rows themselves stay silent.
+  const remoteRowsUnselectable = remoteClassIsUnreachable(remoteClass);
+
   // A REFUSAL parks this dialog's host reads, which is the one consumer shape
   // the manifest registry cannot heal on its own.
   //
@@ -401,7 +466,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
     hostClientResolved: selectedHostClient !== null,
-    hostSupportsFork: selectedHostSupport.kind !== "refused",
+    hostSupportsFork: verdictAllowsSubmit(targetVerdict),
     // The A/B pre-selection gate waits for a staging round-trip that only
     // happens when there IS a seed to override. Cross-host there is none, so
     // keeping the gate would leave Fork permanently disabled.
@@ -596,8 +661,20 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       hostClient: selectedHostClient,
       onSelect: selectHostId,
       refusalByHostId: hostRefusals,
+      // The remote CLASS, not a per-row word: an unpublished source chat is one
+      // fact about the chat, so the rows stay silent and the dialog says it once
+      // below. `sourceHostId` is what tells the picker which row is exempt — a
+      // same-host fork needs no publication at all.
+      unselectableExceptHostId: remoteRowsUnselectable ? tabHostId : null,
     }),
-    [hostRefusals, selectHostId, selectedHostClient, selectedHostId],
+    [
+      hostRefusals,
+      remoteRowsUnselectable,
+      selectHostId,
+      selectedHostClient,
+      selectedHostId,
+      tabHostId,
+    ],
   );
 
   // The retry prompt belongs to the REQUEST that was refused, not to the dialog.
@@ -689,6 +766,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             }
             support={selectedHostSupport}
             boundaryNotPublished={boundaryNotPublished}
+            publicationNotice={publicationNotice}
           />
         </div>
         <DialogFooter>
@@ -734,18 +812,37 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
  */
 function ChatForkTargetNotices(props: {
   readonly isCrossHost: boolean;
+  /**
+   * The Layer-1 sentence about the SOURCE CHAT, rendered once for the whole
+   * dialog rather than per host row — see `chatForkTargetVerdict`.
+   */
+  readonly publicationNotice: string | null;
   /** The chosen fork mode forks off the source working tree ("A/B Fork"). */
   readonly carriesChanges: boolean;
   readonly support: ChatForkTargetSupport;
   readonly boundaryNotPublished: boolean;
 }) {
   const { support } = props;
-  if (!props.isCrossHost && !props.boundaryNotPublished) return null;
+  if (
+    !props.isCrossHost &&
+    !props.boundaryNotPublished &&
+    props.publicationNotice === null
+  ) {
+    return null;
+  }
   return (
     <div
       className="flex min-w-0 flex-col gap-1"
       data-testid="chat-fork-target-notices"
     >
+      {props.publicationNotice === null ? null : (
+        <p
+          className="text-ui-xs text-foreground/80"
+          data-testid="chat-fork-publication-notice"
+        >
+          {props.publicationNotice}
+        </p>
+      )}
       {props.boundaryNotPublished ? (
         <p
           className="text-ui-xs text-foreground/80"

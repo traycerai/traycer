@@ -410,6 +410,13 @@ export function ActiveHostWorkspaceControls(
     activeHostClient,
   );
   const refusalByHostId = hostWorkspaceControlsScopeRefusals(props.hostScope);
+  // A surface-level blocker: every row but the named one goes inert, and none
+  // of them says why, because the reason is not about them. The surface owns
+  // that sentence.
+  const unselectableExceptHostId =
+    props.hostScope.kind === "selected"
+      ? props.hostScope.unselectableExceptHostId
+      : null;
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
@@ -436,6 +443,7 @@ export function ActiveHostWorkspaceControls(
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
           refusalByHostId={refusalByHostId}
+          inertExceptHostId={unselectableExceptHostId}
           // A FIXED scope cannot change hosts — `handleSelectHost` returns
           // early there. Saying so on the row instead of swallowing the click
           // is the same rule the section already applies to a busy submission:

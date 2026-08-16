@@ -916,6 +916,7 @@ function RateLimitHostPickerRow({
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Managing hosts — adding, renaming, updating, removing — is Settings'
         // job, with its own dialogs and failure states; this popover reports
         // usage. So the list ends in the same gear the model picker offers for

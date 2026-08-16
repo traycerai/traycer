@@ -1247,6 +1247,84 @@ export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
 >;
 
+/**
+ * Publication coverage for a chat this host OWNS, asked on demand.
+ *
+ * The fork dialog needs to know, BEFORE it lets a user fork a chat onto another
+ * machine, whether the target will be able to read the transcript at all: a
+ * cross-host fork is served from the chat's cloud publication, so a chat that
+ * has never been published cannot be pulled, and a boundary the published head
+ * does not yet cover would slice against a transcript that stops short of it.
+ *
+ * Answered from the publisher's own acknowledged receipt rather than from
+ * maintained state: no registry-row write path, no outbox interaction, no cloud
+ * schema, and no per-chat churn on the record plane.
+ *
+ * `boundaryMessageId` is the fork boundary the caller intends to use. It is
+ * OPTIONAL because the same question is worth asking without one ("is this chat
+ * backed up at all?"); when it is absent the host answers `boundaryCovered:
+ * null`, which means NOT ASKED and must never be read as "not covered".
+ */
+export const chatPublicationStateRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  boundaryMessageId: z.string().nullish(),
+});
+export type ChatPublicationStateRequest = z.infer<
+  typeof chatPublicationStateRequestSchema
+>;
+
+/**
+ * `boundaryCovered` is decided by MESSAGE IDENTITY, never by clock comparison:
+ * it is true iff the UPSERT that carries the named message is at or below the
+ * acknowledged receipt's `through_seq` in this host's own op log. That is
+ * exact, and it is why no timestamp reasoning exists anywhere in this feature -
+ * forked and cloned chats carry foreign-minted timestamps and per-chat
+ * timestamps are not monotonic, so a "boundary newer than the watermark" test
+ * would be wrong in both directions.
+ *
+ * UPSERT-ONLY, deliberately. A local removal of the boundary message does NOT
+ * make this `false`, and that is the correct answer rather than a gap: coverage
+ * asks what a TARGET host could pull from the published head, and an
+ * unpublished deletion has not changed that. Answering `false` would tell the
+ * user to retry, and retrying is precisely what makes an unpublished removal
+ * fail permanently. Do not build "the boundary is gone if it was deleted" on
+ * this field - it does not answer that question and is not intended to.
+ *
+ * `publishedThroughTs` is DISPLAY METADATA ONLY ("backed up as of …"). It must
+ * never be gated on. It is nullable because a chat with no acknowledged receipt
+ * has no such moment to report.
+ *
+ * The tri-state on `boundaryCovered` is load-bearing:
+ * - `true`  - the boundary is inside the published head.
+ * - `false` - it is not, YET. This clears on its own within a publish sweep, so
+ *   callers should treat it as retryable rather than terminal.
+ * - `null`  - NO ANSWER WAS COMPUTED. Two causes, and `published` is what
+ *   distinguishes them: no boundary was named (`published: true`), or the chat
+ *   has never been published at all (`published: false`), in which case `null`
+ *   comes back even though a boundary WAS named - there is no head to measure
+ *   against. So never branch on `boundaryCovered` alone: read `published`
+ *   first, which is decisive by itself. A caller that collapses `null` to
+ *   `false` blocks a fork on a question that was never answered, and one that
+ *   reads `null` as "not asked" mislabels a never-published chat.
+ *
+ * One deliberate indistinguishability, so a future reader does not treat it as
+ * a leak to be fixed: a boundary withheld by fork arbitration reports
+ * `{ published: true, boundaryCovered: false }`, exactly like a boundary the
+ * sweep has not reached yet. The client's action is identical in both cases -
+ * surface it as retryable and let the host's typed refusal be the authority -
+ * so distinguishing them would leak host-side arbitration state for no
+ * behavioural gain.
+ */
+export const chatPublicationStateResponseSchema = z.object({
+  published: z.boolean(),
+  boundaryCovered: z.boolean().nullable(),
+  publishedThroughTs: z.number().nullable(),
+});
+export type ChatPublicationStateResponse = z.infer<
+  typeof chatPublicationStateResponseSchema
+>;
+
 // Optional two-phase artifact-image ingest. Prepare validates and retains
 // recoverable bytes; finish commits the artifact reference index or aborts.
 export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;

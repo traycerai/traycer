@@ -8,6 +8,7 @@ import {
   hostOptionKindLabel,
   hostOptionStatusWord,
   type HostPickIntent,
+  type HostRowSurfaceState,
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { cn } from "@/lib/utils";
@@ -37,14 +38,14 @@ export function HostOptionRow(props: {
   readonly active: boolean;
   readonly intent: HostPickIntent;
   /**
-   * This surface's own reason for refusing the host, or `null` when it has
-   * none — see `NO_HOST_OPTION_REFUSALS`. Rendered in the status word's slot so
-   * one row never carries two competing explanations.
+   * What this surface is saying about the row, as one value — see
+   * `HostRowSurfaceState`. A union so "inert" and "refused with a word" cannot
+   * both be true of one row.
    */
-  readonly surfaceRefusal: string | null;
+  readonly surfaceState: HostRowSurfaceState;
 }): ReactNode {
   const { host } = props;
-  const statusWord = hostOptionStatusWord(host, props.surfaceRefusal);
+  const statusWord = hostOptionStatusWord(host, props.surfaceState);
   // The ACTIVE tag exists to separate two marks that can disagree: what you are
   // VIEWING versus what this window runs on. Under `bind` they are the same
   // fact by definition, so the tag would restate the check it sits next to.

@@ -34,6 +34,7 @@ export function WorktreePickerHostSection(): ReactNode {
         activeHostId={options.activeHostId}
         onSelect={handleSelectHost}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         disabled={false}
         isLoading={options.isLoading}
         listsFailed={options.listsFailed}

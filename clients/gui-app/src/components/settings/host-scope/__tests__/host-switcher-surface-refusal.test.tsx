@@ -27,6 +27,7 @@ function renderSwitcher(refusalByHostId: ReadonlyMap<string, string>): void {
   render(
     <HostSwitcher
       refusalByHostId={refusalByHostId}
+      inertExceptHostId={null}
       hosts={[UNKNOWN, OLD, ABSENT]}
       selected={UNKNOWN}
       activeHostId={UNKNOWN.hostId}
@@ -78,5 +79,130 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         .getByTestId("settings-host-switcher-option-unknown-host")
         .getAttribute("aria-disabled"),
     ).not.toBe("true");
+  });
+
+  it("inertExceptHostId disables every other row with no word on them", () => {
+    const tab = hostScopeOptionFixture({
+      hostId: "tab-host",
+      name: "Tab host",
+    });
+    const other = hostScopeOptionFixture({
+      hostId: "other-host",
+      name: "Other host",
+    });
+    render(
+      <HostSwitcher
+        refusalByHostId={new Map()}
+        inertExceptHostId="tab-host"
+        hosts={[tab, other]}
+        selected={tab}
+        activeHostId={tab.hostId}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        surface="field"
+        intent="bind"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
+
+    const otherRow = screen.getByTestId(
+      "settings-host-switcher-option-other-host",
+    );
+    const tabRow = screen.getByTestId("settings-host-switcher-option-tab-host");
+    expect(otherRow.getAttribute("aria-disabled")).toBe("true");
+    expect(otherRow.textContent).not.toContain("needs update");
+    expect(tabRow.getAttribute("aria-disabled")).not.toBe("true");
+    expect(tabRow.textContent).not.toContain("needs update");
+  });
+
+  it("inert leads: a 1.1 word does not appear on a class-inert row", () => {
+    const tab = hostScopeOptionFixture({
+      hostId: "tab-host",
+      name: "Tab host",
+    });
+    render(
+      <HostSwitcher
+        refusalByHostId={
+          new Map([
+            ["old-host", "needs update"],
+            ["absent-host", "needs update"],
+          ])
+        }
+        inertExceptHostId="tab-host"
+        hosts={[tab, OLD, ABSENT]}
+        selected={tab}
+        activeHostId={tab.hostId}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        surface="field"
+        intent="bind"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
+
+    const oldRow = screen.getByTestId("settings-host-switcher-option-old-host");
+    const absentRow = screen.getByTestId(
+      "settings-host-switcher-option-absent-host",
+    );
+    expect(oldRow.getAttribute("aria-disabled")).toBe("true");
+    expect(absentRow.getAttribute("aria-disabled")).toBe("true");
+    expect(oldRow.textContent).not.toContain("needs update");
+    expect(absentRow.textContent).not.toContain("needs update");
+  });
+
+  it("inert silences unreachable and requires-upgrade on a non-connectable row", () => {
+    const tab = hostScopeOptionFixture({
+      hostId: "tab-host",
+      name: "Tab host",
+    });
+    const offline = hostScopeOptionFixture({
+      hostId: "offline-host",
+      name: "Offline host",
+      connectable: false,
+      planRestricted: false,
+    });
+    const gated = hostScopeOptionFixture({
+      hostId: "gated-host",
+      name: "Gated host",
+      connectable: false,
+      planRestricted: true,
+    });
+    render(
+      <HostSwitcher
+        refusalByHostId={new Map()}
+        inertExceptHostId="tab-host"
+        hosts={[tab, offline, gated]}
+        selected={tab}
+        activeHostId={tab.hostId}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        surface="field"
+        intent="bind"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));
+
+    const offlineRow = screen.getByTestId(
+      "settings-host-switcher-option-offline-host",
+    );
+    const gatedRow = screen.getByTestId(
+      "settings-host-switcher-option-gated-host",
+    );
+    expect(offlineRow.getAttribute("aria-disabled")).toBe("true");
+    expect(gatedRow.getAttribute("aria-disabled")).toBe("true");
+    expect(offlineRow.textContent).not.toContain("unreachable");
+    expect(gatedRow.textContent).not.toContain("requires upgrade");
   });
 });

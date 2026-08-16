@@ -766,6 +766,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Optional host capability, read-only: does the source chat's publication
+  // cover a chosen fork boundary? No poll - the fork dialog asks once when it
+  // OPENS (and only when the account has a host other than the source, so a
+  // single-host user never pays for it), then lets the 5s stale window cover a
+  // reopen. A timer would keep asking on behalf of a dialog nobody has open,
+  // and the answer is not one that changes without a publish sweep.
+  "epic.chatPublicationState": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Archiving a chat or terminal-agent record persists its archived flag
   // (optional host capability).
   "epic.setChatArchived": {

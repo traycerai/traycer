@@ -39,6 +39,19 @@ export type HostWorkspaceControlsHostScope =
        * word the row shows). `NO_HOST_OPTION_REFUSALS` when it has none.
        */
       readonly refusalByHostId: ReadonlyMap<string, string>;
+      /**
+       * Marks every row EXCEPT this one unselectable, with no word on any of
+       * them — for a blocker that belongs to the surface rather than to any
+       * host, and that the surface explains once in its own copy.
+       *
+       * Distinct from `refusalByHostId` on purpose. That map answers "what is
+       * wrong with THIS host"; this answers "the thing you are trying to do
+       * cannot go anywhere but here", which is not a property of the rows and
+       * must not be written onto them — a per-row word would invite the user to
+       * try a different machine when no machine can help. `null` imposes
+       * nothing.
+       */
+      readonly unselectableExceptHostId: string | null;
     };
 
 export const ACTIVE_HOST_WORKSPACE_CONTROLS_SCOPE: HostWorkspaceControlsHostScope =

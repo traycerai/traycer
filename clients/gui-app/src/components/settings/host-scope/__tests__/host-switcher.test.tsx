@@ -29,6 +29,7 @@ function renderEmpty(props: {
   render(
     <HostSwitcher
       refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
       hosts={[]}
       selected={null}
       activeHostId={null}
@@ -100,6 +101,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -131,6 +133,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -163,6 +166,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[
           hostScopeOptionFixture({
             hostId: "host-gated",
@@ -206,6 +210,7 @@ describe("<HostSwitcher /> trailing action", () => {
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -240,6 +245,7 @@ describe("<HostSwitcher /> trailing action", () => {
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[]}
         selected={null}
         activeHostId={null}

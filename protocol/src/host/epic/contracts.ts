@@ -77,6 +77,8 @@ import {
   recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  chatPublicationStateRequestSchema,
+  chatPublicationStateResponseSchema,
   setChatArchivedRequestSchema,
   setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
@@ -514,6 +516,19 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability - see the registry entry for why a new method
+ * NAME may only ride the optional channel. Old source hosts simply do not
+ * advertise it, the caller gets `E_HOST_UNSUPPORTED` for this call alone, and
+ * the fork dialog treats that as "unknown" rather than as "unpublished".
+ */
+export const epicChatPublicationStateV10 = defineRpcContract({
+  method: "epic.chatPublicationState",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatPublicationStateRequestSchema,
+  responseSchema: chatPublicationStateResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({

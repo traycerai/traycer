@@ -794,6 +794,7 @@ function ResourceMonitorHostPickerRow(props: {
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Managing hosts - adding, renaming, updating, removing - is Settings'
         // job, with its own dialogs and failure states; this popover watches
         // processes. So the list ends in one link to where that work already

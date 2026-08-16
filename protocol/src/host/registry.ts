@@ -343,6 +343,7 @@ import {
   epicResolveArtifactByPathV10,
   epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
+  epicChatPublicationStateV10,
   epicSetChatArchivedV10,
   epicSetChatSharingDefaultV10,
   epicSetCloudChatVisibilityV10,
@@ -5685,6 +5686,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: on-demand publication coverage for a chat
+  // this host OWNS, so the fork dialog can tell a user BEFORE they fork that a
+  // cross-host target could not read the transcript. Registered exactly like
+  // `epic.setChatArchived` below and for the same reason: decision #15/R4-D2
+  // says a new capability must ride a `{major, minor}` bump of an EXISTING
+  // method, never a new NAME, because the floor handshake is fail-closed on the
+  // method-name SET - a name only one peer knows is fatal for the WHOLE
+  // connection, not just for this call. The `degrade: unsupported` strategy is
+  // what makes a new name landable at all: it keeps the method OFF
+  // `RELEASED_FLOOR_METHOD_NAMES` and OUT of the frozen released-method-names
+  // snapshot, so an old peer simply does not advertise it and the caller gets
+  // E_HOST_UNSUPPORTED for this call alone. That refusal IS the gate's
+  // "unknown" row - the dialog then allows the fork and lets the host-side
+  // refusal backstop it, rather than asserting a publication fact it could not
+  // read.
+  "epic.chatPublicationState": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicChatPublicationStateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   // Optional (non-floor) capability: durable host-backed archive toggle for a
   // chat OR terminal-agent record (single method keyed by id). The

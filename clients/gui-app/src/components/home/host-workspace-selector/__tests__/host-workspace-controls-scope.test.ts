@@ -26,6 +26,7 @@ describe("hostWorkspaceControlsScopeHostId", () => {
       hostClient: null,
       onSelect: vi.fn(),
       refusalByHostId: NO_HOST_OPTION_REFUSALS,
+      unselectableExceptHostId: null,
     };
     expect(hostWorkspaceControlsScopeHostId(fixed)).toBe("host-fixed");
     expect(hostWorkspaceControlsScopeHostId(selected)).toBe("host-selected");
@@ -41,6 +42,7 @@ describe("hostWorkspaceControlsScopeRefusals", () => {
       hostClient: null,
       onSelect: vi.fn(),
       refusalByHostId: refusals,
+      unselectableExceptHostId: null,
     };
     expect(hostWorkspaceControlsScopeRefusals(selected)).toBe(refusals);
     expect(

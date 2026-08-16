@@ -120,6 +120,7 @@ function SettingsSidebarHostPicker(props: {
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Settings is where the add-host dialog lives, so here the list ends in
         // the verb itself rather than in a link to this very page.
         action={{
