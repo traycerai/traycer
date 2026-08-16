@@ -11,6 +11,7 @@ import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
+import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -297,6 +298,11 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
  * transport fault - it lands when it lands, and the dialog is a foreground
  * surface someone is looking at, so the first few asks are the ones worth
  * making promptly.
+ *
+ * Entered ONLY while the answer can still move. A publication the host has
+ * called `definitive` never reaches this lane: it has no attempt cap, so a lane
+ * entered on a frozen answer is an unbounded poll of a fact, under copy that
+ * tells the user the wait is enough.
  */
 export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
   id: "epic-chat-publication-state.waiting",
@@ -789,17 +795,32 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     // Polled only while the answer is one the FORK DIALOG'S COPY promises will
     // resolve on its own - "It backs up automatically - try again shortly" and
-    // "Still syncing this turn - retry shortly". `staleTime` alone only marks
-    // the cache stale and issues nothing for a mounted, idle observer, so an
-    // open dialog sitting on either answer would wait forever on a sentence
-    // that told the user waiting was enough.
+    // the boundary-syncing sentence. `staleTime` alone only marks the cache
+    // stale and issues nothing for a mounted, idle observer, so an open dialog
+    // sitting on either answer would wait forever on a sentence that told the
+    // user waiting was enough.
     //
     // `false` for a covered chat: that is terminal for this boundary, and a
     // host too old to answer at all never gets here (the read is gated on
     // `useHostSupportsMethod`).
+    //
+    // This lane has no attempt cap and no terminal lane of its own, which is
+    // exactly why `definitive` has to be read BEFORE the other two fields. A
+    // permanently halted publication reports `published: false` - byte for byte
+    // what a chat mid-first-sweep reports - so without that read the wait lane
+    // is entered forever on a state nothing will ever move, under copy that
+    // promises it will.
     poll: defineConditionPolicy("epic.chatPublicationState", {
       classify: (data) => {
         if (data === undefined) return false;
+        // Terminal, and it outranks both readings below: `definitive` names a
+        // reason waiting cannot clear, so re-asking cannot clear it either. Any
+        // reason counts, including one this build does not recognise; the
+        // shared reader is also what keeps a host that predates the field
+        // (`undefined`, not `null`) in the wait lane where it belongs.
+        if (chatPublicationDefinitiveReason(data.definitive) !== null) {
+          return false;
+        }
         if (!data.published) return CHAT_PUBLICATION_WAIT_POLL_LANE;
         return data.boundaryCovered === false
           ? CHAT_PUBLICATION_WAIT_POLL_LANE

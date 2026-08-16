@@ -1311,15 +1311,49 @@ export type ChatPublicationStateRequest = z.infer<
  * One deliberate indistinguishability, so a future reader does not treat it as
  * a leak to be fixed: a boundary withheld by fork arbitration reports
  * `{ published: true, boundaryCovered: false }`, exactly like a boundary the
- * sweep has not reached yet. The client's action is identical in both cases -
- * surface it as retryable and let the host's typed refusal be the authority -
- * so distinguishing them would leak host-side arbitration state for no
- * behavioural gain.
+ * sweep has not reached yet. Both are retryable and the client's action is the
+ * same, so distinguishing them would leak host-side arbitration state for no
+ * behavioural gain. This holds only while the condition really is transient -
+ * a lineage that has been SUPERSEDED is not, and reports through `definitive`
+ * below rather than hiding here.
  */
 export const chatPublicationStateResponseSchema = z.object({
   published: z.boolean(),
   boundaryCovered: z.boolean().nullable(),
   publishedThroughTs: z.number().nullable(),
+  /**
+   * Set when waiting CANNOT change this answer. `null` means the ordinary
+   * reading applies and the state may still move on its own.
+   *
+   * ## Why a separate field rather than more values on the other three
+   *
+   * Every other answer here is a snapshot of a moving process, and the client
+   * polls precisely because it expects movement. Nothing in `published` /
+   * `boundaryCovered` can express "stop asking": `published: false` is what a
+   * chat mid-first-sweep reports, and it is also what a chat whose publication
+   * halted on an unresolvable conflict reports. The client cannot tell them
+   * apart, so it re-asks every 30s forever and tells the user "it backs up
+   * automatically - try again shortly", which is false and never resolves.
+   *
+   * A caller MUST stop polling when this is non-null and MUST NOT present the
+   * state as transient. Treating an unrecognised reason as terminal-but-
+   * unexplained is correct and forward-compatible; treating it as `null` is
+   * not, and reintroduces the infinite wait.
+   *
+   * - `chat-deleted` - the source chat is a tombstone on its own host. It will
+   *   not come back, and the fork would be refused anyway.
+   * - `lineage-superseded` - this chat lost an arbitrated fork, so its
+   *   publications now land under a different cloud identity. The receipt this
+   *   host holds describes a row a fork of THIS id will never fetch.
+   * - `backup-halted` - publication stopped for a reason the sweep does not
+   *   retry within the process lifetime (an unresolvable conflict, an
+   *   escalation, an unprovable head). A host restart may clear it; waiting on
+   *   this connection will not.
+   */
+  definitive: z
+    .enum(["chat-deleted", "lineage-superseded", "backup-halted"])
+    .nullable()
+    .default(null),
 });
 export type ChatPublicationStateResponse = z.infer<
   typeof chatPublicationStateResponseSchema
