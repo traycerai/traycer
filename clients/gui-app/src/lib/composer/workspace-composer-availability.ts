@@ -64,14 +64,53 @@ export const WORKSPACE_FOLDER_CHECK_FAILED_HINT =
  * host's `worktreeMissingMessage` so the composer hint, the recovery toast,
  * and the on-send reject read consistently. The disable lifts automatically
  * once the on-focus `worktree.getBinding` re-check finds the folder restored.
+ *
+ * `missingWorkspacePaths` are binding-entry KEYS (that is what the host's
+ * `missingWorktreePaths` signal carries, so the picker chip can match its row),
+ * but for a worktree-mode entry the key is the source repo and the directory
+ * that actually vanished is its sibling worktree. Naming the key alone sends
+ * the reader to a folder that is still on disk, so the binding is mapped here
+ * to name the run directory — the same two-audience split the host makes.
  */
 export function worktreeMissingComposerHint(
   missingWorkspacePaths: ReadonlyArray<string>,
+  binding: WorktreeBinding | null,
 ): string {
-  const list = missingWorkspacePaths.join(", ");
+  const list = missingWorkspacePaths
+    .map((workspacePath) => describeMissingBoundFolder(workspacePath, binding))
+    .join(", ");
   return missingWorkspacePaths.length === 1
     ? `A bound folder is missing on disk: ${list}. Restore it, or pick another folder in the workspace picker, to send.`
     : `Bound folders are missing on disk: ${list}. Restore them, or pick others in the workspace picker, to send.`;
+}
+
+function describeMissingBoundFolder(
+  workspacePath: string,
+  binding: WorktreeBinding | null,
+): string {
+  const runDirectory = runDirectoryForWorkspacePath(workspacePath, binding);
+  return runDirectory === null
+    ? workspacePath
+    : `${runDirectory} (the worktree bound to ${workspacePath})`;
+}
+
+/**
+ * The sibling worktree a bound entry runs in, or `null` when the entry runs in
+ * the workspace path itself — a Local row, an entry the binding no longer has
+ * (a re-bind that raced this render), or a blank `worktreePath`, which is never
+ * a valid run directory. `null` means "the key already names the missing
+ * directory", so the hint falls back to it.
+ */
+function runDirectoryForWorkspacePath(
+  workspacePath: string,
+  binding: WorktreeBinding | null,
+): string | null {
+  const entry = binding?.entries.find(
+    (candidate) => candidate.workspacePath === workspacePath,
+  );
+  const worktreePath = entry?.worktreePath ?? null;
+  if (worktreePath === null || worktreePath.length === 0) return null;
+  return worktreePath === workspacePath ? null : worktreePath;
 }
 
 const NO_EFFECTIVE_MISSING_WORKTREE_PATHS: ReadonlyArray<string> = [];
@@ -184,7 +223,10 @@ export function deriveWorktreeBindingWorkspaceAvailability(
   if (missingWorktreePaths.length > 0) {
     return {
       status: "worktree-missing",
-      disabledHint: worktreeMissingComposerHint(missingWorktreePaths),
+      // The hint reads the binding so a missing worktree is named by the
+      // directory that is gone; `missingWorkspacePaths` stays keyed by entry
+      // because the picker chip matches rows by that key.
+      disabledHint: worktreeMissingComposerHint(missingWorktreePaths, binding),
       missingWorkspacePaths: missingWorktreePaths,
     };
   }

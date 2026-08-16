@@ -137,7 +137,10 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
     // depend on a send the disable would forbid.
     expect(availability).toEqual({
       status: "worktree-missing",
-      disabledHint: worktreeMissingComposerHint(["/Users/me/project"]),
+      disabledHint: worktreeMissingComposerHint(
+        ["/Users/me/project"],
+        binding([bindingEntry("/Users/me/project")]),
+      ),
       missingWorkspacePaths: ["/Users/me/project"],
     });
     expect(workspaceComposerCanStart(availability)).toBe(false);
@@ -155,16 +158,62 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
     );
     expect(availability).toEqual({
       status: "worktree-missing",
-      disabledHint: worktreeMissingComposerHint([
-        "/Users/me/project",
-        "/Users/me/other",
-      ]),
+      disabledHint: worktreeMissingComposerHint(
+        ["/Users/me/project", "/Users/me/other"],
+        binding([
+          bindingEntry("/Users/me/project"),
+          bindingEntry("/Users/me/other"),
+        ]),
+      ),
       missingWorkspacePaths: ["/Users/me/project", "/Users/me/other"],
     });
     expect(workspaceComposerCanStart(availability)).toBe(false);
     // The hint names both folders so the disabled-send tooltip is actionable.
     expect(availability.disabledHint).toContain("/Users/me/project");
     expect(availability.disabledHint).toContain("/Users/me/other");
+  });
+
+  it("names the missing WORKTREE, not the source repo it was cut from", () => {
+    // The host's `missingWorktreePaths` is keyed by binding entry, so a deleted
+    // sibling worktree arrives as the source repo's path — a folder that is
+    // still on disk. Blaming it made the disabled-send tooltip look like a false
+    // alarm and pointed recovery at the wrong directory.
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      binding([
+        worktreeBindingEntry(
+          "/Users/me/project",
+          "/Users/me/worktrees/feature",
+        ),
+      ]),
+      true,
+      1,
+      ["/Users/me/project"],
+    );
+
+    expect(availability.disabledHint).toBe(
+      "A bound folder is missing on disk: /Users/me/worktrees/feature (the worktree bound to /Users/me/project). Restore it, or pick another folder in the workspace picker, to send.",
+    );
+    // Still keyed by entry: the picker chip matches its row by workspacePath.
+    expect(availability).toMatchObject({
+      status: "worktree-missing",
+      missingWorkspacePaths: ["/Users/me/project"],
+    });
+  });
+
+  it("falls back to the entry key when the binding cannot name a run directory", () => {
+    // A Local row is its own run directory, and a re-bind can drop the entry
+    // between the host's stat and this render — neither may lose the path.
+    expect(
+      worktreeMissingComposerHint(
+        ["/Users/me/local", "/Users/me/dropped"],
+        binding([bindingEntry("/Users/me/local")]),
+      ),
+    ).toBe(
+      "Bound folders are missing on disk: /Users/me/local, /Users/me/dropped. Restore them, or pick others in the workspace picker, to send.",
+    );
+    expect(worktreeMissingComposerHint(["/Users/me/local"], null)).toContain(
+      "/Users/me/local",
+    );
   });
 });
 
@@ -205,6 +254,18 @@ function binding(
   entries: ReadonlyArray<WorktreeBindingEntry>,
 ): WorktreeBinding {
   return { entries: [...entries] };
+}
+
+function worktreeBindingEntry(
+  workspacePath: string,
+  worktreePath: string,
+): WorktreeBindingEntry {
+  return {
+    ...bindingEntry(workspacePath),
+    mode: "worktree",
+    worktreePath,
+    branch: "feature",
+  };
 }
 
 function bindingEntry(workspacePath: string): WorktreeBindingEntry {
