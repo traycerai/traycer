@@ -330,6 +330,30 @@ describe("worktree intent purge on sweep completion", () => {
       entries: [existingBranchIntent("traycer/gone-branch")],
     });
   });
+
+  // The other half of that filter. Pinned separately, because a later
+  // tightening to an exact host match would leave a `hostId: null` slot
+  // offering a deleted worktree with nothing failing.
+  it("purges the unresolved-host staged bucket with the swept host", () => {
+    const unresolvedKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: null,
+      draftId: null,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(unresolvedKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(unresolvedKey)
+      ],
+    ).toBeUndefined();
+  });
 });
 
 describe("withoutResolvedMissingRows", () => {

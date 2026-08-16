@@ -794,6 +794,36 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
+    // The staged intent this submit is about to read is keyed by
+    // `memoryHostId`, resolved at RENDER time; `activeHostId` above comes off
+    // the live client. For an unpinned modal those diverge in the window
+    // between the app-wide host changing and this component re-rendering, and
+    // a click landing there would read host A's staged pick and then create,
+    // key its run settings and remember its intent on host B. Fail closed, as
+    // the landing composer does: the modal stays open with its draft and
+    // staged pick intact, so a retry lands on the settled host.
+    //
+    // Inert in two cases that are NOT drift: a pinned modal, whose client
+    // reports its own pinned host, and a render-time host of `null` - the
+    // binding has not published one yet, so the staged slot is the
+    // unresolved-host bucket and the memory writes already no-op. Nothing
+    // host-specific was captured there to mis-file.
+    if (memoryHostId !== null && activeHostId !== memoryHostId) {
+      reportableErrorToast(
+        "Couldn't create the conversation.",
+        {
+          description:
+            "The active device changed while this was being prepared. Try again.",
+        },
+        {
+          title: "Could not create conversation",
+          message: "Active device changed mid-submission.",
+          code: null,
+          source: "Chat",
+        },
+      );
+      return;
+    }
     const content = buildSubmittedChatJSONContent(
       editor.getJSON(),
       pickerStore.getState().knownSlashCommands,
@@ -887,6 +917,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    memoryHostId,
     pickerStore,
     draftWorkspaceFolderCount,
     epicId,
@@ -917,6 +948,23 @@ export function NewConversationModalBody(props: {
           {
             title: "Could not start agent",
             message: "No active device was available.",
+            code: null,
+            source: "Chat",
+          },
+        );
+        return;
+      }
+      // Same render-time vs live host drift as `handleSubmit` - see there.
+      if (memoryHostId !== null && activeHostId !== memoryHostId) {
+        reportableErrorToast(
+          "Couldn't start the agent.",
+          {
+            description:
+              "The active device changed while this was being prepared. Try again.",
+          },
+          {
+            title: "Could not start agent",
+            message: "Active device changed mid-submission.",
             code: null,
             source: "Chat",
           },
@@ -956,6 +1004,7 @@ export function NewConversationModalBody(props: {
     [
       canMutate,
       cleanupAfterSubmit,
+      memoryHostId,
       draftWorkspaceFolderCount,
       epicId,
       hostClient,
