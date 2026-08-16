@@ -53,11 +53,33 @@ import { z } from "zod";
  * optional. `storageProjection` below exists for exactly that gap; the frozen
  * `storage` surface is generated from it, not from these schemas.
  *
- * ## Reserved name
+ * ## Reserved name, and why capture is idempotent
  *
  * `residual` is reserved at every captured level: a future modeled field must
- * not be called that. A persisted key of that name still round-trips (it lands
- * in the bag and is re-emitted from there), it just reads oddly.
+ * not be called that. It is reserved in a stronger sense than "do not use it",
+ * because capture READS it: an own `residual` key whose value is a JSON OBJECT
+ * is taken to be a PRIOR BAG and its contents are merged into the new one,
+ * recursively, rather than re-bagged under a second `residual` key.
+ *
+ * That is what makes `capture` idempotent -
+ * `capture(capture(x)) === capture(x)` - and idempotence is not cosmetic here.
+ * A capturing level whose emission does not spread the bag back out re-offers
+ * its own POST-CAPTURE object on the next decode. Without this rule each cycle
+ * would wrap the bag one level deeper (`{residual: R}` →
+ * `{residual: {residual: R}}` → …), so a chat's inline surface would drift by
+ * an empty wrapper per reconcile and stop matching a fresh fold of the same
+ * state. It did exactly that in the field, to depth 19. Reading a prior bag
+ * back also HEALS an already-nested lineage on its next parse, with no repair
+ * pass.
+ *
+ * A NON-object `residual` (string, number, array, `null`) cannot be a bag this
+ * module produced, so it survives as ordinary data under the key `residual`.
+ * On collision the SHALLOWER key wins: the outermost keys are the newest
+ * capture cycle's reading of the object, and deeper ones are older copies of
+ * the same thing.
+ *
+ * The wire is unchanged by any of this - the encoder still emits one bag - so
+ * this is a decode-side rule only.
  */
 
 export const CHAT_SNAPSHOT_RESIDUAL_KEY = "residual";
@@ -75,8 +97,65 @@ function defineOwn(target: JsonObject, key: string, value: unknown): void {
 }
 
 /**
+ * Merges an already-captured bag into the one being built, descending through
+ * however many times the pre-idempotence encoder wrapped it.
+ *
+ * Written first-wins because the caller has already put the object's OWN
+ * unmodeled keys in `into`: those are this cycle's reading of the level, and
+ * each level down is an older copy of the same key. Descent stops at the first
+ * `residual` that is not an object - that one is data, and it lands as data.
+ *
+ * A DECLARED key found in a prior bag is dropped rather than merged. The bag's
+ * standing invariant is that it holds only unmodeled keys - the split puts
+ * declared ones in `kept` - and a stale copy of a since-modeled field must not
+ * start appearing in it. Nothing is lost by dropping it: `mergeResidual` gives
+ * the declared field precedence on the way back out, so the emitted wire is
+ * the same either way.
+ */
+function absorbPriorResidual(
+  into: JsonObject,
+  prior: JsonObject,
+  declared: ReadonlySet<string>,
+): void {
+  let level: JsonObject | null = prior;
+
+  while (level !== null) {
+    let deeper: JsonObject | null = null;
+
+    for (const key of Object.getOwnPropertyNames(level)) {
+      const descriptor = Object.getOwnPropertyDescriptor(level, key);
+      if (descriptor === undefined) continue;
+
+      if (
+        key === CHAT_SNAPSHOT_RESIDUAL_KEY &&
+        isJsonObject(descriptor.value)
+      ) {
+        deeper = descriptor.value;
+        continue;
+      }
+
+      if (declared.has(key)) continue;
+
+      // Shallower wins. `getOwnPropertyDescriptor` rather than `in` or a
+      // truthiness check so a legal `__proto__` key is tested as the own key it
+      // is, and a present-but-null value still counts as present.
+      if (Object.getOwnPropertyDescriptor(into, key) !== undefined) continue;
+      defineOwn(into, key, descriptor.value);
+    }
+
+    level = deeper;
+  }
+}
+
+/**
  * Splits `raw`'s own keys into the declared ones and a canonicalized
  * `residual` bag, ahead of the object schema that will parse the result.
+ *
+ * Idempotent: an own `residual` key holding a JSON OBJECT is read as a prior
+ * bag and merged in rather than re-bagged, so re-capturing an object this
+ * function already produced is a no-op and a legacy nest flattens on the way
+ * through. See the "Reserved name" note above for why that matters and what it
+ * costs (an object-valued `residual` on the wire is no longer ordinary data).
  *
  * A non-object input is handed straight through so the inner schema produces
  * the normal type error rather than this step swallowing it.
@@ -91,12 +170,29 @@ export function captureResidualKeys(
 
     const kept: JsonObject = Object.create(null);
     const residual: JsonObject = Object.create(null);
+    let prior: JsonObject | null = null;
 
     for (const key of Object.getOwnPropertyNames(raw)) {
       const descriptor = Object.getOwnPropertyDescriptor(raw, key);
       if (descriptor === undefined) continue;
-      defineOwn(declared.has(key) ? kept : residual, key, descriptor.value);
+
+      if (declared.has(key)) {
+        defineOwn(kept, key, descriptor.value);
+        continue;
+      }
+
+      if (
+        key === CHAT_SNAPSHOT_RESIDUAL_KEY &&
+        isJsonObject(descriptor.value)
+      ) {
+        prior = descriptor.value;
+        continue;
+      }
+
+      defineOwn(residual, key, descriptor.value);
     }
+
+    if (prior !== null) absorbPriorResidual(residual, prior, declared);
 
     defineOwn(
       kept,
