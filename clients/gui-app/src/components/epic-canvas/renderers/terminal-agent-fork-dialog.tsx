@@ -215,8 +215,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     draft: "",
   }));
   const stagingKey = useMemo(
-    () => pendingForkTerminalAgentStagingKey(epicId),
-    [epicId],
+    () => pendingForkTerminalAgentStagingKey(hostId, epicId),
+    [hostId, epicId],
   );
   const settingsSeed = useMemo(() => {
     if (target === null) return null;
@@ -527,7 +527,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
-        .setEpicIntent(epicId, worktreeIntent, Date.now());
+        .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
     }
     setStatus(
       worktreeIntent !== null && worktreeIntent.entries.length > 0

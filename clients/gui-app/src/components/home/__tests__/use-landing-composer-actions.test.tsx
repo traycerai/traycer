@@ -14,7 +14,10 @@ import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
-import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -330,7 +333,11 @@ describe("useLandingComposerActions", () => {
 
   it("refuses launch while a staged worktree path has unresolved metadata", () => {
     setSingleWorkspace();
-    const key = { surface: "landing" as const, draftId: null };
+    const key = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
     useWorktreeIntentStagingStore.getState().stageIntent(key, {
       entries: [
         {
@@ -369,7 +376,13 @@ describe("useLandingComposerActions", () => {
 
     expect(landingMocks.request).not.toHaveBeenCalled();
     expect(
-      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
     ).toBeDefined();
     queryClient.clear();
   });
@@ -913,7 +926,7 @@ describe("useLandingComposerActions", () => {
     // The staged intent still carries a STALE primary bit on the first
     // folder (staged before the switch) - launch must restamp it by path.
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -1015,7 +1028,7 @@ describe("useLandingComposerActions", () => {
     );
     await useWorkspaceFoldersStore.persist.rehydrate();
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -1106,7 +1119,7 @@ describe("useLandingComposerActions", () => {
     // folder's worktree entry, demoted, and no entry at all for the non-git
     // folder it was demoted in favour of.
     useWorktreeIntentStagingStore.getState().setIntent(
-      { surface: "landing", draftId: null },
+      { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
       {
         entries: [
           {
@@ -1922,7 +1935,11 @@ describe("useLandingComposerActions", () => {
 
   it("retains a staged intent when image preparation aborts before create", async () => {
     setSingleWorkspace();
-    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
     const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-precreate");
     useWorktreeIntentStagingStore
       .getState()
@@ -1957,14 +1974,24 @@ describe("useLandingComposerActions", () => {
     });
     expect(landingMocks.request).not.toHaveBeenCalled();
     expect(
-      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
     ).toEqual(stagedIntent);
     queryClient.clear();
   });
 
   it("retains a staged intent when the one-shot create rejects", async () => {
     setSingleWorkspace();
-    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
     const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-reject");
     useWorktreeIntentStagingStore
       .getState()
@@ -1996,7 +2023,13 @@ describe("useLandingComposerActions", () => {
       await Promise.resolve();
     });
     expect(
-      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString({
+          surface: "landing",
+          hostId: TEST_HOST_ID,
+          draftId: null,
+        })
+      ],
     ).toEqual(stagedIntent);
     queryClient.clear();
   });

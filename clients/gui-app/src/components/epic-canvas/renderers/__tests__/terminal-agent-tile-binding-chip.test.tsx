@@ -368,11 +368,15 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     };
     const sourceStagingKey = {
       surface: "owner" as const,
+      hostId: "test-host",
       epicId: "epic-test",
       ownerKind: "terminal-agent" as const,
       ownerId: "agent-1",
     };
-    const pendingForkKey = pendingForkTerminalAgentStagingKey("epic-test");
+    const pendingForkKey = pendingForkTerminalAgentStagingKey(
+      "test-host",
+      "epic-test",
+    );
     useWorktreeIntentStagingStore.getState().setIntent(sourceStagingKey, {
       entries: [
         {

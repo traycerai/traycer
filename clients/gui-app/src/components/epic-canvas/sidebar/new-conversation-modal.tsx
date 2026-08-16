@@ -539,8 +539,8 @@ export function NewConversationModalBody(props: {
         ?.selection ?? null,
   );
   const stagingKey = useMemo(
-    () => newConversationModalStagingKey(epicId, parentId),
-    [epicId, parentId],
+    () => newConversationModalStagingKey(memoryHostId, epicId, parentId),
+    [epicId, memoryHostId, parentId],
   );
   const stagingKeyId = worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -813,7 +813,7 @@ export function NewConversationModalBody(props: {
       worktreeIntent,
     );
     if (worktreeIntent !== null) {
-      rememberEpicIntent(epicId, worktreeIntent, now);
+      rememberEpicIntent(epicId, activeHostId, worktreeIntent, now);
     }
     useInitialChatHandoffStore.getState().register({
       hostId: activeHostId,
@@ -904,7 +904,8 @@ export function NewConversationModalBody(props: {
       // can only reject - and the draft would already be gone, because
       // `cleanupAfterSubmit` runs before the async create. Keep the modal
       // open and the draft intact instead.
-      if ((hostClient?.getActiveHostId() ?? null) === null) {
+      const activeHostId = hostClient?.getActiveHostId() ?? null;
+      if (activeHostId === null) {
         reportableErrorToast(
           "Couldn't start the agent.",
           {
@@ -925,7 +926,7 @@ export function NewConversationModalBody(props: {
         worktreeIntent,
       );
       if (worktreeIntent !== null) {
-        rememberEpicIntent(epicId, worktreeIntent, Date.now());
+        rememberEpicIntent(epicId, activeHostId, worktreeIntent, Date.now());
       }
       cleanupAfterSubmit();
       void terminalAgentCreate
@@ -1063,6 +1064,7 @@ function useModalWorkspaceSeed(
   const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
   const parentInheritance = useOwnerWorkspaceInheritanceSeed({
     client: hostClient,
+    hostId,
     epicId,
     ownerId: parentId ?? "",
     ownerKind: parentOwnerKind,

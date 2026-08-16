@@ -6,6 +6,7 @@ import type {
   ChatForkMode,
   ChatMessageActions,
 } from "@/components/chat/chat-message";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   buildAbForkWorkspaceSeed,
   buildForkWorkspaceSeed,
@@ -114,6 +115,9 @@ export interface ChatMessageActionsResult {
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {
+  // The chat is bound to this tab's host for life, so both its own staged
+  // slot and the fork scratch slot it seeds belong to that host.
+  const tabHostId = useTabHostId();
   const {
     dispatchUi,
     activeInlineEdit,
@@ -270,6 +274,7 @@ export function useChatMessageActions(
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
+        hostId: tabHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
@@ -290,7 +295,7 @@ export function useChatMessageActions(
       // the chat being forked).
       useWorktreeIntentStagingStore
         .getState()
-        .clear(pendingForkChatStagingKey(currentEpicId));
+        .clear(pendingForkChatStagingKey(tabHostId, currentEpicId));
       setForkTarget({
         sourceChatId: node.id,
         sourceChatTitle: chatTitle ?? node.name,
@@ -311,6 +316,7 @@ export function useChatMessageActions(
     [
       chatParentId,
       chatTitle,
+      tabHostId,
       currentComposerSettings,
       currentEpicId,
       node.id,

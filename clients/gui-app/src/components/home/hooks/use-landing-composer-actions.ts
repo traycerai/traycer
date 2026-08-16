@@ -360,11 +360,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       useComposerRunSettingsStore
         .getState()
         .setEpicRunSettings(epicId, activeHostId, settings, now);
-      rememberLandingWorktreeIntent(
-        epicId,
-        workspaceContext.worktreeIntent,
-        now,
-      );
+      rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
         userId,
@@ -640,11 +636,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       } = launch;
       const epicId = uuidv4();
       const now = Date.now();
-      rememberLandingWorktreeIntent(
-        epicId,
-        workspaceContext.worktreeIntent,
-        now,
-      );
+      rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       // Stored untitled; the title is generated from the first terminal prompt,
       // and render surfaces fall back via `epicDisplayTitle` meanwhile. (The
       // tui-agent tile is named separately in `use-create-tui-agent.ts`.)
@@ -904,6 +896,11 @@ interface LandingWorkspaceContext {
   readonly worktreeIntentSuspended: boolean;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly draftId: string | null;
+  // The DISPATCH-TIME host this context was read for - the same one its folder
+  // bucket and cached default intent came from. Carried rather than re-read at
+  // the write, so a host switch landing mid-dispatch cannot file this launch's
+  // remembered worktree intent under the host that just became active.
+  readonly hostId: string | null;
 }
 
 function readLandingWorkspaceContext(
@@ -917,14 +914,14 @@ function readLandingWorkspaceContext(
       ? null
       : (draftState.drafts.find((draft) => draft.id === draftId) ?? null);
   const exactDraftId = activeDraft?.id ?? null;
-  const stagedWorktreeIntent = readStagedWorktreeIntent({
+  const landingStagingKey: WorktreeStagingKey = {
     surface: "landing",
+    hostId,
     draftId: exactDraftId,
-  });
-  const worktreeIntentSuspended = stagedWorktreeIntentIsSuspended({
-    surface: "landing",
-    draftId: exactDraftId,
-  });
+  };
+  const stagedWorktreeIntent = readStagedWorktreeIntent(landingStagingKey);
+  const worktreeIntentSuspended =
+    stagedWorktreeIntentIsSuspended(landingStagingKey);
   if (activeDraft !== null) {
     return {
       ...canonicalLaunchWorkspace(
@@ -939,6 +936,7 @@ function readLandingWorkspaceContext(
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntentSuspended,
       draftId: exactDraftId,
+      hostId,
     };
   }
   // The launch host's own folder bucket - the same `hostId` the cached
@@ -961,6 +959,7 @@ function readLandingWorkspaceContext(
     workspaceFolderInfoByPath: globalBucket.folderInfoByPath,
     worktreeIntentSuspended,
     draftId: null,
+    hostId,
   };
 }
 
@@ -1080,17 +1079,19 @@ function branchForCachedSummary(
 }
 
 function rememberLandingWorktreeIntent(
+  workspaceContext: LandingWorkspaceContext,
   epicId: string,
-  worktreeIntent: WorktreeIntent | null,
   now: number,
 ): void {
   // Restores the exact branches next time the epic opens. The per-folder default
   // memory is persisted eagerly on each selection, so send only writes the
-  // per-epic tier.
+  // per-epic tier. Keyed by the context's dispatch-time host - the intent names
+  // paths and branches that only exist on that machine.
+  const { worktreeIntent } = workspaceContext;
   if (worktreeIntent === null) return;
   useWorktreeIntentMemoryStore
     .getState()
-    .setEpicIntent(epicId, worktreeIntent, now);
+    .setEpicIntent(epicId, workspaceContext.hostId, worktreeIntent, now);
 }
 
 function clearConsumedLandingWorktreeIntent(
@@ -1099,6 +1100,7 @@ function clearConsumedLandingWorktreeIntent(
   if (workspaceContext.worktreeIntent === null) return;
   const stagingKey: WorktreeStagingKey = {
     surface: "landing",
+    hostId: workspaceContext.hostId,
     draftId: workspaceContext.draftId,
   };
   useWorktreeIntentStagingStore.getState().clear(stagingKey);

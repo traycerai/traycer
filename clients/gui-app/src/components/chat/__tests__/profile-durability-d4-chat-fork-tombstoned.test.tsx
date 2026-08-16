@@ -294,7 +294,7 @@ async function submitFork(): Promise<void> {
 }
 
 function seedLiveForkWorkspace(): void {
-  const stagingKey = pendingForkChatStagingKey("epic-test");
+  const stagingKey = pendingForkChatStagingKey("tab-host-id", "epic-test");
   const folder = {
     path: "/repo/lifecycle",
     name: "lifecycle",
@@ -364,7 +364,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
       claudeState([profile("ambient", "ambient", "Terminal account")]),
     ]);
-    const stagingKey = pendingForkChatStagingKey("epic-test");
+    const stagingKey = pendingForkChatStagingKey("tab-host-id", "epic-test");
     const folder = {
       path: "/repo/added-after-open",
       name: "added-after-open",

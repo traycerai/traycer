@@ -118,10 +118,13 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
   const activityEnabled = useSurfaceActivity();
-  const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
   const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
   const tabHostId = useTabHostId();
+  const stagingKey = useMemo(
+    () => pendingForkChatStagingKey(tabHostId, epicId),
+    [tabHostId, epicId],
+  );
   // The fork's `createChat` call runs on the TAB's host (see
   // `useEpicCreateChatForHost` -> `useTabHostClient`), so the seeded-profile
   // validation below must read that SAME host's `providers.list`, not the
@@ -244,7 +247,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
-        .setEpicIntent(epicId, worktreeIntent, Date.now());
+        .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
     }
     const toolbar = toolbarStore.getState();
     const settings = buildChatRunSettings({

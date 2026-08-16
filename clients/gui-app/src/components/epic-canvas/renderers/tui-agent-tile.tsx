@@ -817,21 +817,23 @@ function TerminalAgentPreLaunchToolbar(
     poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
+  const toolbarHostId = useTabHostId();
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "owner",
+      hostId: toolbarHostId,
       epicId: props.epicId,
       ownerKind: "terminal-agent",
       ownerId: props.agent.id,
     }),
-    [props.agent.id, props.epicId],
+    [props.agent.id, props.epicId, toolbarHostId],
   );
   const sourceStagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(sourceStagingKey)] ?? null,
   );
   const pendingForkStagingKey = useMemo(
-    () => pendingForkTerminalAgentStagingKey(props.epicId),
-    [props.epicId],
+    () => pendingForkTerminalAgentStagingKey(toolbarHostId, props.epicId),
+    [props.epicId, toolbarHostId],
   );
   const clearStagedIntent = useWorktreeIntentStagingStore((s) => s.clear);
   const forkWorkspaceSeed = useMemo(() => {

@@ -72,17 +72,23 @@ export function LandingTerminalGestureProvider(props: {
   // gesture pins), so the folder picker writes the captured draft's workspace,
   // not the focused partner's.
   const effectiveDraftId = openGesture === null ? draftId : openGesture.draftId;
-  const stagingKey = useMemo<WorktreeStagingKey>(
-    () => ({ surface: "landing", draftId: effectiveDraftId }),
-    [effectiveDraftId],
-  );
   // ...and the EFFECTIVE host, for the same reason: folder paths are
   // host-local and now bucketed by host, so a pinned gesture's chooser must
   // list the folders of the host its terminal will actually launch on, not
   // the bucket of a host the landing picker has since switched to. Outside a
-  // gesture the landing surface follows the app-wide active host.
+  // gesture the landing surface follows the app-wide active host. The staged
+  // slot is keyed by the same pair, so a pick made under the gesture's host
+  // cannot surface on the one the picker moved to.
   const workspaceHostId =
     openGesture === null ? activeHostId : openGesture.hostId;
+  const stagingKey = useMemo<WorktreeStagingKey>(
+    () => ({
+      surface: "landing",
+      hostId: workspaceHostId,
+      draftId: effectiveDraftId,
+    }),
+    [effectiveDraftId, workspaceHostId],
+  );
   const workspace = useHomeWorkspaceSource(stagingKey, null, workspaceHostId);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
   const liveWorkspacePaths = workspace.folders;

@@ -46,6 +46,7 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   it("resolves the pinned folder, not the first one (no active draft)", () => {
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId: null,
     };
     const { result } = renderHook(() =>
@@ -66,7 +67,11 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
 
   it("resolves the pinned folder for the active landing draft", () => {
     const draftId = useLandingDraftStore.getState().createDraft(null);
-    const stagingKey: WorktreeStagingKey = { surface: "landing", draftId };
+    const stagingKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: TEST_HOST_ID,
+      draftId,
+    };
     const { result } = renderHook(() =>
       useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
@@ -85,6 +90,7 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   it("falls back to the first folder when the pin names a removed folder", () => {
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId: null,
     };
     const { result } = renderHook(() =>

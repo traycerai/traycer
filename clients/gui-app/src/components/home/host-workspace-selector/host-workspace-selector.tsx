@@ -75,7 +75,11 @@ import {
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import {
+  selectRememberedEpicIntent,
+  selectWorktreeIntentMemoryBucket,
+  useWorktreeIntentMemoryStore,
+} from "@/stores/worktree/worktree-intent-memory-store";
 import {
   useHomeWorkspaceSource,
   type HomeWorkspaceSource,
@@ -291,9 +295,17 @@ interface HomeSurfaceProps {
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
+  // Must be the SAME host `ActiveHostWorkspaceControls` resolves for an
+  // "active" scope below - the staged slot and the folder rows it stages into
+  // have to agree on which machine they describe.
+  const landingHostId = useReactiveActiveHostId();
   const stagingKey = useMemo<WorktreeStagingKey>(
-    () => ({ surface: "landing", draftId: props.draftId }),
-    [props.draftId],
+    () => ({
+      surface: "landing",
+      hostId: landingHostId,
+      draftId: props.draftId,
+    }),
+    [landingHostId, props.draftId],
   );
   return (
     <ActiveHostWorkspaceControls
@@ -533,11 +545,29 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  const setFolderIntent = useWorktreeIntentMemoryStore(
+  // Remembered defaults are host-local, so every read and write here is bound
+  // to the surface's target host. Both maps are stable references (the bucket
+  // is the stored object, or the shared empty one), so subscribing to them
+  // does not churn renders.
+  const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
+  const rowsHostId = props.activeHostId;
+  const setFolderIntent = useCallback(
+    (intent: WorktreeFolderIntent, updatedAt: number): void => {
+      rememberFolderIntent(rowsHostId, intent, updatedAt);
+    },
+    [rememberFolderIntent, rowsHostId],
+  );
   const folderIntentByPath = useWorktreeIntentMemoryStore(
-    (state) => state.folderIntentByPath,
+    useCallback(
+      (state) =>
+        selectWorktreeIntentMemoryBucket(state, rowsHostId).folderIntentByPath,
+      [rowsHostId],
+    ),
+  );
+  const legacyFolderIntentByPath = useWorktreeIntentMemoryStore(
+    (state) => state.legacyFolderIntentByPath,
   );
   // The single resolved primary every row / the collapsed chip / the launch
   // boundary agrees on - re-derived from the CURRENT resolved folder set so a
@@ -717,17 +747,27 @@ function HomeWorkspaceRows(props: {
   // until a write, so this does not churn renders.
   const epicIntent = useWorktreeIntentMemoryStore(
     useCallback(
-      (state) => (seedEpicId === null ? null : state.getEpicIntent(seedEpicId)),
-      [seedEpicId],
+      (state) =>
+        seedEpicId === null
+          ? null
+          : selectRememberedEpicIntent(state, rowsHostId, seedEpicId),
+      [rowsHostId, seedEpicId],
     ),
   );
 
   const rememberedFor = useCallback(
-    (workspacePath: string): WorktreeFolderIntent | null =>
-      Object.hasOwn(folderIntentByPath, workspacePath)
-        ? folderIntentByPath[workspacePath].intent
-        : null,
-    [folderIntentByPath],
+    (workspacePath: string): WorktreeFolderIntent | null => {
+      // The host's own bucket first, then the frozen pre-host-scoping
+      // fallback - the same per-key precedence `selectRememberedFolderIntent`
+      // applies (inlined here so both maps stay reactive subscriptions).
+      if (Object.hasOwn(folderIntentByPath, workspacePath)) {
+        return folderIntentByPath[workspacePath].intent;
+      }
+      return Object.hasOwn(legacyFolderIntentByPath, workspacePath)
+        ? legacyFolderIntentByPath[workspacePath].intent
+        : null;
+    },
+    [folderIntentByPath, legacyFolderIntentByPath],
   );
   // The per-epic entry for a folder, if any. Outranks per-folder memory in both
   // the branch-validation fetch list and the seed, so a remembered epic pick is
@@ -1839,11 +1879,26 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const [pendingCloneHostId, setPendingCloneHostId] = useState<string | null>(
     null,
   );
-  const setFolderIntent = useWorktreeIntentMemoryStore(
+  // In-epic surfaces address their bound owner host (`props.activeHostId` is
+  // `surface.hostId` here), which is also the host whose remembered defaults
+  // this picker may read and write.
+  const ownerHostId = props.activeHostId;
+  const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
-  const getFolderIntent = useWorktreeIntentMemoryStore(
+  const setFolderIntent = useCallback(
+    (intent: WorktreeFolderIntent, updatedAt: number): void => {
+      rememberFolderIntent(ownerHostId, intent, updatedAt);
+    },
+    [ownerHostId, rememberFolderIntent],
+  );
+  const readFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.getFolderIntent,
+  );
+  const getFolderIntent = useCallback(
+    (workspacePath: string): WorktreeFolderIntent | null =>
+      readFolderIntent(ownerHostId, workspacePath),
+    [ownerHostId, readFolderIntent],
   );
 
   // Mid-chat "Create new worktree" / existing-branch checkout stages the
@@ -1862,11 +1917,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "owner",
+      hostId: ownerHostId,
       epicId: surface.epicId,
       ownerKind,
       ownerId: surface.ownerId,
     }),
-    [surface.epicId, ownerKind, surface.ownerId],
+    [ownerHostId, surface.epicId, ownerKind, surface.ownerId],
   );
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],

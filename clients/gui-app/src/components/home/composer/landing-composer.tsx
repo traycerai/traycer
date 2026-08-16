@@ -620,14 +620,14 @@ export function LandingComposer(props: LandingComposerProps) {
       useWorktreeIntentStagingStore
         .getState()
         .migrateKey(
-          { surface: "landing", draftId: null },
-          { surface: "landing", draftId: createdDraftId },
+          { surface: "landing", hostId: activeHostId, draftId: null },
+          { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
         );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);
     },
-    [props.pendingCreateId, runtime, unboundRuntime],
+    [activeHostId, props.pendingCreateId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(
