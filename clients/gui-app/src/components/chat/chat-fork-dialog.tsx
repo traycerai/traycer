@@ -394,17 +394,33 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // the target's bucket, never the source tab's.
     { hostClient: selectedHostClient, hostId: selectedHostId, tuiOnly: false },
   );
-  // Catalog-CONFIRMED, not merely non-empty. The toolbar store retains the
-  // previous host's slug across a retarget while the new target's harness and
-  // model queries are still loading, so a slug-length check would leave Fork
-  // enabled long enough to submit a model the selected host may not provide.
-  // `selectionCatalogConfirmed` is false until the catalog for THIS
-  // `catalog.hostId` covers the resolved slug, which is the question the gate
-  // is actually asking.
-  const modelResolved = useStore(
+  // Cross-host asks the STRONGER question, and only cross-host.
+  //
+  // The toolbar store retains the previous host's slug across a retarget while
+  // the new target's harness/model queries load, so a bare slug-length check
+  // leaves Fork enabled long enough to submit a model the selected host may not
+  // provide. `selectionCatalogConfirmed` is false until the catalog for this
+  // `catalog.hostId` actually covers the resolved slug.
+  //
+  // Same-host keeps the length check every sibling surface uses (the composer's
+  // own Send, `terminal-agent-fork-dialog`), because there the slug came from
+  // THIS host's memory and the memory write gate is itself
+  // `selectionCatalogConfirmed` - a persisted slug was catalog-confirmed when it
+  // was recorded. Applying the strong form here too would buy nothing and cost
+  // real availability: the flag also goes false on an UNLOAD (the models query
+  // detaches, `modelsLoaded: false`), so a transient detach would disable a
+  // same-host fork with nothing on screen to explain it and no action that
+  // reopens it. Cross-host has a producer for that state - pick another host -
+  // and a host whose catalog cannot be read is one this fork should not target.
+  const catalogConfirmed = useStore(
     toolbarStore,
     (s) => s.selectionCatalogConfirmed,
   );
+  const modelSlugPresent = useStore(
+    toolbarStore,
+    (s) => s.selection.modelSlug.length > 0,
+  );
+  const modelResolved = isCrossHost ? catalogConfirmed : modelSlugPresent;
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"

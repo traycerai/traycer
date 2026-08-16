@@ -98,6 +98,8 @@ const dialogMocks = vi.hoisted(() => ({
    * reason after an upgrade.
    */
   capabilityProbeHostIds: new Set<string>(),
+  /** False models the window after a retarget, before the catalog answers. */
+  modelsLoaded: true,
   publicationQuery: { data: undefined as PublicationStateResponse | undefined },
   publicationQueryEnabled: false,
   publicationQueryIsError: false,
@@ -358,24 +360,29 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     isPending: false,
   }),
   useGuiHarnessModelsQueryForClient: () => ({
-    data: {
-      models: [
-        {
-          harnessId: "claude",
-          slug: "claude-opus-4-7",
-          label: "Claude Opus",
-          description: null,
-          contextWindow: null,
-          maxOutputTokens: null,
-          defaultReasoningEffort: null,
-          supportedReasoningEfforts: [],
-          defaultServiceTier: null,
-          supportedServiceTiers: [],
-          metadata: {},
-        },
-      ],
-    },
-    isPending: false,
+    // `undefined` is how the toolbar store learns the catalog is still LOADING
+    // (`modelsLoaded = modelsQuery.data !== undefined`), which is the state a
+    // retarget lands in before the new host's models arrive.
+    data: dialogMocks.modelsLoaded
+      ? {
+          models: [
+            {
+              harnessId: "claude",
+              slug: "claude-opus-4-7",
+              label: "Claude Opus",
+              description: null,
+              contextWindow: null,
+              maxOutputTokens: null,
+              defaultReasoningEffort: null,
+              supportedReasoningEfforts: [],
+              defaultServiceTier: null,
+              supportedServiceTiers: [],
+              metadata: {},
+            },
+          ],
+        }
+      : undefined,
+    isPending: !dialogMocks.modelsLoaded,
   }),
 }));
 
@@ -621,6 +628,7 @@ describe("ChatForkDialog cross-host routing", () => {
       dialogMocks.createVariables = null;
     });
     dialogMocks.capabilityProbeHostIds.clear();
+    dialogMocks.modelsLoaded = true;
     dialogMocks.publicationQuery = { data: undefined };
     dialogMocks.publicationQueryEnabled = false;
     dialogMocks.publicationQueryIsError = false;
@@ -878,6 +886,31 @@ describe("ChatForkDialog cross-host routing", () => {
         },
       ],
     });
+  });
+
+  it("a loading catalog blocks a CROSS-HOST fork but not a same-host one", () => {
+    // The retarget window: the toolbar store still carries the source host's
+    // slug while the newly-selected host's models are in flight. Submitting
+    // there sends a model the target may not provide.
+    dialogMocks.modelsLoaded = false;
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
+    // Same-host is unaffected - the slug came from THIS host's memory, and the
+    // memory write gate is catalog confirmation itself, so it was confirmed when
+    // it was recorded. Requiring confirmation again here would disable a fork
+    // whenever the models query merely detaches, with no way back.
+    expect(forkButton().disabled).toBe(false);
+
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind).toBe("selected");
+    if (scope?.kind === "selected") {
+      act(() => {
+        scope.onSelect(OTHER_HOST_ID);
+      });
+    }
+
+    expect(forkButton().disabled).toBe(true);
   });
 
   it("a 1.1 refusal flips to selectable after the host is recorded at 1.2, with no interaction", () => {
