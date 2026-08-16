@@ -27,6 +27,12 @@ const UNKNOWN: ChatForkPublicationState = { kind: "unknown" };
  * discipline the negotiated-version read follows, and the reason Layer 2's
  * typed host-side refusal exists as the backstop.
  *
+ * `unknown` is also the one state that must not be confused with the response's
+ * `definitive` reasons, which travel the opposite way: those are answers, and
+ * terminal ones. Not knowing is permissive and resolves itself; being told the
+ * publication is over is neither. `publicationStateFromResponse` keeps them
+ * apart, and only a real response can produce the terminal state.
+ *
  * Gated on `useHostSupportsMethod` rather than fired-and-caught: against an old
  * host the capability gate means no request is issued at all, so the common
  * mixed-fleet case costs nothing and produces no error noise.
@@ -34,11 +40,19 @@ const UNKNOWN: ChatForkPublicationState = { kind: "unknown" };
  * Its unknown -> false collapse is safe HERE, and for a reason that does not
  * depend on any claim about traffic elsewhere: an unresolved capability
  * disables the query, the gate reads `unknown`, and `unknown` is PERMISSIVE.
- * Nothing parks on it — the fork proceeds and Layer 2 remains the authority —
- * so the worst case of never learning the answer is exactly the post-A4
+ * Nothing parks on it — the fork proceeds and the host is the only authority
+ * left — so the worst case of never learning the answer is exactly the post-A4
  * behaviour, not a deadlock. That is what distinguishes this from a surface
  * that gates its affordances on a `false` and thereby switches off the reads
  * that would refresh it.
+ *
+ * "The host is the only authority left" is a statement about the UNKNOWN path
+ * specifically, and it is not a general claim that the host backstops whatever
+ * this gate declines to block. It does not: its boundary-coverage check is
+ * presence-only, so a KNOWN-uncovered boundary can be accepted and seed a
+ * truncated turn. That is why the gate blocks submit on a known `false` while
+ * staying permissive on a `null` or an unanswered read — see
+ * `chat-fork-target.ts`'s `boundarySyncing` note.
  */
 export function useChatPublicationState(args: {
   /** The SOURCE host's client — the tab client in the fork dialog. */

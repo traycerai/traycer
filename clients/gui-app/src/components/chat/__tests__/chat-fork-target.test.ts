@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_SYNCING_NOTICE,
+  CHAT_BACKUP_HALTED_NOTICE,
+  CHAT_BACKUP_UNAVAILABLE_NOTICE,
+  CHAT_DELETED_NOTICE,
   CHAT_FORK_NEEDS_UPDATE_WORD,
+  CHAT_LINEAGE_SUPERSEDED_NOTICE,
   CHAT_NOT_BACKED_UP_NOTICE,
   chatForkHostRefusals,
   chatForkTargetSupport,
@@ -280,13 +284,21 @@ describe("publication gate treatment follows how long the condition lasts", () =
     expect(verdictAllowsSubmit(unpublished)).toBe(false);
     expect(verdictNotice(unpublished)).toBe(CHAT_NOT_BACKED_UP_NOTICE);
 
-    // Speaks without blocking: if this were silently downgraded to `allowed`
-    // the notice would vanish and the non-blocking half would still pass.
+    // Blocks submit while leaving the row selectable - the two halves are
+    // independent, deliberately. Production INVERTED this: the host's old
+    // coverage check is presence-only (`containsMessageId`), so a boundary
+    // turn published mid-stream and since finalized locally reads as covered
+    // at its partial version. Leaving submit enabled here would let a fork
+    // sail through Layer 2 and seed a silently TRUNCATED turn - the poll
+    // lane this method carries is what makes the row worth keeping
+    // selectable instead of a dead end (see `boundarySyncing`'s own note in
+    // chat-fork-target.ts). A future reader must not "fix" this back to
+    // `true`.
     expect(syncing.kind).toBe("boundarySyncing");
     expect(
       remoteClassIsUnreachable(chatForkRemoteClassState(BOUNDARY_UNCOVERED)),
     ).toBe(false);
-    expect(verdictAllowsSubmit(syncing)).toBe(true);
+    expect(verdictAllowsSubmit(syncing)).toBe(false);
     expect(verdictNotice(syncing)).toBe(BOUNDARY_SYNCING_NOTICE);
 
     expect(refused.kind).toBe("hostRefused");
@@ -339,5 +351,193 @@ describe("publicationStateFromResponse", () => {
         boundaryCovered: true,
       }),
     ).toEqual(COVERED);
+  });
+});
+
+describe("publicationStateFromResponse layers `definitive` on top of the ordinary reading", () => {
+  const COVERED_RESPONSE = { published: true, boundaryCovered: true } as const;
+
+  it("chat-deleted invalidates an otherwise-covered head", () => {
+    expect(
+      publicationStateFromResponse({
+        ...COVERED_RESPONSE,
+        definitive: "chat-deleted",
+      }),
+    ).toEqual({ kind: "definitivelyUnavailable", reason: "chat-deleted" });
+  });
+
+  it("lineage-superseded invalidates an otherwise-covered head", () => {
+    expect(
+      publicationStateFromResponse({
+        ...COVERED_RESPONSE,
+        definitive: "lineage-superseded",
+      }),
+    ).toEqual({
+      kind: "definitivelyUnavailable",
+      reason: "lineage-superseded",
+    });
+  });
+
+  // Counterfactual for the two blocks above: same base fixture, only the
+  // reason changes. `backup-halted` is the pure freeze - publication
+  // stopped, but whatever had already been acknowledged is still there to be
+  // pulled - so it must NOT contradict the coverage fact this client already
+  // read.
+  it("backup-halted does NOT invalidate an otherwise-covered head", () => {
+    expect(
+      publicationStateFromResponse({
+        ...COVERED_RESPONSE,
+        definitive: "backup-halted",
+      }),
+    ).toEqual(COVERED);
+  });
+
+  // Same counterfactual again: an unrecognised reason is a licence to stop
+  // polling (see chat-publication-definitive.test.ts), never a licence to
+  // contradict a coverage fact this client actually read.
+  it("an unrecognised reason does NOT invalidate an otherwise-covered head either", () => {
+    expect(
+      publicationStateFromResponse({
+        ...COVERED_RESPONSE,
+        definitive: "a-reason-this-build-does-not-know",
+      }),
+    ).toEqual(COVERED);
+  });
+
+  it("counterfactual: the same base fixture with definitive: null stays covered", () => {
+    expect(
+      publicationStateFromResponse({
+        ...COVERED_RESPONSE,
+        definitive: null,
+      }),
+    ).toEqual(COVERED);
+  });
+
+  it("keeps boundaryCovered: null uncollapsed when a definitive field is also present", () => {
+    // Guards the tri-state discipline against the new field: `definitive:
+    // null` must not be mistaken for a boundaryCovered value, and must not
+    // itself collapse the tri-state to false.
+    expect(
+      publicationStateFromResponse({
+        published: true,
+        boundaryCovered: null,
+        definitive: null,
+      }),
+    ).toEqual(COVERED);
+  });
+
+  it("a definitive reason freezes an unpublished or uncovered answer too", () => {
+    expect(
+      publicationStateFromResponse({
+        published: false,
+        boundaryCovered: null,
+        definitive: "chat-deleted",
+      }),
+    ).toEqual({ kind: "definitivelyUnavailable", reason: "chat-deleted" });
+    expect(
+      publicationStateFromResponse({
+        published: true,
+        boundaryCovered: false,
+        definitive: "backup-halted",
+      }),
+    ).toEqual({ kind: "definitivelyUnavailable", reason: "backup-halted" });
+  });
+});
+
+describe("chatForkTargetVerdict with a definitively unavailable publication", () => {
+  const DEFINITIVELY_DELETED: ChatForkPublicationState = {
+    kind: "definitivelyUnavailable",
+    reason: "chat-deleted",
+  };
+  const DEFINITIVELY_SUPERSEDED: ChatForkPublicationState = {
+    kind: "definitivelyUnavailable",
+    reason: "lineage-superseded",
+  };
+  const DEFINITIVELY_HALTED: ChatForkPublicationState = {
+    kind: "definitivelyUnavailable",
+    reason: "backup-halted",
+  };
+  const DEFINITIVELY_UNEXPLAINED: ChatForkPublicationState = {
+    kind: "definitivelyUnavailable",
+    reason: "unexplained",
+  };
+
+  it.each([
+    { publication: DEFINITIVELY_DELETED, notice: CHAT_DELETED_NOTICE },
+    {
+      publication: DEFINITIVELY_SUPERSEDED,
+      notice: CHAT_LINEAGE_SUPERSEDED_NOTICE,
+    },
+    { publication: DEFINITIVELY_HALTED, notice: CHAT_BACKUP_HALTED_NOTICE },
+    {
+      publication: DEFINITIVELY_UNEXPLAINED,
+      notice: CHAT_BACKUP_UNAVAILABLE_NOTICE,
+    },
+  ])(
+    "names the reason-specific notice, blocks submit, and marks the row unreachable ($publication.reason)",
+    ({ publication, notice }) => {
+      const verdict = chatForkTargetVerdict({
+        isCrossHost: true,
+        version: SUPPORTED,
+        publication,
+      });
+      expect(verdict).toEqual({ kind: "chatUnavailable", notice });
+      expect(verdictAllowsSubmit(verdict)).toBe(false);
+      expect(verdictNotice(verdict)).toBe(notice);
+      expect(
+        remoteClassIsUnreachable(chatForkRemoteClassState(publication)),
+      ).toBe(true);
+    },
+  );
+
+  it("outranks a per-host build refusal - a frozen source-chat fact is universal, a build fact is per-row", () => {
+    const verdict = chatForkTargetVerdict({
+      isCrossHost: true,
+      version: REFUSED,
+      publication: DEFINITIVELY_DELETED,
+    });
+    expect(verdict.kind).toBe("chatUnavailable");
+  });
+});
+
+describe("verdictAllowsSubmit is true only for the allowed verdict", () => {
+  it.each<{ name: string; verdict: ChatForkTargetVerdict; allows: boolean }>([
+    { name: "allowed", verdict: ALLOWED, allows: true },
+    { name: "chatUnpublished", verdict: UNPUBLISHED_VERDICT, allows: false },
+    { name: "boundarySyncing", verdict: SYNCING_VERDICT, allows: false },
+    { name: "hostRefused", verdict: refusedVerdict(), allows: false },
+    {
+      name: "chatUnavailable",
+      verdict: { kind: "chatUnavailable", notice: CHAT_DELETED_NOTICE },
+      allows: false,
+    },
+  ])("$name -> allows=$allows", ({ verdict, allows }) => {
+    expect(verdictAllowsSubmit(verdict)).toBe(allows);
+  });
+
+  it("keeps the permissive publication states allowing submit - an unsupported or unreachable source host must not start blocking the fork", () => {
+    // `unknown` publication is what a source host that predates
+    // `epic.chatPublicationState`, or one that is currently unreachable,
+    // resolves to (see use-chat-publication-state-query.ts's "every failure
+    // resolves to unknown"). Neither must be swept into the blocking
+    // behaviour added for `boundarySyncing` and `definitivelyUnavailable`.
+    expect(
+      verdictAllowsSubmit(
+        chatForkTargetVerdict({
+          isCrossHost: true,
+          version: SUPPORTED,
+          publication: PUB_UNKNOWN,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      verdictAllowsSubmit(
+        chatForkTargetVerdict({
+          isCrossHost: true,
+          version: UNKNOWN,
+          publication: PUB_UNKNOWN,
+        }),
+      ),
+    ).toBe(true);
   });
 });

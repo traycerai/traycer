@@ -1,4 +1,9 @@
 import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import {
+  chatPublicationDefinitiveReason,
+  definitiveInvalidatesPublishedHead,
+  type ChatPublicationDefinitiveReason,
+} from "@/lib/chats/chat-publication-definitive";
 
 /**
  * Whether a host can serve the fork this dialog is about to send, decided from
@@ -144,8 +149,13 @@ export type ChatForkPublicationState =
    * No answer. The source host predates `epic.chatPublicationState` (the
    * optional-capability refusal `E_HOST_UNSUPPORTED`), is unreachable, or the
    * read is still in flight. Deliberately permissive, exactly like an unknown
-   * version: unknown is not "unpublished", and Layer 2's typed refusal is the
-   * backstop.
+   * version: unknown is not "unpublished", so nothing here may block.
+   *
+   * The host is then the only authority left, which is a description of THIS
+   * arm rather than a general backstop this file may lean on: the host's own
+   * coverage check is presence-only, so it does not refuse every fork this gate
+   * declines to block. That is why a KNOWN-uncovered boundary is handled here
+   * instead — see the `boundarySyncing` verdict.
    */
   | { readonly kind: "unknown" }
   /** Never published — no remote host can pull this transcript at all. */
@@ -155,6 +165,20 @@ export type ChatForkPublicationState =
    * by construction: it clears within a publish sweep.
    */
   | { readonly kind: "boundaryUncovered" }
+  /**
+   * The host named a `definitive` reason, so this answer is FROZEN: waiting
+   * cannot change it and re-asking cannot either. Distinct from `unknown` in
+   * the direction that matters — `unknown` is "we never learned", this is "we
+   * learned that it is over" — and distinct from `unpublished` in that it also
+   * covers a chat published only PART of the way to the boundary.
+   *
+   * Deliberately NOT reachable from a frozen `covered`: see
+   * `publicationStateFromResponse` and `definitiveInvalidatesPublishedHead`.
+   */
+  | {
+      readonly kind: "definitivelyUnavailable";
+      readonly reason: ChatPublicationDefinitiveReason;
+    }
   /** Published, and the boundary is inside the published head. */
   | { readonly kind: "covered" };
 
@@ -163,7 +187,7 @@ export type ChatForkPublicationState =
  *
  * The two gates have different subjects and therefore different presentations,
  * which is exactly why they are resolved together in one place rather than
- * `&&`-ed at each render site: nine (version × publication) cells decided once,
+ * `&&`-ed at each render site: every (version × publication) cell decided once,
  * with the precedence rule stated where it can be read.
  *
  * **Precedence: the more fundamental KNOWN fact leads; an unknown never
@@ -191,35 +215,110 @@ export type ChatForkTargetVerdict =
    */
   | { readonly kind: "chatUnpublished"; readonly notice: string }
   /**
-   * Also a source-chat fact, but TRANSIENT — it clears on its own in seconds.
+   * A source-chat fact like `chatUnpublished`, and durable for a reason the
+   * HOST named rather than one this client inferred from a snapshot: the
+   * publication answer is frozen (`definitive`), so no amount of waiting or
+   * re-asking moves it.
    *
-   * It blocks NOTHING. The row stays selectable AND submit stays enabled; this
-   * verdict only speaks. Two reasons, and the first is the load-bearing one:
+   * Separate from `chatUnpublished` because the two say different things to a
+   * user and only one of them is honest here. "It backs up automatically — try
+   * again shortly" is exactly the sentence this verdict exists to stop showing;
+   * the notice it carries is per-reason and never promises a wait.
+   */
+  | { readonly kind: "chatUnavailable"; readonly notice: string }
+  /**
+   * Also a source-chat fact, but TRANSIENT — it clears on its own within a
+   * publish sweep.
    *
-   * 1. **Blocking here would make Layer 1 authoritative for a case the design
-   *    says it is not.** Layer 1 is pre-submit UX; Layer 2 — the host's typed
-   *    refusal — is the authority. A notice is precise pre-submit UX on its
-   *    own; blocking is not required to deliver it, and claiming the block
-   *    inverts the layering.
-   * 2. It would be a dead end. The Fork button IS the retry affordance, so
-   *    disabling it leaves the user reading "retry shortly" with nothing to
-   *    press, waiting on a background refetch. The cost of not blocking is one
-   *    cheap doomed round trip that comes back as `E_FORK_BOUNDARY_NOT_PUBLISHED`
-   *    and renders inline exactly as it already does; the cost of blocking is a
-   *    new control for a state that resolves itself in seconds.
+   * It BLOCKS SUBMIT, and leaves the row selectable. Both halves are
+   * deliberate, and the block REVERSES an earlier decision this comment used to
+   * defend, so the reversal is recorded here rather than quietly applied.
    *
-   * This does NOT generalize to `chatUnpublished`: that is durable, so there is
-   * nothing to wait through and no dead end — which is why the two publication
-   * states differ in BOTH row and submit treatment, for the same underlying
-   * reason of how long each lasts.
+   * **What the old reasoning got wrong.** It left submit enabled on the premise
+   * that Layer 2 — the host's typed refusal — is the authority for an uncovered
+   * boundary, so the worst case was one cheap doomed round trip answered by
+   * `E_FORK_BOUNDARY_NOT_PUBLISHED`. That premise is false. The host's coverage
+   * check is PRESENCE-only (`containsMessageId`), so a boundary turn that was
+   * published mid-stream and has since finalized locally IS present in the
+   * published head — at its partial version. The fork is then accepted, 200 OK,
+   * and seeds a silently TRUNCATED turn. So the cost of not blocking was never
+   * a visible error the user could act on; it was a wrong result that looks
+   * right, which is the one outcome no amount of Layer 2 backstopping recovers.
+   * (A host-side refusal for exactly this case lands alongside this change.
+   * This half is what keeps the user out of the round trip to begin with.)
+   *
+   * **And the dead end it worried about is gone.** The second objection was
+   * that the Fork button IS the retry affordance, so disabling it strands the
+   * user with nothing to press. That held only while nothing re-asked. This
+   * method now carries a CONDITION POLL LANE
+   * (`CHAT_PUBLICATION_WAIT_POLL_LANE` in `host-method-policy-table.ts`) that
+   * re-asks precisely while the answer is transient, so the button re-enables
+   * on its own when the sweep lands. There is nothing to press because there is
+   * nothing for the user to do — which is what the copy now says instead of
+   * "retry shortly".
+   *
+   * The row stays SELECTABLE, unlike `chatUnpublished`. Nothing is wrong with
+   * any host, the state is seconds long, and the row is where the user
+   * configures the fork they are about to be allowed to make; making it inert
+   * would throw that configuration away for a wait that outlasts it.
    */
   | { readonly kind: "boundarySyncing"; readonly notice: string };
 
 export const CHAT_NOT_BACKED_UP_NOTICE =
   "This chat hasn't been backed up yet, so another machine can't read its history. It backs up automatically — try again shortly.";
 
+/**
+ * Describes a WAIT, not a retry.
+ *
+ * "Retry shortly" was written when this state left Fork enabled, so it named an
+ * action the user had. Now that it blocks submit (see the `boundarySyncing`
+ * variant), the same words would point at a button that is greyed out — the
+ * dead end the old comment predicted. The poll lane is what makes the promise
+ * true, so the sentence says what will happen rather than what to press.
+ */
 export const BOUNDARY_SYNCING_NOTICE =
-  "Still syncing this turn — retry shortly.";
+  "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.";
+
+/**
+ * The four terminal sentences, one per `definitive` reason.
+ *
+ * None of them tells the user to wait, and that is the whole point: the state
+ * they describe cannot clear on this connection, so "try again shortly" — the
+ * copy every one of these used to be indistinguishable from — is false for all
+ * four. Each says what is actually true of its own reason instead, and names
+ * the one thing that COULD change it where such a thing exists.
+ */
+export const CHAT_DELETED_NOTICE =
+  "This agent was deleted on its host, so its history can't be forked to another machine.";
+
+export const CHAT_LINEAGE_SUPERSEDED_NOTICE =
+  "Another copy of this agent took over its cloud backup, so this one's history can't be forked to another machine. Fork from that copy instead.";
+
+/**
+ * Honest about the one recovery that exists. The publisher will not retry
+ * within this host process, so waiting on this connection genuinely never
+ * clears it — but a host restart can, and the user is the person who can do
+ * that.
+ */
+export const CHAT_BACKUP_HALTED_NOTICE =
+  "This agent's cloud backup has stopped, so this turn can't be forked to another machine. Waiting won't restart it — restarting the host might.";
+
+/**
+ * A reason a newer host named that this build has no copy for. Says only what
+ * this client actually knows — the backup will not finish and waiting will not
+ * help — rather than guessing at a cause.
+ */
+export const CHAT_BACKUP_UNAVAILABLE_NOTICE =
+  "This agent's cloud backup can't finish, so this turn can't be forked to another machine. Waiting won't change that.";
+
+export function chatPublicationDefinitiveNotice(
+  reason: ChatPublicationDefinitiveReason,
+): string {
+  if (reason === "chat-deleted") return CHAT_DELETED_NOTICE;
+  if (reason === "lineage-superseded") return CHAT_LINEAGE_SUPERSEDED_NOTICE;
+  if (reason === "backup-halted") return CHAT_BACKUP_HALTED_NOTICE;
+  return CHAT_BACKUP_UNAVAILABLE_NOTICE;
+}
 
 /**
  * What is true of EVERY remote target, independent of which host is currently
@@ -239,11 +338,19 @@ export const BOUNDARY_SYNCING_NOTICE =
 export type ChatForkRemoteClassState =
   | { readonly kind: "open" }
   | { readonly kind: "unpublished"; readonly notice: string }
+  /** Frozen by a host-named `definitive` reason. Durable, like `unpublished`. */
+  | { readonly kind: "unavailable"; readonly notice: string }
   | { readonly kind: "syncing"; readonly notice: string };
 
 export function chatForkRemoteClassState(
   publication: ChatForkPublicationState,
 ): ChatForkRemoteClassState {
+  if (publication.kind === "definitivelyUnavailable") {
+    return {
+      kind: "unavailable",
+      notice: chatPublicationDefinitiveNotice(publication.reason),
+    };
+  }
   if (publication.kind === "unpublished") {
     return { kind: "unpublished", notice: CHAT_NOT_BACKED_UP_NOTICE };
   }
@@ -253,11 +360,20 @@ export function chatForkRemoteClassState(
   return { kind: "open" };
 }
 
-/** Whether the remote class is out of reach — durable refusals only. */
+/**
+ * Whether the remote class is out of reach — durable refusals only.
+ *
+ * This is the ROW-INERTNESS question, and it is narrower than "can this be
+ * submitted". `syncing` blocks submit (see the `boundarySyncing` variant) yet
+ * deliberately stays selectable: the wait is seconds long and the row is where
+ * the user configures the fork the poll lane is about to unblock, so killing
+ * the row would discard that work. The two durable states have nothing to wait
+ * through, so there is no configuration worth preserving.
+ */
 export function remoteClassIsUnreachable(
   state: ChatForkRemoteClassState,
 ): boolean {
-  return state.kind === "unpublished";
+  return state.kind === "unpublished" || state.kind === "unavailable";
 }
 
 /** The dialog-level sentence for the class, or `null` when it has none. */
@@ -285,7 +401,17 @@ export function chatForkTargetVerdict(input: {
   // submittable even when the chat has never been backed up - blocking a LOCAL
   // fork on a CLOUD fact would be the subject error in its most damaging form.
   if (!input.isCrossHost) return { kind: "allowed" };
-  // Known and universal first: no choice of target can make an unpublished
+  // Frozen first, ahead of `unpublished`: it is the same universal subject and
+  // strictly more informative. A chat the host has called definitively over is
+  // one no target and no wait can help, and saying "it backs up automatically"
+  // about it is the exact falsehood this arm was added to retire.
+  if (input.publication.kind === "definitivelyUnavailable") {
+    return {
+      kind: "chatUnavailable",
+      notice: chatPublicationDefinitiveNotice(input.publication.reason),
+    };
+  }
+  // Known and universal next: no choice of target can make an unpublished
   // chat readable, so it outranks a per-host build fact even a known one.
   if (input.publication.kind === "unpublished") {
     return { kind: "chatUnpublished", notice: CHAT_NOT_BACKED_UP_NOTICE };
@@ -298,9 +424,10 @@ export function chatForkTargetVerdict(input: {
       detail: support.detail,
     };
   }
-  // Transient last among the knowns, and it blocks NOTHING - it only speaks.
-  // Layer 1 is pre-submit UX; the host's typed refusal is the authority, so
-  // claiming a block here would move that authority. See the variant's note.
+  // Transient last among the knowns. It BLOCKS SUBMIT while leaving the row
+  // selectable - the host's presence-only coverage check means an uncovered
+  // boundary can be ACCEPTED and seed a truncated turn, so Layer 2 is not the
+  // backstop this branch once assumed. See the variant's note.
   if (input.publication.kind === "boundaryUncovered") {
     return { kind: "boundarySyncing", notice: BOUNDARY_SYNCING_NOTICE };
   }
@@ -310,13 +437,15 @@ export function chatForkTargetVerdict(input: {
 /**
  * Whether this verdict lets the fork be submitted.
  *
- * `boundarySyncing` is deliberately submittable — see the variant's own note.
- * Only the two DURABLE refusals block: a target whose build cannot carry the
- * fork, and a chat no remote host can read at all. Both are conditions that
- * waiting does not fix.
+ * EVERY refusal blocks now, including the transient one. `boundarySyncing` used
+ * to be exempt on the ground that the host would refuse an uncovered boundary
+ * anyway; it does not — its check is presence-only, so an uncovered boundary
+ * can be ACCEPTED and seed a truncated turn. See the variant's own note for the
+ * full reversal. The distinction the two durable refusals still carry is over
+ * the ROW, not the button: `remoteClassIsUnreachable`.
  */
 export function verdictAllowsSubmit(verdict: ChatForkTargetVerdict): boolean {
-  return verdict.kind === "allowed" || verdict.kind === "boundarySyncing";
+  return verdict.kind === "allowed";
 }
 
 /**
@@ -326,6 +455,7 @@ export function verdictAllowsSubmit(verdict: ChatForkTargetVerdict): boolean {
  */
 export function verdictNotice(verdict: ChatForkTargetVerdict): string | null {
   if (verdict.kind === "chatUnpublished") return verdict.notice;
+  if (verdict.kind === "chatUnavailable") return verdict.notice;
   if (verdict.kind === "boundarySyncing") return verdict.notice;
   return null;
 }
@@ -347,11 +477,50 @@ export function verdictNotice(verdict: ChatForkTargetVerdict): string | null {
  * `publishedThroughTs` is deliberately unread: it is display metadata, and no
  * clock comparison exists anywhere in this feature.
  */
-export function publicationStateFromResponse(response: {
+function ordinaryPublicationState(response: {
   readonly published: boolean;
   readonly boundaryCovered: boolean | null;
 }): ChatForkPublicationState {
   if (!response.published) return { kind: "unpublished" };
   if (response.boundaryCovered === false) return { kind: "boundaryUncovered" };
   return { kind: "covered" };
+}
+
+/**
+ * The whole read of the wire response: the ordinary three-way above, plus the
+ * one field that says whether it can still move.
+ *
+ * `definitive` is applied ON TOP of the ordinary reading rather than instead of
+ * it, and the ordering is the point. The field means "this ANSWER is frozen",
+ * not "this chat is finished", so a chat frozen at `covered` is a chat a remote
+ * host can still pull — short-circuiting on `definitive` before reading
+ * `published` / `boundaryCovered` would refuse that fork on the strength of
+ * good news. The two reasons that DO invalidate the head whatever it covers are
+ * named by `definitiveInvalidatesPublishedHead`, next to the protocol wording
+ * they come from.
+ *
+ * The tri-state discipline is untouched underneath: `published` is still read
+ * first, and `boundaryCovered: null` still never collapses to `false`.
+ *
+ * `definitive` is widened to `string` rather than typed as the wire enum, and
+ * declared OPTIONAL, for the two compatibility reasons documented on
+ * `chatPublicationDefinitiveReason`. The optionality is not laxness: a host
+ * built before the field negotiates the same method version, so its response
+ * takes the un-parsed same-version path and genuinely arrives without the key.
+ * An absent field is the ordinary reading, never a reason.
+ */
+export function publicationStateFromResponse(response: {
+  readonly published: boolean;
+  readonly boundaryCovered: boolean | null;
+  readonly definitive?: string | null;
+}): ChatForkPublicationState {
+  const ordinary = ordinaryPublicationState(response);
+  const reason = chatPublicationDefinitiveReason(response.definitive);
+  if (reason === null) return ordinary;
+  if (
+    ordinary.kind === "covered" &&
+    !definitiveInvalidatesPublishedHead(reason)
+  )
+    return ordinary;
+  return { kind: "definitivelyUnavailable", reason };
 }

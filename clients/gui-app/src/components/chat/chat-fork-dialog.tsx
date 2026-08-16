@@ -325,8 +325,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // still keyed to the selection.
   const remoteClass = chatForkRemoteClassState(publication);
   const publicationNotice = remoteClassNotice(remoteClass);
-  // The remote CLASS goes unselectable on an unpublished chat - no remote host
-  // can serve it - while the rows themselves stay silent.
+  // The remote CLASS goes unselectable on the DURABLE answers - a chat that has
+  // never been published, and one the host has called definitively over - since
+  // no remote host can serve either, while the rows themselves stay silent. A
+  // boundary that is merely still syncing is not one of them: it blocks submit
+  // but keeps the rows live, because the wait is seconds long and the rows are
+  // where the fork is configured meanwhile.
   const remoteRowsUnselectable = remoteClassIsUnreachable(remoteClass);
 
   // A REFUSAL parks this dialog's host reads, which is the one consumer shape
@@ -503,7 +507,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
     hostClientResolved: selectedHostClient !== null,
-    hostSupportsFork: verdictAllowsSubmit(targetVerdict),
+    // Not a host-build fact any more, and the name says so. This one boolean
+    // now carries the SOURCE CHAT's publication too - a frozen publication and
+    // a boundary the published head does not cover both hold Fork shut, the
+    // second of them transiently and with a poll lane behind it that reopens
+    // the button on its own.
+    verdictAllowsSubmit: verdictAllowsSubmit(targetVerdict),
     // The A/B pre-selection gate waits for a staging round-trip that only
     // happens when there IS a seed to override. Cross-host there is none, so
     // keeping the gate would leave Fork permanently disabled.
@@ -702,10 +711,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       hostClient: selectedHostClient,
       onSelect: selectHostId,
       refusalByHostId: hostRefusals,
-      // The remote CLASS, not a per-row word: an unpublished source chat is one
-      // fact about the chat, so the rows stay silent and the dialog says it once
-      // below. `sourceHostId` is what tells the picker which row is exempt — a
-      // same-host fork needs no publication at all.
+      // The remote CLASS, not a per-row word: an unpublished or definitively
+      // unavailable source chat is one fact about the chat, so the rows stay
+      // silent and the dialog says it once below. `sourceHostId` is what tells
+      // the picker which row is exempt — a same-host fork needs no publication
+      // at all.
       unselectableExceptHostId: remoteRowsUnselectable ? tabHostId : null,
     }),
     [
@@ -1008,8 +1018,13 @@ function canSubmitFork(input: {
   readonly createPending: boolean;
   /** The selected host resolved to a client this app can actually dial. */
   readonly hostClientResolved: boolean;
-  /** The selected host's build can serve this fork - see `chat-fork-target`. */
-  readonly hostSupportsFork: boolean;
+  /**
+   * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It
+   * spans BOTH subjects the dialog gates on: the selected host's build, and the
+   * source chat's publication (never backed up, frozen, or not yet covering the
+   * chosen boundary).
+   */
+  readonly verdictAllowsSubmit: boolean;
   readonly requiresStagedPreselection: boolean;
 }): boolean {
   if (input.target === null) return false;
@@ -1017,7 +1032,7 @@ function canSubmitFork(input: {
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;
-  if (!input.hostSupportsFork) return false;
+  if (!input.verdictAllowsSubmit) return false;
   if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;
   }
