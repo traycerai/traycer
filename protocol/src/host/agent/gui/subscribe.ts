@@ -75,7 +75,10 @@ import {
   worktreeIntentSchema,
   worktreeIntentSchemaV10,
 } from "@traycer/protocol/host/worktree-schemas";
-import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  managedCommandSchema,
+  managedCommandSchemaPreImage,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -710,14 +713,24 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
  * Never sent to a peer that negotiated ≤1.5: it has no variant for this kind,
  * and the whole surface arrives together or not at all.
  */
-const chatSubscribeManagedCommandsChangedServerFrameSchema = z.object({
-  kind: z.literal("managedCommandsChanged"),
-  ...textFrameFields,
-  ...chatReferenceFields,
-  // Defaulted for the same reason as the snapshot's field: a consumer reads one
-  // array shape on both channels and never null-checks either.
-  managedCommands: z.array(managedCommandSchema).default([]),
-});
+// Parameterised over the command schema for the same reason `blockDelta` is
+// parameterised over its event schema: this frame is shared by the frozen `1.6`
+// bundle and the live one, and the command shape differs between them.
+function managedCommandsChangedServerFrameSchema<
+  CommandSchema extends z.ZodType,
+>(commandSchema: CommandSchema) {
+  return z.object({
+    kind: z.literal("managedCommandsChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    // Defaulted for the same reason as the snapshot's field: a consumer reads
+    // one array shape on both channels and never null-checks either.
+    managedCommands: z.array(commandSchema).default([]),
+  });
+}
+
+const chatSubscribeManagedCommandsChangedServerFrameSchema =
+  managedCommandsChangedServerFrameSchema(managedCommandSchema);
 
 // `blockDelta`'s `event` schema is the one shared-frame shape that changes
 // incompatibly across `chat.subscribe` minors (`runtimeEventSchema` gained
@@ -1925,7 +1938,10 @@ const chatSnapshotSchemaV16 = z.object({
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   backgroundItems: z.array(backgroundItemSchema).optional(),
-  managedCommands: z.array(managedCommandSchema).default([]),
+  // Pinned to the pre-image: `1.6` is the released line the Shells surface
+  // arrived on, and the details widening (`command`/`cwd`/`cadence`) landed
+  // after it. Same reason `chat` above is pinned to `chatSchemaPreImage`.
+  managedCommands: z.array(managedCommandSchemaPreImage).default([]),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1939,7 +1955,7 @@ const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV16,
   chatSubscribeTurnStateChangedServerFrameSchema,
-  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  managedCommandsChangedServerFrameSchema(managedCommandSchemaPreImage),
   ...chatSubscribeCommonServerFrameSchemasPreTurnTail,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);

@@ -531,6 +531,14 @@ function shouldPromoteToolSegment(
 ): boolean {
   if (segment.toolName === "image_generation") return true;
   if (segment.agentMessageSend !== null) return true;
+  // A shell the agent ran or restarted (`traycer_run_shell` /
+  // `traycer_restart_shell`, host-stamped) is a background process that
+  // outlives the turn, exactly what the backgrounded-command rule below is for:
+  // its card is the shell's own surface in the feed - live status, the door to
+  // its output - and folding it into "Used N tools" would hide the one thing
+  // in the group that keeps going after the turn ends. Keyed on the durable
+  // block marker, so it holds after reload and for legacy-free stamped blocks.
+  if (segment.managedCommand !== null) return true;
   // A backgrounded command/Monitor stays a standalone card for its whole life -
   // running, completed, stopped, errored, and after reload - keyed on the
   // persistent block marker. This is the durable signal: it is stamped at birth

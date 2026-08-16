@@ -8,6 +8,7 @@ import {
   providerNoticeNormalizedMetadataSchema,
   subAgentBlockSchema,
   textBlockSchema,
+  toolCallBlockSchema,
   type ApprovalBlock,
   type AutonomousResumeBlock,
   type FileChangeBlock,
@@ -15,6 +16,7 @@ import {
   type SubAgentBlock,
   type TextBlock,
   type ToolCallBlock,
+  type ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -263,6 +265,138 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(parsed.approvalId).toBeNull();
     expect(parsed.supersededByPlanId).toBeNull();
     expect(parsed.metadata).toBeNull();
+  });
+});
+
+describe("toolCallManagedCommandSchema (started/restarted union)", () => {
+  const baseToolCall = {
+    type: "tool_call" as const,
+    blockId: "tc-shell",
+    status: "completed" as const,
+    timestamp: 1,
+    toolName: "traycer_run_shell",
+    error: null,
+  };
+
+  it("parses a legacy identity-only managedCommand (pre-restart-correlation) as a started event with cwd:null", () => {
+    // Every block stamped before restarts were correlated carries only the
+    // identity fields - the union's started member defaults `event` and
+    // `cwd` so this old shape still parses instead of failing the block.
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: {
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+      },
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toEqual({
+      event: "started",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      cwd: null,
+    });
+  });
+
+  it("round-trips a started payload carrying cwd", () => {
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: {
+        event: "started",
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+        cwd: "/work/repo",
+      },
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toEqual({
+      event: "started",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      cwd: "/work/repo",
+    });
+  });
+
+  it("round-trips a restarted payload with a running outcome", () => {
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log --since 1h",
+      effectiveCwd: "/work/repo",
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running", pid: 4410, startedAtMs: 10 },
+    };
+    const block = toolCallBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    });
+    expect(block.managedCommand).toEqual(restarted);
+
+    // Through the full contentBlockSchema union too - the restarted member is
+    // tried FIRST precisely so a shape carrying its own required `event`
+    // literal is never reinterpreted as a defaulted started shape.
+    const viaContentBlock = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    }) as ToolCallBlock;
+    expect(viaContentBlock.managedCommand).toEqual(restarted);
+  });
+
+  it("round-trips a restarted payload with an exited/null-code outcome (spawn failure)", () => {
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: false,
+      effectiveCommand: "tail -f deploy.log",
+      effectiveCwd: "/work/repo",
+      commandChanged: false,
+      cwdChanged: true,
+      outcome: {
+        state: "exited",
+        exitCode: null,
+        signal: null,
+        exitedAtMs: 20,
+      },
+    };
+    const block = toolCallBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: restarted,
+    });
+    expect(block.managedCommand).toEqual(restarted);
+  });
+
+  it("rejects a restarted payload missing a required field (effectiveCwd)", () => {
+    const incomplete = {
+      event: "restarted" as const,
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log",
+      // effectiveCwd omitted - the restarted member has no default for it,
+      // and the started member's literal "started" cannot match "restarted".
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running" as const, pid: 1, startedAtMs: 1 },
+    };
+    const result = toolCallBlockSchema.safeParse({
+      ...baseToolCall,
+      managedCommand: incomplete,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("still parses managedCommand: null (every non-shell tool call)", () => {
+    const block = contentBlockSchema.parse({
+      ...baseToolCall,
+      managedCommand: null,
+    }) as ToolCallBlock;
+    expect(block.managedCommand).toBeNull();
   });
 });
 

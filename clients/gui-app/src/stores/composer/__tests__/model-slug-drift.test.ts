@@ -31,6 +31,9 @@ function model(
 
 function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
   return {
+    // This file is only exercising model-slug resolution, not host-scoped
+    // memory, so a hostless catalog keeps the fixtures focused.
+    hostId: null,
     harnesses: [
       {
         id: "claude",
@@ -68,6 +71,7 @@ function createStore(
         ? null
         : (settings) => onSettingsChange(settings.model),
     tuiOnly: false,
+    hostId: null,
   });
 }
 

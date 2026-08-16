@@ -442,6 +442,7 @@ function toolSegment(
     ...toolInputFields(toolName, input),
     error: null,
     agentMessageSend: null,
+    managedCommand: null,
     isStreaming: false,
     endState: null,
     stopped: false,

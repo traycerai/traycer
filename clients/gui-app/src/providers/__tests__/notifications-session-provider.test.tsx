@@ -2366,6 +2366,8 @@ describe("<NotificationsSessionProvider />", () => {
       ),
     ).toEqual({
       unreadFailure: false,
+      unreadNonTerminalFailure: false,
+      unreadTerminalFailure: false,
       pendingFork: false,
       pendingApproval: false,
       pendingInterview: false,

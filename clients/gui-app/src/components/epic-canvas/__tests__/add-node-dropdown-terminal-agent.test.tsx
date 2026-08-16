@@ -38,6 +38,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   },
 }));
 
+// The launcher's null-scope target follows the app-wide active host
+// (`add-node-dropdown.tsx`'s `memoryHostId = launchHostId ?? reactiveActiveHostId`).
+// This suite renders with no HostRuntimeProvider, so the real hook would
+// resolve null; mocking a fixed active host keeps the global-workspace
+// fallback (workspace-folders-store, bucketed by host) reachable exactly as
+// it was before that store was host-scoped.
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "active-host",
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
@@ -119,11 +129,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     mocks.onAddTerminalAgent.mockReset();
     hostClientForHostIdMock.calls.length = 0;
     harnessModelPickerMock.calls.length = 0;
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
@@ -179,9 +185,13 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
       },
     };
     useWorkspaceFoldersStore.setState({
-      folders: [folder.path],
-      folderInfoByPath: { [folder.path]: folder },
-      primaryPath: folder.path,
+      byHost: {
+        "active-host": {
+          folders: [folder.path],
+          folderInfoByPath: { [folder.path]: folder },
+          primaryPath: folder.path,
+        },
+      },
     });
     useWorktreeIntentStagingStore
       .getState()

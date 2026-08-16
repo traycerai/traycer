@@ -385,6 +385,10 @@ export function ActiveHostWorkspaceControls(
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
+    // The scope-correct host: the FIXED host when pinned, else the app-wide
+    // active one - the same resolution every other host-derived read in this
+    // component uses, so the folder bucket can never disagree with them.
+    activeHostId,
   );
   const workspaceSource = useMemo<HomeWorkspaceSource>(
     () =>
@@ -408,6 +412,7 @@ export function ActiveHostWorkspaceControls(
   const resolved = useResolvedWorkspaceFolders(
     workspaceSource.source,
     activeHostClient,
+    activeHostId,
   );
   const refusalByHostId = hostWorkspaceControlsScopeRefusals(props.hostScope);
   // A surface-level blocker: every row but the named one goes inert, and none

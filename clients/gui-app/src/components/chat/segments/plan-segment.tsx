@@ -356,14 +356,14 @@ function PlanModalView(
         <div className="min-h-0 overflow-y-auto px-5 py-4">
           {props.truncationNotice === null ? null : (
             <p
-              className="mb-3 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm italic text-muted-foreground"
+              className="mb-3 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm italic text-muted-foreground"
               data-testid="plan-truncated-notice"
             >
               {props.truncationNotice}
             </p>
           )}
           {props.isFetching ? (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots
                 className="text-muted-foreground"
                 testId="plan-fetch-spinner"
@@ -380,7 +380,7 @@ function PlanModalView(
           ) : null}
           {props.failure === null ? null : (
             <div
-              className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground"
+              className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground"
               data-testid="plan-content-error"
             >
               <span>
@@ -555,6 +555,7 @@ function planCardTone(status: PlanSegmentModel["planStatus"]): string {
     return "border-emerald-500/25 bg-emerald-500/5";
   }
   if (status === "rejected" || status === "superseded") {
+    // muted-fill-ok: plan card tone paints on the chat canvas backdrop, never card/popover
     return "border-border/35 bg-muted/20 opacity-85";
   }
   return "border-border/45 bg-card";
@@ -571,9 +572,9 @@ function statusBadgeTone(status: PlanSegmentModel["planStatus"]): string {
     return "border-destructive/30 bg-destructive/10 text-destructive";
   }
   if (status === "superseded") {
-    return "border-border/50 bg-muted/50 text-muted-foreground";
+    return "border-border/50 bg-foreground/5 text-muted-foreground";
   }
-  return "border-border/50 bg-muted/40 text-muted-foreground";
+  return "border-border/50 bg-foreground/5 text-muted-foreground";
 }
 
 // Drop the leading markdown heading from the modal body ONLY when it duplicates

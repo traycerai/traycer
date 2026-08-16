@@ -23,6 +23,13 @@ export type EpicPostResolvePreparation =
   | {
       readonly kind: "open-tile";
       readonly node: EpicCanvasTileRef;
+      /**
+       * Open as a preview tab (italic, evicted by the next preview, promoted
+       * by a double-click / deliberate re-open / drag) rather than a permanent
+       * one. Explicit at every construction site: whether a jump-to-owner is a
+       * glance or a keep is the caller's judgement, not a default.
+       */
+      readonly preview: boolean;
     }
   | {
       readonly kind: "activate-tile";

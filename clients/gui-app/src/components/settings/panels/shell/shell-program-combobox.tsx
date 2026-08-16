@@ -233,7 +233,7 @@ export function ShellProgramCombobox(props: {
           ref={triggerRef}
           type="button"
           disabled={disabled}
-          className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-muted/50 disabled:opacity-50"
+          className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-foreground/5 disabled:opacity-50"
         >
           <TriggerLabel
             synthesised={synthesised}
@@ -298,7 +298,7 @@ export function ShellProgramCombobox(props: {
           <div className="px-1 pb-1 text-ui-xs uppercase tracking-wide text-muted-foreground/70">
             Add a shell
           </div>
-          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 focus-within:border-border">
+          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-2 py-1.5 focus-within:border-border">
             <span className="shrink-0 font-mono text-[var(--term-ansi-green)]">
               ❯
             </span>

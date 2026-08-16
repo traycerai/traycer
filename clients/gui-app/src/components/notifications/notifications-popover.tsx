@@ -766,7 +766,7 @@ function NotificationFeedStatus(props: {
       aria-live="polite"
       className={cn(
         props.compact
-          ? "flex shrink-0 items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2 text-muted-foreground"
+          ? "flex shrink-0 items-center gap-2 border-b border-border/60 bg-foreground/3 px-4 py-2 text-muted-foreground"
           : "flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground",
       )}
       data-testid="notifications-feed-status"
@@ -861,7 +861,7 @@ function OriginUnavailableBanner(): ReactNode {
   return (
     <p
       data-testid="notifications-origin-unavailable"
-      className="shrink-0 border-b border-border/60 bg-muted/40 px-4 py-2 text-ui-xs text-muted-foreground"
+      className="shrink-0 border-b border-border/60 bg-foreground/5 px-4 py-2 text-ui-xs text-muted-foreground"
     >
       This notification is from {hostLabel ?? "another device"}, which
       isn&apos;t the active device right now.

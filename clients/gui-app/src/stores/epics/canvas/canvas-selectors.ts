@@ -18,7 +18,11 @@ import {
 import { isTileRefRecordBacked } from "./tile-schema";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
-import { findPaneTabByContentId } from "./actions";
+import {
+  findPaneTabByContentId,
+  findPaneTabForRef,
+  type TileIdentity,
+} from "./actions";
 import { EMPTY_RECORDS } from "./canvas-desktop-projection";
 import {
   resolveTabIdForEpic,
@@ -465,8 +469,28 @@ export function useOpenTileContentIds(
 }
 
 /**
+ * Locate an open tab for a REF in `tabId`'s canvas - id and bound host both,
+ * the same identity `openTile` dedups on. Host-bound kinds (a chat, a shell's
+ * output) can have two tabs sharing one id across a cross-host clone, and
+ * "activate the one already open" must not hand back the other machine's.
+ */
+export function findOpenTileInTab(
+  tabId: string,
+  node: TileIdentity,
+): { paneId: string; instanceId: string } | null {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+  if (canvas === undefined) return null;
+  const found = findPaneTabForRef(canvas, node);
+  if (found === null) return null;
+  return { paneId: found.pane.id, instanceId: found.instanceId };
+}
+
+/**
  * Locate an open tab by content id in `tabId`'s canvas. Returns the holding
  * pane's id plus the tab's `instanceId` (activation/close key on instanceId).
+ *
+ * Id only: for host-bound kinds prefer {@link findOpenTileInTab}, which also
+ * matches the host.
  */
 export function findOpenArtifactInTab(
   tabId: string,

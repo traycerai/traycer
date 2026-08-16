@@ -73,7 +73,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
 
         {candidates.length > 0 ? (
           <section
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-muted/10 px-5 py-4"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
             aria-labelledby="delete-tasks-worktree-heading"
             aria-describedby="delete-tasks-worktree-description"
             data-testid="delete-tasks-worktree-cleanup"
@@ -105,7 +105,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
           </section>
         ) : null}
 
-        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-muted/20 px-5 py-3 sm:flex sm:justify-end">
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
           <Button
             type="button"
             variant="ghost"

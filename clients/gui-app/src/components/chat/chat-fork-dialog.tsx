@@ -378,7 +378,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, selectedHostClient),
     null,
-    { hostClient: selectedHostClient, tuiOnly: false },
+    // `hostId` is the same target host as `hostClient` - the SELECTED host,
+    // not the tab's. The per-host last-used buckets it keys describe the
+    // machine the fork will run on, so a cross-host fork must read and write
+    // the target's bucket, never the source tab's.
+    { hostClient: selectedHostClient, hostId: selectedHostId, tuiOnly: false },
   );
   const modelResolved = useStore(
     toolbarStore,
@@ -550,6 +554,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // never touched the folder rows resolves to the empty workspace rather
       // than falling through to this machine's global folder list.
       fallbackWorkspace: workspaceSeed,
+      // The launch host, so the global fallback below this one reads the
+      // TARGET machine's folder bucket. Folder paths are host-local; the
+      // source tab's bucket would seed paths that need not exist there.
+      hostId,
     });
     const workspaceMode = deriveWorkspaceMode(
       launchWorkspace.folderCount,

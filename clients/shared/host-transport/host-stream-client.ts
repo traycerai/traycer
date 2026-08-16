@@ -93,3 +93,16 @@ export interface IHostStreamClient<
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
 }
+
+/**
+ * The slice of a stream client that reports negotiated per-method support -
+ * all a capability reader needs. A session store can hand this to its
+ * consumers so they read the BOUND host's capabilities off the very client
+ * their subscription rides on, without being handed the whole transport.
+ */
+export type StreamMethodSupportSource<
+  Registry extends VersionedStreamRpcRegistry,
+> = Pick<
+  IHostStreamClient<Registry>,
+  "getMethodSupport" | "subscribeMethodSupport"
+>;

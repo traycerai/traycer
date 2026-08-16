@@ -204,7 +204,7 @@ function SharingDefaultConfirmDialog(props: {
             {props.description}
           </DialogDescription>
         </div>
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"

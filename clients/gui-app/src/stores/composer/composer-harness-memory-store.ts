@@ -28,35 +28,94 @@ export interface ResolvedHarnessSwitch extends EffortTier {
 
 export type ResolvedModelSelection = EffortTier;
 
-interface ComposerHarnessMemoryStore {
+/**
+ * One host's harness memory. Hosts have different harness/model/profile
+ * catalogs, so every map is bucketed by the host the selection was committed
+ * on - a cross-host read would restore state the reading host may not serve.
+ */
+export interface ComposerHarnessMemoryHostBucket {
   // harnessId -> last explicitly selected profile. `null` is the ambient
   // Terminal profile and is stored deliberately (rather than represented by
   // a missing key) so it can replace an earlier managed-profile selection.
-  lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
+  readonly lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
   // harnessId -> last committed model slug. Profile memory is deliberately
   // separate so changing credentials cannot change the remembered model.
-  lastModelByHarness: Record<string, string>;
+  readonly lastModelByHarness: Record<string, string>;
   // (harnessId, modelSlug) -> effort/tier, LRU-capped by updatedAt. Like the
   // last model, these settings belong to the provider/model, not a profile.
-  effortByHarnessModel: Record<string, HarnessModelEffortRecord>;
+  readonly effortByHarnessModel: Record<string, HarnessModelEffortRecord>;
+}
 
-  // WRITE — settings.model is always resolved (onSettingsChange guarantees it).
-  record: (settings: ChatRunSettings) => void;
+const EMPTY_HOST_BUCKET: ComposerHarnessMemoryHostBucket = {
+  lastProfileByHarness: {},
+  lastModelByHarness: {},
+  effortByHarnessModel: {},
+};
+
+interface ComposerHarnessMemoryStore {
+  // hostId -> that host's memory. Writes ALWAYS land here (never in
+  // `legacy`), keyed by the composer's target host.
+  byHost: Record<string, ComposerHarnessMemoryHostBucket>;
+  // Frozen pre-host-scoping data (v2 and earlier), kept as a read-only
+  // per-key fallback so the common single-host install keeps its remembered
+  // selections across the migration. A migration cannot know which host the
+  // flat data belonged to; catalog-availability rerouting in the toolbar
+  // store remains the safety net when the fallback names a harness/model the
+  // reading host does not serve.
+  legacy: ComposerHarnessMemoryHostBucket;
+
+  // WRITE — settings.model is always resolved (onSettingsChange guarantees
+  // it). `hostId === null` (no resolved target host) drops the write.
+  record: (hostId: string | null, settings: ChatRunSettings) => void;
   // WRITE — selection commits call this immediately, before model resolution.
   recordProfileSelection: (
+    hostId: string | null,
     harnessId: GuiHarnessId,
     profileId: string | null,
   ) => void;
   // READ — missing memory falls back to the ambient Terminal profile.
-  resolveLastProfile: (harnessId: GuiHarnessId) => string | null;
+  resolveLastProfile: (
+    hostId: string | null,
+    harnessId: GuiHarnessId,
+  ) => string | null;
   // READ — harness switch: last model + its record (or "" / null defaults).
-  resolveHarnessSwitch: (harnessId: string) => ResolvedHarnessSwitch;
+  resolveHarnessSwitch: (
+    hostId: string | null,
+    harnessId: string,
+  ) => ResolvedHarnessSwitch;
   // READ — explicit model pick: that pair's record (or null defaults).
   resolveModelSelection: (
+    hostId: string | null,
     harnessId: string,
     modelSlug: string,
   ) => ResolvedModelSelection;
   resetForTests: () => void;
+}
+
+function hostBucket(
+  state: Pick<ComposerHarnessMemoryStore, "byHost">,
+  hostId: string | null,
+): ComposerHarnessMemoryHostBucket {
+  if (hostId === null || !Object.hasOwn(state.byHost, hostId)) {
+    return EMPTY_HOST_BUCKET;
+  }
+  return state.byHost[hostId];
+}
+
+/**
+ * The per-host `lastProfileByHarness` view the header rate-limit surfaces
+ * read: the host bucket overlaid on the legacy fallback, so a harness the
+ * host has no record for yet still resolves its pre-migration profile.
+ * Returns a fresh object - subscribe through `useShallow`.
+ */
+export function selectLastProfileByHarness(
+  state: Pick<ComposerHarnessMemoryStore, "byHost" | "legacy">,
+  hostId: string | null,
+): Partial<Record<GuiHarnessId, string | null>> {
+  return {
+    ...state.legacy.lastProfileByHarness,
+    ...hostBucket(state, hostId).lastProfileByHarness,
+  };
 }
 
 // Keeps the pre-profile persisted key byte-identical, so v1 ambient records
@@ -170,11 +229,19 @@ interface ComposerHarnessMemoryPersistedState {
   readonly effortByHarnessModel: Record<string, HarnessModelEffortRecord>;
 }
 
+interface ComposerHarnessMemoryPersistedStateV3 {
+  readonly byHost: Record<string, ComposerHarnessMemoryHostBucket>;
+  readonly legacy: ComposerHarnessMemoryHostBucket;
+}
+
 /**
- * v1 -> v2 migration. v1 scoped model and effort memory to a provider profile,
- * so changing credentials could restore a different model/reasoning tuple.
- * v2 keeps profile memory independent and collapses profile-scoped records to
- * the most recently updated provider/model records.
+ * v1/v2 -> flat-map normalization, reused by the v3 migration as the `legacy`
+ * bucket. v1 scoped model and effort memory to a provider profile, so
+ * changing credentials could restore a different model/reasoning tuple; v2
+ * keeps profile memory independent and collapses profile-scoped records to
+ * the most recently updated provider/model records. Running it on v2 data is
+ * a no-op normalization (plain keys parse as themselves), so one tolerant
+ * pass covers both stored versions.
  */
 export function migrateComposerHarnessMemoryPersistedState(
   persisted: unknown,
@@ -288,102 +355,171 @@ export function migrateComposerHarnessMemoryPersistedState(
   };
 }
 
+/**
+ * v3 migration: every earlier version's flat maps become the read-only
+ * `legacy` fallback; per-host buckets start empty and fill as each host is
+ * actually used. A migration cannot know which host the flat data belonged
+ * to, so it is deliberately NOT assigned to any host bucket.
+ */
+export function migrateComposerHarnessMemoryPersistedStateV3(
+  persisted: unknown,
+): ComposerHarnessMemoryPersistedStateV3 {
+  return {
+    byHost: {},
+    legacy: migrateComposerHarnessMemoryPersistedState(persisted),
+  };
+}
+
 export const useComposerHarnessMemoryStore =
   create<ComposerHarnessMemoryStore>()(
     persist(
       (set, get) => ({
-        lastProfileByHarness: {},
-        lastModelByHarness: {},
-        effortByHarnessModel: {},
-        record: (settings) => {
+        byHost: {},
+        legacy: EMPTY_HOST_BUCKET,
+        record: (hostId, settings) => {
+          if (hostId === null) return;
           // The settings callback is also a valid profile-selection signal
           // (permission/reasoning edits can be the first committed edit on a
           // seeded composer), so keep profile memory in the same funnel as the
           // model/effort memory. `commitSelection` records earlier as well so a
           // profile switch is remembered even while its model catalog loads.
           const profileId = settings.profileId ?? null;
-          get().recordProfileSelection(settings.harnessId, profileId);
+          get().recordProfileSelection(hostId, settings.harnessId, profileId);
           // Mirror the sibling run-settings store: an unresolved model is not a
           // real selection. Writing an empty model would make
           // `resolveHarnessSwitch` treat it as a record and suppress the lazy
           // `globalLastRunSettings` fallback.
           if (settings.model.length === 0) return;
           const modelKey = harnessModelKey(settings.harnessId, settings.model);
-          set((state) => ({
-            lastModelByHarness: {
-              ...state.lastModelByHarness,
-              [settings.harnessId]: settings.model,
-            },
-            // Always write - no value dedup. `updatedAt` is the recency key the
-            // cap sorts on, so even re-selecting the same pair must refresh it;
-            // a just-touched record must not be evicted as "least recently
-            // used".
-            effortByHarnessModel: cappedByUpdatedAt(
-              {
-                ...state.effortByHarnessModel,
-                [modelKey]: {
-                  reasoningEffort: settings.reasoningEffort,
-                  serviceTier: settings.serviceTier,
-                  updatedAt: Date.now(),
+          set((state) => {
+            const bucket = hostBucket(state, hostId);
+            return {
+              byHost: {
+                ...state.byHost,
+                [hostId]: {
+                  ...bucket,
+                  lastModelByHarness: {
+                    ...bucket.lastModelByHarness,
+                    [settings.harnessId]: settings.model,
+                  },
+                  // Always write - no value dedup. `updatedAt` is the recency
+                  // key the cap sorts on, so even re-selecting the same pair
+                  // must refresh it; a just-touched record must not be evicted
+                  // as "least recently used".
+                  effortByHarnessModel: cappedByUpdatedAt(
+                    {
+                      ...bucket.effortByHarnessModel,
+                      [modelKey]: {
+                        reasoningEffort: settings.reasoningEffort,
+                        serviceTier: settings.serviceTier,
+                        updatedAt: Date.now(),
+                      },
+                    },
+                    COMPOSER_HARNESS_MEMORY_CAP,
+                  ),
                 },
               },
-              COMPOSER_HARNESS_MEMORY_CAP,
-            ),
-          }));
+            };
+          });
         },
-        recordProfileSelection: (harnessId, profileId) => {
+        recordProfileSelection: (hostId, harnessId, profileId) => {
+          if (hostId === null) return;
           const state = get();
+          const bucket = hostBucket(state, hostId);
           // Return before `set`, not from inside its updater: the persist
           // middleware serializes after every `set` call even when Zustand
           // preserves state identity, so this guard also avoids a redundant
           // localStorage write on the settings emit that follows a commit.
           if (
-            Object.hasOwn(state.lastProfileByHarness, harnessId) &&
-            state.lastProfileByHarness[harnessId] === profileId
+            Object.hasOwn(bucket.lastProfileByHarness, harnessId) &&
+            bucket.lastProfileByHarness[harnessId] === profileId
           ) {
             return;
           }
           set({
-            lastProfileByHarness: {
-              ...state.lastProfileByHarness,
-              [harnessId]: profileId,
+            byHost: {
+              ...state.byHost,
+              [hostId]: {
+                ...bucket,
+                lastProfileByHarness: {
+                  ...bucket.lastProfileByHarness,
+                  [harnessId]: profileId,
+                },
+              },
             },
           });
         },
-        resolveLastProfile: (harnessId) => {
-          return get().lastProfileByHarness[harnessId] ?? null;
-        },
-        resolveHarnessSwitch: (harnessId) => {
+        resolveLastProfile: (hostId, harnessId) => {
           const state = get();
-          const modelSlug = ownRecordValue(state.lastModelByHarness, harnessId);
-          if (modelSlug !== undefined) {
+          const bucket = hostBucket(state, hostId);
+          // `hasOwn`, not `??` on the value: a stored `null` IS the remembered
+          // ambient choice and must not fall through to the legacy fallback.
+          if (Object.hasOwn(bucket.lastProfileByHarness, harnessId)) {
+            return bucket.lastProfileByHarness[harnessId] ?? null;
+          }
+          return state.legacy.lastProfileByHarness[harnessId] ?? null;
+        },
+        resolveHarnessSwitch: (hostId, harnessId) => {
+          const state = get();
+          // Per-host memory first at BOTH tiers (a record on this host is
+          // always fresher than the frozen legacy fallback), then the same
+          // two tiers of the pre-host-scoping legacy data. Within each tier
+          // the stored per-harness model wins over the lazy last-run backfill
+          // (read-time `getState()` only, no eager hydration-time write),
+          // which applies iff the last-run tuple belongs to the same harness.
+          const hostModel = ownRecordValue(
+            hostBucket(state, hostId).lastModelByHarness,
+            harnessId,
+          );
+          if (hostModel !== undefined) {
             // Reuse the model-pick resolver for the exact same (harness,
             // model) record lookup - `{ null, null }` when absent.
             return {
-              modelSlug,
-              ...state.resolveModelSelection(harnessId, modelSlug),
+              modelSlug: hostModel,
+              ...state.resolveModelSelection(hostId, harnessId, hostModel),
             };
           }
-          // Lazy backfill (read-time `getState()` only, no eager hydration-time
-          // write): when this harness has no record, fall back to the last-run
-          // tuple iff it belongs to the same harness. A real
-          // record always wins over this fallback because of the stored-model
-          // check above.
-          const global =
-            useComposerRunSettingsStore.getState().globalLastRunSettings;
-          if (global !== null && global.harnessId === harnessId) {
+          const runSettings = useComposerRunSettingsStore.getState();
+          const hostGlobal =
+            hostId !== null &&
+            Object.hasOwn(runSettings.globalLastRunSettingsByHostId, hostId)
+              ? runSettings.globalLastRunSettingsByHostId[hostId]
+              : null;
+          if (hostGlobal !== null && hostGlobal.harnessId === harnessId) {
             return {
-              modelSlug: global.model,
-              reasoningEffort: global.reasoningEffort,
-              serviceTier: global.serviceTier,
+              modelSlug: hostGlobal.model,
+              reasoningEffort: hostGlobal.reasoningEffort,
+              serviceTier: hostGlobal.serviceTier,
+            };
+          }
+          const legacyModel = ownRecordValue(
+            state.legacy.lastModelByHarness,
+            harnessId,
+          );
+          if (legacyModel !== undefined) {
+            return {
+              modelSlug: legacyModel,
+              ...state.resolveModelSelection(hostId, harnessId, legacyModel),
+            };
+          }
+          const legacyGlobal = runSettings.legacyGlobalLastRunSettings;
+          if (legacyGlobal !== null && legacyGlobal.harnessId === harnessId) {
+            return {
+              modelSlug: legacyGlobal.model,
+              reasoningEffort: legacyGlobal.reasoningEffort,
+              serviceTier: legacyGlobal.serviceTier,
             };
           }
           return { modelSlug: "", reasoningEffort: null, serviceTier: null };
         },
-        resolveModelSelection: (harnessId, modelSlug) => {
+        resolveModelSelection: (hostId, harnessId, modelSlug) => {
           const state = get();
           const key = harnessModelKey(harnessId, modelSlug);
-          const record = ownRecordValue(state.effortByHarnessModel, key);
+          const record =
+            ownRecordValue(
+              hostBucket(state, hostId).effortByHarnessModel,
+              key,
+            ) ?? ownRecordValue(state.legacy.effortByHarnessModel, key);
           if (record === undefined) {
             return { reasoningEffort: null, serviceTier: null };
           }
@@ -394,23 +530,21 @@ export const useComposerHarnessMemoryStore =
         },
         resetForTests: () => {
           set({
-            lastProfileByHarness: {},
-            lastModelByHarness: {},
-            effortByHarnessModel: {},
+            byHost: {},
+            legacy: EMPTY_HOST_BUCKET,
           });
         },
       }),
       {
         ...basePersistOptions(composerHarnessMemoryKey(null)),
-        version: 2,
+        version: 3,
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
-          lastProfileByHarness: state.lastProfileByHarness,
-          lastModelByHarness: state.lastModelByHarness,
-          effortByHarnessModel: state.effortByHarnessModel,
+          byHost: state.byHost,
+          legacy: state.legacy,
         }),
         migrate: (persisted) =>
-          migrateComposerHarnessMemoryPersistedState(persisted),
+          migrateComposerHarnessMemoryPersistedStateV3(persisted),
       },
     ),
   );

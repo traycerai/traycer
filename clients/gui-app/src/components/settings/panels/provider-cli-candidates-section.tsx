@@ -331,7 +331,7 @@ function CliBinaryProbePendingNotice({
   readonly providerLabel: string;
 }): ReactNode {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
       Looking for the {providerLabel} CLI…
     </div>
@@ -348,7 +348,7 @@ function CliBinaryMissingNotice({
   const openExternalLink = useRunnerOpenExternalLink();
   const runnerHost = use(RunnerHostContext);
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+    <div className="rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <p>
         No {providerLabel} CLI was found on this machine, and Traycer ships no
         bundled copy of it. Install it, or add its path below.
@@ -603,7 +603,7 @@ function CandidateTable({
       <div
         className={cn(
           TABLE_ROW,
-          "border-b border-border/40 bg-muted/30 py-2 text-ui-xs font-medium text-muted-foreground",
+          "border-b border-border/40 bg-foreground/3 py-2 text-ui-xs font-medium text-muted-foreground",
         )}
       >
         <span />
@@ -678,7 +678,7 @@ function CustomPathForm({
     // `col-span-4`: the table container is the shared grid the header and rows
     // subgrid onto, so this form is a grid item too - without it, it lands in
     // the 2.25rem radio column and collapses to a sliver.
-    <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
+    <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-foreground/2 p-3">
       <div className="flex items-center gap-2">
         <Input
           ref={focusDraftInput}
@@ -784,7 +784,7 @@ function CandidateRow({
     <div
       className={cn(
         TABLE_ROW,
-        "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-muted/20",
+        "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-foreground/3",
         presentation.unavailable ? "opacity-60" : "",
       )}
     >
@@ -1372,7 +1372,7 @@ function RowStatusLine({
           // width, which this repo's UI rule excludes for layout surfaces - the
           // track has to shrink with a narrow settings dialog rather than hold
           // a rem figure chosen against one window size.
-          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-muted"
+          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-foreground/8"
         >
           <span
             className={cn(

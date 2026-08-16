@@ -15,6 +15,7 @@ import {
 import {
   FAILURE_TONE,
   notificationFeedTone,
+  TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -214,7 +215,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       // but are visually de-emphasised so this machine's actionable items
       // lead — de-emphasis, not filter-out (D7).
       className={cn(
-        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-muted/70 has-[:focus-visible]:bg-muted/70",
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-foreground/6 has-[:focus-visible]:bg-foreground/6",
         packPresentation.packRemote && "opacity-60",
       )}
       data-testid="notification-entry"
@@ -422,7 +423,7 @@ function NotificationRowControlButton(
         onClick={props.onClick}
         aria-label={props.label}
         data-testid={props.testId}
-        className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Check className="size-3.5" aria-hidden />
       </button>
@@ -508,10 +509,12 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     return globalEventGlyph(row.globalEntry.event);
   }
   if (row.appLocalKind !== null) {
-    return {
-      icon: FAILURE_TONE.Icon,
-      colorClassName: FAILURE_TONE.className,
-    };
+    const tone =
+      row.appLocalKind === "terminal.closed" ||
+      row.appLocalKind === "terminal.crashed"
+        ? TERMINAL_FAILURE_TONE
+        : FAILURE_TONE;
+    return { icon: tone.Icon, colorClassName: tone.className };
   }
   const statusTone = notificationFeedTone(row);
   if (statusTone !== null) {

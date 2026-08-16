@@ -997,7 +997,7 @@ function IncompatibleDetail(props: {
     <>
       {reason === null ? null : (
         <p
-          className="max-w-full break-words rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+          className="max-w-full break-words rounded-md bg-foreground/5 px-3 py-2 text-left text-ui-xs text-muted-foreground"
           data-testid="local-host-incompatible-reason"
         >
           Reason: {reason}

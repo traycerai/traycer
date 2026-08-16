@@ -670,7 +670,7 @@ function ConnectForm(props: {
       />
 
       {choice !== null && choice.unavailableReason !== null ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+        <p className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-xs text-muted-foreground">
           {choice.unavailableReason}
         </p>
       ) : null}
@@ -700,7 +700,7 @@ function ConnectForm(props: {
       ) : null}
 
       {props.restartNotice !== null ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+        <p className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-xs text-muted-foreground">
           {props.restartNotice}
         </p>
       ) : null}
@@ -919,7 +919,7 @@ function OauthWaitingPanel(props: {
   return (
     <div className="flex flex-col gap-3">
       {attempt.instructions !== null ? (
-        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs whitespace-pre-wrap text-muted-foreground">
+        <p className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-xs whitespace-pre-wrap text-muted-foreground">
           {redactLogText(attempt.instructions)}
         </p>
       ) : null}

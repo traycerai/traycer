@@ -425,7 +425,7 @@ function VersionManagerHeader(props: {
   const footprint = formatFootprintLine(props.sharedLine, props.totalSizeLabel);
 
   return (
-    <header className="flex w-full flex-col gap-3 border-b border-border bg-muted/40 px-4 py-3 sm:px-5">
+    <header className="flex w-full flex-col gap-3 border-b border-border bg-foreground/5 px-4 py-3 sm:px-5">
       <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-ui-sm font-semibold text-foreground">
@@ -500,7 +500,7 @@ function UpdateAvailableBanner(props: {
   return (
     <div
       data-testid="provider-pack-update-available-banner"
-      className="mx-4 mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 sm:mx-5"
+      className="mx-4 mt-3 flex flex-col gap-2 rounded-lg border border-border bg-foreground/3 px-3.5 py-2.5 sm:mx-5"
     >
       <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-ui-sm text-foreground">
@@ -854,7 +854,7 @@ function DownloadProgress(props: {
     return (
       <div
         data-testid="download-progress-indeterminate"
-        className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+        className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-foreground/8"
         role="progressbar"
         aria-valuetext="Download in progress on another host"
         aria-busy="true"
@@ -867,7 +867,7 @@ function DownloadProgress(props: {
   return (
     <div
       data-testid="download-progress-determinate"
-      className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+      className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-foreground/8"
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}

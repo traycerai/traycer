@@ -16,6 +16,13 @@ import {
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
+  /** Failure that is not a renderer-local terminal lifecycle failure. Host
+   * failures use this arm because the released indicator response does not
+   * carry a terminal subtype. */
+  readonly unreadNonTerminalFailure?: boolean;
+  /** GUI-local subtype used to distinguish terminal failures on aggregate
+   * task surfaces. When true, `unreadFailure` is also true. */
+  readonly unreadTerminalFailure?: boolean;
   readonly pendingFork: boolean;
   readonly pendingApproval: boolean;
   readonly pendingInterview: boolean;
@@ -36,6 +43,8 @@ export type SurfaceNotificationIndicators =
 
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
+  unreadNonTerminalFailure: false,
+  unreadTerminalFailure: false,
   pendingFork: false,
   pendingApproval: false,
   pendingInterview: false,
@@ -51,19 +60,32 @@ export function selectNotificationIndicatorState(
   indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
   const hostState = selectHostIndicatorState(indicators, entity, originHostId);
-  const unreadLocalFailure = Object.values(state.byId).some(
-    (entry) =>
+  let unreadLocalTerminalFailure = false;
+  let unreadLocalNonTerminalFailure = false;
+  for (const entry of Object.values(state.byId)) {
+    const matchesEntity =
       entry.readAt === null &&
       (originHostId === null || entry.originHostId === originHostId) &&
       (entity.chatId === undefined
         ? notificationPayloadBelongsToEpic(entry.payload, entity.epicId)
-        : notificationPayloadBelongsToEntity(entry.payload, entity)),
-  );
+        : notificationPayloadBelongsToEntity(entry.payload, entity));
+    if (!matchesEntity) continue;
+    if (entry.kind === "terminal.closed" || entry.kind === "terminal.crashed") {
+      unreadLocalTerminalFailure = true;
+    } else {
+      unreadLocalNonTerminalFailure = true;
+    }
+  }
+  const unreadLocalFailure =
+    unreadLocalTerminalFailure || unreadLocalNonTerminalFailure;
   if (!unreadLocalFailure && hostState === EMPTY_HOST_INDICATOR_STATE) {
     return EMPTY_NOTIFICATION_INDICATOR_STATE;
   }
   return {
     unreadFailure: unreadLocalFailure || hostState.unreadFailure,
+    unreadNonTerminalFailure:
+      unreadLocalNonTerminalFailure || hostState.unreadFailure,
+    unreadTerminalFailure: unreadLocalTerminalFailure,
     pendingFork: hostState.pendingFork,
     pendingApproval: hostState.pendingApproval,
     pendingInterview: hostState.pendingInterview,

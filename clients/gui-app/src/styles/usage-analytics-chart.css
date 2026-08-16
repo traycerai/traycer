@@ -37,8 +37,15 @@
   /* Sequential ramp for the activity heatmap (dataviz skill blue ramp,
      steps 150/300/450/650 light): one hue, light→dark, monotonic
      lightness; level 0 is the neutral no-usage tile. Dark mode below picks
-     its OWN steps (650→250, dark→bright) rather than flipping these. */
-  --usage-heat-0: var(--muted);
+     its OWN steps (650→250, dark→bright) rather than flipping these.
+
+     Level 0 is a surface-relative foreground alpha, NOT `--muted`: the tiles
+     are 10px and borderless, so the no-usage cell IS the grid's lattice. The
+     Usage surfaces render on `--popover` (epic dialog) and `--card`
+     (Settings), and every preset dark defines `--muted` as exactly those
+     values - a muted level 0 erased the lattice and left the heatmap reading
+     as scattered dots. The alpha keeps the ramp monotonic in both modes. */
+  --usage-heat-0: color-mix(in oklab, var(--foreground) 8%, transparent);
   --usage-heat-1: #b7d3f6;
   --usage-heat-2: #6da7ec;
   --usage-heat-3: #2a78d6;
@@ -55,7 +62,7 @@
   --usage-series-7: #9085e9;
   --usage-series-8: #e66767;
   --usage-series-other: var(--muted-foreground);
-  --usage-heat-0: var(--muted);
+  --usage-heat-0: color-mix(in oklab, var(--foreground) 8%, transparent);
   --usage-heat-1: #104281;
   --usage-heat-2: #256abf;
   --usage-heat-3: #5598e7;

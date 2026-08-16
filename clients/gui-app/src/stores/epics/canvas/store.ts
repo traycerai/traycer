@@ -71,7 +71,7 @@ import {
   openTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
-  findPaneTabByContentId,
+  findPaneTabForRef,
   openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
   renameArtifact,
@@ -1842,7 +1842,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const targetPane =
             before === null ? null : findPaneById(before.root, paneId);
           const existingSingleton =
-            before === null ? null : findPaneTabByContentId(before, ref.id);
+            before === null ? null : findPaneTabForRef(before, ref);
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               openSingletonTileInPaneCanvas(canvas, paneId, ref),
@@ -2017,7 +2017,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           // both before `set()` commits the move.
           const before = canvasForExistingTab(get(), tabId);
           if (before !== null) {
-            const existing = findPaneTabByContentId(before, node.id);
+            const existing = findPaneTabForRef(before, node);
             if (existing !== null && existing.pane.id !== targetPaneId) {
               flushChatTabViewportHandoff([
                 existing.instanceId,
@@ -2156,7 +2156,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
                     targetPane.activeTabId,
                     targetPane.tabInstanceIds,
                   );
-            const existing = findPaneTabByContentId(before, node.id);
+            const existing = findPaneTabForRef(before, node);
             flushChatTabViewportHandoff([
               ...(targetInstanceId === null ? [] : [targetInstanceId]),
               ...(existing !== null ? [existing.instanceId] : []),
@@ -3097,6 +3097,7 @@ export {
   collectOpenEpicIds,
   epicTabName,
   findOpenArtifactInTab,
+  findOpenTileInTab,
   getCanvasRootForTab,
   isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,

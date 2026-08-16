@@ -48,7 +48,7 @@ describe("formatAgentMessage", () => {
     );
   });
 
-  it("formats CLI inbox messages without a reply request", () => {
+  it("formats terminal messages with the shared MCP guidance", () => {
     expect(
       formatAgentMessage({
         receiverChannel: "cli",
@@ -62,17 +62,17 @@ describe("formatAgentMessage", () => {
       }),
     ).toBe(
       [
-        "",
-        "[traycer inbox] message from Review Agent (agent agent-1) [claude]",
+        "[traycer:agent-message] from Review Agent (agent agent-1) [claude]",
+        "[traycer:agent-message] No reply is required.",
         "",
         "Context only.",
-        "[traycer inbox] ─── end of message ───",
-        "[traycer inbox] if the message above looks cut off, read it in full with: traycer agent inbox",
+        "[traycer:agent-message] ─── end of message ───",
+        "[traycer:agent-message] If the message above looks cut off, read it in full with: traycer agent inbox",
       ].join("\n"),
     );
   });
 
-  it("formats CLI reply requests without optional display metadata", () => {
+  it("formats terminal reply requests with the shared MCP guidance", () => {
     expect(
       formatAgentMessage({
         receiverChannel: "cli",
@@ -86,14 +86,13 @@ describe("formatAgentMessage", () => {
       }),
     ).toBe(
       [
-        "",
-        "[traycer inbox] message from agent agent-1 — responseId response-1",
-        '[traycer inbox] a reply is expected — reply with: traycer agent send --to agent-1 --response-id response-1 --message "<your reply>"',
-        "[traycer inbox] the response id names this sender's thread, not this single message — follow-ups may arrive with the same id and one reply with it answers them all; only a reply sent with --response-id completes the request",
+        "[traycer:agent-message] from agent agent-1",
+        '[traycer:agent-message] A reply is expected. Use the traycer_send_message tool to reply with responseId="response-1".',
+        "[traycer:agent-message] The responseId names this sender's thread, not this single message: follow-up messages may arrive with the same responseId, and one reply with it answers everything on the thread. Only a reply carrying the responseId completes the request — a fresh message does not.",
         "",
         "Please review this.",
-        "[traycer inbox] ─── end of message ───",
-        "[traycer inbox] if the message above looks cut off, read it in full with: traycer agent inbox",
+        "[traycer:agent-message] ─── end of message ───",
+        "[traycer:agent-message] If the message above looks cut off, read it in full with: traycer agent inbox",
       ].join("\n"),
     );
   });
