@@ -221,3 +221,100 @@ export function useManagedCommandDelete(): UseMutationResult<
       }),
   );
 }
+
+export interface ManagedCommandDeliverHeldVariables {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  /** Null releases every hold this chat owns. */
+  readonly commandIds: readonly string[] | null;
+}
+
+/**
+ * Whether a Deliver is in flight for this chat, across every mounted panel -
+ * the same shared-pending read `Stop all` needs, and for a stronger reason: a
+ * null-ids Deliver names no commands, so a second tile re-sending it is not a
+ * duplicate of a narrower request but the identical whole-chat action.
+ */
+export function useManagedCommandDeliverHeldIsPending(chatId: string): boolean {
+  return (
+    useIsMutating({
+      mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
+    }) > 0
+  );
+}
+
+/**
+ * Releases the holds a committed Stop fence left on this chat's shells.
+ *
+ * Unlike the lifecycle three this does NOT go through
+ * {@link useManagedCommandLifecycleMutation}: those are keyed by a single
+ * `commandId` and answer with a command, while Deliver is chat-scoped and
+ * answers with a per-command split. It still pins a transient client to the
+ * command's OWN host for the same reason they do - a hold belongs to a
+ * specific host process, and a host switch mid-flight must not redirect it.
+ *
+ * A partial failure is a RESOLVED response carrying `unresolved`, not a
+ * rejection, so the success path has to report it. Rejecting is reserved for
+ * the call failing outright.
+ */
+export function useManagedCommandDeliverHeld(
+  chatId: string,
+): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "managedCommand.deliverHeld">,
+  HostRpcError,
+  ManagedCommandDeliverHeldVariables
+> {
+  const defaultClient = useHostClient();
+  const directory = useHostDirectory();
+
+  return useMutation(
+    withHostMutationLifecycleBoundary("managedCommand.deliverHeld", {
+      mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
+      mutationFn: (variables: ManagedCommandDeliverHeldVariables) =>
+        withHostRpcErrorBoundary("managedCommand.deliverHeld", () => {
+          const entry = directory.findById(variables.hostId);
+          const client: HostClient<HostRpcRegistry> | null =
+            entry === null
+              ? null
+              : buildTransientHostClient(defaultClient, entry);
+          if (client === null) {
+            return Promise.reject(
+              hostClientUnavailableError("managedCommand.deliverHeld"),
+            );
+          }
+          return client.request("managedCommand.deliverHeld", {
+            epicId: variables.epicId,
+            chatId: variables.chatId,
+            commandIds:
+              variables.commandIds === null ? null : [...variables.commandIds],
+          });
+        }),
+      onSuccess: (response) => {
+        if (response.unresolved.length === 0) return;
+        // Every remaining hold is stuck for the SAME reason only when they
+        // agree; otherwise the honest summary is the count. `retryable` is the
+        // one field a client may branch on - a false means retrying against
+        // this host can never work, so say that instead of implying a retry.
+        const permanent = response.unresolved.filter(
+          (failure) => !failure.retryable,
+        );
+        if (permanent.length === response.unresolved.length) {
+          toast.error(
+            permanent.length === 1
+              ? "That shell's output can't be delivered by this host. Restarting or updating it may help."
+              : `${permanent.length} shells' output can't be delivered by this host. Restarting or updating it may help.`,
+          );
+          return;
+        }
+        toast.warning(
+          response.unresolved.length === 1
+            ? "One shell is still held. Try again in a moment."
+            : `${response.unresolved.length} shells are still held. Try again in a moment.`,
+        );
+      },
+      onError: (error: HostRpcError) =>
+        toastFromHostError(error, "Couldn't deliver it."),
+    }),
+  );
+}

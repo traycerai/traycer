@@ -124,6 +124,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "managedCommandsChanged" }
     >,
   ) => void;
+  readonly onHeldUpdatesChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "heldUpdatesChanged" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -327,14 +333,7 @@ export class ChatStreamClient {
         return;
       }
       case "heldUpdatesChanged": {
-        // Deliberately dropped, for now. The held set arrives on every
-        // `snapshot` too, so a client that ignores this frame still renders a
-        // correct list on subscribe and after any reconnect - it just will not
-        // see a hold appear or clear live. Consuming it belongs with the
-        // surface that acts on it (the Deliver affordance), which lands
-        // separately; this case exists so that omission is a stated decision
-        // rather than a silent fall-through, since the switch below has no
-        // exhaustiveness guard to make an unhandled kind visible.
+        this.callbacks.onHeldUpdatesChanged(frame);
         return;
       }
       case "pong": {

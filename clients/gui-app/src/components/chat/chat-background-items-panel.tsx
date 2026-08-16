@@ -5,6 +5,7 @@ import {
   Bot,
   ChevronDown,
   Monitor,
+  PauseCircle,
   Plug,
   Square,
   TerminalSquare,
@@ -23,6 +24,8 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import {
+  useManagedCommandDeliverHeld,
+  useManagedCommandDeliverHeldIsPending,
   useManagedCommandStopAll,
   useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
@@ -35,8 +38,14 @@ import {
   type EpicCanvasManagedCommandOutputDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
-import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  useHeldManagedCommandsForChat,
+  useRunningManagedCommandsForChat,
+} from "@/stores/managed-commands/managed-commands-for-chat";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import { cn } from "@/lib/utils";
 import {
   BASE_PAD_LEFT,
@@ -418,6 +427,58 @@ function backgroundHeaderSummary(input: {
  * is how a person says WHERE, and having to find the same shell in a second
  * menu to place it deliberately was the only reason to go there.
  */
+/**
+ * One shell whose last output a committed Stop fence is holding back.
+ *
+ * Rendered without the running rows' drag handle, elapsed timer or Stop
+ * action, because none of them mean anything here: the shell has already
+ * finished, so there is nothing to stop and no elapsed time to run. What it has
+ * instead is the one action that matters - a door onto the output, so a person
+ * can see what is being held before deciding to take it.
+ */
+function HeldManagedCommandRow(props: {
+  readonly held: HeldManagedCommandUpdate;
+  readonly onOpen: ((commandId: string) => void) | null;
+}) {
+  const { held, onOpen } = props;
+  return (
+    <li className="m-0">
+      <div
+        className="group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40"
+        style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
+      >
+        <TooltipWrapper
+          label={`${held.description} — output held after Stop`}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <button
+            type="button"
+            data-testid={`held-managed-command-row-${held.commandId}`}
+            disabled={onOpen === null}
+            onClick={() => {
+              onOpen?.(held.commandId);
+            }}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <PauseCircle
+              aria-hidden
+              className="size-3.5 shrink-0 text-foreground/40"
+            />
+            <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+              {held.description}
+            </span>
+            <span className="shrink-0 text-ui-xs text-muted-foreground">
+              Held
+            </span>
+          </button>
+        </TooltipWrapper>
+      </div>
+    </li>
+  );
+}
+
 function ManagedCommandRow(props: {
   readonly command: ManagedCommand;
   readonly epicId: string;
@@ -696,6 +757,19 @@ export function BackgroundItemsPanel(props: {
     runningCount: runningGroupCount + managedCommands.length,
     waitingWakeCount,
   });
+  // Held shells are NOT part of `managedCommands` above: that list is the ones
+  // running right now, and a hold only lingers on a shell that has finished.
+  // They are deliberately kept out of the header's running count for the same
+  // reason - nothing is running.
+  const heldManagedCommands = useHeldManagedCommandsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId,
+  });
+  const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
+  const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
+    props.chatId,
+  );
   const openManagedCommand = useManagedCommandDoor();
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
   // Cross-instance: the same chat can be open in two tiles, and each panel
@@ -767,6 +841,34 @@ export function BackgroundItemsPanel(props: {
           </span>
         </CollapsibleTrigger>
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
+          {heldManagedCommands.length > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              disabled={deliverHeldPending}
+              data-testid="background-deliver-held"
+              onClick={() => {
+                // Null, not the rendered ids: Deliver means "everything you are
+                // holding for me", and naming the ids this panel happens to
+                // show would silently skip a hold installed between render and
+                // click.
+                deliverHeld.mutate({
+                  hostId,
+                  epicId: props.epicId,
+                  chatId: props.chatId,
+                  commandIds: null,
+                });
+              }}
+            >
+              <span className="text-ui-xs">
+                {heldManagedCommands.length === 1
+                  ? "Deliver"
+                  : `Deliver ${heldManagedCommands.length}`}
+              </span>
+            </Button>
+          ) : null}
           <BackgroundStopButton
             label="Stop all"
             iconOnly={false}
@@ -786,6 +888,13 @@ export function BackgroundItemsPanel(props: {
           )}
         >
           <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
+            {heldManagedCommands.map((held) => (
+              <HeldManagedCommandRow
+                key={`held-${held.commandId}`}
+                held={held}
+                onOpen={openManagedCommand}
+              />
+            ))}
             {managedCommands.map((command) => (
               <ManagedCommandRow
                 key={command.id}

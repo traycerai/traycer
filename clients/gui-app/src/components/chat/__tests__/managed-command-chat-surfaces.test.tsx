@@ -19,7 +19,10 @@ import {
 import type { ReactNode } from "react";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
@@ -47,6 +50,8 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 const stopMutate = vi.fn();
 const stopAllMutate = vi.fn();
 const stopAllFlight = { isPending: false };
+const deliverHeldMutate = vi.fn();
+const deliverHeldFlight = { isPending: false };
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
   () => ({
@@ -58,6 +63,11 @@ vi.mock(
     }),
     useManagedCommandStopAllIsPending: () => stopAllFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeld: () => ({
+      mutate: deliverHeldMutate,
+      isPending: deliverHeldFlight.isPending,
+    }),
+    useManagedCommandDeliverHeldIsPending: () => deliverHeldFlight.isPending,
   }),
 );
 
@@ -109,6 +119,17 @@ function command(over: Partial<ManagedCommand>): ManagedCommand {
   };
 }
 
+function held(
+  over: Partial<HeldManagedCommandUpdate>,
+): HeldManagedCommandUpdate {
+  return {
+    commandId: "cmd-1",
+    description: "deploy watcher",
+    heldAtMs: 10,
+    ...over,
+  };
+}
+
 function trigger(
   over: Partial<AutonomousResumeTrigger>,
 ): AutonomousResumeTrigger {
@@ -156,6 +177,14 @@ function setCommands(
   chatSession(chatId).setCommands(commands);
 }
 
+/** This chat's whole set of held updates, the way the host sends it. */
+function setHeldUpdates(
+  heldUpdates: readonly HeldManagedCommandUpdate[],
+  chatId: string,
+): void {
+  chatSession(chatId).setHeldUpdates(heldUpdates);
+}
+
 function chatTileTree(node: ReactNode): ReactNode {
   return (
     <EpicSessionContext.Provider value={epicHandle}>
@@ -185,6 +214,8 @@ beforeEach(() => {
   stopMutate.mockClear();
   stopAllMutate.mockClear();
   stopAllFlight.isPending = false;
+  deliverHeldMutate.mockClear();
+  deliverHeldFlight.isPending = false;
   streamSupport.value = "supported";
   epicHandle = createOpenEpicStore({
     epicId: EPIC_ID,
@@ -709,5 +740,115 @@ describe("running commands in the Background panel", () => {
 
     expect(screen.queryByText("Not stopped by Stop all")).toBeNull();
     expect(screen.queryByText("Shells")).toBeNull();
+  });
+});
+
+describe("held shells in the Background panel", () => {
+  function renderPanel(): void {
+    renderInChatTile(
+      <BackgroundItemsPanel
+        items={[]}
+        epicId={EPIC_ID}
+        chatId={CHAT_ID}
+        viewTabId={TAB_ID}
+        canAct
+        readOnly={false}
+        pendingStopTaskIds={new Set()}
+        stopAllPending={false}
+        scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
+        onItemClick={() => undefined}
+        onStopItem={() => null}
+        onStopAll={() => null}
+      />,
+    );
+  }
+
+  function expandPanel(): void {
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+  }
+
+  it("shows no Deliver button when this chat holds nothing", () => {
+    renderPanel();
+
+    expect(screen.queryByTestId("background-deliver-held")).toBeNull();
+  });
+
+  it("appears the moment this chat has a held shell, named by count", () => {
+    renderPanel();
+    act(() => {
+      setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
+    });
+
+    expect(screen.getByTestId("background-deliver-held").textContent).toBe(
+      "Deliver",
+    );
+
+    act(() => {
+      setHeldUpdates(
+        [held({ commandId: "cmd-1" }), held({ commandId: "cmd-2" })],
+        CHAT_ID,
+      );
+    });
+
+    expect(screen.getByTestId("background-deliver-held").textContent).toBe(
+      "Deliver 2",
+    );
+  });
+
+  it("sends commandIds: null, not the rendered ids", () => {
+    renderPanel();
+    act(() => {
+      setHeldUpdates(
+        [held({ commandId: "cmd-1" }), held({ commandId: "cmd-2" })],
+        CHAT_ID,
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("background-deliver-held"));
+
+    // A hold installed between render and click must not be silently
+    // skipped - Deliver means "everything you are holding for me", not "the
+    // ids this panel happened to show".
+    expect(deliverHeldMutate).toHaveBeenCalledTimes(1);
+    expect(deliverHeldMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      commandIds: null,
+    });
+  });
+
+  it("disables the Deliver button while a Deliver is already in flight", () => {
+    deliverHeldFlight.isPending = true;
+    renderPanel();
+    act(() => {
+      setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
+    });
+
+    const deliverButton = screen.getByTestId<HTMLButtonElement>(
+      "background-deliver-held",
+    );
+    expect(deliverButton.disabled).toBe(true);
+    fireEvent.click(deliverButton);
+    expect(deliverHeldMutate).not.toHaveBeenCalled();
+  });
+
+  it("renders held rows above running rows", () => {
+    renderPanel();
+    act(() => {
+      setCommands([command({ id: "running-1" })], CHAT_ID);
+      setHeldUpdates([held({ commandId: "held-1" })], CHAT_ID);
+    });
+    expandPanel();
+
+    const heldRow = screen.getByTestId("held-managed-command-row-held-1");
+    const runningRow = screen.getByTestId(
+      "managed-command-background-row-running-1",
+    );
+    expect(
+      heldRow.compareDocumentPosition(runningRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });

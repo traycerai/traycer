@@ -226,10 +226,13 @@ export type ManagedCommandDeliverHeldRequest = z.infer<
  * of inheriting it (see `managedCommandDeliverHeldResponseSchema`).
  *
  * `retryable` is the ONLY field a client may branch on, and it is a boolean on
- * purpose. A reason enum would have to grow as new failure modes appear, and an
- * added enum value on a host->client payload is a wire break at a released
- * version (`surface-compat.ts`) - so the one bit a surface genuinely needs is
- * carried in a shape that can never need widening:
+ * purpose: the one bit a surface acts on, in a shape that never needs widening.
+ *
+ * (An added enum value on a host->client payload IS a wire break at a released
+ * version - `surface-compat.ts` - but that argument alone proves too much to
+ * lean on here: this method has not shipped, so an enum would be free today,
+ * and freezing-plus-bridging is a ritual this repo pays routinely elsewhere.
+ * The boolean earns its place by being the whole decision a surface makes.)
  *
  * - `true`  - transient. The hold is real and this host process could still
  *   release it: the pair has not been materialized by a reconcile pass yet, or
@@ -245,12 +248,33 @@ export type ManagedCommandDeliverHeldRequest = z.infer<
  * branch on it; it is for humans reading a report.
  */
 export const managedCommandHeldReleaseFailureSchema = z.object({
-  commandId: z.string(),
+  /**
+   * NULL when the host could not attribute the failure to any one command,
+   * which is a real state and not a degenerate one: three of the host's proof
+   * arms - a disposed router, a delivery-state table it could not read, and a
+   * boot record load that failed - fail BEFORE anything is enumerated, so there
+   * is no id to name. The last is the sharp one: with `commandIds: null` the
+   * in-scope set IS the owned-record set, which is exactly what the failed load
+   * did not produce.
+   *
+   * Nullable rather than rejecting the call, because rejecting would throw away
+   * `retryable` - the one bit the surface needs - into an error channel a client
+   * cannot branch on. An un-attributed entry means "this Deliver proved
+   * nothing"; a surface must NOT read the response's empty `released`/`held` as
+   * "there was nothing held".
+   */
+  commandId: z.string().nullable(),
   /** Stable identifier for logs and telemetry. Never branch on this. */
   code: z.string(),
   /** Whether retrying against THIS host process could ever succeed. */
   retryable: z.boolean(),
-  /** Host-authored detail, safe to show in a diagnostic surface. */
+  /**
+   * Host-authored detail. Show it verbatim rather than composing copy from
+   * `retryable` alone: `false` covers two different human remedies - a row a
+   * NEWER build wrote (upgrade this host) and a boot load that failed (restart
+   * it) - and only this string distinguishes them, since `code` is not
+   * branchable.
+   */
   message: z.string(),
 });
 export type ManagedCommandHeldReleaseFailure = z.infer<
@@ -278,7 +302,22 @@ export const managedCommandDeliverHeldResponseSchema = z.object({
   released: z.array(z.string()),
   /** In-scope commands whose release could not be proven. */
   unresolved: z.array(managedCommandHeldReleaseFailureSchema),
-  /** Every hold the chat still owns once this call settled. */
+  /**
+   * The holds the chat still owns once this call settled, as far as the host
+   * can SEE them - not a proof of completeness, and the difference matters.
+   *
+   * Its producer is derived from the host's in-memory pair set, and a delivery
+   * row this build cannot decode never becomes a pair (the reconcile pass skips
+   * it), so such a hold can never appear here. It surfaces in `unresolved`
+   * instead whenever it is in scope - but `held` is chat-wide while the proof is
+   * scoped to `commandIds`, so a narrowed Deliver can leave an undecodable hold
+   * on a SIBLING shell in neither list.
+   *
+   * So: settle the rows you asked about from `released`/`unresolved`, and treat
+   * `held` as the best current view rather than as authority to clear a row you
+   * did not name. An empty `held` alongside a non-empty `unresolved` never means
+   * "nothing is held".
+   */
   held: z.array(heldManagedCommandUpdateSchema),
 });
 export type ManagedCommandDeliverHeldResponse = z.infer<

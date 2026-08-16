@@ -11,11 +11,21 @@ import { describe, expect, it } from "vitest";
  * `managedCommand.deliverHeld` something to act on (see `unary-schemas.ts`
  * and `contracts.ts`).
  *
- * The regression this suite exists to catch: `chat.subscribe@1.6` is the
- * released line the whole Shells surface arrived on, hand-frozen to
+ * The regression this suite exists to catch: `chat.subscribe@1.6` is the line
+ * the whole Shells surface arrived on, hand-frozen to
  * `managedCommandSchemaPreImage` precisely so a LIVE addition can never leak
  * onto it. `heldUpdates`/`heldUpdatesChanged` are `1.7`-only - a `1.6` peer
  * must never observe either.
+ *
+ * `1.6` has NOT shipped - no released baseline carries `chat.subscribe` above
+ * `1.5` - so this guards the freeze DISCIPLINE rather than a peer in the field.
+ * That is the point: the discipline is what will still be correct once `1.7`
+ * ships and `1.6` becomes a line someone really negotiates.
+ *
+ * Note what these two tests do NOT cover: the host serializes frames as-is, so
+ * a frozen schema only STRIPS on parse. Keeping the field off an older peer's
+ * wire is the host's job, in `chat-frame-projection.ts`, and no schema test can
+ * see a regression there.
  */
 
 const chat: Chat = {
