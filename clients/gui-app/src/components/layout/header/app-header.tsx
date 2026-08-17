@@ -107,6 +107,10 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
     >
       <WindowsMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
+      <HeaderProjectProfileSlot
+        enabled={!navDisabled}
+        framelessDesktop={framelessDesktop}
+      />
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -122,7 +126,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       {showTabStrip && framelessDesktop ? (
         <div
           aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+          className="relative z-10 hidden h-full shrink-0 basis-[clamp(1rem,3vw,3rem)] md:block"
           style={spacerDragStyle}
         />
       ) : null}
@@ -153,7 +157,6 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         {!navDisabled && showGlobalResourceMonitor ? (
           <ResourceMonitorPopover className={undefined} />
         ) : null}
-        <HeaderProjectProfileSlot enabled={!navDisabled} />
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
@@ -162,9 +165,19 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   );
 }
 
-function HeaderProjectProfileSlot(props: { readonly enabled: boolean }) {
+function HeaderProjectProfileSlot(props: {
+  readonly enabled: boolean;
+  readonly framelessDesktop: boolean;
+}) {
   if (!props.enabled) return null;
-  return <ProjectProfileSwitcher />;
+  return (
+    <div
+      className="relative z-10 shrink-0"
+      style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
+    >
+      <ProjectProfileSwitcher />
+    </div>
+  );
 }
 
 // Hiding the bell when signed-out keeps the notifications-store +
