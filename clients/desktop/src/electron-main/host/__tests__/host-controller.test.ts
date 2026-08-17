@@ -645,6 +645,7 @@ describe("mutation lane: wait-never-reject", () => {
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       return {
         data: {
@@ -735,6 +736,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       // A watchdog heartbeat: liveness only, every numeric field null.
       opts.onEvent({
@@ -744,6 +746,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: null,
+        workUnits: null,
       });
       return {
         data: {
@@ -811,6 +814,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 45,
         totalBytes: 100,
         message: "downloading host 1.8.0",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -819,6 +823,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "retrying host archive shortly",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -827,6 +832,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "extracting host 1.8.0",
+        workUnits: null,
       });
       return {
         data: {
@@ -853,6 +859,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 45,
         totalBytes: 100,
         message: "retrying host archive shortly",
+        workUnits: null,
       }),
       // ...and a GENUINE transition carries nothing. This assertion used to read
       // `percent: 45`, pinning the leak as though it were intended - incidentally,
@@ -909,6 +916,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 838_860_800,
         totalBytes: 838_860_800,
         message: "downloading host 1.8.0",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -917,6 +925,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "extracting host 1.8.0",
+        workUnits: null,
       });
       return {
         data: {
@@ -949,6 +958,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "extracting host 1.8.0",
+        workUnits: null,
       }),
     );
   });

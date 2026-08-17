@@ -55,6 +55,7 @@ vi.mock("../../installer/download-stage", () => ({
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return {
       outcome: "short-circuit",
@@ -125,6 +126,7 @@ vi.mock("../../installer/apply", () => ({
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return { outcome: "no-op", installedVersion: "1.0.0" };
   },

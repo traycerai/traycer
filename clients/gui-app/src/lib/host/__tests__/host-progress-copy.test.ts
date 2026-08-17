@@ -187,4 +187,41 @@ describe("buildHostProgressView", () => {
     };
     expect(buildHostProgressView(laneHigh)?.percent).toBe(100);
   });
+
+  it("a verify stage carrying BYTES still heads 'Setting up Traycer Host…', never 'Downloading'", () => {
+    // The `verify` phase now reports hashed bytes, so the card gains a transfer
+    // label - "400 MB of 800 MB" - during a local-source install. That is safe
+    // only because the download WORDING is gated on `stage === "download"` rather
+    // than on the presence of byte fields.
+    //
+    // That safety rests on a stage gate, and stage gates get consolidated. This
+    // arm is what stops a future refactor routing a hash into download wording and
+    // telling a user their bundled install is downloading something.
+    const verifying: MutationLaneStatus = {
+      kind: "ensure",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      progress: {
+        stage: "verify",
+        percent: null,
+        bytes: 400_000_000,
+        totalBytes: 838_860_800,
+        message: "hashing /Applications/Traycer.app/…/host-runtime.tar.gz",
+        workUnits: null,
+      },
+    };
+    const view = buildHostProgressView(verifying);
+
+    expect(view?.heading).toBe("Setting up Traycer Host…");
+    expect(view?.heading).not.toContain("Downloading");
+    expect(view?.shortLabel).not.toContain("Downloading");
+    // Positive control for the assertions above: the bytes DID reach the view, so
+    // "not Downloading" is not being satisfied by a view that never saw them.
+    // BINARY MB, and asserted as the exact string because that is what caught the
+    // author writing "400 MB of 839 MB" here from a decimal reading of the same
+    // two numbers. 400_000_000 B is 381 MiB; 838_860_800 B is exactly 800 MiB.
+    expect(view?.transferLabel).toBe("381 MB of 800 MB");
+    // And no progress bar: `percent` stays null through verify, so the card gains
+    // a live figure without gaining a determinate bar.
+    expect(view?.percent).toBeNull();
+  });
 });

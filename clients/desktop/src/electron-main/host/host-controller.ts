@@ -137,6 +137,7 @@ function noopProgress(): MutationProgress {
     bytes: null,
     totalBytes: null,
     message: null,
+    workUnits: null,
   };
 }
 
@@ -149,6 +150,7 @@ function progressFromNdjson(
     bytes: event.bytes,
     totalBytes: event.totalBytes,
     message: event.message,
+    workUnits: event.workUnits,
   };
 }
 
@@ -902,6 +904,11 @@ export class HostController {
           bytes: progress.bytes ?? prior.bytes,
           totalBytes: progress.totalBytes ?? prior.totalBytes,
           message: progress.message,
+          // In the carry-forward set for the same reason as the rest: a bare
+          // event inside a stage should HOLD the count, not blank it. It resets
+          // across a genuine transition with everything else, which is correct -
+          // a new stage's work has not started being counted.
+          workUnits: progress.workUnits ?? prior.workUnits,
         };
     this.mutationStatus = { ...this.mutationStatus, progress: merged };
     this.publishMutationStatus();

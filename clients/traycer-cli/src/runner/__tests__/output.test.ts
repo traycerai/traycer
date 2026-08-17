@@ -32,7 +32,14 @@ function downloadTick(
   bytes: number,
   totalBytes: number,
 ): ProgressInfo {
-  return { stage: "download", message, percent, bytes, totalBytes };
+  return {
+    stage: "download",
+    message,
+    percent,
+    bytes,
+    totalBytes,
+    workUnits: null,
+  };
 }
 
 // Mirrors `emitRegistryHeartbeat` in ../../registry/client.ts: stage
@@ -48,6 +55,7 @@ function archiveHeartbeatTick(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   };
 }
 
@@ -161,6 +169,7 @@ describe("createOutput human-mode TTY progress bar", () => {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
 
     const writes = capture.writes();
@@ -181,6 +190,7 @@ describe("createOutput human-mode TTY progress bar", () => {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     output.progress(
       archiveHeartbeatTick("attempt", "fetching host archive (attempt 1)"),

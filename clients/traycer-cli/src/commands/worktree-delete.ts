@@ -395,6 +395,7 @@ function relayStatus(ctx: CommandContext, message: string): void {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return;
   }
@@ -418,6 +419,7 @@ function relayOutput(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return;
   }

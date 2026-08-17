@@ -142,6 +142,20 @@ export const LOCAL_HOST_SLOW_START_THRESHOLD_MS = 10_000;
  * needs it. An identical event produces an identical key and does not reset
  * anything.
  *
+ * ⚠ `workUnits` IS WHAT MAKES THIS WORK ON THE POPULATION THAT MATTERS, and its
+ * absence is why an earlier version of this key did not. A bundled first launch
+ * never runs `download` - the desktop ships the archive beside the CLI - so the
+ * only stages that run are `verify` and `extract`, and both emitted a CONSTANT
+ * payload for minutes: a stage name and nothing else. The key therefore had PHASE
+ * granularity, two advances in an entire install, and this staged wait promoted a
+ * healthy install to its Retry surface about ten seconds in.
+ *
+ * `verify` now reports hashed `bytes` - a real position, from a stream that
+ * already knew it - and `extract` reports `workUnits`, archive entries being the
+ * only discrete unit that phase has. An older bundled CLI sends neither, and the
+ * NDJSON parser normalises both to `null`, so version skew degrades to the
+ * previous behaviour rather than breaking.
+ *
  * `null` FOR AN EVENTLESS LANE IS DELIBERATE. `useHostProvisioningProgress` is
  * explicit that a null `progress` on a running lane means "accepted but has not
  * pushed an event", not "no progress yet" - so an install that was accepted and
@@ -154,7 +168,7 @@ export function laneProgressAdvanceKey(
   progress: MutationProgress | null,
 ): string | null {
   if (progress === null) return null;
-  const { stage, percent, bytes } = progress;
+  const { stage, percent, bytes, workUnits } = progress;
   // `totalBytes` is excluded on purpose: it is the SIZE of the work, not the
   // position in it, so a total arriving late would read as advancement while
   // nothing had moved. `message` is excluded for the same reason.
@@ -173,8 +187,15 @@ export function laneProgressAdvanceKey(
   // `__tests__/host-provisioning-controller.test.tsx`. Read those before
   // trusting a green run on this branch, and prefer an integration-level
   // measurement if you need to change it.
-  if (stage === null && percent === null && bytes === null) return null;
-  return `${stage ?? ""}|${percent ?? ""}|${bytes ?? ""}`;
+  if (
+    stage === null &&
+    percent === null &&
+    bytes === null &&
+    workUnits === null
+  ) {
+    return null;
+  }
+  return `${stage ?? ""}|${percent ?? ""}|${bytes ?? ""}|${workUnits ?? ""}`;
 }
 
 export interface HostProvisioning {

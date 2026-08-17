@@ -1295,6 +1295,89 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     expect(readLifecycle()?.slowStartStage).toBe("slow");
   });
 
+  it("does NOT promote during a bundled first launch - the local-source path the desktop actually takes", () => {
+    // The payloads below are the REAL first-launch emissions, not a synthetic
+    // lane. Quoted from the producer, which never runs `download` on this path:
+    //
+    //   installer/bundled-host.ts:6-11  - production desktop bundles ship the
+    //     archive beside the CLI, so `host ensure` takes the LOCAL-SOURCE path.
+    //     `download` - the only stage that emits an advancing position - never
+    //     runs at all.
+    //   installer/install.ts:709-714    - verify: stage "verify", percent null,
+    //     bytes null, totalBytes = the archive size. `totalBytes` is excluded
+    //     from the position key by design (a size is not a position), so this is
+    //     CONSTANT while it hashes ~800 MB.
+    //   installer/install.ts:236-241    - extract announce, all comparable
+    //     fields null.
+    //   installer/extract-heartbeat.ts:41-47 - every 2s, throttled, per archive
+    //     entry: stage "extract", message `extracting host <version>`, percent
+    //     null, bytes null, totalBytes null. CONSTANT for the whole extract,
+    //     which that file's own comment says "can run for minutes".
+    //
+    // So the position key is "verify||" for the whole hash and "extract||" for
+    // the whole extract: two advances in total, minutes apart.
+    vi.useFakeTimers();
+    const { queryClient, management, readLifecycle } = mountWithLane();
+
+    const push = (progress: MutationProgress): void => {
+      pushEnsureProgress(queryClient, management, progress, "2026-05-15T00:00:01Z");
+    };
+
+    // verify: announce, then hash an 800MB archive, reporting the position the
+    // stream already knew. Chunked so the wall clock passes the threshold with no
+    // single gap reaching it - the same arithmetic as the chatty arm.
+    push({
+      stage: "verify",
+      message: "hashing /Applications/Traycer.app/…/host-runtime.tar.gz",
+      percent: null,
+      bytes: null,
+      totalBytes: 838_860_800,
+      workUnits: null,
+    });
+    for (const hashed of [200_000_000, 400_000_000, 600_000_000, 838_860_800]) {
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      push({
+        stage: "verify",
+        message: "hashing /Applications/Traycer.app/…/host-runtime.tar.gz",
+        percent: null,
+        bytes: hashed,
+        totalBytes: 838_860_800,
+        workUnits: null,
+      });
+    }
+
+    // extract: announce, then heartbeats every 2s for a minute.
+    push({
+      stage: "extract",
+      message: "extracting host archive into /tmp/staging",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+    // The throttled heartbeat, every 2s, carrying a RISING entry count - the only
+    // field that differs between two of them. Every other field is byte-identical
+    // by construction.
+    for (let i = 0; i < 30; i += 1) {
+      push({
+        stage: "extract",
+        message: "extracting host 1.2.3",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: (i + 1) * 40,
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+    }
+
+    // Nothing has failed. The install is working. Retry must not be on screen.
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+  });
+
   it("STILL promotes to slow when NO lane event ever arrives - the wait is baselined at mount", () => {
     // THE MOST IMPORTANT ARM ON THIS SURFACE, and the one whose failure direction
     // is unacceptable to leave inferred.

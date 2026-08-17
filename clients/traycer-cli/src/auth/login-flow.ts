@@ -91,6 +91,7 @@ export async function runDeviceAuthFlow(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
 
   // Best-effort: open the one-click link locally. On a headless box the spawn

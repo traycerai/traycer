@@ -22,6 +22,20 @@ export interface MutationProgress {
   readonly bytes: number | null;
   readonly totalBytes: number | null;
   readonly message: string | null;
+  /**
+   * Monotonic count of discrete units of work completed within this stage -
+   * the CLI's `ProgressInfo.workUnits`, forwarded unchanged.
+   *
+   * ⚠ Producers increment it only when a unit of work has COMPLETED, never on a
+   * timer. The renderer's staged wait reads it to tell an advancing stage from a
+   * stalled one, so a timer-driven producer would report a wedged install as
+   * healthy.
+   *
+   * `null` from any producer with no discrete unit to count, and from any CLI
+   * predating the field - `parseNdjsonEvent` normalises an absent numeric to
+   * `null`, so an older bundled CLI degrades to the pre-field behaviour.
+   */
+  readonly workUnits: number | null;
 }
 
 export interface MutationLaneStatus {
