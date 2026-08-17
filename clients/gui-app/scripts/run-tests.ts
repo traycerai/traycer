@@ -106,7 +106,10 @@ const shardValueArgs = new Set<string>(
 const runsWholeSuite = !testArgs.some(
   (arg) => !arg.startsWith("-") && !shardValueArgs.has(arg),
 );
-const runsDiffEditBrowser =
+// The env var keeps its original name because CI sets it by that name
+// (`test.yml`); it now gates every browser regression, not just the diff-edit
+// one. Renaming it would be a workflow change riding inside an unrelated fix.
+const runsBrowserRegressions =
   runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
 runVitest("vitest.config.ts", undefined);
@@ -115,15 +118,22 @@ if (runsFirstShard) {
     "vitest.react-compiler.config.ts",
     "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
   );
-  if (runsDiffEditBrowser) runDiffEditBrowserRegression();
+  if (runsBrowserRegressions) {
+    runBrowserRegression("scripts/diff-edit-browser-regression.mjs");
+    // Same gate, same reason: the claim is "after Cancel the window is usable
+    // again", and jsdom has no hit testing, so only a real layout engine can
+    // tell a released modal from a modal that merely stopped being asserted
+    // about. Runs behind the same env flag rather than a second one - a browser
+    // check nobody enables is a coverage gap wearing a test's name.
+    runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
+    runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
+  }
 }
 
-function runDiffEditBrowserRegression(): void {
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/diff-edit-browser-regression.mjs"],
-    { stdio: "inherit" },
-  );
+function runBrowserRegression(scriptPath: string): void {
+  const result = spawnSync(process.execPath, [scriptPath], {
+    stdio: "inherit",
+  });
   if (result.error !== undefined) throw result.error;
   if (result.signal !== null) {
     process.exit(SIGNAL_EXIT_CODES[result.signal] ?? 1);

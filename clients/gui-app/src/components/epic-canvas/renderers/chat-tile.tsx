@@ -99,6 +99,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostBinding } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   useHostReachability,
@@ -504,18 +505,15 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
+  // APP-WIDE BY INTENT: the cloud lookup below runs against the app-wide host
+  // so it SHARES the list already fetched elsewhere in the app. Pointing it at
+  // this tile's host would be a cache miss per host for an answer that is the
+  // same everywhere. Not the spine either, which named no host once P4.2
+  // deleted the active slot.
   const bannerBinding = useHostBinding();
   const bannerEffectiveHostId = useEffectiveHostId();
-  // The cloud lookup below runs against the app-wide host (it shares the list
-  // already fetched elsewhere), so it needs the client for that host - not the
-  // spine, which named no host once P4.2 deleted the active slot.
   const bannerAppHostClient = useMemo(
-    () =>
-      bannerBinding === null
-        ? null
-        : bannerBinding.hostClient.createRequesterForHostId(
-            bannerEffectiveHostId,
-          ),
+    () => resolveAppWideHostClient(bannerBinding, bannerEffectiveHostId),
     [bannerBinding, bannerEffectiveHostId],
   );
   const providedOwnerUserId =

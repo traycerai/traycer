@@ -230,6 +230,41 @@ function createStableHostCompatibilityContext(): HostCompatibilityContextValue {
 
 export const HostCompatibilityContext = createStableHostCompatibilityContext();
 
+/**
+ * ⚠ THE RETURNED OBJECT IS FRESH ON EVERY RENDER OF THE PROVIDER. Read fields
+ * off it; never depend on the object itself.
+ *
+ * `useHostCompatibilityProbeForClient` builds its answer as an object literal
+ * on each of its four arms, with `retry` as a fresh closure, so there is no
+ * arm on which the identity survives a render. `HostCompatibilityProvider`
+ * then passes it straight to `<HostCompatibilityContext.Provider value={…}>`
+ * and re-renders on every `leasesChanged` (it reads `useHostLeases()` for the
+ * incompatible-host recovery probes), and context propagation deliberately
+ * pierces the `props.children` bailout - so every consumer of this hook is
+ * re-entered on every lease delivery in the app.
+ *
+ * That costs nothing TODAY, and only because all three consumers happen to
+ * read the primitive: `harness-catalog-prefetcher.tsx` and
+ * `epic-tab-existence-reconciler.tsx` both narrow to `compatibility.status`,
+ * and `host-readiness-controller.tsx` feeds the object into a `useMemo` whose
+ * body is a pure derivation, in a component that re-renders on every lease
+ * delivery anyway. Put this object in a `useEffect` dep array and that changes
+ * from a defeated memo into a side effect firing on every lease change to any
+ * host - the hazard is latent, not absent, and nothing but this note stands
+ * between a reader and it.
+ *
+ * ⚠ A `useMemo` on the provider's `recoveryHosts` is NOT the remedy, though it
+ * is the one a perf audit (2026-08-17) proposed. That array is consumed as a
+ * keyed list, so React reconciles it by `key` and fresh elements change
+ * nothing; the CONTEXT VALUE is the only identity that propagates. Memoizing
+ * the list would close the finding while leaving every consequence in place.
+ * The real remedy is memoizing the verdict at its source - which means a
+ * `useCallback` on `retry` and a `useMemo` over all four arms of
+ * `useHostCompatibilityProbeForClient`, whose arm ORDER is load-bearing
+ * (terminal verdict before held data, see its body). Judged not worth that
+ * risk for a cost measured at nil above; recorded so the next reader inherits
+ * the measurement instead of the row.
+ */
 export function useHostCompatibility(): HostCompatibility {
   const compatibility = use(HostCompatibilityContext);
   if (compatibility === null) {

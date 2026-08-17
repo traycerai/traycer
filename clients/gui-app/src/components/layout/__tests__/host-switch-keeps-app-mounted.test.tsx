@@ -136,10 +136,12 @@ function expectNoWindowScopeBanner(): void {
 function controllerFor(
   readiness: SurfaceReadiness,
   presentation: DefaultHostReadinessPresentation,
+  hasBeenDefaultHostReady: boolean,
 ): HostReadinessController {
   return {
     readinessFor: () => readiness,
     defaultHostPresentation: presentation,
+    hasBeenDefaultHostReady,
   };
 }
 
@@ -228,6 +230,11 @@ function mountSwitchSurface(
 
   let readiness = initialReadiness;
   let currentPresentation = presentation;
+  // The gate's latch moved into the readiness controller (the window modal has
+  // to read it too), and this suite hand-supplies that context - so the harness
+  // has to model it or the gate never latches and every post-latch pin below
+  // fails against a correct gate. Monotonic, exactly like the provider.
+  let hasBeenReady = initialReadiness.kind === "ready";
 
   const tree = (
     next: SurfaceReadiness,
@@ -236,7 +243,7 @@ function mountSwitchSurface(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
-          value={controllerFor(next, nextPresentation)}
+          value={controllerFor(next, nextPresentation, hasBeenReady)}
         >
           <HostReadyGate>
             <AppSentinel />
@@ -250,6 +257,7 @@ function mountSwitchSurface(
   return {
     hostClient,
     setReadiness: (next, nextPresentation) => {
+      if (next.kind === "ready") hasBeenReady = true;
       readiness = next;
       currentPresentation = nextPresentation;
       view.rerender(tree(readiness, currentPresentation));

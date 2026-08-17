@@ -57,13 +57,13 @@ import {
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useHostClient } from "@/lib/host";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   deriveTitleSourceFromSessionTitle,
@@ -111,7 +111,22 @@ function TerminalsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
-  const hostClient = useHostClient();
+  // The Epic SESSION's host, not the app-wide effective one. This panel is a
+  // sibling of the canvas and therefore outside every tile `TabHostProvider`,
+  // which is exactly the case `useEpicSessionHostId` was written for: "host
+  // RPCs issued by the sidebar must use the session transport's host instead
+  // of ... independently re-reading the app-wide active host". `terminal.list`
+  // is such an RPC, and the pair below has to come from ONE source - the list
+  // names the machine whose terminals it shows, and the id it hands to
+  // `makeTerminalRef` binds each opened tile to that machine for life.
+  //
+  // Reading ambient made both wrong together the moment they disagreed:
+  // activation or failover moves the effective host while `EpicSessionProvider`
+  // is still rendering its previous session (and for the whole of a
+  // re-point that is establishing, or one that failed), so an Epic projected
+  // from host A listed, killed and renamed host B's terminals, and opened them
+  // as B-bound tiles under A's Epic.
+  const hostClient = useEpicSessionHostClient();
   const list = useTerminalList({ kind: "epic", epicId }, hostClient);
   // Manual escape hatch for a stranded error state: host-scoped queries get
   // no automatic retry/refetch routes (transport already retried), so without
@@ -128,7 +143,7 @@ function TerminalsPanelBodyLive(props: {
   const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareSetActiveTileTabFocusTarget,
   );
-  const activeHostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const openExisting = useCallback(
     (session: CanonicalTerminalSessionInfo) => {

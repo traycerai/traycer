@@ -17,19 +17,20 @@ import { hostFailureReportIssueAction } from "@/components/layout/host-failure-r
 import { compatibilityPresentation } from "@/components/layout/host-compatibility-presentation";
 import {
   HostReadinessControllerContext,
+  gateBlocksApp,
+  gateCardReadiness,
   isHostDialable,
-  keepsSplashAfterLatch,
   type GateDrawnReadiness,
   targetPresentsLocalHostLifecycle,
   projectDefaultHostReadiness,
   resolveSurfaceReadiness,
   useHostReadinessController,
   useSurfaceReadiness,
-  windowNarratorOwns,
   type DefaultHostReadinessPresentation,
   type HostReadinessController,
   type HostReadinessScope,
   type HostTargetKind,
+  type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import {
   HostProvisioningController,
@@ -39,6 +40,7 @@ import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { useHostBinding } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
@@ -73,11 +75,14 @@ export function HostReadinessControllerProvider(props: {
   // The app-wide client, resolved from that id. It used to be the spine, whose
   // answer came from the active slot; P4.2 deleted the slot, so the id-pinned
   // requester is what reports "the effective host, once its row exists".
+  //
+  // APP-WIDE BY CONSTRUCTION: this controller is a top-level provider, so every
+  // host-scoped surface renders INSIDE it and none can re-provide above it. The
+  // explicit hook is what keeps that true if the tree ever moves - this is the
+  // app's readiness authority, and a controller reporting a settings panel's
+  // host would gate the whole window on a machine the user is only inspecting.
   const client = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(effectiveHostId),
+    () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
   );
   const readiness = useReactiveHostReadiness(client);
@@ -221,48 +226,77 @@ function HostReadinessControllerContents(props: {
       props.onOpenSettings,
     ],
   );
-  const controller = useMemo<HostReadinessController>(() => {
-    return {
-      readinessFor: (scope, tabHostId) => {
-        const readiness = resolveSurfaceReadiness({
-          scope,
-          tabHostId,
-          authStatus: props.authStatus,
-          activeHostId: props.activeHostId,
-          requestContextUserId: props.requestContextUserId,
-          directoryEntries: props.directoryEntries,
-          hasReadySessionFor: props.hasReadySessionFor,
-          hasLocalHost: props.hasLocalHost,
-          hasMobileNoHost: props.hasMobileNoHost,
-          leases: props.leases,
-          authorityAttached: props.authorityAttached,
-        });
-        return scope === "default-host"
-          ? projectDefaultHostReadiness({
-              readiness,
-              presentation: defaultHostPresentation,
-            })
-          : readiness;
-      },
+  // ONE resolver, hoisted out of the controller memo so the latch below and the
+  // context value cannot resolve readiness by two different routes.
+  const resolveFor = useCallback(
+    (scope: HostReadinessScope, tabHostId: string | null): SurfaceReadiness => {
+      const readiness = resolveSurfaceReadiness({
+        scope,
+        tabHostId,
+        authStatus: props.authStatus,
+        activeHostId: props.activeHostId,
+        requestContextUserId: props.requestContextUserId,
+        directoryEntries: props.directoryEntries,
+        hasReadySessionFor: props.hasReadySessionFor,
+        hasLocalHost: props.hasLocalHost,
+        hasMobileNoHost: props.hasMobileNoHost,
+        leases: props.leases,
+        authorityAttached: props.authorityAttached,
+      });
+      return scope === "default-host"
+        ? projectDefaultHostReadiness({
+            readiness,
+            presentation: defaultHostPresentation,
+          })
+        : readiness;
+    },
+    // Depend on the individual fields this closes over, like the presentation
+    // memo above. `props` is a fresh object every render, so listing it defeated
+    // the memo entirely: the context value changed identity on each render and
+    // re-ran every `useSurfaceReadiness` / `useHostReadinessController` consumer
+    // across the surface tree.
+    [
       defaultHostPresentation,
-    };
-    // Depend on the individual fields `readinessFor` closes over, like the
-    // presentation memo above. `props` is a fresh object every render, so
-    // listing it defeated this memo entirely: the context value changed
-    // identity on each render and re-ran every `useSurfaceReadiness` /
-    // `useHostReadinessController` consumer across the surface tree.
-  }, [
-    defaultHostPresentation,
-    props.activeHostId,
-    props.authStatus,
-    props.directoryEntries,
-    props.hasReadySessionFor,
-    props.hasLocalHost,
-    props.hasMobileNoHost,
-    props.leases,
-    props.authorityAttached,
-    props.requestContextUserId,
-  ]);
+      props.activeHostId,
+      props.authStatus,
+      props.directoryEntries,
+      props.hasReadySessionFor,
+      props.hasLocalHost,
+      props.hasMobileNoHost,
+      props.leases,
+      props.authorityAttached,
+      props.requestContextUserId,
+    ],
+  );
+
+  // THE GATE'S LATCH, lifted from `DefaultHostReadyGate` because the window
+  // modal now needs it too - see `HostReadinessController.hasBeenDefaultHostReady`
+  // for why, and for why it stays render-adjusted rather than moving to an
+  // effect. It is state adjusted DURING render (React's documented "adjusting
+  // state when props change" pattern) rather than a ref read in render or a
+  // `setState` in an effect: the gate's whole output is a function of it, so it
+  // has to be render-visible, and React re-runs this render immediately - before
+  // committing anything - instead of painting an un-latched frame first.
+  //
+  // Monotonic: set once, never cleared, so the widened re-render scope is one
+  // extra pass per window rather than a recurring global invalidation.
+  const [hasBeenDefaultHostReady, setHasBeenDefaultHostReady] =
+    useState<boolean>(false);
+  if (
+    resolveFor("default-host", null).kind === "ready" &&
+    !hasBeenDefaultHostReady
+  ) {
+    setHasBeenDefaultHostReady(true);
+  }
+
+  const controller = useMemo<HostReadinessController>(
+    () => ({
+      readinessFor: resolveFor,
+      defaultHostPresentation,
+      hasBeenDefaultHostReady,
+    }),
+    [resolveFor, defaultHostPresentation, hasBeenDefaultHostReady],
+  );
 
   return (
     <HostReadinessControllerContext.Provider value={controller}>
@@ -452,47 +486,43 @@ export function DefaultHostReadyGate(props: {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  // The latch is state adjusted DURING render (React's documented
-  // "adjusting state when props change" pattern) rather than a ref read in
-  // render or a `setState` in an effect: this component's whole output is a
-  // function of the latch, so it has to be render-visible, and React re-runs
-  // this render immediately - before committing anything - instead of
-  // painting an un-latched frame first.
-  const [hasBeenReady, setHasBeenReady] = useState(false);
-  if (readiness.kind === "ready" && !hasBeenReady) {
-    setHasBeenReady(true);
-  }
-  // Only a signed-in user can HAVE a ready default host, so blocking anyone
-  // else would hide the sign-in surface behind a host that cannot exist yet.
-  // `resolveSurfaceReadiness` only special-cases auth for the request-context
-  // arm; the host arms answer `loading-host`/`mobile-no-host` regardless of
-  // who is signed in, which is correct for a surface and wrong for a gate.
-  if (authStatus !== "signed-in") return props.children;
-  if (pathname.startsWith(GATE_BYPASS_PATH_PREFIX)) return props.children;
-  if (readiness.kind === "ready") return props.children;
-  if (hasBeenReady && !keepsSplashAfterLatch(readiness.kind)) {
-    return props.children;
-  }
-  // The window narrator (the global modal) speaks for these kinds now, so the
-  // gate keeps the app from mounting against a host that cannot serve it but
-  // draws no card of its own - one narrator per scope. Rendering both put two
-  // surfaces on screen for one fact, each with its own copy and its own
-  // recovery actions; the modal derives from the authority's leases, which is
-  // the vocabulary this whole redesign narrates from.
-  //
+  // The latch is no longer this component's state - it moved to the readiness
+  // controller so the window modal can read it too. See
+  // `HostReadinessController.hasBeenDefaultHostReady`, which carries the reason
+  // it stays render-adjusted rather than becoming an effect.
+  const { hasBeenDefaultHostReady } = useHostReadinessController();
+  // Both questions come from ONE place, shared with the window modal. They are
+  // genuinely different questions: for a narrator-owned kind this gate still
+  // BLOCKS - the app must not mount against a host that cannot serve it - while
+  // drawing no card of its own, leaving the words to the modal. Deriving either
+  // one here as well as there is what let two surfaces narrate one failure.
+  const predicateInput = {
+    readiness,
+    hasBeenReady: hasBeenDefaultHostReady,
+    signedIn: authStatus === "signed-in",
+    bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
+  };
+  if (!gateBlocksApp(predicateInput)) return props.children;
   // The frame stays (header + background) so the block still looks like the
   // app rather than a blank document, and so a user whose modal is suppressed
   // on `/settings` is not left staring at nothing.
-  const narrated = windowNarratorOwns(readiness);
+  //
+  // `null` here means the window narrator owns this kind: `ready` and the
+  // not-blocking cases are already gone via `gateBlocksApp` above. The card gets
+  // the NARROWED value, so it cannot be handed a kind the narrator speaks for
+  // even by accident.
+  const cardReadiness = gateCardReadiness(predicateInput);
   return (
     <div
       className="flex min-h-svh w-full flex-col bg-background text-foreground"
       data-testid="host-ready-gate"
       data-readiness={readiness.kind}
-      data-narrated-by-window-modal={narrated ? "true" : "false"}
+      data-narrated-by-window-modal={cardReadiness === null ? "true" : "false"}
     >
       <AppHeader variant="host-loading" />
-      {narrated ? null : <SurfaceReadinessFallback readiness={readiness} />}
+      {cardReadiness === null ? null : (
+        <SurfaceReadinessFallback readiness={cardReadiness} />
+      )}
     </div>
   );
 }
@@ -693,6 +723,31 @@ function provisioningErrorFallback(
         disabled: presentation.provisioning,
         pending: presentation.provisioning,
         onClick: presentation.retryProvisioning,
+      },
+      // THE ESCAPE HATCH, and it was missing here.
+      //
+      // This card is drawn when the local host could not start, offering Retry -
+      // an action that may keep failing for a reason only Settings ▸ Shell can
+      // fix, since that page edits the launch config through the CLI with no
+      // running host involved. A card that can only retry the thing that just
+      // failed is a dead end for exactly the user who is stuck.
+      //
+      // Unconditional, deliberately, and the same rule the window modal states
+      // for its own copy of this button: gating the escape hatch behind the
+      // failure it exists to fix is the lockout that surface exists to prevent.
+      // It is NOT disabled while provisioning either - a retry in flight is
+      // precisely when someone wants to go and change the shell it is using.
+      //
+      // Independent of whether anything ever suppresses the modal over this
+      // card: the gap is real on its own, and this card has to be survivable
+      // whether it is the only narrator or not.
+      {
+        label: "Open settings",
+        testId: "local-host-provisioning-open-settings",
+        variant: "outline",
+        disabled: false,
+        pending: false,
+        onClick: presentation.openSettings,
       },
     ],
   };

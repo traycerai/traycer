@@ -60,6 +60,26 @@ export interface WindowHostModalProps {
    */
   readonly onUpdateHost: (() => void) | null;
   readonly onOpenSettings: () => void;
+  /**
+   * Whether anything has failed yet. `Report issue` is the affordance that
+   * turns a false impression of breakage into real support load, so it renders
+   * only once there is a failure for a report to describe.
+   *
+   * Decided above, like every other action on this surface - see the component
+   * doc. A component that re-derived "has something failed" from `cause` would
+   * be a second decider, and it would miss the slow arm entirely.
+   */
+  readonly showReportIssue: boolean;
+  /**
+   * How much weight `Open settings` carries. Never whether it renders: it is
+   * unconditional in every variant and must stay so - it is the escape hatch
+   * for a host that cannot start, and a user who reaches this modal with no
+   * host has no other route to Settings.
+   *
+   * A row of equal-weight buttons is itself the "something is wrong, pick one"
+   * signal, so on a start that has not failed this is the quiet form.
+   */
+  readonly settingsEmphasis: "button" | "link";
 }
 
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
@@ -154,22 +174,25 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             <Button
               type="button"
               size="sm"
-              variant="outline"
+              variant={props.settingsEmphasis === "button" ? "outline" : "link"}
               onClick={props.onOpenSettings}
               data-testid="window-host-modal-open-settings"
+              data-emphasis={props.settingsEmphasis}
             >
               Open settings
             </Button>
-            <ReportIssueAction
-              context={createReportIssueContext({
-                title: copy.reportTitle,
-                message: copy.reportMessage,
-                code: copy.reportCode,
-                source: "Host connection",
-              })}
-              presentation="text"
-              className={undefined}
-            />
+            {props.showReportIssue ? (
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: copy.reportTitle,
+                  message: copy.reportMessage,
+                  code: copy.reportCode,
+                  source: "Host connection",
+                })}
+                presentation="text"
+                className={undefined}
+              />
+            ) : null}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
@@ -313,8 +336,13 @@ function modalCopy(
       // incompatibility is a bug rather than routine drift, and the copy names
       // the leg the handshake says is behind rather than a generic fatal.
       title: hostUpdateSkew(variant.detail, getClientAppVersion()).title,
-      description:
-        "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched.",
+      // Two descriptions, because on the fallback arm the first one's advice
+      // is something the reader cannot act on from here. "Update the host to
+      // continue" beside no button is an unexplained gap; naming the machine
+      // and saying where it can be updated is an honest absence.
+      description: variant.isTargetHost
+        ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
+        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that machine, or switch to a host this one can reach.",
       reportTitle: "Host update required",
       reportMessage: "Traycer Host requires an update.",
       reportCode: "HOST_INCOMPATIBLE",

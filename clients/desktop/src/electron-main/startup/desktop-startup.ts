@@ -38,6 +38,7 @@ import {
   QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
   runUpdateInstallQuitSequence,
 } from "./update-install-quit";
+import { applyQuitDecision } from "./quit-decision";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   applyHostUpdateMenuState,
@@ -1124,8 +1125,12 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return activeBridge
           .requestQuitDecision(snapshot)
           .then((decision) => {
-            log.info("[desktop] quit decision resolved", { decision });
-            authorizeQuitAfterFlush();
+            applyQuitDecision(decision, {
+              authorizeQuitAfterFlush,
+              stayOpen: () => {
+                services.quitState.resetQuitting();
+              },
+            });
           })
           .catch((err) => {
             log.warn("[desktop] quit decision failed - staying alive", err);

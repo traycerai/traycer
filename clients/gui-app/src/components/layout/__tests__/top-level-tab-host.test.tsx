@@ -161,6 +161,7 @@ const SETTINGS: TabRef = { kind: "settings", id: "settings" };
 
 const UNAVAILABLE_DEFAULT_HOST_CONTROLLER: HostReadinessController = {
   readinessFor: () => ({ kind: "restoring-request-context" }),
+  hasBeenDefaultHostReady: false,
   defaultHostPresentation: {
     targetKind: "local",
     localBootIntent: true,

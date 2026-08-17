@@ -96,6 +96,46 @@ export interface UnsyncedEditsEntry {
 }
 
 /**
+ * The walk's own row: an {@link UnsyncedEditsEntry} plus the one fact the
+ * exported type deliberately does NOT carry.
+ *
+ * `unsyncable` is INTERNAL ON PURPOSE, and this is the reason rather than a
+ * preference: `UnsyncedEditsEntry` crosses the desktop IPC boundary, and both
+ * hops rebuild it as a fresh object literal from exactly four fields -
+ * `ipc-parsers.ts` when main parses a renderer snapshot, and `lifecycle-ipc.ts`
+ * again in its merge. An added field is dropped at both, silently, with no
+ * parse error. `mergeEntries` in `quit-intercept-bridge.tsx` then unions a
+ * main-originated snapshot with live rows, so a reader would get a different
+ * answer per row depending on which side won, and nothing anywhere would say
+ * why. Keeping the field off the wire type makes that unrepresentable instead
+ * of documented - a warning at the definition does not reach the reader who
+ * never looks at the definition.
+ *
+ * If a main-side consumer ever genuinely needs durability, that is the moment
+ * to extend the wire contract deliberately, with the parser and the merge
+ * updated together.
+ */
+interface UnsyncedRow extends UnsyncedEditsEntry {
+  /**
+   * True when some part of this row's work can NEVER sync: a buffer retained
+   * across a host re-point had `detachTransport()` called on it, so it is a
+   * live `Y.Doc` with no socket and no local persistence, and its store is
+   * frozen at retention time. A dirty LIVE session is not unsyncable - it
+   * still holds a transport and drains when its host returns.
+   */
+  readonly unsyncable: boolean;
+}
+
+function toWireEntry(row: UnsyncedRow): UnsyncedEditsEntry {
+  return {
+    epicId: row.epicId,
+    title: row.title,
+    queueSize: row.queueSize,
+    isDirty: row.isDirty,
+  };
+}
+
+/**
  * A dirty session preserved across a host re-point (F10).
  *
  * Below protocol `@1.2` the host sends no `roomId`, so the cross-host document
@@ -568,8 +608,8 @@ export class OpenEpicSessionRegistry {
    * decision - and "live session vs retained buffer" is a fact about session
    * machinery that means nothing to the reader.
    */
-  private collectUnsyncedRows(): UnsyncedEditsEntry[] {
-    const out: UnsyncedEditsEntry[] = [];
+  private collectUnsyncedRows(): UnsyncedRow[] {
+    const out: UnsyncedRow[] = [];
     const seen = new Set<string>();
     for (const entry of this.entries.values()) {
       const state = entry.handle.store.getState();
@@ -593,6 +633,11 @@ export class OpenEpicSessionRegistry {
         ),
         queueSize: state.unsyncedQueueSize + retainedQueueSize,
         isDirty: state.isDirty || retainedBucket.length > 0,
+        // Keyed on the RETENTION alone, never on the live session's state: the
+        // live half's dirtiness is a different question and must not enter.
+        // An epic can hold both at once, and the retained half is destroyed
+        // just the same while the live half drains.
+        unsyncable: retainedBucket.length > 0,
       });
     }
     // Retentions whose live session is gone. Reachable while a tab is open on
@@ -608,6 +653,9 @@ export class OpenEpicSessionRegistry {
         ),
         queueSize: sumRetainedQueueSize(bucket),
         isDirty: true,
+        // This loop IS the retained-only arm, so every row it emits is
+        // unsyncable by construction.
+        unsyncable: true,
       });
     }
     return out;
@@ -619,13 +667,29 @@ export class OpenEpicSessionRegistry {
    * discard-confirmation gate.
    */
   hasUnsyncedEdits(epicId: string): boolean {
-    const state = this.entries.get(epicId)?.handle.store.getState() ?? null;
-    if (state !== null && state.isDirty) return true;
-    return (this.retained.get(epicId)?.length ?? 0) > 0;
+    // A real projection of the shared walk, not a parallel implementation.
+    // This used to do its own `entries` + `retained` lookup, which agreed with
+    // `collectUnsyncedRows` only by maintenance - and the comment above that
+    // method already asserted the enforcement that did not exist. Two
+    // independent traversals of this fact is exactly what let the projection
+    // and `epicHasUnsyncedEdits` drift apart before, and that drift discarded
+    // work without asking.
+    //
+    // Deliberately NOT routed through `getUnsyncedEdits()`: that memoizes on a
+    // cache key built by joining every row's `epicId:queueSize:isDirty:title`,
+    // which is a LIST identity. A per-epic boolean must not depend on a string
+    // that changes when an unrelated epic's title does. The walk is bounded by
+    // `maxLive` (5) plus retentions and this is a gate on a user gesture, so it
+    // stays unmemoized rather than borrowing an invalidation it does not fit.
+    return this.collectUnsyncedRows().some((row) => row.epicId === epicId);
   }
 
   getUnsyncedEdits(): ReadonlyArray<UnsyncedEditsEntry> {
-    const out = this.collectUnsyncedRows();
+    // Mapped rather than returned as-is: `UnsyncedRow` is structurally
+    // assignable to `UnsyncedEditsEntry`, so handing the walk's rows straight
+    // back would put `unsyncable` on the object at RUNTIME and send it over
+    // IPC, which is the thing the split exists to prevent.
+    const out = this.collectUnsyncedRows().map(toWireEntry);
     const cacheKey = out
       .map((e) => `${e.epicId}:${e.queueSize}:${e.isDirty}:${e.title}`)
       .join("|");
@@ -635,6 +699,33 @@ export class OpenEpicSessionRegistry {
     this.cachedKey = cacheKey;
     this.cachedUnsynced = out;
     return out;
+  }
+
+  /**
+   * The rows holding work that can NEVER reach a server, newest walk each call.
+   *
+   * A DURABILITY question, not a presentation one - which is why it exists
+   * beside a projection that deliberately merges live and retained into one
+   * row. That merge is right for the unsynced sheet: the row is an offer to
+   * discard, and "live session vs retained buffer" means nothing to the reader.
+   * This asks something the reader never has to: can this work still be saved
+   * at all, and may we therefore destroy it without asking?
+   *
+   * It answers off the RETENTION alone. A dirty live session on a dead host
+   * still holds a transport and resumes when the host returns; a retained
+   * buffer had `detachTransport()` called on it and there is no local
+   * persistence anywhere for an epic `Y.Doc`, so the transport was its only
+   * route. An epic can hold both at once, and callers must not read this as
+   * "and nothing else is dirty" - the live half draining does not save the
+   * retained half.
+   *
+   * Returns wire-shaped entries so a caller can name the affected epics
+   * without `unsyncable` escaping onto a type that crosses IPC.
+   */
+  unsyncableWork(): ReadonlyArray<UnsyncedEditsEntry> {
+    return this.collectUnsyncedRows()
+      .filter((row) => row.unsyncable)
+      .map(toWireEntry);
   }
 
   subscribe(listener: () => void): () => void {

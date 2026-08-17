@@ -50,6 +50,7 @@ export function buildHostFreePortAndRestartCommand(
             percent: null,
             bytes: null,
             totalBytes: null,
+            workUnits: null,
           });
           const result = await killConflictingPortOwner({
             pid: args.pid,
@@ -65,6 +66,7 @@ export function buildHostFreePortAndRestartCommand(
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         await createServiceController().restart(label);
         return {

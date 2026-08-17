@@ -36,7 +36,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { createRequestContext } from "@traycer/protocol/auth/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
-import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
 import {
   fileTreeExpansionScopeKey,
   useFileTreeStore,
@@ -52,8 +55,13 @@ const WORKSPACE_PATH = "/work/repo";
 const hostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
   current: null,
 };
+/** The APP-WIDE client - deliberately not the panel's, and never recorded. */
+const ambientHostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
+  current: null,
+};
 
 const listFileTreeCalls: Array<{
+  readonly hostId: string | null;
   readonly workspacePath: string | null;
   readonly enabled: boolean;
 }> = [];
@@ -64,17 +72,43 @@ interface RecordedReset {
 const resetPathsCalls: RecordedReset[] = [];
 const setSearchCalls: Array<string | null> = [];
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+const pinnedStreamBindingRef = vi.hoisted(() => ({
+  value: null as StreamRuntimeBinding | null,
+}));
+
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => pinnedStreamBindingRef.value,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,
 }));
 
-// Only `useHostClient` is replaced: the real `useWorkspaceSearchPaths`,
-// its query wiring, and the echo guard all run against a mock TRANSPORT, so
-// the tests exercise the actual request shape and stale-reply handling.
+// The real `useWorkspaceSearchPaths`, its query wiring and the echo guard all
+// run against a mock TRANSPORT, so the tests exercise the actual request shape
+// and stale-reply handling.
+//
+// THE TWO CLIENTS ARE DIFFERENT ON PURPOSE. This panel is host-pinned: it
+// resolves its client from the `hostId` it was handed, and every `searchCalls`
+// assertion below only records a request that reached THAT client's transport.
+// The app-wide client is a distinct object with no recorder, so a build that
+// reverts to reading the ambient host does not fail on a wrong value here - it
+// fails as SILENCE, and the suite's existing "asked the host for ranked
+// matches" cases are what catch it.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => hostClientRef.current };
+  return { ...actual, useHostClient: () => ambientHostClientRef.current };
 });
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? hostClientRef.current : ambientHostClientRef.current,
+}));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   useGitListChangedFilesSubscription: () => ({
@@ -99,11 +133,13 @@ const UNARY_TREE_DATA = {
 };
 
 vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
-  useWorkspaceListFileTree: (
-    workspacePath: string | null,
-    enabled: boolean,
-  ) => {
-    listFileTreeCalls.push({ workspacePath, enabled });
+  useWorkspaceListFileTree: (args: {
+    readonly hostId: string | null;
+    readonly workspacePath: string | null;
+    readonly enabled: boolean;
+  }) => {
+    const { hostId, workspacePath, enabled } = args;
+    listFileTreeCalls.push({ hostId, workspacePath, enabled });
     return {
       data: enabled ? UNARY_TREE_DATA : undefined,
       error: null,
@@ -363,6 +399,12 @@ function installSearchHost(script: Partial<SearchScript>): void {
     }),
   );
   hostClientRef.current = spine.createRequester(entry);
+  // A SEPARATE app-wide client on the same spine, addressing a host this
+  // fixture's messenger has no handlers for. Nothing routed here is recorded,
+  // which is what turns "the panel read the ambient host" into a visible
+  // absence rather than an indistinguishable pass.
+  ambientHostClientRef.current =
+    spine.createRequesterForHostId("host-ambient");
 }
 
 function fileResult(relPath: string): WorkspaceSearchPathResult {
@@ -445,6 +487,33 @@ describe("sidebar file tree source selection", () => {
     cleanup();
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
+    pinnedStreamBindingRef.value = null;
+  });
+
+  it("opens the stream on the PINNED host's transport, not the app-wide one", async () => {
+    // The panel re-provides `StreamRuntimeContext` for the host its pin
+    // resolved to, and this is the arm that proves the provider actually sits
+    // ABOVE the hooks that read it - an adjacency neither the hook's own suite
+    // nor the subscription registry's can see, because each is correct in
+    // isolation either way.
+    //
+    // Before the re-point this panel passed the pinned host's id as a
+    // subscribe PARAM while riding the app-wide socket, which watches the
+    // wrong machine's working tree and reports nothing wrong: the param is a
+    // key, not a route. So the assertion is WHICH TRANSPORT carried the
+    // subscribe, and the ambient client is here as the control - without it a
+    // build that subscribed on both would pass.
+    const ambient = new MockWsStreamClient("unknown");
+    const pinned = new MockWsStreamClient("unknown");
+    pinnedStreamBindingRef.value = {
+      wsStreamClient: pinned,
+      hostId: HOST_ID,
+    };
+
+    renderPanel(ambient);
+
+    expect(pinned.subscribedMethods).toEqual(["workspace.subscribeFileList"]);
+    expect(ambient.subscribedMethods).toEqual([]);
   });
 
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {

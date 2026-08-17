@@ -130,16 +130,6 @@ function approvalRequiredMessage(): string {
   );
 }
 
-function noopProgress(): MutationProgress {
-  return {
-    stage: null,
-    percent: null,
-    bytes: null,
-    totalBytes: null,
-    message: null,
-  };
-}
-
 function progressFromNdjson(
   event: Extract<NdjsonEvent, { type: "progress" }>,
 ): MutationProgress {
@@ -149,6 +139,7 @@ function progressFromNdjson(
     bytes: event.bytes,
     totalBytes: event.totalBytes,
     message: event.message,
+    workUnits: event.workUnits,
   };
 }
 
@@ -861,19 +852,57 @@ export class HostController {
     // rare blip into a constant flicker on exactly the throttled links it
     // exists for. A genuine stage transition (resolve/download/extract/swap/
     // …) still lands.
+    // SCOPED TO ONE STAGE (completing Mi-1, not reversing it). The paragraph
+    // above states a WITHIN-stage purpose - "a bare heartbeat holds the bar" -
+    // and the `stage` guard shows transitions were already being reasoned about.
+    // The numbers were simply not given the same treatment, so they leaked
+    // across a real stage change, and on the SHIPPED download path that meant:
+    //
+    //   download climbs to percent 100, bytes == totalBytes
+    //   extract announces with all three null
+    //   stage transitions correctly, and every number is inherited
+    //
+    // ⇒ a FULL progress bar and "800 MB of 800 MB" under "Setting up Traycer
+    // Host…" for the entire multi-minute extract. A full bar reads as finished,
+    // not as working - the worst of the three, and it was on every registry
+    // install. The bundled path had the same shape one field down: `verify`
+    // emits `totalBytes` with no `bytes`, so extract inherited a frozen total.
+    //
+    // Blanking at a genuine transition is the fix, not a regression: the new
+    // stage has no measured position yet, and an honest empty beats an inherited
+    // lie. `percent`/`bytes`/`totalBytes` describe THIS stage's work.
+    //
+    // NO CLAUSE FOR A NULL INCOMING STAGE, deliberately, and this was checked
+    // rather than assumed. A first draft treated one as "omitted" so it would
+    // not be mistaken for a transition - but it cannot happen: this method has
+    // exactly ONE caller (`progressFromNdjson`, below the stream reader) and the
+    // NDJSON progress event types `stage` as a non-null `string`. So the clause
+    // was dead code and the arm for it was unwritable through any real path;
+    // both are gone rather than left reading as covered.
+    //
+    // This file used to hold a `noopProgress()` returning an all-null progress,
+    // the one thing here that could have produced a null stage. It had no call
+    // site and is now deleted, so the argument above no longer has an exception
+    // to carve out. Re-introducing any all-null producer puts the clause back on
+    // the table - it is the type, not this comment, that would stop being true.
     const prior = this.mutationStatus.progress;
-    const merged: MutationProgress =
-      prior === null
-        ? progress
-        : {
-            stage: isRegistryLivenessStage(progress.stage)
-              ? prior.stage
-              : progress.stage,
-            percent: progress.percent ?? prior.percent,
-            bytes: progress.bytes ?? prior.bytes,
-            totalBytes: progress.totalBytes ?? prior.totalBytes,
-            message: progress.message,
-          };
+    const isLiveness = isRegistryLivenessStage(progress.stage);
+    const withinStage =
+      prior !== null && (isLiveness || progress.stage === prior.stage);
+    const merged: MutationProgress = !withinStage
+      ? progress
+      : {
+          stage: isLiveness ? prior.stage : progress.stage,
+          percent: progress.percent ?? prior.percent,
+          bytes: progress.bytes ?? prior.bytes,
+          totalBytes: progress.totalBytes ?? prior.totalBytes,
+          message: progress.message,
+          // In the carry-forward set for the same reason as the rest: a bare
+          // event inside a stage should HOLD the count, not blank it. It resets
+          // across a genuine transition with everything else, which is correct -
+          // a new stage's work has not started being counted.
+          workUnits: progress.workUnits ?? prior.workUnits,
+        };
     this.mutationStatus = { ...this.mutationStatus, progress: merged };
     this.publishMutationStatus();
     for (const listener of this.progressListeners) {

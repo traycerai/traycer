@@ -52,10 +52,9 @@ vi.mock("@/lib/host/runtime", () => ({
 }));
 
 /**
- * `useDefaultHostClient` resolves the SELECTION LAYER's effective host through
- * the spine (redesign P2.1), so a fixture that only binds the client leaves
- * every default-host query addressing ∅. Naming the effective host is now part
- * of building an app-wide host fixture.
+ * The default-host wrappers resolve the SELECTION LAYER's effective host, so a
+ * fixture that only binds the client leaves every one of them addressing ∅.
+ * Naming the effective host is part of building an app-wide host fixture.
  */
 function setEffectiveHostId(hostId: string | null): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({

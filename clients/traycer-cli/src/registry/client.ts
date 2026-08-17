@@ -582,6 +582,7 @@ function emitRegistryHeartbeat(
     // numeric fields stay null so the renderer holds the last real values.
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
 }
 

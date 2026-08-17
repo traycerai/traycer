@@ -199,6 +199,9 @@ describe("deriveNoHostVariant precedence", () => {
       kind: "update-host",
       hostId: "host-target",
       detail: targetDetail,
+      // Arm 1 names the target, so the card and the local lifecycle's action
+      // are about the SAME machine and the Update button is offered.
+      isTargetHost: true,
     });
   });
 
@@ -222,6 +225,12 @@ describe("deriveNoHostVariant precedence", () => {
       kind: "update-host",
       hostId: "host-other",
       detail,
+      // Arm 3: the incompatible host is NOT the target, so the action - which
+      // re-provisions THIS machine - must be withheld. Carried on the variant
+      // rather than re-derived at the card, because `canManageHost` answers a
+      // different question ("is the target this machine") and reads as this
+      // guard without being one.
+      isTargetHost: false,
     });
   });
 
@@ -250,6 +259,12 @@ describe("deriveNoHostVariant precedence", () => {
       kind: "update-host",
       hostId: "host-other",
       detail,
+      // Arm 3: the incompatible host is NOT the target, so the action - which
+      // re-provisions THIS machine - must be withheld. Carried on the variant
+      // rather than re-derived at the card, because `canManageHost` answers a
+      // different question ("is the target this machine") and reads as this
+      // guard without being one.
+      isTargetHost: false,
     });
   });
 });

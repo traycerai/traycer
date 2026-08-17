@@ -20,6 +20,7 @@ import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { runnerQueryKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import {
   Analytics,
   AnalyticsEvent,
@@ -103,12 +104,100 @@ type LocalHostStartupStage = "loading" | "slow";
 
 /**
  * Threshold before the staged wait promotes from Stage 1 ("loading", no Retry)
- * to Stage 2 ("slow", the unavailable surface with Retry). Chosen in the 8-15s
- * band so a healthy bundled-host boot (typically well under a second)
- * never flashes the Retry UI, while a genuinely stalled launch surfaces the
- * escape hatch before the user suspects the app is broken.
+ * to Stage 2 ("slow", the unavailable surface with Retry).
+ *
+ * It measures TIME WITHOUT PROGRESS, not time since the wait began - see
+ * {@link laneProgressAdvanceKey}. That distinction is the whole contract:
+ * `slow` means STALLED, not merely long.
+ *
+ * The number is chosen in the 8-15s band so a healthy bundled-host boot
+ * (typically well under a second) never flashes the Retry UI, while a genuinely
+ * stalled launch surfaces the escape hatch before the user suspects the app is
+ * broken.
+ *
+ * ⚠ THAT JUSTIFICATION IS ABOUT ONE POPULATION, and for a long time this timer
+ * governed several. A bundled-host BOOT is sub-second, so 10s is a 10x margin.
+ * The same staged wait also covers the first-run download and install, where ten
+ * seconds is entirely routine - so a healthy first launch promoted to `slow` mid
+ * download and put Retry in front of a user whose install was working perfectly.
+ * That is the recovery-action-on-a-healthy-startup complaint this epic started
+ * from, arriving by a different route.
+ *
+ * The fix was NOT a bigger number. A bigger number moves the same bug later and
+ * costs every genuinely stalled user the delay. Resetting on real progress is
+ * what makes one threshold correct for every population sharing it.
  */
 export const LOCAL_HOST_SLOW_START_THRESHOLD_MS = 10_000;
+
+/**
+ * A comparable fingerprint of how far the host controller's lane has got, or
+ * `null` when it offers no evidence of having moved.
+ *
+ * The staged wait restarts whenever this CHANGES, which is what makes the
+ * threshold mean "time without progress".
+ *
+ * KEYED ON ADVANCEMENT, NOT ON ARRIVAL, and the difference is a real failure
+ * mode rather than a nicety: a download that is stuck but chatty re-emits the
+ * same percent indefinitely, and a timer reset by the arrival of any event would
+ * never promote - so the escape hatch would vanish for precisely the user who
+ * needs it. An identical event produces an identical key and does not reset
+ * anything.
+ *
+ * ⚠ `workUnits` IS WHAT MAKES THIS WORK ON THE POPULATION THAT MATTERS, and its
+ * absence is why an earlier version of this key did not. A bundled first launch
+ * never runs `download` - the desktop ships the archive beside the CLI - so the
+ * only stages that run are `verify` and `extract`, and both emitted a CONSTANT
+ * payload for minutes: a stage name and nothing else. The key therefore had PHASE
+ * granularity, two advances in an entire install, and this staged wait promoted a
+ * healthy install to its Retry surface about ten seconds in.
+ *
+ * `verify` now reports hashed `bytes` - a real position, from a stream that
+ * already knew it - and `extract` reports `workUnits`, archive entries being the
+ * only discrete unit that phase has. An older bundled CLI sends neither, and the
+ * NDJSON parser normalises both to `null`, so version skew degrades to the
+ * previous behaviour rather than breaking.
+ *
+ * `null` FOR AN EVENTLESS LANE IS DELIBERATE. `useHostProvisioningProgress` is
+ * explicit that a null `progress` on a running lane means "accepted but has not
+ * pushed an event", not "no progress yet" - so an install that was accepted and
+ * then went quiet for the whole threshold is exactly the stall this stage exists
+ * to surface. Same for an event carrying only a message: a line of prose is not
+ * evidence of movement. When there is nothing comparable to compare, the wait
+ * runs, which fails toward keeping the escape hatch.
+ */
+export function laneProgressAdvanceKey(
+  progress: MutationProgress | null,
+): string | null {
+  if (progress === null) return null;
+  const { stage, percent, bytes, workUnits } = progress;
+  // `totalBytes` is excluded on purpose: it is the SIZE of the work, not the
+  // position in it, so a total arriving late would read as advancement while
+  // nothing had moved. `message` is excluded for the same reason.
+  //
+  // ⚠ THE SAFETY ARGUMENT, here rather than only in the suite - this is where
+  // someone stands when they decide the line is dead weight. Returning a
+  // non-null value for an event with no comparable fields makes every repeat of
+  // that event restart the staged wait, so an installer that says "working…"
+  // forever WITHHOLDS Retry and Report issue indefinitely. Prose is not
+  // movement. The wrong direction here is silent: the user gets a screen that
+  // never offers a way out.
+  //
+  // ⚠ AND IT IS UNPROVEN. Mutating this line to report an advance passes the
+  // entire suite - three attempts at an arm for it were each vacuous, for three
+  // different reasons recorded in
+  // `__tests__/host-provisioning-controller.test.tsx`. Read those before
+  // trusting a green run on this branch, and prefer an integration-level
+  // measurement if you need to change it.
+  if (
+    stage === null &&
+    percent === null &&
+    bytes === null &&
+    workUnits === null
+  ) {
+    return null;
+  }
+  return `${stage ?? ""}|${percent ?? ""}|${bytes ?? ""}|${workUnits ?? ""}`;
+}
 
 export interface HostProvisioning {
   readonly isProvisioning: boolean;
@@ -306,7 +395,7 @@ function useHostProvisioning(args: {
     });
     void management.clearRemoval().then(
       () => run(false, "reinstall"),
-      () => {
+      (error: unknown) => {
         // The sentinel couldn't be cleared, so convergeReady would just
         // short-circuit back to the removed outcome. Restore the removed
         // surface instead of flashing a spinner through a wasted round-trip;
@@ -315,6 +404,11 @@ function useHostProvisioning(args: {
         queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
           removedByUser: true,
         });
+        // The restore alone was the entire feedback, and it is ambiguous: the
+        // Reinstall button reappearing looks identical to a click that never
+        // registered. Say the request failed, through the shared runner
+        // handler so a typed bridge error keeps its own message.
+        toastFromRunnerError(error, "Couldn't reinstall the host. Try again.");
       },
     );
   }, [queryClient, run, runnerHost.hostManagement]);
@@ -432,7 +526,18 @@ export function HostProvisioningController(props: {
   readonly children: (lifecycle: HostProvisioningLifecycle) => ReactNode;
 }): ReactNode {
   const runnerHost = useRunnerHost();
-  const { state, stage } = useLocalHostStartupState(runnerHost);
+  // THE LANE, not this renderer's own mutation state. A first launch is driven by
+  // the desktop's launch reconciler, so `provisioning.isProvisioning` is false
+  // and `provisioning.progress` is null throughout the very install that trips
+  // the staged wait - see `useHostProvisioningProgress`, which exists because a
+  // renderer-side observer "can only ever see the episodes it started". Keying
+  // the staged wait on that would have left the only population that hits this
+  // defect exactly as broken as before.
+  const laneStatus = useRunnerHostControllerStatusQuery();
+  const advanceKey = laneProgressAdvanceKey(
+    laneStatus.data?.mutation?.progress ?? null,
+  );
+  const { state, stage } = useLocalHostStartupState(runnerHost, advanceKey);
   const provisioning = useHostProvisioning({
     enabled: props.enabled && state?.kind === "unavailable",
     isReady: props.isReady,
@@ -482,6 +587,14 @@ interface LocalHostStartupState {
  */
 function useLocalHostStartupState(
   runnerHost: IRunnerHost,
+  /**
+   * The host controller lane's advance fingerprint, from
+   * {@link laneProgressAdvanceKey}. Passed IN rather than read here because the
+   * lane read has to happen where `HostProvisioningController` already reads it -
+   * this hook runs before `useHostProvisioning`, whose `enabled` depends on the
+   * state this hook produces, so reading the lane here would close that loop.
+   */
+  advanceKey: string | null,
 ): LocalHostStartupState {
   const [state, setState] = useState<LocalHostState | null>(null);
   const [stage, setStage] = useState<LocalHostStartupStage>("loading");
@@ -512,6 +625,38 @@ function useLocalHostStartupState(
   }, [runnerHost]);
 
   const isReady = state !== null && state.kind === "ready";
+  // The last POSITION the lane was seen at, which is what the staged wait below
+  // restarts on. Not the raw key: that changes on transitions to `null` too, and
+  // a wait restarted by absence-of-evidence is the wrong direction entirely.
+  //
+  // Measured: with the raw key as the dependency, the lane momentarily reading
+  // `null` - the controller-status query's own priming fetch landing after a
+  // pushed event - restarted the wait and a genuinely stuck download stopped
+  // promoting. It surfaced as a test failing for a reason unrelated to what it
+  // was testing, which is the cheapest way to be told.
+  //
+  // "Advance" means A DIFFERENT position, not a greater one. A stage change
+  // resets `percent` to a lower number (download 90% -> extract 5%), so
+  // requiring monotonic increase would read a legitimate transition as a stall.
+  const [lastAdvance, setLastAdvance] = useState<string | null>(null);
+  // Adjusted DURING RENDER, the same documented pattern the ready latch uses -
+  // not in an effect. React re-runs this render immediately, before committing,
+  // so the wait below sees the new position in the same pass. In an effect it
+  // would land one commit late, which is a frame in which the timer is still
+  // running against the previous position.
+  //
+  // `null` is not a position, so it neither advances nor rewinds the wait: an
+  // accepted-but-silent lane keeps whatever timer is already running, which is
+  // what lets it promote on schedule.
+  if (advanceKey !== null && advanceKey !== lastAdvance) {
+    setLastAdvance(advanceKey);
+  }
+
+  // `lastAdvance` is a DEPENDENCY, and that is the entire mechanism: React tears
+  // down and re-runs this effect whenever the lane reaches a new position, which
+  // restarts the timer from zero. So the threshold measures time since progress
+  // last moved rather than time since the wait began. Repeated identical events
+  // leave it untouched, so a chatty stall still promotes on schedule.
   useEffect(() => {
     if (isReady || stage === "slow") {
       return;
@@ -522,7 +667,7 @@ function useLocalHostStartupState(
     return () => {
       clearTimeout(timer);
     };
-  }, [isReady, stage]);
+  }, [isReady, stage, lastAdvance]);
 
   return { state, stage };
 }

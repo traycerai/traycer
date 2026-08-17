@@ -54,6 +54,21 @@ export type WindowNarrationVariant =
   | {
       readonly kind: "update-host";
       readonly hostId: string;
+      /**
+       * Whether `hostId` is the host this window was TARGETING, or merely
+       * another incompatible one the fallback arm found.
+       *
+       * Required, never defaulted: the two arms below produce an identical
+       * shape while meaning different things, and a consumer that inherits
+       * that meaning silently is exactly how the local "Update host" action
+       * ended up bound to a remote machine. The compiler now refuses to let a
+       * new arm skip the question.
+       *
+       * `false` does NOT mean "remote" - it means "not the machine whose
+       * lifecycle this window can act on", which is the only distinction an
+       * action-side guard can safely make here.
+       */
+      readonly isTargetHost: boolean;
       readonly detail: SelectionIncompatibility;
     };
 
@@ -155,6 +170,7 @@ export function deriveNoHostVariant(
     return {
       kind: "update-host",
       hostId: target.hostId,
+      isTargetHost: true,
       detail: target.dead.detail,
     };
   }
@@ -169,6 +185,10 @@ export function deriveNoHostVariant(
       return {
         kind: "update-host",
         hostId: lease.hostId,
+        // Arm 3: the target is unusable for some other reason and THIS is
+        // merely the recoverable incompatible one. A different machine from
+        // the one this window's lifecycle affordances act on.
+        isTargetHost: false,
         detail: lease.dead.detail,
       };
     }

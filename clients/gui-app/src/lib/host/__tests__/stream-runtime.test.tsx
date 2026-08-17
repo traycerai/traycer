@@ -385,6 +385,7 @@ function fakeRemoteSession(): FakeRemoteSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    subscribeReadinessLost: () => () => undefined,
     // These provider tests never exercise fatal verdicts.
     terminalFatal: () => null,
     close: () => {
@@ -477,6 +478,7 @@ function streamController(ready: boolean): HostReadinessController {
     readinessFor: () =>
       ready ? { kind: "ready" } : { kind: "unavailable-host" },
     defaultHostPresentation: DEFAULT_PRESENTATION,
+    hasBeenDefaultHostReady: false,
   };
 }
 

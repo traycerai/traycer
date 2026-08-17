@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   HOST_PROGRESS_IDLE_HEADING,
@@ -15,6 +15,91 @@ import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-trayc
  * CLI subprocess cost is paid only when the user is actively watching.
  */
 const BOOTSTRAP_TAIL_POLL_MS = 1500;
+
+export interface BootstrapLogDisclosureProps {
+  readonly onConfigureShell: () => void;
+}
+
+/**
+ * The bootstrap.log tail and the "Configure shell…" shortcut, behind one text
+ * toggle.
+ *
+ * Exported separately from {@link LocalHostLoadingContent} because the two are
+ * true in different states. The log affordance is the one thing that lets a
+ * user take a stuck startup somewhere else, so it belongs on the FAILED arm as
+ * well - while the spinner and the progress heading belong only to a start that
+ * is actually in progress. Composing it beside the failure diagnostics is how
+ * the failed arm gets the log without the "Starting local Traycer Host…" lie,
+ * and it keeps `LocalHostLoadingContent`'s one-purpose rule intact rather than
+ * regrowing the second face P3.4 deleted.
+ */
+export function BootstrapLogDisclosure(
+  props: BootstrapLogDisclosureProps,
+): ReactNode {
+  const runnerHost = useRunnerHost();
+  const [showDetails, setShowDetails] = useState<boolean>(false);
+  // Only poll while the disclosure is open. Cache stays warm if the user
+  // toggles closed-then-open quickly.
+  const status = useRunnerTraycerHostStatusQuery({
+    pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
+  });
+  if (runnerHost.traycerCli === null) return null;
+  return (
+    <DetailsDisclosure
+      open={showDetails}
+      onToggle={() => setShowDetails((v) => !v)}
+      tail={status.data?.bootstrapLogTail ?? ""}
+      onConfigureShell={props.onConfigureShell}
+    />
+  );
+}
+
+/**
+ * The ONE alignment contract for a local-bootstrap body.
+ *
+ * Both bodies were fragments, so their children became direct children of the
+ * dialog's own `flex flex-col gap-4` column and each one carried (or failed to
+ * carry) its own alignment. Same defect in both, but NOT the same history, and
+ * the difference is worth keeping straight: the loading body lost its contract
+ * (every consumer that supplied a wrapper was deleted, leaving one that supplies
+ * none), while the ∅ body never had one - it was authored as a fragment into a
+ * `gap-4` column. Nothing was deleted from under it.
+ *
+ * THE COUNT, since two different threes have been cited. The rendered-evidence
+ * count is the CLOSED card and its members are: the left-aligned body, the
+ * centred toggle, and the right-aligned action footer - which branch-left
+ * deliberately KEEPS, because a footer is not part of the body's column. The
+ * other three is the OPEN card measured by
+ * `scripts/window-host-modal-alignment-browser.mjs` (body, centred toggle label,
+ * centred `Configure shell…`) and excludes the footer entirely. Cite the closed
+ * card's three; it is the one the variants were shot against.
+ *
+ * Branch-left, decided on rendered full-modal screenshots. Base-centred was
+ * rejected on that evidence because it recreates the same defect with different
+ * members. `self-start` on the toggle is rejected for a sharper reason: it
+ * shrink-wraps the button, which makes a stray `justify-center` INVISIBLE rather
+ * than absent. That is exactly why one rendered variant looked fixed while still
+ * carrying `justify-center`. Dropping both classes removes the defect;
+ * `self-start` would only hide it - and hide it from this file's own harness too,
+ * which measures a position that `self-start` and the real fix both produce.
+ * Alignment belongs to this root, not to each leaf that remembers to ask.
+ *
+ * `gap-4` deliberately matches the dialog column's own gap, so introducing this
+ * root preserves the existing vertical rhythm instead of quietly re-spacing a
+ * surface whose spacing nobody asked to change.
+ */
+export function LocalHostBodyShell(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div
+      data-testid="local-host-body"
+      className="flex w-full flex-col gap-4 text-left"
+    >
+      {props.children}
+    </div>
+  );
+}
 
 export interface LocalHostLoadingContentProps {
   /**
@@ -45,37 +130,41 @@ export interface LocalHostLoadingContentProps {
 export function LocalHostLoadingContent(
   props: LocalHostLoadingContentProps,
 ): ReactNode {
-  const runnerHost = useRunnerHost();
-  const hasCli = runnerHost.traycerCli !== null;
-  const [showDetails, setShowDetails] = useState<boolean>(false);
-  // Only poll while the disclosure is open. Cache stays warm if the user
-  // toggles closed-then-open quickly.
-  const status = useRunnerTraycerHostStatusQuery({
-    pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
-  });
-  const tail = status.data?.bootstrapLogTail ?? "";
   const progressView = props.progress;
 
   return (
-    <>
+    <LocalHostBodyShell>
       <AgentSpinningDots
         testId="local-host-loading-spinner"
         variant="pulse"
         className="h-8 min-w-8 text-title-md text-foreground"
       />
-      <p className="text-ui font-medium text-foreground">
+      {/* The STAGE, subordinate to the modal's title - not a second heading.
+          It used to be `text-ui font-medium text-foreground`, which put it 2px
+          from the dialog title at the identical weight and colour, so one event
+          arrived as two competing headings ("Setting up Traycer" above
+          "Setting up Traycer Host…").
+
+          Demoted in SIZE and COLOUR, which is the endorsed variant. `font-medium`
+          is deliberately KEPT rather than dropped: the lane's own detail line
+          directly below is already `text-ui-sm text-muted-foreground`, so
+          dropping weight too would make the stage byte-identical to the message
+          it is meant to caption, and the modal description above it is that
+          same pair. Weight is the one channel left that separates the three.
+
+          The COPY is untouched on purpose. `hostProgressHeading` is D10's shared
+          one-wording-per-event table, read by Settings ▸ Host as well; rewording
+          it here to reduce a within-surface duplication would break the
+          across-surface rule that table exists to enforce. */}
+      <p
+        data-testid="local-host-loading-stage"
+        className="text-ui-sm font-medium text-muted-foreground"
+      >
         {progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
       </p>
       <ProgressLines view={progressView} />
-      {hasCli ? (
-        <DetailsDisclosure
-          open={showDetails}
-          onToggle={() => setShowDetails((v) => !v)}
-          tail={tail}
-          onConfigureShell={props.onConfigureShell}
-        />
-      ) : null}
-    </>
+      <BootstrapLogDisclosure onConfigureShell={props.onConfigureShell} />
+    </LocalHostBodyShell>
   );
 }
 
@@ -99,44 +188,93 @@ function ProgressLines(props: {
           {view.detail}
         </p>
       )}
-      {view.percent === null ? null : (
-        <HostDownloadProgress
-          percent={view.percent}
-          shortLabel={view.shortLabel}
-          transferLabel={view.transferLabel}
-        />
-      )}
+      {/* THE CONTRACT, not a special case: a lane is RUNNING and reports no
+          percentage => indeterminate. Reaching here at all means a lane is
+          running - `useHostProvisioningProgress` returns `null` when none is,
+          which the guard above already handled - so the only question left is
+          whether it has a number.
+
+          Written as the contract rather than as an extract-shaped patch, so it
+          covers `verify`, `swap`, `service-start` and anything added later for
+          free. The block also stopped being "the download's progress" the moment
+          the carry-forward was scoped to one stage; it is the CURRENT stage's. */}
+      <HostProgress
+        percent={view.percent}
+        shortLabel={view.shortLabel}
+        transferLabel={view.transferLabel}
+      />
     </>
   );
 }
 
-interface HostDownloadProgressProps {
-  readonly percent: number;
+interface HostProgressProps {
+  /** `null` for a running stage with no measured position - see the contract above. */
+  readonly percent: number | null;
   readonly shortLabel: string;
   readonly transferLabel: string | null;
 }
 
-function HostDownloadProgress(props: HostDownloadProgressProps) {
+/**
+ * The current stage's progress: determinate when it reports a percentage,
+ * indeterminate when it is merely running.
+ *
+ * WHY IT RENDERS AT ALL WITHOUT A NUMBER. Before this, the block was gated on
+ * `percent !== null`, so at a stage transition the whole thing unmounted and the
+ * card lost 48px - and because the modal is centred with `-translate-y-1/2`, both
+ * of its edges moved 24px and the whole dialog jumped mid-install. Measured, on
+ * the one surface this epic exists to fix. Holding the space is the point.
+ *
+ * ⚠ AND IT MUST NOT HIDE A STALL. It cannot: stall detection is entirely the
+ * staged wait's (`LOCAL_HOST_SLOW_START_THRESHOLD_MS` and
+ * `laneProgressAdvanceKey`), which reads the lane's POSITION and promotes to the
+ * Retry surface on its own clock. A genuinely wedged extract still gets there
+ * while this animates. The two mechanisms compose and neither is load-bearing for
+ * the other - worth knowing before anyone "fixes" this bar to stop after a while.
+ */
+function HostProgress(props: HostProgressProps) {
+  const indeterminate = props.percent === null;
   return (
     <div
       data-testid="local-host-download-progress"
+      data-indeterminate={indeterminate ? "true" : "false"}
       className="flex w-full flex-col gap-2"
     >
       <div className="flex items-center justify-between text-ui-xs text-muted-foreground">
         <span>{props.transferLabel ?? props.shortLabel}</span>
-        <span className="font-medium text-foreground">{props.percent}%</span>
+        {indeterminate ? null : (
+          <span className="font-medium text-foreground">{props.percent}%</span>
+        )}
       </div>
       <div
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={props.percent}
+        // Omitted while indeterminate, which is what the ARIA role means by it -
+        // a `progressbar` with no `aria-valuenow` is announced as busy with an
+        // unknown position, rather than as a specific amount done.
+        aria-valuenow={props.percent ?? undefined}
         className="h-2 w-full overflow-hidden rounded-full bg-foreground/8"
       >
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-          style={{ width: `${props.percent}%` }}
-        />
+        {indeterminate ? (
+          // A SWEEPING SEGMENT, not a pulsing full-width fill: a full bar reads as
+          // finished however it is animated, which is the exact lie the scoped
+          // carry-forward removed. `w-2/5` + a translate keeps it obviously
+          // partial. `animation` inline because the keyframe is app CSS
+          // (`index.css`) and there is no utility for it.
+          <div
+            data-testid="local-host-progress-indeterminate"
+            className="h-full w-2/5 rounded-full bg-primary"
+            style={{
+              animation:
+                "host-progress-indeterminate 1.4s ease-in-out infinite",
+            }}
+          />
+        ) : (
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+            style={{ width: `${String(props.percent)}%` }}
+          />
+        )}
       </div>
     </div>
   );
@@ -157,34 +295,64 @@ interface DetailsDisclosureProps {
  */
 function DetailsDisclosure(props: DetailsDisclosureProps) {
   const Icon = props.open ? ChevronUp : ChevronDown;
+  // The toggle names the region it expands. Kept in the DOM with `hidden`
+  // rather than unmounted so the id `aria-controls` points at always resolves -
+  // a dangling `aria-controls` is worse than none, since assistive tech reports
+  // a control that operates nothing. `hidden` is `display: none`, so a closed
+  // region contributes no gap to the column either.
+  const regionId = useId();
   return (
     <div className="flex w-full flex-col items-stretch gap-3">
       <button
         type="button"
         onClick={props.onToggle}
         aria-expanded={props.open}
+        aria-controls={regionId}
         data-testid="local-host-loading-toggle-details"
-        className="inline-flex items-center justify-center gap-1 self-center text-ui-xs text-muted-foreground hover:text-foreground"
+        // No `self-center` and no `justify-center`: alignment is the shell's,
+        // and this control centring itself is what made the card read as three
+        // alignments (see the shell's doc for which three).
+        //
+        // NOT `self-start` either, and not because it is untried - it was
+        // rendered. Because it shrink-wraps this button, which makes a stray
+        // `justify-center` a NO-OP: one rendered variant looked fixed while
+        // still carrying the class. `self-start` hides this defect where
+        // dropping both removes it.
+        //
+        // The consequence, accepted deliberately: with `items-stretch` on the
+        // parent, this button's box spans the card while its label sits left, so
+        // the hit area is wider than the text. Harmless here - it is a lone
+        // control on its row, with nothing adjacent to mis-hit - and the wide box
+        // is what keeps a re-added `justify-center` VISIBLE instead of masked.
+        // Shrink-wrapping it (`w-fit` as much as `self-start`) would buy a
+        // tidier target and reintroduce the blind spot.
+        className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground hover:text-foreground"
       >
         <span>{props.open ? "Hide details" : "Show details"}</span>
         <Icon className="size-3" />
       </button>
-      {props.open ? (
-        <>
-          <BootstrapLogTail tail={props.tail} />
-          <div className="flex justify-center">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={props.onConfigureShell}
-              data-testid="local-host-open-shell-settings"
-            >
-              Configure shell…
-            </Button>
-          </div>
-        </>
-      ) : null}
+      <div
+        id={regionId}
+        hidden={!props.open}
+        className="flex w-full flex-col gap-3"
+      >
+        {props.open ? (
+          <>
+            <BootstrapLogTail tail={props.tail} />
+            <div className="flex">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={props.onConfigureShell}
+                data-testid="local-host-open-shell-settings"
+              >
+                Configure shell…
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -211,8 +379,36 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     return (
       <p
         data-testid="local-host-loading-empty-tail"
+        // `text-left`, decided rather than inherited. This was `text-center`,
+        // which made it the last leaf overriding the body's one-alignment
+        // contract - and it is the SAME SLOT as the `<pre>` below, which is
+        // `text-left`, so the two states of one region disagreed about where
+        // their text starts. Content appearing to shift for a reason unrelated
+        // to the content is what that reads as.
+        //
+        // Not a rare branch, either: on the ∅ arm the host never reported ready,
+        // so an empty tail is the EXPECTED reading, not an edge case - and it is
+        // the one branch the alignment harness does not enter.
+        //
+        // ⚠ NOTHING EVALUATES THE WAIVER BELOW, and that is a property of THIS
+        // FILE rather than of the waiver. `muted-fill-on-raised-surface-lint`
+        // walks imports DOWNWARD from a file that spells a raised-surface token;
+        // this component is a dialog body composed by its CALLER and passed in as
+        // a prop, so the edge runs the other way and no hop count reaches it -
+        // measured out of scope at 1, 2 AND 3 hops. Both waivers in this file are
+        // therefore a claim NOBODY CHECKS. They are kept because they are true
+        // (both fills are /30 behind their own border, which the guard's own
+        // `isLoadBearing` would clear anyway), and because a reader who deletes
+        // them will assume the sweep covers this file. It does not. A fill added
+        // here is guarded by the AGENTS.md rule and a human, and by nothing else.
+        //
+        // The waiver stays LAST, adjacent to the class list it excuses: the
+        // muted-fill guard only looks a few lines back, so prose inserted between
+        // the two silently orphans it. That is what happened here - the comment
+        // above was added later and pushed the marker out of range. Kept in force
+        // for the day this file does come into scope.
         // muted-fill-ok: weak tint delimited by its own border-border/60
-        className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground"
+        className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       >
         Waiting for bootstrap output…
       </p>
@@ -223,6 +419,8 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     <pre
       ref={ref}
       data-testid="local-host-loading-log-tail"
+      // The second of this file's two unevaluated waivers - see the note on the
+      // empty-tail branch above for why nothing in CI reads either of them.
       // muted-fill-ok: weak tint delimited by its own border-border/60
       className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground"
     >

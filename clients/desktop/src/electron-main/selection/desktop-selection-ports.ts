@@ -183,6 +183,38 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * resurrect rows the newer one removed - a deregistered host reappearing in
    * the authority for up to a full poll interval. Stamped at fetch START,
    * adopted only if no newer same-generation completion beat it.
+   *
+   * ⚠ ORDERING WITHOUT IN-FLIGHT DEDUPE IS THE DESIGN, NOT A MISSING
+   * OPTIMIZATION. A perf audit (2026-08-17) filed the absent dedupe as a
+   * finding: overlapping refreshes each issue a fetch and the older completion
+   * is declined, so one of the two round trips is "wasted". The measurement is
+   * right and the conclusion is not, and this note is here because the risk is
+   * not someone breaking it by accident - it is someone FIXING it, correctly
+   * following a number.
+   *
+   * What is actually paid, and what is not: the cost of no dedupe is a
+   * duplicate FETCH. It is never a duplicate ADOPTION - `adoptedSeq` below
+   * already guarantees at most one completion wins, in request order. So the
+   * bug the dedupe would prevent does not exist; only the network call does,
+   * bounded to roughly two in practice (the 60s poll racing a deregister).
+   *
+   * What coalescing would cost is a correctness property, and it is one this
+   * port has already been bitten by. Callers refresh BECAUSE something
+   * changed - a registration, a deregistration, an identity change. Serving
+   * such a caller from a fetch that started BEFORE the change it is reacting
+   * to returns pre-change data, and the request that would have observed the
+   * change never happens. `adoptedSeq` cannot catch that: the stale completion
+   * genuinely IS the newest completion of the only in-flight fetch, so the
+   * guard agrees with it rather than declining it.
+   *
+   * The proof that this is not hypothetical is the SECOND counter below.
+   * `localIdentitySeq` exists because a local-identity change that landed
+   * during a refresh's fetch was published and then overwritten by the id that
+   * refresh had read before its request - a shipped bug, from exactly the
+   * class dedupe re-introduces, and one that left the authority calling the
+   * stale host local and this machine remote until the next host event.
+   * Coalescing would recreate that shape for the ROWS, where there is no
+   * third counter to rescue it.
    */
   private refreshSeq = 0;
   private adoptedSeq = 0;

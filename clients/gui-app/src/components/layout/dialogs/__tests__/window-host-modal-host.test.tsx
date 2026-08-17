@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  MockRunnerHost,
+  MockTraycerCli,
+} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -12,6 +16,7 @@ import {
   type HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const hostStatus = vi.hoisted(() => ({
   data: undefined as
@@ -109,6 +114,7 @@ function controllerFor(
   return {
     readinessFor: () => ({ kind: "ready" }),
     defaultHostPresentation: presentation,
+    hasBeenDefaultHostReady: false,
   };
 }
 
@@ -130,6 +136,13 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
 function renderHost(
   presentation: DefaultHostReadinessPresentation,
   bypassed: boolean,
+  // Required, not optional (`fn(x?: T)` is banned): every call site states
+  // what it wants rather than inheriting a default that could drift. `undefined`
+  // preserves the prior no-CLI shell for every existing fixture; only the
+  // fixtures that specifically assert the bootstrap-log toggle pass a real one
+  // - see `local-host-loading.test.tsx`'s own positive/negative control pair
+  // for why a no-CLI shell can never prove that toggle's presence.
+  traycerCli: ITraycerCli | null | undefined,
 ) {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -138,7 +151,7 @@ function renderHost(
     hosts: [],
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
-    traycerCli: undefined,
+    traycerCli,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -172,15 +185,28 @@ const BOOTSTRAP_MARKERS = {
 beforeEach(() => {
   hostStatus.data = undefined;
   controllerStatus.data = undefined;
+  // `ReportIssueAction` gates on this store, defaulting to `false` - so every
+  // fixture that checks Report issue's PRESENCE needs it true first, or the
+  // absence would be satisfied by the store gate rather than by
+  // `showReportIssue`. Fixtures asserting Report issue's ABSENCE stay
+  // meaningful either way, since they are asserting the more restrictive of
+  // two independently-sufficient gates.
+  useDesktopDialogStore.getState().setReportIssueAvailable(true);
 });
 
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
+  useDesktopDialogStore.getState().setReportIssueAvailable(false);
 });
 
 describe("<WindowHostModalHost />", () => {
-  it("∅ + all leases dead(offline) + local lifecycle: modal visible with cause no-usable-host, local bootstrap body, bootstrap log path and attempt summary", async () => {
+  it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; spinner + progress heading absent; attempt panel + log toggle present", async () => {
+    // Previously asserted `local-host-loading-spinner` truthy on this arm -
+    // THAT was the reported defect (B4): a live "starting" spinner drawn over
+    // a state where nothing is starting, with Retry and Report issue beside
+    // it as if a real attempt were in flight. Kept only as the negative
+    // assertion below, with a comment recording why, so nobody restores it.
     hostStatus.data = BOOTSTRAP_MARKERS;
     applySnapshot({
       attached: true,
@@ -197,19 +223,45 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      // A real CLI, not the no-CLI default: `local-host-loading-toggle-details`
+      // structurally cannot render without one (see
+      // `local-host-loading.test.tsx`'s own positive/negative control pair),
+      // so proving it PRESENT needs the positive shell.
+      new MockTraycerCli(),
     );
 
+    // Existence before absence: a modal that failed to render at all would
+    // also satisfy every "absent" assertion below, and that exact shape has
+    // already bitten this branch three times.
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("no-usable-host");
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    expect(openSettings).toBeTruthy();
+
+    // Nothing is starting, so nothing narrates a start.
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByText("Starting local Traycer Host…")).toBeNull();
+
+    // The attempt panel is what explains this state, and it is present...
     expect(
       screen.getByTestId("local-host-bootstrap-log-path").textContent,
     ).toBe("/Users/me/.traycer/bootstrap.log");
     expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
+    // ...and the log disclosure toggle survives onto this arm - it is the one
+    // way to take a stuck startup elsewhere, and it is TRUE here.
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+
+    // This IS the settled failure: Retry, Report issue, and Open settings as
+    // an equal-weight button, all present.
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
   });
 
   it("a REMOTE-only fleet: no local bootstrap body, no bootstrap log path", async () => {
@@ -227,6 +279,7 @@ describe("<WindowHostModalHost />", () => {
         localBootIntent: false,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -236,7 +289,7 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
   });
 
-  it("cold-start cause: modal visible, no attempt summary (nothing failed yet)", async () => {
+  it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; spinner shown; no attempt summary", async () => {
     // The markers MUST be available for this assertion to mean anything. The
     // first version of this test left the status query empty, so the summary
     // was absent because there was nothing to summarise - it passed with the
@@ -259,6 +312,7 @@ describe("<WindowHostModalHost />", () => {
         localBootIntent: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -267,8 +321,126 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("cold-start");
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    expect(openSettings).toBeTruthy();
+
     expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
     expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
+
+    // This is the reported defect's own state: a start with no failure of any
+    // kind. Retry and Report issue must both be absent, and Open settings
+    // must be the quiet link rather than an equal-weight button.
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("link");
+  });
+
+  it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
+    // The row most likely to get this wrong later: Retry and Report issue sit
+    // adjacent in the same row and share the same underlying state, so it is
+    // easy for a change that means to unlock Retry to unlock both.
+    applySnapshot({
+      attached: true,
+      effectiveHostId: LOCAL_HOST_ID,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        stage: "slow",
+      },
+      false,
+      undefined,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    expect(openSettings).toBeTruthy();
+
+    // Slow promotes Retry (nothing has FAILED, but the wait has outrun the
+    // healthy band) without promoting Report issue - there is still no
+    // failure for a report to describe.
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+  });
+
+  it("cold-start, settled failure (provisioningError set): Retry, Report issue and Open settings(button) present; spinner + stage line absent; attempt panel + log toggle present", async () => {
+    applySnapshot({
+      attached: true,
+      effectiveHostId: LOCAL_HOST_ID,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    // The markers must be AVAILABLE for the body assertions below to mean
+    // anything - the attempt panel is what replaces the spinner here, and
+    // without markers it renders nothing and "no spinner" would be satisfied by
+    // an empty body.
+    hostStatus.data = BOOTSTRAP_MARKERS;
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        provisioningError: new Error("bootstrap exited 1"),
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    expect(openSettings).toBeTruthy();
+
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+
+    // THE BODY, which this test used to say nothing about - and that silence was
+    // worse than an omission. The row was enumerated, so it read as covered,
+    // while the arm it covers went on drawing a live spinner and "Starting local
+    // Traycer Host…" beside the Retry and Report issue asserted above. The ∅
+    // test has had this negative assertion all along; the arm that was actually
+    // broken did not.
+    //
+    // Positive first: the attempt panel is what this arm draws INSTEAD of the
+    // spinner, so its presence is what makes the absences below meaningful
+    // rather than vacuous.
+    expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
+    // The copy itself, not just the node: the stage line's fallback is the exact
+    // sentence this arm must not say, and asserting the testid alone would pass
+    // if the same string were reintroduced anywhere else in the card.
+    expect(document.body.textContent).not.toContain(
+      "Starting local Traycer Host…",
+    );
   });
 
   it("bypassed: true renders nothing at all", () => {
@@ -282,6 +454,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       true,
+      undefined,
     );
 
     expect(screen.queryByTestId("window-host-modal")).toBeNull();
@@ -298,7 +471,7 @@ describe("<WindowHostModalHost />", () => {
       ],
     });
 
-    renderHost(EMPTY_PRESENTATION, false);
+    renderHost(EMPTY_PRESENTATION, false, undefined);
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -320,6 +493,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -356,6 +530,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       false,
+      undefined,
     );
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -416,7 +591,11 @@ describe("<WindowHostModalHost />", () => {
       leases: [deadLease(REMOTE_HOST_ID, { reason: "offline" })],
     });
 
-    renderHost({ ...EMPTY_PRESENTATION, targetKind: "remote" }, false);
+    renderHost(
+      { ...EMPTY_PRESENTATION, targetKind: "remote" },
+      false,
+      undefined,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -451,6 +630,7 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -460,6 +640,77 @@ describe("<WindowHostModalHost />", () => {
       screen.getByTestId("window-host-modal").getAttribute("data-variant"),
     ).toBe("update-host");
     expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
+  });
+
+  it("arm 3: a non-target incompatible host is named, and no local action is offered for it", async () => {
+    // `deriveNoHostVariant` arm 3 - "some OTHER lease is dead because it is
+    // incompatible", reached when the target is dead for an unrelated reason.
+    // Arm 1 (target IS the incompatible host) is what the two tests around this
+    // one cover, and on that arm the named host and the acted-on host are the
+    // same machine, which is why `canManageHost` reads as a sufficient guard.
+    // It is not: it asks "is the TARGET this machine", while the card names
+    // whichever host is incompatible. Here those differ.
+    const forceProvisioning = vi.fn();
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        // Target: this machine, dead but NOT incompatible - so arm 1 misses.
+        deadLease(LOCAL_HOST_ID, { reason: "offline" }),
+        // A different machine, and the incompatible one. Its version is what
+        // the card will quote, which is how the assertions below tell which
+        // lease the narration is about.
+        deadLease(REMOTE_HOST_ID, {
+          reason: "incompatible",
+          detail: {
+            code: "protocol-major-behind",
+            hostVersion: "0.9.0",
+            minSupportedVersion: "1.5.0",
+          },
+        }),
+      ],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        // `canManageHost` is TRUE here, and legitimately so: the target is this
+        // machine. That is exactly what makes the guard insufficient - it is
+        // satisfied by a fact about the target while the card is about a
+        // different host.
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        forceProvisioning,
+      },
+      false,
+      undefined,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+
+    // Premise, positively: the narration really is arm 3 - `update-host`, and
+    // quoting the REMOTE lease's version rather than the target's. Without
+    // this the assertion below could pass on an arm-1 render.
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-variant"),
+    ).toBe("update-host");
+    expect(screen.getByTestId("window-host-modal").textContent).toContain(
+      "0.9.0",
+    );
+
+    // Fixed: no button, because this machine's provisioning cannot fix that
+    // machine's host. Asserted alongside a POSITIVE consequence - the card
+    // still names the incompatible host and now explains the absence - so this
+    // cannot pass on a build where the whole modal failed to render.
+    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(
+      screen.getByTestId("window-host-modal-description").textContent,
+    ).toContain("can't be updated from here");
+    expect(forceProvisioning).not.toHaveBeenCalled();
   });
 
   it("update-host: WITHHOLDS Update host when THIS APP is the outdated leg", async () => {
@@ -490,11 +741,185 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+  });
+
+  /**
+   * F8's two STRUCTURAL claims, which is all of it jsdom can answer.
+   *
+   * The finding has a third, geometric half - the toggle centring itself in an
+   * otherwise left-aligned card - and no assertion in this file touches it.
+   * `self-center` is a resolved box position, and jsdom computes no layout at
+   * all, so the only jsdom-visible form of that claim is "the class string does
+   * not contain `self-center`", which pins the fix's SPELLING and would pass
+   * happily on a build that re-centred the control by any other means. It is
+   * measured in a real engine instead, by
+   * `scripts/window-host-modal-alignment-browser.mjs`, and recorded as
+   * browser-verified-only rather than left reading as covered here.
+   *
+   * TWO LIMITS OF THAT HARNESS, stated here because this is where a reader comes
+   * looking for coverage:
+   *
+   *  1. It renders the COLD-START body only. Its existence check requires the
+   *     spinner, the stage line, the lane detail and the progress bar - four
+   *     members the ∅ body does not render - so pointing it at that arm makes it
+   *     FAIL rather than measure. The ∅ arm has no rendered alignment
+   *     measurement at all; the assertions below are its only coverage.
+   *  2. It cannot distinguish the shipped fix from `self-start` +
+   *     `justify-center`, which renders at the same left edge. Its own `PC4`
+   *     asserts that blindness as a truth table rather than admitting it in
+   *     prose, and the grep-style class guard is what actually pins it -
+   *     `src/__tests__/local-bootstrap-alignment-lint.test.ts`, where that exact
+   *     combination is one of the mutation proofs.
+   *
+   * WHY THE ∅ ARM HAS NO RENDERED MEASUREMENT, and what would make it need one.
+   *
+   * Deferred, not forgotten, and the argument is CONDITIONAL - which is the only
+   * reason a deferral is a decision rather than a gap. Both arms now route through
+   * the same `LocalHostBodyShell`, so alignment is shared BY CONSTRUCTION:
+   * measuring the cold-start arm measures the shell, and the ∅ arm uses that
+   * shell. A rendered ∅ measurement would be re-verifying one owner through a
+   * second door, and building it faithfully needs the readiness controller mounted
+   * in a browser fixture - approximating it would measure the fixture.
+   *
+   * ⚠ THE CONSTRUCTION ARGUMENT DIES the moment anyone gives the ∅ arm alignment
+   * of its own - a second root, or centring on one of its children. At that point
+   * the shared-owner reasoning no longer holds and the rendered measurement
+   * becomes required. What the shell does NOT cover either way is a CHILD carrying
+   * its own centring, which is precisely the `text-center` that survived on
+   * `local-host-loading-empty-tail` in the one branch nothing measured; the class
+   * guard covers its recurrence.
+   */
+  describe("the local-bootstrap body's structure", () => {
+    it("gives BOTH local arms one body root, so alignment has an owner", async () => {
+      // The defect class: both bodies were fragments, so their children became
+      // direct children of the dialog's own column and each one carried its own
+      // alignment or none. Asserted per arm because the two arms are built by
+      // different branches of `buildLocalBootstrapBody` - fixing one and
+      // leaving the other is exactly how they drift.
+      hostStatus.data = BOOTSTRAP_MARKERS;
+      applySnapshot({
+        attached: true,
+        effectiveHostId: LOCAL_HOST_ID,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [
+          lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+        ],
+      });
+      renderHost(
+        { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      expect(
+        screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      ).toBe("cold-start");
+
+      // ONE root, not one per child: two roots would re-create the same defect
+      // with the members regrouped.
+      expect(screen.getAllByTestId("local-host-body")).toHaveLength(1);
+      const coldStartBody = screen.getByTestId("local-host-body");
+      // The root actually CONTAINS the body's members. Without this the
+      // assertion above is satisfied by an empty div rendered beside them.
+      expect(
+        screen
+          .getByTestId("local-host-loading-spinner")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(coldStartBody);
+      expect(
+        screen
+          .getByTestId("local-host-loading-toggle-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(coldStartBody);
+
+      cleanup();
+      useSelectionAuthorityStore.getState().reset();
+
+      // The ∅ arm, whose body is a different branch with different members.
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+      });
+      renderHost(
+        {
+          ...EMPTY_PRESENTATION,
+          targetKind: "local",
+          localBootIntent: true,
+          canManageHost: true,
+        },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      expect(
+        screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      ).toBe("no-usable-host");
+      expect(screen.getAllByTestId("local-host-body")).toHaveLength(1);
+      const emptyArmBody = screen.getByTestId("local-host-body");
+      expect(
+        screen
+          .getByTestId("local-host-bootstrap-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(emptyArmBody);
+      expect(
+        screen
+          .getByTestId("local-host-loading-toggle-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(emptyArmBody);
+    });
+
+    it("puts the ∅ arm's attempt panel ABOVE the log toggle, not below it", async () => {
+      // Document order, deliberately anchored on the MODAL rather than on the
+      // body root: this claim predates the root, so expressing it this way is
+      // what lets it be controlled against the tree that actually had the
+      // defect. Below the toggle, the panel reads as the toggle's own expanded
+      // content - an open dropdown the user never opened.
+      hostStatus.data = BOOTSTRAP_MARKERS;
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+      });
+      renderHost(
+        {
+          ...EMPTY_PRESENTATION,
+          targetKind: "local",
+          localBootIntent: true,
+          canManageHost: true,
+        },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      const panel = screen.getByTestId("local-host-bootstrap-details");
+      const toggle = screen.getByTestId("local-host-loading-toggle-details");
+      // Both present first: an ordering assertion over a missing node is the
+      // vacuity this branch keeps catching.
+      expect(panel).toBeTruthy();
+      expect(toggle).toBeTruthy();
+      expect(
+        panel.compareDocumentPosition(toggle) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeGreaterThan(0);
+    });
   });
 });

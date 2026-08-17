@@ -36,6 +36,11 @@ function baseProps(
     retryPending: false,
     onUpdateHost: null,
     onOpenSettings: () => undefined,
+    // The default mirrors this base's `cause: "no-usable-host"` - a settled
+    // failure - so existing fixtures keep describing the state they were
+    // written for. The healthy-start arm passes these explicitly.
+    showReportIssue: true,
+    settingsEmphasis: "button",
     ...overrides,
   };
 }
@@ -112,7 +117,12 @@ describe("<WindowHostModal />", () => {
     };
     renderModal(
       baseProps({
-        variant: { kind: "update-host", hostId: "host-a", detail },
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
         onUpdateHost: () => undefined,
       }),
     );
@@ -131,13 +141,47 @@ describe("<WindowHostModal />", () => {
     const onUpdateHost = vi.fn();
     renderModal(
       baseProps({
-        variant: { kind: "update-host", hostId: "host-a", detail },
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
         onUpdateHost,
       }),
     );
     const button = screen.getByTestId("window-host-modal-update-host");
     fireEvent.click(button);
     expect(onUpdateHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("update-host: a NON-target incompatible host explains why it cannot be updated here", () => {
+    // Arm 3 of `deriveNoHostVariant`. The action is withheld upstream because
+    // this machine's provisioning cannot fix another machine's host - so the
+    // copy has to say that, or the card reads as "update the host" beside no
+    // button, which is an unexplained gap rather than an honest absence.
+    const detail: SelectionIncompatibility = {
+      code: "protocol-major-behind",
+      hostVersion: "1.0.0",
+      minSupportedVersion: "1.2.0",
+    };
+    renderModal(
+      baseProps({
+        variant: {
+          kind: "update-host",
+          hostId: "host-b",
+          isTargetHost: false,
+          detail,
+        },
+        onUpdateHost: null,
+      }),
+    );
+    const description = screen.getByTestId("window-host-modal-description");
+    expect(description.textContent).toContain("Another host on this account");
+    expect(description.textContent).toContain("can't be updated from here");
+    // And it must NOT still tell the reader to do the thing there is no
+    // control for.
+    expect(description.textContent).not.toContain("Update the host to continue");
   });
 
   it("update-host: the Update host button is absent when onUpdateHost is null", () => {
@@ -148,7 +192,12 @@ describe("<WindowHostModal />", () => {
     };
     renderModal(
       baseProps({
-        variant: { kind: "update-host", hostId: "host-a", detail },
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
         onUpdateHost: null,
       }),
     );

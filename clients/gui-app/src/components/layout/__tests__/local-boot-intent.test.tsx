@@ -312,8 +312,10 @@ describe("local-boot intent", () => {
   it("arms nothing local for an unresolved REMOTE selection", async () => {
     // The intent is the selection AUTHORITY's derived effective host now
     // (redesign P1.2), not a persisted key `resolveLocalBootIntent` reads
-    // from storage - `lastSelectedHostKey`/`lastLocalHostIdKey` have no
-    // production reader left. Registering the remote host in the
+    // from storage. `lastSelectedHostKey` had no production reader at all and
+    // is deleted; `lastLocalHostIdKey` is still LIVE - read by
+    // `host-directory-service.ts:22,46` - so this comment used to assert a
+    // deadness that was true of one key and false of the other. Registering the remote host in the
     // authority's fleet (so derivation can name it effective) while the
     // DIRECTORY's own remoteFetcher still returns nothing for it reproduces
     // "the directory row never arrives"; with no local host up and no other

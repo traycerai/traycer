@@ -645,6 +645,7 @@ describe("mutation lane: wait-never-reject", () => {
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       return {
         data: {
@@ -735,6 +736,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       // A watchdog heartbeat: liveness only, every numeric field null.
       opts.onEvent({
@@ -744,6 +746,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: null,
+        workUnits: null,
       });
       return {
         data: {
@@ -811,6 +814,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 45,
         totalBytes: 100,
         message: "downloading host 1.8.0",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -819,6 +823,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "retrying host archive shortly",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -827,6 +832,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "extracting host 1.8.0",
+        workUnits: null,
       });
       return {
         data: {
@@ -844,13 +850,117 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     expect(outcome.kind).toBe("ok");
     expect(progresses).toEqual([
       expect.objectContaining({ stage: "download", percent: 45 }),
+      // The tick carries EVERYTHING forward, stage included. This is the arm
+      // that protects what Mi-1 exists for, and the one a careless scoping of
+      // the carry-forward breaks.
       expect.objectContaining({
         stage: "download",
         percent: 45,
+        bytes: 45,
+        totalBytes: 100,
         message: "retrying host archive shortly",
+        workUnits: null,
       }),
-      expect.objectContaining({ stage: "extract", percent: 45 }),
+      // ...and a GENUINE transition carries nothing. This assertion used to read
+      // `percent: 45`, pinning the leak as though it were intended - incidentally,
+      // since this test's subject is the `stage` guard and not the numbers. It was
+      // the only thing in the suite that noticed they leaked, and it agreed with
+      // them.
+      expect.objectContaining({
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+      }),
     ]);
+  });
+
+  it("a genuine stage transition blanks the bar instead of inheriting a COMPLETED download's numbers", async () => {
+    // THE SHIPPED DEFECT, in the shape a user meets it. On every registry
+    // install: download climbs to 100% with bytes == totalBytes, extract
+    // announces with all three null, the stage transitions correctly - and every
+    // number is inherited. So the card sat at a FULL progress bar reading
+    // "800 MB of 800 MB", under "Setting up Traycer Host…", for the whole
+    // multi-minute extract.
+    //
+    // A full bar reads as FINISHED, not as working, which makes it the worst of
+    // the three fields. Blanking is not a regression: the new stage has no
+    // measured position yet, and an honest empty beats an inherited lie.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const progresses: MutationProgress[] = [];
+    const unsubscribeProgress = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      // A download that RAN TO COMPLETION - the case that produced the full bar.
+      opts.onEvent({
+        type: "progress",
+        stage: "download",
+        percent: 100,
+        bytes: 838_860_800,
+        totalBytes: 838_860_800,
+        message: "downloading host 1.8.0",
+        workUnits: null,
+      });
+      opts.onEvent({
+        type: "progress",
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "extracting host 1.8.0",
+        workUnits: null,
+      });
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+    unsubscribeProgress();
+
+    expect(outcome.kind).toBe("ok");
+    // Positive first: the download's own numbers DID land, so the absences below
+    // are not satisfied by a lane that never reported anything.
+    expect(progresses[0]).toEqual(
+      expect.objectContaining({
+        stage: "download",
+        percent: 100,
+        bytes: 838_860_800,
+        totalBytes: 838_860_800,
+      }),
+    );
+    expect(progresses[1]).toEqual(
+      expect.objectContaining({
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "extracting host 1.8.0",
+        workUnits: null,
+      }),
+    );
   });
 });
 

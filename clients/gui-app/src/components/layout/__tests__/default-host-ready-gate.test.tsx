@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
+  fireEvent,
   render,
   screen,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -18,7 +22,10 @@ import {
 // `HostReadyGate` to `return props.children` would restore the regression with
 // every test still green.
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
+import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { appLogger } from "@/lib/logger";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -91,10 +98,12 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
 function controllerFor(
   readiness: SurfaceReadiness,
   presentation: DefaultHostReadinessPresentation,
+  hasBeenDefaultHostReady: boolean,
 ): HostReadinessController {
   return {
     readinessFor: () => readiness,
     defaultHostPresentation: presentation,
+    hasBeenDefaultHostReady,
   };
 }
 
@@ -122,41 +131,94 @@ function renderGate(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  // Providers are stable across readiness flips so the gate's latch (per-
-  // window state, set once the first `ready` renders) survives re-renders -
-  // remounting the gate would reset it and the post-latch pins would pass
-  // vacuously against a gate that still blocks.
-  const view = render(
+  // THE LATCH LIVES IN THE PROVIDER NOW, so this harness has to model it.
+  //
+  // It used to be `useState` inside the gate, and simply rendering `ready` once
+  // set it. It moved to `HostReadinessController` because the window modal needs
+  // to read it too (see `gateCardReadiness`), and this suite hand-supplies that
+  // context - so a harness that always reported `false` would leave the gate
+  // blocking for ever and every post-latch pin below would fail against a
+  // correct gate.
+  //
+  // Modelled statefully rather than passed per call so the existing tests keep
+  // their semantics - render `ready`, then flip - instead of each one having to
+  // know about the flag. Monotonic, exactly like the provider: set once, never
+  // cleared.
+  //
+  // What this harness therefore does NOT prove is that the REAL provider
+  // latches. That is `app-stays-mounted-across-host-switch.test.tsx`, the only
+  // suite in the tree mounting the production chain, where a broken latch
+  // unmounts the app across a switch and reddens it.
+  let hasBeenReady = readiness.kind === "ready";
+  const tree = (
+    next: SurfaceReadiness,
+    nextPresentation: DefaultHostReadinessPresentation,
+  ) => (
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
-          value={controllerFor(readiness, presentation)}
+          value={controllerFor(next, nextPresentation, hasBeenReady)}
         >
           <HostReadyGate>
             <main>app</main>
           </HostReadyGate>
         </HostReadinessControllerContext.Provider>
       </RunnerHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  // Providers are stable across readiness flips so the latch survives re-renders -
+  // remounting would reset it and the post-latch pins would pass vacuously
+  // against a gate that still blocks.
+  const view = render(tree(readiness, presentation));
   return {
     view,
     setReadiness: (next, nextPresentation) => {
-      view.rerender(
-        <QueryClientProvider client={client}>
-          <RunnerHostProvider runnerHost={runnerHost}>
-            <HostReadinessControllerContext.Provider
-              value={controllerFor(next, nextPresentation)}
-            >
-              <HostReadyGate>
-                <main>app</main>
-              </HostReadyGate>
-            </HostReadinessControllerContext.Provider>
-          </RunnerHostProvider>
-        </QueryClientProvider>,
-      );
+      if (next.kind === "ready") hasBeenReady = true;
+      view.rerender(tree(next, nextPresentation));
     },
   };
+}
+
+/**
+ * The gate AND the window modal in one tree, which is the only arrangement that
+ * can see them collide.
+ *
+ * `WindowHostModalHost` is a sibling of the gate rather than a child, exactly as
+ * the app mounts it - inside it the gate would replace it during a cold start and
+ * the co-render could never happen.
+ */
+function renderGateWithModal(
+  readiness: SurfaceReadiness,
+  presentation: DefaultHostReadinessPresentation,
+  withModal: boolean,
+  hasBeenReady: boolean,
+): RenderResult {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostReadinessControllerContext.Provider
+          value={controllerFor(readiness, presentation, hasBeenReady)}
+        >
+          <HostReadyGate>
+            <main>app</main>
+          </HostReadyGate>
+          {withModal ? <WindowHostModalHost bypassed={false} /> : null}
+        </HostReadinessControllerContext.Provider>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
 }
 
 /**
@@ -389,6 +451,53 @@ describe("<HostReadyGate />", () => {
     expect(screen.getByText("boom")).toBeTruthy();
   });
 
+  it("offers Open settings on the provisioning-error card, and keeps it live while a retry is in flight", () => {
+    // A DISTINCT claim from the Retry pin above, not a wider version of it.
+    // Retry re-runs the thing that just failed; it can keep failing for a reason
+    // only Settings ▸ Shell can fix, since that page edits the launch config
+    // through the CLI with no running host involved. A card whose only action is
+    // "try the failure again" is a dead end for exactly the user who is stuck,
+    // and this card had no other exit.
+    const openSettings = vi.fn();
+    renderGate(
+      { kind: "provisioning-error" },
+      {
+        ...PRESENTATION,
+        provisioningError: new Error("boom"),
+        openSettings,
+      },
+    );
+
+    const escapeHatch = screen.getByTestId(
+      "local-host-provisioning-open-settings",
+    );
+    expect(escapeHatch).toBeTruthy();
+    // Wired, not merely present: a button that renders and does nothing is the
+    // same dead end with extra steps.
+    fireEvent.click(escapeHatch);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+
+    cleanup();
+
+    // UNCONDITIONAL, including mid-retry. A provision in flight is precisely
+    // when someone wants to go and change the shell it is using, and gating the
+    // escape hatch behind the failure it exists to fix is the lockout the window
+    // modal states the same rule about. Retry is disabled here (asserted
+    // elsewhere) - this must not be.
+    renderGate(
+      { kind: "provisioning-error" },
+      {
+        ...PRESENTATION,
+        provisioningError: new Error("boom"),
+        provisioning: true,
+      },
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Open settings" })
+        .disabled,
+    ).toBe(false);
+  });
+
   it("defers the zero-dialable default-host card to the window modal too - no gate-drawn card, no tab wording", () => {
     // D7 zero-dialable arm: default-host reaches unavailable-host only when
     // nothing is dialable. This card (and its copy, its report family) now
@@ -494,6 +603,233 @@ describe("<HostReadyGate />", () => {
       ),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+  });
+
+  /**
+   * ONE NARRATOR PER SCOPE, tested where the two narrators can actually collide.
+   *
+   * `provisioning-error` and `removed-host` are gate-drawn - deliberately, they
+   * are local lifecycle terminals - while the window modal is mounted OUTSIDE
+   * this gate and derives its own verdict from the authority's leases rather
+   * than from readiness. Two independent deciders, so nothing in either one's
+   * types prevents both from speaking at once, and the tests above cannot see it
+   * because they never mount the modal.
+   *
+   * Order is load-bearing. Both surfaces are proved renderable FIRST, in the
+   * exact states the third case combines, because "they are never both present"
+   * is satisfied completely by a tree where neither can render - and a harness
+   * that silently fails to mount one of them is the likeliest way this suite
+   * would go quietly vacuous.
+   */
+  describe("the gate and the window modal, when both could speak", () => {
+    const DEAD_LOCAL_LEASE = {
+      hostId: "local-host",
+      status: "dead",
+      dead: { reason: "offline" },
+    } as HostLeaseSnapshot;
+
+    /** The ∅ authority state: attached, nothing effective, local lease dead. */
+    function applyEmptyFleet(): void {
+      // Annotated rather than asserted: an annotation is CHECKED against the
+      // type, so a field the kernel snapshot grows later is a compile error here
+      // instead of a silently-missing input.
+      const snapshot: SelectionKernelSnapshot = {
+        attached: true,
+        preferredHostId: null,
+        targetHostId: "local-host",
+        effectiveHostId: null,
+        leases: [DEAD_LOCAL_LEASE],
+        selectionRevision: 1,
+      };
+      act(() => {
+        useSelectionAuthorityStore.getState().applyKernelSnapshot(snapshot);
+      });
+    }
+
+    it("A (positive control): the gate's provisioning-error card CAN render", () => {
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        false,
+        false,
+      );
+      expect(
+        screen.getByTestId("host-ready-gate-provisioning-error"),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId("host-ready-gate").dataset.narratedByWindowModal,
+      ).toBe("false");
+    });
+
+    it("B (positive control): the window modal CAN render in this harness, on the ∅ authority state", () => {
+      // A NARRATED readiness kind, so the gate draws no card of its own and the
+      // only thing being proved here is that the modal reaches the DOM under
+      // this provider stack. Without this, case C would pass on a harness where
+      // `WindowHostModalHost` throws or silently returns null.
+      applyEmptyFleet();
+      renderGateWithModal(
+        { kind: "unavailable-host" },
+        SLOW_PRESENTATION,
+        true,
+        false,
+      );
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(
+        screen.queryByTestId("host-ready-gate-unavailable-host"),
+      ).toBeNull();
+    });
+
+    it("C: with a provisioning error AND an empty fleet, only ONE of them narrates", () => {
+      // Both conditions at once, which is a single-host account whose local
+      // provision threw: readiness is `provisioning-error` (A's state) and the
+      // authority has nothing effective (B's state). Before this was pinned the
+      // user saw the modal floating at z-[60] behind its blur over the gate's
+      // own centred card, each with its own copy and its own recovery actions -
+      // the layering this epic exists to delete, rebuilt out of two deciders
+      // that were each correct alone.
+      applyEmptyFleet();
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        false,
+      );
+
+      const gateCard = screen.queryByTestId(
+        "host-ready-gate-provisioning-error",
+      );
+      const modal = screen.queryByTestId("window-host-modal");
+      // Stated as a count rather than as two absences: "not both" must not be
+      // satisfiable by NEITHER. One of them has to be narrating this failure -
+      // a state that produces silence is a worse bug than a state that produces
+      // two cards.
+      const narrators = [gateCard, modal].filter((el) => el !== null);
+      expect(narrators).toHaveLength(1);
+    });
+
+    it("D: the same holds for removed-host, the OTHER gate-drawn kind", () => {
+      // The row next door. `removed-host` is gate-drawn for the same reason
+      // `provisioning-error` is - a local lifecycle terminal - so it co-renders
+      // identically, and a suppression written for one kind would leave this one
+      // broken while a test named for the fix passed. That is the precise shape
+      // of the half-fix this branch has already had to reopen once.
+      //
+      // Its card is NOT given `Open settings`, deliberately and unlike the
+      // provisioning-error card: the user removed the host on purpose, Reinstall
+      // is the direct remedy and Quit is a real exit, so there is no lockout to
+      // relieve. That is a decision about actions; this test is about scope.
+      applyEmptyFleet();
+      renderGateWithModal({ kind: "removed-host" }, PRESENTATION, true, false);
+
+      const narrators = [
+        screen.queryByTestId("host-ready-gate-removed-host"),
+        screen.queryByTestId("window-host-modal"),
+      ].filter((el) => el !== null);
+      expect(narrators).toHaveLength(1);
+      // Named, so a future change that silenced BOTH could not satisfy this by
+      // cardinality alone: on this arm the survivor must be the gate's card.
+      expect(screen.getByTestId("host-ready-gate-removed-host")).toBeTruthy();
+      expect(screen.getByTestId("local-host-removed-reinstall")).toBeTruthy();
+    });
+
+    it("E: AFTER the gate latches, the modal narrates and is NOT suppressed", () => {
+      // THE ZERO CASE, and the reason the assertions above count narrators
+      // instead of asserting two absences.
+      //
+      // Post-latch the gate stops replacing the app and draws no card for these
+      // kinds at all, so the modal is the only surface left that can say
+      // anything. A suppression keyed on the readiness KIND rather than on the
+      // latch would go silent here too - and "neither is present" would satisfy
+      // a naive "they are never both present" assertion while shipping a failure
+      // nobody narrates. Silence is strictly worse than two cards.
+      applyEmptyFleet();
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        // The latch, which is the entire difference from case C.
+        true,
+      );
+
+      // The gate has stepped aside completely - not even its frame.
+      expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+      expect(
+        screen.queryByTestId("host-ready-gate-provisioning-error"),
+      ).toBeNull();
+      // ...so the modal must be speaking, and the app stays mounted behind it.
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      // By TEXT, not by `getByRole("main")`, and the reason is worth keeping:
+      // this modal is a Radix `modal` dialog, so it marks everything outside
+      // itself `aria-hidden` and the app's `<main>` stops being reachable by
+      // role. It is still mounted - which is the claim - and a role query here
+      // fails for a reason that has nothing to do with the latch. The first
+      // draft of this assertion did exactly that.
+      expect(screen.getByText("app")).toBeTruthy();
+    });
+
+    /**
+     * F: the stand-down leaves a trace, and only when it happens.
+     *
+     * A suppression is invisible by construction: the surface renders nothing,
+     * so from a screenshot "the modal correctly deferred" and "the modal is
+     * broken and missing" are the same picture. Without a line naming WHICH
+     * card won and WHAT was suppressed, the first question triage asks about
+     * this mechanism has no answer in the logs.
+     *
+     * Both halves are asserted, and the second is the one that makes the first
+     * mean something: a log that fires on every render of this component -
+     * including case E, where nothing is suppressed - would satisfy the
+     * positive arm while telling a reader nothing. Existence, then absence.
+     */
+    it("F: records the stand-down, naming the card that won and what it silenced", () => {
+      // `mockClear` is load-bearing, not hygiene. This suite has no mock reset
+      // in `afterEach`, and `vi.spyOn` on an already-spied method hands back the
+      // EXISTING spy with its accumulated calls - so without this, arms C and D
+      // (which drive the same suppression) leak their lines into these counts.
+      // The negative arm below caught exactly that, and read as a code defect
+      // until the spy was checked.
+      const info = vi.spyOn(appLogger, "info");
+      info.mockClear();
+      applyEmptyFleet();
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        false,
+      );
+
+      const standDowns = info.mock.calls.filter((call) =>
+        call[0].includes("stood down"),
+      );
+      expect(standDowns).toHaveLength(1);
+      expect(standDowns[0][1]).toEqual({
+        by: "provisioning-error",
+        suppressedCause: "no-usable-host",
+        suppressedVariant: "offline",
+      });
+    });
+
+    it("F (negative): says nothing when there is nothing to suppress", () => {
+      const info = vi.spyOn(appLogger, "info");
+      info.mockClear();
+      applyEmptyFleet();
+      // Case E's state: post-latch, the gate draws no card and the modal is the
+      // sole narrator. It did not stand down, so it must not claim to have.
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        true,
+      );
+
+      // The premise, asserted rather than assumed: this arm is only meaningful
+      // while the modal is actually on screen. If it were absent the "no log"
+      // assertion would pass for the wrong reason.
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(
+        info.mock.calls.filter((call) => call[0].includes("stood down")),
+      ).toEqual([]);
+    });
   });
 
   it("still draws its own card for a NON-narrated kind (removed-host), pinning the deferral as selective, not blanket", () => {

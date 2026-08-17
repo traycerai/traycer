@@ -426,7 +426,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
   // anyway (`useHostBinding` tolerates a missing provider) - stub it
   // directly rather than exercising that context machinery.
-  useDefaultHostClient: () => null,
   // The picker asks this at every intent edge before it refetches. This suite
   // mocks the hook module wholesale, so its query stubs carry no
   // `dataUpdatedAt` to judge freshness from - answer "due" so the edges under

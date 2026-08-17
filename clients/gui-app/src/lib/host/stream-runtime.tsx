@@ -13,6 +13,7 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding } from "@/lib/host/runtime";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   hostTransportKey,
@@ -64,17 +65,20 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const binding = useHostBinding();
   const auth = useStreamAuthRevalidator();
   const authnBaseUrl = useRunnerHost().authnBaseUrl;
+  // The app-wide client, APP-WIDE BY CONSTRUCTION: this is a top-level
+  // provider, so no re-provided `HostRuntimeContext` is above it. Stated
+  // explicitly all the same, because the failure if one ever were is that the
+  // WINDOW's stream client follows whichever settings panel is open. A scoped
+  // surface that needs a pinned stream has its own seam for it
+  // (`useScopedStreamBinding`) and must not reach for this one.
+  //
+  // This provider used to read the SPINE, whose answers came from the active
+  // slot; P4.2 deleted the slot, so every question below ("which host", "what
+  // is its transport", "who owns it") resolves the selection layer's effective
+  // host through the same id-pinned requester any other app-wide consumer uses.
   const effectiveHostId = useEffectiveHostId();
-  // The app-wide client. This provider used to read the SPINE, whose answers
-  // came from the active slot; P4.2 deleted the slot, so every question below
-  // ("which host", "what is its transport", "who owns it") resolves the
-  // selection layer's effective host through the same id-pinned requester any
-  // other app-wide consumer uses.
   const appHostClient = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(effectiveHostId),
+    () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
   );
   const readiness = useReactiveHostReadiness(appHostClient);

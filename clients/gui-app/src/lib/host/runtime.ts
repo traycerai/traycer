@@ -9,6 +9,10 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  resolveAppWideHostClient,
+  resolveSubtreeHostClient,
+} from "@/lib/host/binding-host-client";
 
 type AppHostRuntimeState = HostRuntimeState<HostRpcRegistry>;
 
@@ -59,18 +63,36 @@ export const HostRuntimeContext = runtime.HostRuntimeContext;
  * messenger, the request coordinator, the binding-authority registry and the
  * request context.
  *
- * NOT a host. It is what a host id is resolved AGAINST, which is why its only
- * callers are the resolution hooks below and in `hooks/host/`: everything
- * else wants a client for a named host and must say which one. It answers no
- * host identity at all: the active slot it used to answer from is gone
- * (redesign D17 / P4.2), so `getActiveHostId()` here is a constant `null`.
+ * NOT a host. It is what a host id is resolved AGAINST. It answers no host
+ * identity at all: the active slot it used to answer from is gone (redesign
+ * D17 / P4.2), so `getActiveHostId()` here is a constant `null`.
+ *
+ * Its callers are the two EXPLICIT-host hooks in `hooks/host/`
+ * (`use-host-client-for`, `use-host-client-for-host-id`), which name the host
+ * they want.
+ *
+ * This docstring used to claim the spine had no OTHER reachable form -
+ * "everything else wants a client for a named host and must say which one" -
+ * and that was already false when it was written, which is part of why the
+ * pinning defect stayed invisible. The same object is also `binding.hostClient`,
+ * and ten sites took it from there and resolved a name against it inline. The
+ * inline idiom is gone (`lib/host/binding-host-client.ts` is its one home) but
+ * the object is still reachable that way, so the rule is "resolve through a
+ * resolver", not "you cannot get here".
  */
 export const useHostRuntimeClient = runtime.useHostClient;
 
 /**
- * The app-wide host client: the selection layer's `effectiveHostId`, resolved
- * through the same pinned-requester mechanism a surface pin resolves its own
- * host through (redesign D17 / P2.1).
+ * The host client for THIS SUBTREE: the binding's own host when it names one,
+ * and otherwise the selection layer's `effectiveHostId`, resolved through the
+ * same pinned-requester mechanism a surface pin resolves its own host through
+ * (redesign D17 / P2.1).
+ *
+ * "This subtree" and "the app" are the same host everywhere except beneath a
+ * re-provided `HostRuntimeContext` — the seven host-scoped surfaces listed on
+ * `useScopedHostBinding`. Beneath one, this is the host the page is SHOWING,
+ * which is what those surfaces have always claimed and, until `hostId` existed,
+ * never got.
  *
  * Before this, a window-global consumer held the spine itself and every call
  * it made read whatever host happened to be bound at that instant. That is
@@ -91,12 +113,20 @@ export const useHostRuntimeClient = runtime.useHostClient;
  * reading the value it read before.
  */
 export function useHostClient(): HostClient<HostRpcRegistry> {
-  const spine = useHostRuntimeClient();
+  const binding = useHostBinding();
   const effectiveHostId = useEffectiveHostId();
-  return useMemo(
-    () => spine.createRequesterForHostId(effectiveHostId),
-    [spine, effectiveHostId],
+  const client = useMemo(
+    () => resolveSubtreeHostClient(binding, effectiveHostId),
+    [binding, effectiveHostId],
   );
+  // AFTER every hook, never before one: this is the no-provider case, and an
+  // early return above a hook call would make the hook order conditional.
+  if (client === null) {
+    throw new Error(
+      "Host runtime hooks must be used inside a <HostRuntimeProvider>.",
+    );
+  }
+  return client;
 }
 
 /**
@@ -112,11 +142,15 @@ export function useHostClient(): HostClient<HostRpcRegistry> {
  * spine no longer holds an identity, so asking it would return `null` forever.
  */
 export function getAppHostClientSnapshot(): HostClient<HostRpcRegistry> | null {
-  const spine = runtime.getBindingSnapshot()?.hostClient ?? null;
-  if (spine === null) {
-    return null;
-  }
-  return spine.createRequesterForHostId(readEffectiveHostIdSnapshot());
+  // App-wide by construction, not by choice: `getBindingSnapshot()` is the
+  // PROVIDER's binding, which a `HostRuntimeContext` re-provide cannot reach —
+  // context is a render-tree fact and this has no render tree. Stated through
+  // the app-wide resolver so the one raw `createRequesterForHostId` idiom this
+  // file used to spell nine ways has exactly one home left.
+  return resolveAppWideHostClient(
+    runtime.getBindingSnapshot(),
+    readEffectiveHostIdSnapshot(),
+  );
 }
 
 export const useHostDirectory = runtime.useHostDirectory;

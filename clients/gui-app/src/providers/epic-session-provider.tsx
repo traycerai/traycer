@@ -40,6 +40,7 @@ import {
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
   handleHostIds,
+  releaseOpenEpicSessionIfUnused,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
@@ -236,7 +237,15 @@ export function EpicSessionProvider(
       // Involuntary either way - no confirmation was shown - so retained
       // buffers stay. They remain reachable through the unsynced-edits
       // projection, which reports retentions whose live session is gone.
-      getOpenEpicRegistry().release(epicId, "keep");
+      //
+      // ...and IF NO OTHER TAB IN THIS WINDOW STILL SHOWS THE EPIC. The
+      // paragraph above establishes that a denial is about a TAB and that one
+      // window can hold the same epic in two of them; releasing straight
+      // through the epic-keyed registry then contradicted it on the very next
+      // line, disposing the live session under a tab that was never denied
+      // anything. `discardTabState(tabId)` above has already removed this tab,
+      // so the question this asks is exactly "does another one still hold it".
+      releaseOpenEpicSessionIfUnused(epicId, "keep");
       await desktopBridge.requestFocus(claim.currentOwner);
       void navigate({ to: "/epics", replace: true });
     })();

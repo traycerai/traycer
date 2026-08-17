@@ -15,7 +15,26 @@ export interface UnsyncedEditsSnapshotEntry {
 
 export type UnsyncedEditsSnapshot = ReadonlyArray<UnsyncedEditsSnapshotEntry>;
 
-export type QuitDecision = "proceed" | "userConfirmedDiscard";
+/**
+ * How the renderer answered the quit intercept.
+ *
+ * `proceed` and `userConfirmedDiscard` both quit; `userCancelled` does not - it
+ * is the user declining the quit, and main answers it by staying alive with
+ * every unsynced edit untouched. It exists because a modal offering only the
+ * first two has no non-destructive exit once waiting can no longer terminate:
+ * a dirty session retained across a host re-point (F10) has no transport, so
+ * its row never clears and "Quit and discard" was the only working control.
+ *
+ * **Adding a member here is a change of meaning at sites the compiler cannot
+ * point at.** Two of them defaulted to quitting: `parseQuitDecision` fell back
+ * to `proceed` through an `if`, and the `before-quit` consumer authorized the
+ * quit without reading the decision at all. Both are exhaustive `switch`es now,
+ * so the NEXT member fails to compile rather than silently meaning "quit".
+ */
+export type QuitDecision =
+  | "proceed"
+  | "userConfirmedDiscard"
+  | "userCancelled";
 
 export interface QuitRequest {
   readonly requestId: string;

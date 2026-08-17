@@ -16,6 +16,11 @@ import {
   trackUpdateDownloadStarted,
   trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
+import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
+import {
+  useSurfaceReadiness,
+  windowNarratorOwns,
+} from "@/components/layout/host-readiness-controller-context";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -37,6 +42,19 @@ export function AppUpdateToastController(): null {
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
   );
+  // Whether the window narrator owns the frame - i.e. the full-screen host
+  // modal is up because this machine's host is still being set up.
+  //
+  // Read here, in place, rather than by moving this mount: the controller
+  // already renders inside `HostReadinessControllerProvider`, and it sits
+  // outside the router deliberately so root-route bridges survive setup.
+  //
+  // The app already has a policy for what may interrupt first-run setup -
+  // `AppHeader` suppresses six surfaces on `variant === "host-loading"`,
+  // including the update BUTTON. The toast was exempt only because it is not
+  // in the file where that reasoning lives, which left the persistent fallback
+  // suppressed while the interrupting surface was not.
+  const narrated = windowNarratorOwns(useSurfaceReadiness("default-host", null));
   const handledSequenceRef = useRef(0);
   const handledReportCapabilityRef = useRef<boolean | null>(null);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(
@@ -57,6 +75,25 @@ export function AppUpdateToastController(): null {
     }
     if (bridge === null) return;
     if (snapshot.sequence === 0) return;
+    // SUPPRESS, DO NOT DROP. Ordered before the `handledSequenceRef` write
+    // below on purpose: that write consumes the sequence, and the dedupe guard
+    // beneath it would then treat this update as already handled for ever - the
+    // toast would be silently lost, not deferred, and the header button would be
+    // the only remaining route. An early return placed a few lines later reads
+    // identical and behaves completely differently.
+    //
+    // `narrated` is in this effect's dependency list for the same reason: the
+    // effect has to re-run when the narrator releases the frame, or the update
+    // is dropped by a second route with the ordering above still correct.
+    //
+    // Re-emit on release rather than unfreeze in place. The toast cannot be
+    // dismissed while the modal is up (measured: Radix's modal sets
+    // `pointer-events: none` on the body and nothing in the Sonner subtree
+    // re-enables it), and it carries `duration: Infinity`, so "leave it there"
+    // means handing the user a notification they were unable to clear for the
+    // whole of setup and that only becomes live afterwards. A fresh one arrives
+    // at a moment they chose to be in.
+    if (narrated) return;
     const capabilityChangedForCurrentError =
       snapshot.status === "error" &&
       handledSequenceRef.current === snapshot.sequence &&
@@ -85,11 +122,17 @@ export function AppUpdateToastController(): null {
         trackUpdateDownloadStarted("direct_ui");
         void bridge.downloadUpdate();
       },
-      // "Restart" installs straight away - the click is the confirmation, and
-      // the host keeps running agents across the app restart.
+      // "Restart" installs straight away UNLESS some epic holds work that can
+      // never sync. The old comment here read "the click is the confirmation,
+      // and the host keeps running agents across the app restart" - both
+      // clauses are still true and neither covers this: the click confirms a
+      // RESTART, not the discarding of editor work the user was never told
+      // about, and "agents keep running" is a promise about agents, not about a
+      // retained `Y.Doc` with no transport for the host to keep anything alive
+      // through.
       onRestart: () => {
         trackUpdateRestartRequested("direct_ui");
-        void bridge.installUpdate();
+        requestAppUpdateInstall(bridge);
       },
       onViewInstructions: () => {
         Analytics.getInstance().track(
@@ -105,6 +148,7 @@ export function AppUpdateToastController(): null {
   }, [
     bridge,
     snapshot,
+    narrated,
     openInstallGuidance,
     openReportIssueWithContext,
     reportIssueAvailable,

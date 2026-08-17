@@ -71,6 +71,26 @@ export function createRegisteredHostsPublisher(
  * back, not stale and then scrambling. Gating on visibility would also buy a
  * new state coupling (minimized, tray-alive, the last window closing mid-tick)
  * for a saving of one request per minute.
+ *
+ * ⚠ A PERF AUDIT RE-FILED THIS AS A DEFECT (2026-08-17), measuring the one
+ * fetch a minute against a released build that issued none and reading it as a
+ * lost visibility gate. The measurement was correct and the conclusion was not.
+ * Recorded here because the reasoning above was already written and did not
+ * stop it: the risk to this trade is not someone breaking it by accident, it is
+ * someone FIXING it, correctly following a number, and silently coupling
+ * authority freshness to whether a window is visible.
+ *
+ * ⚠ DECLARED COVERAGE GAP - `timer.unref()` is the leg that makes an
+ * unconditional 60s poll safe (without it the cadence keeps the main process
+ * alive, which is the only version of this that IS a defect), and no test in
+ * `__tests__/registered-hosts-broadcast.test.ts` asserts it. That is a limit of
+ * the harness rather than a decision: the suite's cadence arms drive vitest's
+ * faked clock, and a `vi.spyOn(globalThis, "setInterval")` there records ZERO
+ * calls from this module under both faked and real timers, so the call this
+ * module makes is not reachable from that test realm. Pinning it would mean
+ * injecting the timer factory - a production seam added purely for a test - and
+ * that was judged not worth it. The cadence and disposal ARE pinned; `unref` is
+ * not, and this note is here so nobody reads three green arms as covering it.
  */
 export function registerRegisteredHostsBroadcast(
   bridge: RegisteredHostsBroadcastBridge,

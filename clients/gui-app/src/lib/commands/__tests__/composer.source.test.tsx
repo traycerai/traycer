@@ -58,7 +58,7 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 /**
- * Minimal shape the mocked `useDefaultHostClient` / `useGuiHarnessCatalogForClient`
+ * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
  * need: only object identity matters to the assertions below (which host's
  * catalog the subpages asked for), never any real RPC behavior.
  */
@@ -91,6 +91,23 @@ const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
 }));
 
+// The app-wide client the palette falls back to with no focused composer. It
+// used to come from this file's `use-gui-harness-catalog` mock, as
+// `useDefaultHostClient`; that export was deleted once a binding could name its
+// own host, and the source resolves a client from the BINDING now - so the
+// fixture moves to where the question is actually asked. Spread rather than
+// replaced: `@/lib/host` has many other exports this graph pulls in.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({
+    // A binding that NAMES a host, so `resolveSubtreeHostClient` hands back
+    // this client verbatim instead of rebuilding a requester off it - which a
+    // fake with no `createRequesterForHostId` could not survive.
+    hostClient: focusedComposerCatalogMock.defaultClient,
+    hostId: "default-host",
+  }),
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalog: () => ({
     harnesses: catalogMock.harnesses,
@@ -98,8 +115,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     harnessesError: null,
     modelsLoading: false,
   }),
-  useDefaultHostClient: (): FakeCatalogHostClient =>
-    focusedComposerCatalogMock.defaultClient,
   // Records the `client` each call was invoked with, so tests can assert the
   // composer subpages resolve the FOCUSED composer's host client (not the
   // default host's) - regardless of which client was passed, this returns

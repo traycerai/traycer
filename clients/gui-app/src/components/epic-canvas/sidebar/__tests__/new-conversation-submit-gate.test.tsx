@@ -97,9 +97,14 @@ const stubHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => stubHostClient,
-  // `useReactiveActiveHostId` (the modal's per-host memory key for the
-  // unpinned path) subscribes through the binding; null = no active host, so
-  // memory reads fall to the legacy tier and writes no-op - inert here.
+  // The modal's per-host memory key for the unpinned path subscribes through
+  // the binding; null = no active host, so memory reads fall to the legacy tier
+  // and writes no-op - inert here.
+  //
+  // This comment used to name `useReactiveActiveHostId` as the subscriber. That
+  // hook no longer exists anywhere in the tree; the sentence is left describing
+  // the binding it actually mocks rather than being re-pointed at a successor
+  // nobody has verified. What is asserted here is the `null`, not the reader.
   useHostBinding: () => null,
 }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));

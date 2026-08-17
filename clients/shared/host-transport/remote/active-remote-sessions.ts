@@ -306,9 +306,26 @@ export function acquireRemoteSession<
       notifyReadinessChanged,
     );
     const offClosed = session.onClosed(notifyReadinessChanged);
+    // The DOWN edge, and the reason this trio is not a pair. Both wirings
+    // above point UP - a session becoming ready, and a session dying - so a
+    // relay `host_detached` or a drop into `reconnecting` flipped
+    // `isReady()` false with nobody told, and every subscriber held its
+    // previous `true` for the whole outage. If the reconnect then succeeded
+    // they never observed the loss at all.
+    //
+    // The general form, because the diff that caused it showed no deletion:
+    // this wiring REPLACED two 1-second polls (see the note above), and a
+    // poll has no direction - it answered "did this stop being ready" by
+    // asking again. A poll-to-event migration has to enumerate transitions in
+    // BOTH directions, and nothing in the diff will tell you which one was
+    // dropped.
+    const offReadinessLost = session.subscribeReadinessLost(
+      notifyReadinessChanged,
+    );
     created.disposeReadinessWiring = () => {
       offRecovered();
       offClosed();
+      offReadinessLost();
     };
     entry = created;
     // Insert BEFORE sweeping. The sweep's `close()` calls fire `onClosed`
@@ -417,6 +434,7 @@ export function acquireRemoteSession<
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
       session.subscribeAvailabilityRecovered(listener),
+    subscribeReadinessLost: (listener) => session.subscribeReadinessLost(listener),
     close: release,
   };
 }

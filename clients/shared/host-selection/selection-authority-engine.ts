@@ -42,6 +42,7 @@
  */
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
+  leaseEquals,
   type ActivateResult,
   type AuthorityIdentitySource,
   type HostFleetSnapshot,
@@ -484,6 +485,20 @@ interface LocalEnsureToken {
 /** The selection tuple the engine currently holds. */
 interface SelectionState {
   readonly preferredHostId: string | null;
+  /**
+   * The fleet-wide selection target: preferred, or the local host when preferred
+   * is null (M5), or null when neither exists. Canonical wording lives on
+   * `SelectionChange.targetHostId` in `selection-authority-contract.ts`.
+   *
+   * ⚠ NOT the epic-session `targetHostId`, which is a different concept two
+   * layers away: the host a single epic session is being established on, paired
+   * there with `originalHostId` (`lib/registries/epic-session-registry.ts`,
+   * `providers/epic-session-provider.tsx`). Nine declarations share this
+   * identifier across the two meanings, and two careful readers reached a wrong
+   * shared conclusion from it inside a day - which is why every declaration of
+   * this one now says which it is at the point of declaration, rather than
+   * relying on the reader knowing the layer they are in.
+   */
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
 }
@@ -527,20 +542,6 @@ function selectionEquals(a: SelectionState, b: SelectionState): boolean {
     a.preferredHostId === b.preferredHostId &&
     a.targetHostId === b.targetHostId &&
     a.effectiveHostId === b.effectiveHostId
-  );
-}
-
-function leaseEquals(a: HostLeaseSnapshot, b: HostLeaseSnapshot): boolean {
-  if (a.hostId !== b.hostId || a.status !== b.status) return false;
-  if (a.dead === null || b.dead === null) return a.dead === b.dead;
-  if (a.dead.reason !== b.dead.reason) return false;
-  if (a.dead.reason !== "incompatible" || b.dead.reason !== "incompatible") {
-    return true;
-  }
-  return (
-    a.dead.detail.code === b.dead.detail.code &&
-    a.dead.detail.hostVersion === b.dead.detail.hostVersion &&
-    a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion
   );
 }
 

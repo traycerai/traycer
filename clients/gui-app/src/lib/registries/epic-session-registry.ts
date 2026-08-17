@@ -2,6 +2,7 @@ import { createContext } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
+  type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -123,6 +124,20 @@ export function epicHasUnsyncedEdits(epicId: string): boolean {
 }
 
 /**
+ * The epics holding work that can NEVER reach a server.
+ *
+ * Distinct from {@link epicHasUnsyncedEdits}, which asks whether there is
+ * unsynced work at all. This asks whether that work is still SAVEABLE, and it
+ * is the only honest basis for destroying it without asking: a dirty live
+ * session drains through its transport, a buffer retained across a host
+ * re-point had `detachTransport()` called on it and no epic `Y.Doc` has local
+ * persistence anywhere, so the transport was its only route out.
+ */
+export function unsyncableWork(): ReadonlyArray<UnsyncedEditsEntry> {
+  return registry.unsyncableWork();
+}
+
+/**
  * Discard every unsynced edit for an epic, live and retained.
  *
  * The action counterpart to the per-epic row in the unsynced sheet. Callers
@@ -145,13 +160,33 @@ export function releaseOpenEpicSession(epicId: string): void {
   registry.release(epicId, "discard");
 }
 
-export function releaseOpenEpicSessionIfUnused(epicId: string): void {
+/**
+ * Release an epic's session only if no tab in THIS window still shows it.
+ *
+ * `registry.release` keys on `epicId` and disposes unconditionally, but a
+ * window can legitimately hold the same epic in two tabs - so any path that
+ * has finished with ONE tab has to ask this question first, or it disposes the
+ * live session out from under the other one. That is the whole reason this
+ * wrapper exists, and it is the only thing standing between an epic-keyed
+ * registry and a tab-keyed UI.
+ *
+ * `retainedBuffers` is explicit at every call because the two answers are not
+ * interchangeable. `"discard"` belongs to paths where the user was ASKED - the
+ * close confirmation reads `epicHasUnsyncedEdits`, which covers retentions, so
+ * arriving there means they answered for them. `"keep"` belongs to involuntary
+ * paths, where nothing was shown and dropping the buffer would be a silent
+ * loss.
+ */
+export function releaseOpenEpicSessionIfUnused(
+  epicId: string,
+  retainedBuffers: "discard" | "keep",
+): void {
   const state = useEpicCanvasStore.getState();
   const stillOpen = state.openTabOrder.some(
     (tabId) => state.tabsById[tabId]?.epicId === epicId,
   );
   if (stillOpen) return;
-  releaseOpenEpicSession(epicId);
+  registry.release(epicId, retainedBuffers);
 }
 
 /**

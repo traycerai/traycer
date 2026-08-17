@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createContext } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { createContext, use, type ReactNode } from "react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -34,23 +34,58 @@ function getSpine(): HostClient<HostRpcRegistry> {
   return spineRef.value;
 }
 
-vi.mock("@/providers/host-runtime-provider", () => ({
-  createHostRuntimeState: () => ({
-    context: createContext(null),
-    bindingSnapshot: { value: null },
-  }),
-  createHostRuntime: () => ({
-    HostRuntimeProvider: () => null,
-    HostRuntimeContext: createContext(null),
-    useHostClient: getSpine,
-    useHostDirectory: () => null,
-    useAuthService: () => null,
-    useHostBinding: () => null,
-    getBindingSnapshot: () => null,
-  }),
+/**
+ * The APP-WIDE binding, as the provider publishes it: the spine, naming no host.
+ *
+ * This used to be `useHostBinding: () => null`, and that one line is why the
+ * pinning defect shipped with a green suite. The hook under test reads its host
+ * from the binding, so stubbing the binding away made the scoped path
+ * unreachable in the only file that owns the hook - every assertion below was
+ * correct and none of them could see it. The seam was mocked out at the seam.
+ */
+interface ProbeBinding {
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+}
+
+const bindingRef = vi.hoisted<{ value: ProbeBinding | null }>(() => ({
+  value: null,
 }));
 
-import { useHostClient } from "@/lib/host/runtime";
+vi.mock("@/providers/host-runtime-provider", () => {
+  // ONE context for the module's lifetime, so a test can re-provide into the
+  // same object `runtime.ts` reads from. `createHostRuntime` is called once at
+  // module scope, but a fresh context per call would still break a suite that
+  // imported the export and rendered a Provider with it.
+  const context = createContext<ProbeBinding | null>(null);
+  return {
+    createHostRuntimeState: () => ({
+      context: createContext(null),
+      bindingSnapshot: { value: null },
+    }),
+    createHostRuntime: () => ({
+      HostRuntimeProvider: () => null,
+      HostRuntimeContext: context,
+      useHostClient: getSpine,
+      useHostDirectory: () => null,
+      useAuthService: () => null,
+      // Context first, ambient second - the real provider's own shape. A panel
+      // that re-provides is BELOW the app-wide provider, and a subtree with no
+      // re-provide sees the app-wide binding, which is exactly what `null` from
+      // `useScopedHostBinding` means at a panel's own render.
+      useHostBinding: () => use(context) ?? bindingRef.value,
+      getBindingSnapshot: () => null,
+    }),
+  };
+});
+
+import { HostRuntimeContext, useHostClient } from "@/lib/host/runtime";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const HOST_B: HostDirectoryEntry = {
@@ -97,12 +132,14 @@ beforeEach(() => {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   spineRef.value = spine;
+  bindingRef.value = { hostClient: spine, hostId: null };
 });
 
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
   spineRef.value = null;
+  bindingRef.value = null;
   messengerRef.value = null;
 });
 
@@ -165,6 +202,139 @@ describe("useHostClient", () => {
     );
     expect(messengerRef.value?.calls[0]?.authority.endpoint.websocketUrl).toBe(
       HOST_B.websocketUrl,
+    );
+  });
+});
+
+/**
+ * A binding that NAMES a host wins over the app-wide effective host.
+ *
+ * This is the property `HostRuntimeBinding.hostId` exists for, and it had NO
+ * coverage of any kind: `useHostClient()` composed the binding's CLIENT with a
+ * name read from the selection layer, so a re-provided pinned client was used
+ * only to rebuild a requester for the ambient host - `createRequesterForHostId`
+ * is not intercepted by `createPinnedRequester`, so the pin fell through to the
+ * spine and vanished. Every host-scoped panel in the app shipped inert.
+ *
+ * Each case sets the effective host to A and the binding to B, so the two
+ * sources ALWAYS disagree: a build that reads the wrong one fails on the value,
+ * never on an absence. The assertion is the ENDPOINT of the request that
+ * actually went out - not which object came back, and not that a field was
+ * set. `hostId` is bookkeeping; the machine the RPC reaches is the effect.
+ */
+describe("useHostClient under a re-provided binding", () => {
+  /** The pinned client a scoped panel re-provides, built the way one really is. */
+  function requesterForHostB(): HostClient<HostRpcRegistry> {
+    return getSpine().createRequesterForHostId(HOST_B.hostId);
+  }
+
+  function scopeShowingHostB(overrides: Partial<HostScope>): HostScope {
+    // `host`, not `hostId`: the fixture DERIVES `hostId` from `host`
+    // (`host?.hostId ?? null`), so passing `hostId` alone would leave `host`
+    // naming the default `host-a` and the two disagreeing inside the fixture.
+    return hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: HOST_B.hostId }),
+      ...overrides,
+    });
+  }
+
+  const seenClient: { value: HostClient<HostRpcRegistry> | null } = {
+    value: null,
+  };
+
+  function HostClientProbe(): ReactNode {
+    seenClient.value = useHostClient();
+    return null;
+  }
+
+  /** The production arrangement, verbatim: `providers-settings-panel.tsx:336`. */
+  function ScopedPanel(props: { readonly scope: HostScope }): ReactNode {
+    const scopedBinding = useScopedHostBinding(props.scope);
+    if (scopedBinding === null) return <HostClientProbe />;
+    return (
+      <HostRuntimeContext.Provider value={scopedBinding}>
+        <HostClientProbe />
+      </HostRuntimeContext.Provider>
+    );
+  }
+
+  async function endpointHostIdOfNextRequest(): Promise<string | undefined> {
+    const client = seenClient.value;
+    if (client === null) throw new Error("probe never resolved a client");
+    await client.request("terminal.kill", { sessionId: "session-a" });
+    expect(messengerRef.value?.calls).toHaveLength(1);
+    return messengerRef.value?.calls[0]?.authority.endpoint.hostId;
+  }
+
+  beforeEach(() => {
+    seenClient.value = null;
+    // The app is on A for every case here. Without this the two sources could
+    // agree and no case below could distinguish them.
+    applyEffectiveHostId(mockLocalHostEntry.hostId);
+    expect(HOST_B.hostId).not.toBe(mockLocalHostEntry.hostId);
+  });
+
+  it("sends the request to the binding's host, not the effective one", async () => {
+    bindingRef.value = { hostClient: requesterForHostB(), hostId: HOST_B.hostId };
+
+    render(<HostClientProbe />);
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(HOST_B.hostId);
+  });
+
+  it("falls back to the effective host when the binding names none - SAME client object", async () => {
+    // The control, and it is the sharp one: byte-identical binding except for
+    // `hostId`. If this landed on B too, the case above would prove only that a
+    // pinned client stays pinned - which was already true - rather than that
+    // `hostId` is what decides. It also pins the fall-through the app-wide
+    // resolver depends on: `createRequesterForHostId` called on a PINNED client
+    // reaches the spine through `Reflect.get` and re-resolves from there.
+    bindingRef.value = { hostClient: requesterForHostB(), hostId: null };
+
+    render(<HostClientProbe />);
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(
+      mockLocalHostEntry.hostId,
+    );
+  });
+
+  it("reaches the scoped host through the real useScopedHostBinding re-provide", async () => {
+    // The PRODUCER, not a hand-built binding: a panel showing host B while the
+    // app is on A, arranged exactly as `providers-settings-panel` arranges it.
+    //
+    // This is the case a type cannot protect. `useScopedHostBinding` returns a
+    // SPREAD of the app-wide binding, so `...realBinding` already satisfies the
+    // required `hostId` with that binding's `null` - drop the explicit
+    // `hostId:` and the tree still compiles, every panel silently returns to
+    // the ambient host, and only this assertion moves.
+    render(
+      <ScopedPanel
+        scope={scopeShowingHostB({
+          status: "ready",
+          client: requesterForHostB(),
+        })}
+      />,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(HOST_B.hostId);
+  });
+
+  it("keeps a following scope on the effective host so it can still re-point", async () => {
+    // `following` means "track the app", so the binding must name NO host even
+    // though the scope names one. Pinning it here would freeze the panel on
+    // whichever host was effective when it mounted - auto-follow deleted, and
+    // nothing else in the suite would notice.
+    render(
+      <ScopedPanel
+        scope={scopeShowingHostB({
+          status: "following",
+          client: requesterForHostB(),
+        })}
+      />,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(
+      mockLocalHostEntry.hostId,
     );
   });
 });

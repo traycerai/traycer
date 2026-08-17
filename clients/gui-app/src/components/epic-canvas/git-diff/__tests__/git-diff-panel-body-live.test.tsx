@@ -17,6 +17,15 @@ import type {
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  useWsStreamClient,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
@@ -50,6 +59,33 @@ const testState = vi.hoisted(() => ({
   prefetch: vi.fn(),
   refresh: vi.fn<() => Promise<void>>(),
 }));
+
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every OTHER
+// assertion here is about. One arm below flips this to a pinned binding to
+// prove the provider sits above the subscription.
+const pinnedStreamBindingRef = vi.hoisted(() => ({
+  value: null as StreamRuntimeBinding | null,
+}));
+
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => pinnedStreamBindingRef.value,
+}));
+
+/**
+ * The transport `useGitListChangedFilesSubscription` was handed, recorded from
+ * inside the mock.
+ *
+ * The real hook takes its client from `useWsStreamClient()` rather than from
+ * its arguments, which is exactly why the wrong-host defect was invisible: the
+ * pinned `hostId` it DOES take is a subscribe param, not a route, so a
+ * subscribe carrying host B's name over host A's socket looks identical to a
+ * correct one at every call site. Recording the context read here is what
+ * makes the routing observable in a suite that otherwise mocks the hook out.
+ */
+const observedSubscriptionClients: Array<IHostStreamClient<HostStreamRpcRegistry> | null> =
+  [];
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => ({
@@ -137,6 +173,7 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   useGitListChangedFilesSubscription: (args: {
     readonly runningDir: string | null;
   }) => {
+    observedSubscriptionClients.push(useWsStreamClient());
     const data =
       args.runningDir === null
         ? null
@@ -331,6 +368,29 @@ const rootSelected: GitPanelSelectedRepo = {
   repoRoot: "/repo",
 };
 
+/** A real, never-dialed transport - identity is all these arms compare. */
+function streamClientFixture(): WsStreamClient<HostStreamRpcRegistry> {
+  return new WsStreamClient<HostStreamRpcRegistry>({
+    registry: hostStreamRpcRegistry,
+    endpoint: () => null,
+    bearer: () => null,
+    auth: null,
+    hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
+    webSocketFactory: {
+      create: () => {
+        throw new Error("stream client fixture should not open a websocket");
+      },
+    },
+    dialTimeoutMs: 1_000,
+    openAckTimeoutMs: 1_000,
+    pingIntervalMs: 25_000,
+    pongTimeoutMs: 50_000,
+    initialBackoffMs: 10,
+    maxBackoffMs: 1_000,
+  });
+}
+
 function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
   useGitPanelStore.setState({
     stateByEpicId: {
@@ -413,6 +473,27 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
   afterEach(() => {
     cleanup();
     useSelectionAuthorityStore.getState().reset();
+    pinnedStreamBindingRef.value = null;
+    observedSubscriptionClients.length = 0;
+  });
+
+  it("subscribes on the PINNED host's transport, not the app-wide one", () => {
+    // Proves the re-provider sits ABOVE the subscription rather than beside
+    // it. That adjacency is the whole fix and nothing else can see it: the
+    // hook resolving the transport is correct either way, and the subscription
+    // registry is correct either way - only their arrangement decides which
+    // machine gets watched. `renderPanel` supplies no ambient binding, so a
+    // panel that failed to re-provide would subscribe on `null`.
+    const pinned = streamClientFixture();
+    pinnedStreamBindingRef.value = {
+      wsStreamClient: pinned,
+      hostId: "host-1",
+    };
+
+    renderPanel(rootSelected);
+
+    expect(observedSubscriptionClients.length).toBeGreaterThan(0);
+    expect([...new Set(observedSubscriptionClients)]).toEqual([pinned]);
   });
 
   it("renders the compact selector and removes the persistent repo tree", () => {
