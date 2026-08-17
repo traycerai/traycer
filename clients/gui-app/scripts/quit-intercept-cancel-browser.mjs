@@ -146,6 +146,20 @@ try {
   // (the modal blocks) and the dialog must answer main rather than just
   // vanishing (a dismissal without a decision parks main for ever).
   await emitQuit(client);
+
+  // Opening focus must not sit on the destructive control. This dialog is
+  // summoned by a keyboard shortcut, so a default of "Quit and discard" means
+  // Cmd+Q then Enter destroys every unsynced edit - and jsdom cannot see focus
+  // the way a real focus scope resolves it.
+  assert.equal(
+    await evaluate(
+      client,
+      `document.activeElement === null ? "none" : (document.activeElement.getAttribute("data-testid") ?? document.activeElement.tagName.toLowerCase())`,
+    ),
+    "quit-intercept-cancel",
+    "the quit dialog must open with focus on Cancel, not on Quit and discard",
+  );
+
   await click(client, appButton.x, appButton.y);
   await waitFor(
     client,

@@ -116,6 +116,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
   const appLifecycle = useMemo(() => readAppLifecycle(), []);
   const quitDecisionResolvedRef = useRef(false);
   const quitRequestIdRef = useRef<string | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Freeze the snapshot that was in flight when `quitRequested` fired. The
   // dialog renders a union of this set with the live registry so titles do
@@ -293,7 +294,34 @@ export function QuitInterceptBridge(): null | React.ReactElement {
         }
       }}
     >
-      <DialogContent data-testid="quit-intercept-dialog">
+      <DialogContent
+        data-testid="quit-intercept-dialog"
+        onOpenAutoFocus={(event) => {
+          // Radix's `FocusScope` focuses the first tabbable descendant, and in
+          // this footer that is "Quit and discard". Measured in the browser
+          // regression before this existed:
+          //
+          //   FOCUS_ON_OPEN = quit-intercept-discard
+          //   TAB_ORDER     = discard > cancel > wait > close-x
+          //
+          // This dialog opens in response to a KEYBOARD gesture (Cmd+Q), so
+          // the hand that summoned it is already on the keys: one Enter or
+          // Space destroyed every unsynced edit, retained buffers included. A
+          // destructive confirmation must not default to its destructive
+          // control, and adding a safe exit does not help a keyboard user if
+          // the focused control is still the unsafe one.
+          //
+          // Focus is moved rather than the footer reordered: DOM order puts the
+          // primary action rightmost on `sm:`, which is the layout convention,
+          // and reordering would trade this hazard for a visual one.
+          const cancel = cancelButtonRef.current;
+          // Fail safe: with nothing to move focus to, let Radix's own default
+          // run rather than preventing it and leaving focus outside the trap.
+          if (cancel === null) return;
+          event.preventDefault();
+          cancel.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Saving - please wait</DialogTitle>
           <DialogDescription>
@@ -324,6 +352,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
             absence is what made every other exit from this dialog destructive.
           */}
           <Button
+            ref={cancelButtonRef}
             variant="secondary"
             onClick={handleCancel}
             data-testid="quit-intercept-cancel"
