@@ -362,11 +362,18 @@ interface CompatRecord {
   readonly verdict: "compatible" | "incompatible";
   readonly incompatibility: SelectionIncompatibility | null;
   /**
-   * The authority's own observation ordinal for `probedOnSessionId`, or -1
-   * for a null-anchored (weakest) verdict. Version strings are never an
-   * ordering key.
+   * The authority's own observation ordinal for `probedOnSessionId`, or
+   * `null` when the verdict named no session at all. Version strings are
+   * never an ordering key.
+   *
+   * `null` means UNORDERABLE, not "lowest". It is deliberately not a numeric
+   * floor: the relay that supplies the anchor documents `null` as "I have no
+   * name to give you", explicitly NOT as a statement about the host, so a
+   * sentinel number here would feed a name-only absence into a `<` and
+   * silently rank it beneath every anchored verdict. It did exactly that -
+   * see {@link SelectionAuthorityEngineImpl.ingestCompat}.
    */
-  readonly rank: number;
+  readonly rank: number | null;
 }
 
 /** Per-host aggregated evidence. Pruned when the host leaves the fleet. */
@@ -1143,7 +1150,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): void {
     const rank =
       report.probedOnSessionId === null
-        ? -1
+        ? null
         : this.rankForCompatAnchor(
             attachment,
             report.hostId,
@@ -1152,10 +1159,65 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     const evidence = this.hostEvidence(report.hostId);
     const current = evidence.compat;
     // A verdict probed on a session the authority observed later supersedes
-    // every earlier one; equal rank means the same session (or two
-    // null-anchored verdicts), where latest-received wins. A null-anchored
-    // verdict never displaces a session-anchored one.
-    if (current !== null && rank < current.rank) return;
+    // every earlier one; equal rank means the same session, where
+    // latest-received wins.
+    //
+    // ORDER ONLY WHEN BOTH SIDES NAME A SESSION. An unanchored verdict is
+    // UNORDERABLE against an anchored one, not beneath it, and the difference
+    // is a D13 hole: a `null` anchor means the relay had no NAME to give -
+    // its own contract says so in capitals - and never that the host is
+    // healthier or staler. Ranking absence at a numeric floor tested that
+    // value anyway, and a rejected handshake is exactly where it bit. Such a
+    // handshake fails BEFORE the transport ready boundary, so it can never
+    // announce the session it would need to out-rank anything; its
+    // `incompatible` verdict therefore arrived unanchored and was dropped
+    // behind a held `compatible` from the session that just died. The host
+    // kept a `compatible` lease against a fresh incompatible answer, and
+    // because the same rejection recurs identically on every retry, nothing
+    // in the compat path could ever dislodge it.
+    //
+    // WHAT REPLACES THE ORDERING WHEN IT CANNOT RUN, as one rule rather than
+    // a truth table: AN UNANCHORED VERDICT MAY NEVER RELAX A GATE, AND MAY
+    // NEVER OUTRANK REAL EVIDENCE. Anchored evidence names a real session
+    // generation, so it always supersedes an unanchored verdict; an
+    // unanchored verdict is admissible only when it is MORE restrictive than
+    // what it meets.
+    //
+    // Both halves are load-bearing and each has its own failure if dropped:
+    //
+    //  - Drop "never relax a gate" and a null-anchored COMPATIBLE clears a
+    //    session-anchored INCOMPATIBLE - relaxing a compatibility gate on a
+    //    verdict that names no session, the one move D13 must never make.
+    //  - Drop "never outrank real evidence" and the mirror strands hosts
+    //    permanently. An outdated host rejected at cold boot stores
+    //    `incompatible` UNANCHORED as its first verdict; the user then
+    //    updates it, it reconnects, and its `compatible` verdict IS anchored
+    //    - so a rule that merely said "the restrictive verdict wins" would
+    //    refuse it, every time, forever. `evidence.compat` is written in
+    //    exactly one place and reset nowhere, so nothing else could clear it:
+    //    escape would be fleet pruning or an app restart.
+    //
+    // The second failure is why the arm below tests `rank === null` (the
+    // INCOMING side) rather than "exactly one side is null". Pinned by T5d,
+    // and the D13 fix above widens its precondition rather than narrowing it,
+    // since that fix deliberately stores unanchored incompatible verdicts.
+    if (
+      current !== null &&
+      rank !== null &&
+      current.rank !== null &&
+      rank < current.rank
+    ) {
+      return;
+    }
+    if (
+      current !== null &&
+      rank === null &&
+      current.rank !== null &&
+      report.verdict === "compatible" &&
+      current.verdict === "incompatible"
+    ) {
+      return;
+    }
     evidence.compat = {
       verdict: report.verdict,
       incompatibility: report.incompatibility,

@@ -3493,7 +3493,24 @@ describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely
     authority.dispose();
   });
 
-  it("T5b/P7: an incompatible verdict with no session anchor is dropped against a held session-anchored compatible", () => {
+  // INVERTED, and the inversion is the record of a D13 defect this test used
+  // to pin as correct.
+  //
+  // It was written as the CONTRAST for T5a: proof that an unanchored verdict
+  // loses to an anchored one, offered as the reason the failure arm of the
+  // GUI producer had to carry an anchor at all. The reasoning was sound and
+  // the conclusion was backwards, because the case it describes is not
+  // hypothetical - it is the ONE case that matters. A handshake rejected as
+  // INCOMPATIBLE fails before the transport ready boundary, so it never
+  // announces a session and its verdict is NECESSARILY unanchored; the
+  // preceding `compatible` verdict, produced while the now-dead session was
+  // live, is anchored. Ranking absence beneath an ordinal therefore dropped
+  // every real incompatibility behind a stale compatible one, and no retry
+  // could clear it because the rejection reproduces identically forever.
+  //
+  // The engine now orders two verdicts only when BOTH name a session. An
+  // unanchored verdict lands, latest-received. See `ingestCompat`.
+  it("T5b/P7: an incompatible verdict with no session anchor LANDS against a held session-anchored compatible", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -3515,6 +3532,7 @@ describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely
     engine.ingestEvidence("A", incarnation, compatCompatible("H", "s1"));
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
 
+    // The rejected handshake: no session to name, so the anchor is null.
     engine.ingestEvidence(
       "A",
       incarnation,
@@ -3522,7 +3540,92 @@ describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely
     );
 
     const after = findLease(engine.snapshot().leases, "H");
-    expect(after?.status).not.toBe("dead");
+    if (after === undefined) throw new Error("expected a lease for H");
+    expect(after.status).toBe("dead");
+    expect(after.dead?.reason).toBe("incompatible");
+    expect(isUsableForSelection(after)).toBe(false);
+
+    authority.dispose();
+  });
+
+  // RECOVERY. The mirror of T5b, and the case that decides whether holding an
+  // unanchored verdict to the safe side is a rule or a trap: once an
+  // unanchored `incompatible` is the incumbent, the host is updated,
+  // reconnects, establishes a session, and answers the probe. That verdict IS
+  // anchored. If it cannot displace an incumbent that names no session, the
+  // host is dead("incompatible") forever and no amount of fixing it helps.
+  it("T5d: an ANCHORED compatible verdict recovers a host held incompatible by an unanchored one", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // The rejected handshake names no session.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("H", null, INCOMPAT_DETAIL),
+    );
+    expect(findLease(engine.snapshot().leases, "H")?.dead?.reason).toBe(
+      "incompatible",
+    );
+
+    // The host is updated and comes back: a real session, a real anchor.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("H", "s9", "established", 0),
+    );
+    engine.ingestEvidence("A", incarnation, compatCompatible("H", "s9"));
+
+    expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
+
+    authority.dispose();
+  });
+
+  it("T5c: an unanchored verdict does not disturb the anchored-vs-anchored ordering it sits beside", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("H", "s2", "established", 1),
+    );
+
+    // s2 is the later observation, so its verdict supersedes s1's...
+    engine.ingestEvidence("A", incarnation, compatCompatible("H", "s2"));
+    // ...and an s1-anchored incompatible arriving late must still LOSE, which
+    // is the supersession rule the null-handling above must not have weakened.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("H", "s1", INCOMPAT_DETAIL),
+    );
+    expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
 
     authority.dispose();
   });
