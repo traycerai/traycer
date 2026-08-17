@@ -51,7 +51,10 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
+import {
+  resetHostServiceWriteLatchesForTest,
+  useHostServiceWriteLatchStore,
+} from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -328,7 +331,13 @@ describe("<HostSettingsPanel /> Overview arm-time capture", () => {
 });
 
 describe("<HostSettingsPanel /> Overview restart outcomes", () => {
-  it("a busy restart renders the busy notice, not a success or an error toast", async () => {
+  it("a busy restart with NO force route reports the verdict without promising a Force button", async () => {
+    // `makeRunnerHost()` has no CLI bridge, so there is no respawn to offer
+    // and nothing to put a force/defer decision to. The verdict is reported in
+    // the same "deliberately not restarted, clears on its own" register a
+    // declined respawn uses — never an error — and the sentence must STOP
+    // before "Force restart ends them immediately.", which would name a
+    // control this host cannot have.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -363,9 +372,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
       await screen.findByRole("button", { name: "Restart host" }),
     );
 
-    expect(
-      await screen.findByTestId("host-overview-restart-busy"),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.objectContaining({
+          description:
+            "2 sessions are still working on this host. Nothing was interrupted; try again when they finish.",
+        }),
+      );
+    });
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -427,7 +443,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     expect(transitionIds[1]).toBe(transitionIds[0]);
   });
 
-  it("sends a non-empty transitionId, and a retry from the busy notice sends a fresh one", async () => {
+  it("sends a non-empty transitionId, and a retry after a BUSY verdict sends a fresh one", async () => {
     // Tracked locally, same reason as the arm-time-capture suite:
     // `overrideHandlers` replaces the fixture's own tracked handler.
     const transitionIds: string[] = [];
@@ -466,9 +482,14 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
+    await waitFor(() => expect(transitionIds).toHaveLength(1));
 
-    fireEvent.click(screen.getByTestId("host-overview-restart-busy-retry"));
+    // Busy is a DEFINITIVE answer - the host refused the claim outright - so
+    // the retry is a NEW action and must not adopt the spent id. Reached from
+    // the `⋯` menu now that the busy band with its own Try again is gone;
+    // re-asking a host that may have drained since is the honest retry.
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
@@ -483,6 +504,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
 });
 
 describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", () => {
+  // The busy verdict's ONLY affordance is `HostBusyForceDeferDialog`, the same
+  // second modal the menu/tray restart flow shows for the same answer. The amber
+  // band that used to carry an inline, one-press Force restart is deleted: the
+  // identical verdict must not be more destructive answered from Settings than
+  // from the Help menu.
   it("a busy restart on a REMOTE host offers no Force restart, even with a management bridge present", async () => {
     // The forking rule is `isLocalMachine`, not "is a bridge available" — a
     // remote host's process cannot be respawned by THIS machine's bridge, so
@@ -528,9 +554,13 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       await screen.findByRole("button", { name: "Restart host" }),
     );
 
-    expect(
-      await screen.findByTestId("host-overview-restart-busy"),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.anything(),
+      );
+    });
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
     // future markup change that drops the testid but leaves a real "Force
     // restart" button behind must still fail this.
@@ -575,16 +605,20 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       await screen.findByRole("button", { name: "Restart host" }),
     );
 
-    expect(
-      await screen.findByTestId("host-overview-restart-busy"),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.anything(),
+      );
+    });
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
     // future markup change that drops the testid but leaves a real "Force
     // restart" button behind must still fail this.
     expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
   });
 
-  it("a LOCAL host with a CLI bridge offers Force restart, and a successful force clears the busy notice", async () => {
+  it("a LOCAL host with a CLI bridge puts the verdict in the force/defer modal, and Force respawns", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -624,23 +658,98 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Force restart" }),
+    const busyDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
     );
+    // The count the force is sized from is stated where the decision is made,
+    // in the same words the Help-menu flow uses for the same verdict.
+    expect(busyDialog.textContent).toContain(
+      "2 sessions are still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.",
+    );
+    // Nothing has been killed yet: reaching the dialog is not consenting to it.
+    expect(restartHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
-      expect(screen.queryByTestId("host-overview-restart-busy")).toBeNull();
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
     expect(toast.success).toHaveBeenCalledWith("Restarting host-local");
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("a declined force restart clears the busy notice and shows an informational toast, not an error", async () => {
+  it("Defer answers the offer without respawning, and Restart re-asks the host", async () => {
+    // The other half of the second modal, and the reason it exists: the
+    // destructive choice must be declinable. Deferring dispatches nothing and
+    // closes the offer - `⋯ → Restart` is the retry, which re-asks a host that
+    // may have drained since rather than replaying a stale verdict.
+    let attempt = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-local",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.restart": () => {
+          attempt += 1;
+          return Promise.resolve({
+            outcome: "busy" as const,
+            verdict: { busySessionCount: attempt },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const management = buildOverviewManagement({ restartHost });
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider
+          runnerHost={makeRunnerHostWithManagement(management)}
+        >
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    expect(restartHost).not.toHaveBeenCalled();
+
+    // The second ask carries the SECOND verdict, so the dialog is describing
+    // the host as it is now rather than replaying the answer just declined.
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+    const reopened = await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(reopened.textContent).toContain("2 sessions are still working");
+    expect(restartHost).not.toHaveBeenCalled();
+  });
+
+  it("a declined force restart closes the offer and shows an informational toast, not an error", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -683,11 +792,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
+    await screen.findByTestId("host-busy-force-defer-dialog");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Force restart" }),
-    );
+    fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
@@ -702,8 +809,10 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+    // Declined performed nothing, but it ANSWERED - re-offering a decision the
+    // user already made would put the same modal back up over its own toast.
     await waitFor(() => {
-      expect(screen.queryByTestId("host-overview-restart-busy")).toBeNull();
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
   });
 
@@ -770,11 +879,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
+    await screen.findByTestId("host-busy-force-defer-dialog");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Force restart" }),
-    );
+    fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
@@ -864,11 +971,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
+    await screen.findByTestId("host-busy-force-defer-dialog");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Force restart" }),
-    );
+    fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
@@ -901,20 +1006,19 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
   });
 
-  it("a pending PAGE-WIDE write (rename in flight) disables both busy-notice buttons; releasing it re-enables them", async () => {
-    // Codex P1: the notice's own buttons only gated each OTHER
-    // (`retryPending || forcePending`) - nothing gated them on the REST of
-    // the page. Every other lifecycle write already refuses to dispatch
-    // while a restart is in flight (`corePending` includes `restart.isPending`
-    // and `forceRestartInFlight`), but the exclusion did not hold in the
-    // other direction: Try again and Force restart stayed clickable while a
-    // rename, an update install, or a service write was running - any of
-    // which a forced bridge respawn would then race. `pageGatePending`
-    // (`anyPending`, the page's fullest write gate) closes that gap.
-    let releaseRename: (() => void) | null = null;
-    const gate = new Promise<void>((resolve) => {
-      releaseRename = resolve;
-    });
+  it("a PAGE-WIDE write arming under the open offer closes it, so Force cannot recycle the host beside another lifecycle write", async () => {
+    // Codex P1, carried over from the deleted busy band: its buttons gated
+    // only each OTHER, so Force stayed clickable while a rename, an update
+    // install or a service write was running - any of which a forced bridge
+    // respawn would then race. `pageGatePending` closed that on the band; the
+    // modal inherits the rule as a CLOSE rather than a disable, because
+    // disabling a modal's only two buttons traps the user in it.
+    //
+    // The lever is the update-install accepted latch, armed through the real
+    // store: it is the page-wide write that can arm with NO interaction, which
+    // is the only kind that can reach a page behind an open modal. A disable
+    // test cannot be written for the others - Radix takes the page's pointer
+    // events, so nothing on it is clickable to start one.
     const fixture = buildOverviewHostFixture({
       hostId: "host-local",
       isLocalMachine: true,
@@ -925,20 +1029,15 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
             outcome: "busy" as const,
             verdict: { busySessionCount: 2 },
           }),
-        "host.identity.set": async (req) => {
-          await gate;
-          return {
-            systemName: "host-local",
-            customName: req.customName,
-            effectiveName: req.customName ?? "host-local",
-          };
-        },
       },
     });
     recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const management = buildOverviewManagement({});
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const management = buildOverviewManagement({ restartHost });
     render(
       <QueryClientProvider
         client={
@@ -961,56 +1060,20 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(
       await screen.findByRole("button", { name: "Restart host" }),
     );
-    await screen.findByTestId("host-overview-restart-busy");
+    // OPEN before the unrelated write - so the close below is caused by that
+    // write, not by a fixture that never let the offer appear.
+    await screen.findByTestId("host-busy-force-defer-dialog");
 
-    // Enabled BEFORE the unrelated write - so the lock below is caused by
-    // the rename, not by a fixture that never let the buttons load.
-    expect(
-      screen
-        .getByRole("button", { name: "Force restart" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-    expect(
-      screen
-        .getByRole("button", { name: "Try again" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Edit name" }));
-    const input = await screen.findByTestId("host-overview-name-input");
-    fireEvent.change(input, { target: { value: "New Name" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getByRole("button", { name: "Force restart" })
-          .hasAttribute("disabled"),
-      ).toBe(true);
-    });
-    expect(
-      screen
-        .getByRole("button", { name: "Try again" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-
-    await act(async () => {
-      releaseRename?.();
-      await gate;
+    act(() => {
+      useHostServiceWriteLatchStore
+        .getState()
+        .armUpdateInstallAccepted("host-local");
     });
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByRole("button", { name: "Force restart" })
-          .hasAttribute("disabled"),
-      ).toBe(false);
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(
-      screen
-        .getByRole("button", { name: "Try again" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
+    expect(restartHost).not.toHaveBeenCalled();
   });
 });
 

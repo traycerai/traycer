@@ -10,6 +10,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { busyRestartMessage } from "@/components/host/host-restart-busy-message";
 import { useHostRestart } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -136,18 +137,6 @@ interface LocalHostRestartFlowProps {
   readonly requested: boolean;
   /** Clears that state. Every path out of the flow funnels through this. */
   readonly onClose: () => void;
-}
-
-/**
- * Same copy the Settings Overview busy notice renders for the same verdict, so
- * "restart refused because busy" reads identically wherever it surfaces.
- */
-function busyRestartMessage(busySessionCount: number): string {
-  const sessions =
-    busySessionCount === 1
-      ? "1 session is"
-      : `${busySessionCount} sessions are`;
-  return `${sessions} still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.`;
 }
 
 /**
@@ -460,7 +449,12 @@ function CooperativeFirstRestartFlow(
           if (response.outcome === "busy") {
             setForceOffer({
               hostId,
-              message: busyRestartMessage(response.verdict.busySessionCount),
+              // Always `true` on this arm: the offer IS the dialog this sets,
+              // and its Force button is the control the sentence promises.
+              message: busyRestartMessage(
+                response.verdict.busySessionCount,
+                true,
+              ),
             });
             return;
           }
