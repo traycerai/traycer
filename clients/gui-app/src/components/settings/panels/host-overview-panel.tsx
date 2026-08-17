@@ -62,7 +62,7 @@ import {
   hostServiceWriteLatches,
   useHostServiceWriteLatchStore,
 } from "@/components/settings/panels/host-service-write-latch-store";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   toastHostRestartDeclined,
@@ -303,7 +303,7 @@ export function HostOverviewPanel(props: {
       }
       return management.restartHost();
     },
-    onSuccess: (result, variables) => {
+    onSuccess: (result) => {
       // The offer is answered either way — a `declined` respawn performed
       // nothing, but it did ANSWER, and the toast below carries what happened.
       // Leaving the dialog up would re-offer a decision already made.
