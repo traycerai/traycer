@@ -24,6 +24,7 @@ export interface ProjectProfile {
   readonly color: ProjectProfileColor;
   readonly folderPaths: ReadonlyArray<string>;
   readonly primaryPath: string | null;
+  readonly epicIds: ReadonlyArray<string>;
 }
 
 export interface ProjectProfileCreateInput {
@@ -80,10 +81,21 @@ interface ProjectProfilesStore {
     profileId: string,
     folderPath: string,
   ) => void;
+  addProfileEpics: (
+    hostId: string | null,
+    profileId: string,
+    epicIds: ReadonlyArray<string>,
+  ) => void;
+  removeProfileEpic: (
+    hostId: string | null,
+    profileId: string,
+    epicId: string,
+  ) => void;
 }
 
 const MAX_PROFILES_PER_HOST = 20;
 const MAX_FOLDERS_PER_PROFILE = 50;
+const MAX_EPICS_PER_PROFILE = 200;
 
 export const EMPTY_PROJECT_PROFILES_BUCKET: ProjectProfilesHostBucket = {
   profiles: [],
@@ -130,6 +142,7 @@ export const useProjectProfilesStore = create<ProjectProfilesStore>()(
           color: input.color,
           folderPaths: input.folderPaths,
           primaryPath: input.primaryPath,
+          epicIds: [],
         });
         set((state) => ({
           byHost: {
@@ -237,6 +250,20 @@ export const useProjectProfilesStore = create<ProjectProfilesStore>()(
           return { ...profile, primaryPath: folderPath };
         });
       },
+      addProfileEpics: (hostId, profileId, epicIds) => {
+        updateProfile(set, get, { hostId, profileId }, (profile) =>
+          mergeProfileEpicIds(profile, epicIds),
+        );
+      },
+      removeProfileEpic: (hostId, profileId, epicId) => {
+        updateProfile(set, get, { hostId, profileId }, (profile) => {
+          if (!profile.epicIds.includes(epicId)) return profile;
+          return {
+            ...profile,
+            epicIds: profile.epicIds.filter((id) => id !== epicId),
+          };
+        });
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.projectProfiles)),
@@ -301,7 +328,33 @@ function normalizeProfile(input: ProjectProfile): ProjectProfile {
     color: input.color,
     folderPaths: trimmed,
     primaryPath: resolvePrimaryPath(trimmed, input.primaryPath),
+    epicIds: normalizeEpicIds(input.epicIds),
   };
+}
+
+function mergeProfileEpicIds(
+  profile: ProjectProfile,
+  epicIds: ReadonlyArray<string>,
+): ProjectProfile {
+  const next = normalizeEpicIds([...profile.epicIds, ...epicIds]);
+  if (next.length === profile.epicIds.length) {
+    const same = next.every((id, index) => id === profile.epicIds[index]);
+    if (same) return profile;
+  }
+  return { ...profile, epicIds: next };
+}
+
+function normalizeEpicIds(raw: ReadonlyArray<string>): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const epicIds: string[] = [];
+  for (const value of raw) {
+    const id = value.trim();
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    epicIds.push(id);
+    if (epicIds.length >= MAX_EPICS_PER_PROFILE) break;
+  }
+  return epicIds;
 }
 
 function parsePersistedByHost(
@@ -343,6 +396,7 @@ function parsePersistedProfiles(value: unknown): ReadonlyArray<ProjectProfile> {
         folderPaths: parsePersistedFolderPaths(raw.folderPaths),
         primaryPath:
           typeof raw.primaryPath === "string" ? raw.primaryPath : null,
+        epicIds: parsePersistedEpicIds(raw.epicIds),
       }),
     );
     if (profiles.length >= MAX_PROFILES_PER_HOST) break;
@@ -351,6 +405,13 @@ function parsePersistedProfiles(value: unknown): ReadonlyArray<ProjectProfile> {
 }
 
 function parsePersistedFolderPaths(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    typeof entry === "string" && entry.trim().length > 0 ? [entry] : [],
+  );
+}
+
+function parsePersistedEpicIds(value: unknown): ReadonlyArray<string> {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) =>
     typeof entry === "string" && entry.trim().length > 0 ? [entry] : [],
