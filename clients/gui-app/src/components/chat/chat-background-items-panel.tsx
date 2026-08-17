@@ -931,8 +931,12 @@ export function BackgroundItemsPanel(props: {
   };
   // Count every affected row, not just root tree groups - a parent command
   // with running children would otherwise understate the dialog's blast
-  // radius.
-  const panelItemCount = items.length + managedCommands.length;
+  // radius. Wakeup rows are excluded: host-owned wakes survive a session
+  // stop (the handler never touches them), so counting them would be a
+  // false promise.
+  const panelItemCount =
+    items.filter((item) => item.kind !== "wakeup").length +
+    managedCommands.length;
 
   return (
     <Collapsible
@@ -1067,23 +1071,44 @@ export function BackgroundItemsPanel(props: {
           </ul>
         </div>
       </CollapsibleContent>
-      {sessionStopEscalation !== null ? (
-        <ConfirmDestructiveDialog
-          open={confirmingSessionStop}
-          onOpenChange={setConfirmingSessionStop}
-          title={`Stop the ${sessionStopEscalation.providerLabel} session?`}
-          description={sessionStopDialogDescription({
-            providerLabel: sessionStopEscalation.providerLabel,
-            itemCount: panelItemCount,
-            turnActive: props.turnActive,
-          })}
-          cascadeSummary={null}
-          actionLabel="Stop session"
-          isPending={props.sessionStopPending}
-          onConfirm={confirmSessionStop}
-        />
-      ) : null}
+      <SessionStopConfirmDialog
+        escalation={sessionStopEscalation}
+        open={confirmingSessionStop}
+        onOpenChange={setConfirmingSessionStop}
+        itemCount={panelItemCount}
+        turnActive={props.turnActive}
+        isPending={props.sessionStopPending}
+        onConfirm={confirmSessionStop}
+      />
     </Collapsible>
+  );
+}
+
+function SessionStopConfirmDialog(props: {
+  readonly escalation: { readonly providerLabel: string } | null;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly itemCount: number;
+  readonly turnActive: boolean;
+  readonly isPending: boolean;
+  readonly onConfirm: () => void;
+}) {
+  if (props.escalation === null) return null;
+  return (
+    <ConfirmDestructiveDialog
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title={`Stop the ${props.escalation.providerLabel} session?`}
+      description={sessionStopDialogDescription({
+        providerLabel: props.escalation.providerLabel,
+        itemCount: props.itemCount,
+        turnActive: props.turnActive,
+      })}
+      cascadeSummary={null}
+      actionLabel="Stop session"
+      isPending={props.isPending}
+      onConfirm={props.onConfirm}
+    />
   );
 }
 

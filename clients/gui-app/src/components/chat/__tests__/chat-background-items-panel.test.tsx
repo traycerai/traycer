@@ -766,6 +766,52 @@ describe("<BackgroundItemsPanel />", () => {
       screen.getByTestId("confirm-destructive-dialog").textContent,
     ).toContain("Stopping the session ends all 3 background items.");
   });
+
+  it("excludes wakeups from the session-stop confirm dialog's count - a session stop can't end a host-owned wake", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+    const child = backgroundItem({
+      taskId: "child-command",
+      kind: "command",
+      title: "Child command",
+      blockId: "child-command-tool",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    });
+    const wakeup = backgroundItem({
+      taskId: "wake-task",
+      kind: "wakeup",
+      title: "Review status",
+      blockId: "wake-tool",
+      parentTaskId: null,
+      scheduledFor: 1_769_000_000_000,
+    });
+
+    renderPanel({
+      items: [gatedCommand, child, wakeup],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => "action-1",
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("Stopping the session ends all 2 background items.");
+  });
 });
 
 interface PanelInput {

@@ -3499,7 +3499,7 @@ describe("createChatSessionStore", () => {
     expect(harness.sent[0].kind).toBe("stopBackgroundSession");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false, turnId: null });
   });
 
   it("stops the turn first when one is active, then sends the session stop once turnStateChanged reports it settled", () => {
@@ -3552,7 +3552,7 @@ describe("createChatSessionStore", () => {
     expect(harness.sent[0].kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
 
     // The turn settles but the gated command is still running - the
     // session-stop frame dispatches now instead of waiting forever.
@@ -3578,6 +3578,7 @@ describe("createChatSessionStore", () => {
     ).toEqual({
       clientActionId: sessionFrame.clientActionId,
       awaitingTurnEnd: false,
+      turnId: null,
     });
   });
 
@@ -3684,7 +3685,7 @@ describe("createChatSessionStore", () => {
     expect(sent).not.toBeNull();
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false, turnId: null });
 
     // The frame died with the connection before any ack arrived.
     callbacks.onConnectionStatus("reconnecting", null);
@@ -3747,7 +3748,7 @@ describe("createChatSessionStore", () => {
     expect(harness.sent.at(-1)?.kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
 
     // The turn-stop frame died with the connection before any ack arrived;
     // the reconnect snapshot still reports the turn as active.
@@ -3833,7 +3834,7 @@ describe("createChatSessionStore", () => {
     });
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
 
     // The connection drops before `turnStateChanged` reports the turn
     // settled; the reconnect snapshot is the only signal that arrives, and
@@ -3862,6 +3863,7 @@ describe("createChatSessionStore", () => {
     ).toEqual({
       clientActionId: sessionFrame.clientActionId,
       awaitingTurnEnd: false,
+      turnId: null,
     });
   });
 
@@ -4001,6 +4003,7 @@ describe("createChatSessionStore", () => {
     ).toEqual({
       clientActionId: sessionFrame.clientActionId,
       awaitingTurnEnd: false,
+      turnId: null,
     });
 
     // The turn-stop's late rejection targets a clientActionId the slot has
@@ -4023,7 +4026,180 @@ describe("createChatSessionStore", () => {
     ).toEqual({
       clientActionId: sessionFrame.clientActionId,
       awaitingTurnEnd: false,
+      turnId: null,
     });
+  });
+
+  it("falls back to a plain stop-all when the gated command settles on its own during wind-down", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-gated",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const ungatedCommand: BackgroundItem = {
+      taskId: "task-ungated",
+      kind: "command",
+      title: "sleep 5",
+      blockId: "tool-2",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand, ungatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("stop");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+
+    // The gated command finished on its own during wind-down - only the
+    // ungated one is still running when the turn settles.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [ungatedCommand],
+    });
+
+    // No process-kill frame - the reason for one is gone. The confirmed
+    // "stop my background work" is honored via the graceful per-item path.
+    expect(
+      harness.sent.some((frame) => frame.kind === "stopBackgroundSession"),
+    ).toBe(false);
+    const lastFrame = harness.sent.at(-1);
+    if (lastFrame === undefined || lastFrame.kind === "ping") {
+      throw new Error("Expected stopAllBackgroundItems frame");
+    }
+    expect(lastFrame.kind).toBe("stopAllBackgroundItems");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.handle.store.getState().pendingBackgroundStopAll).toEqual({
+      clientActionId: lastFrame.clientActionId,
+      taskIds: new Set(["task-ungated"]),
+    });
+  });
+
+  it("clears the escalation without firing when a different turn is seen active", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const turnOne: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn: turnOne,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+
+    // A different turn is now running - a queued send started while the
+    // escalation was in flight. Firing at ITS end would stop work the user
+    // never confirmed stopping.
+    const turnTwo: ChatActiveTurn = {
+      ...turnOne,
+      turnId: "turn-2",
+      userMessageId: "message-2",
+    };
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: turnTwo,
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
+
+    // Turn two settles - the released escalation must not resurrect itself.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(harness.sent).toHaveLength(1);
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
   });
 
   it("does not apply an ownerless detached background tool terminal to the active turn", () => {

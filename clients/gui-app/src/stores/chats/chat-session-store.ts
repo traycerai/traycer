@@ -440,10 +440,15 @@ export interface ChatSessionState {
    * phase-one id lets a rejected turn stop (turn genuinely still running)
    * release the escalation instead of stranding it, and lets the reconnect
    * sweep drop either phase when its frame died with the connection.
+   * `turnId` is the turn phase one stopped (null when unknown or in phase
+   * two): if a DIFFERENT turn is ever seen active, the escalation is stale -
+   * a queued turn started meanwhile - and firing at that turn's end would
+   * take work the user never confirmed stopping.
    */
   readonly pendingBackgroundSessionStop: {
     readonly clientActionId: string;
     readonly awaitingTurnEnd: boolean;
+    readonly turnId: string | null;
   } | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
@@ -917,7 +922,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingBackgroundSessionStop:
         sent === null
           ? null
-          : { clientActionId: sent, awaitingTurnEnd: false },
+          : { clientActionId: sent, awaitingTurnEnd: false, turnId: null },
     }));
     return sent;
   };
@@ -934,12 +939,40 @@ export function createChatSessionStoreWithNotificationDependencies(
     const state = get();
     const pending = state.pendingBackgroundSessionStop;
     if (pending === null || !pending.awaitingTurnEnd) return;
+    const activeTurnId = state.activeTurn?.turnId ?? null;
+    if (
+      pending.turnId !== null &&
+      activeTurnId !== null &&
+      activeTurnId !== pending.turnId
+    ) {
+      // A different turn than the one the user confirmed against is running
+      // (a queued turn started meanwhile, possibly while disconnected).
+      // Firing at ITS end would take work the user never asked to stop -
+      // release the escalation instead.
+      set(() => ({ pendingBackgroundSessionStop: null }));
+      return;
+    }
     const turnActive = state.turnInProgress ?? state.activeTurn !== null;
     if (turnActive) return;
-    if ((state.backgroundItems ?? []).length === 0) {
+    const items = state.backgroundItems ?? [];
+    if (items.length === 0) {
       // Everything settled with the turn - the session stop has nothing left
       // to do.
       set(() => ({ pendingBackgroundSessionStop: null }));
+      return;
+    }
+    if (
+      !items.some(
+        (item) =>
+          item.kind === "command" && item.individualStopUnavailable !== null,
+      )
+    ) {
+      // The gated command settled on its own while the turn wound down, so
+      // the reason for killing the provider session is gone. Honor the
+      // confirmed "stop my background work" with the graceful per-item path
+      // instead of the process kill.
+      set(() => ({ pendingBackgroundSessionStop: null }));
+      get().stopAllBackgroundItems();
       return;
     }
     sendBackgroundSessionStopFrame({ set, get });
@@ -2464,6 +2497,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingBackgroundSessionStop: {
               clientActionId: stopSent,
               awaitingTurnEnd: true,
+              turnId: state.activeTurn?.turnId ?? null,
             },
           }));
           return stopSent;
