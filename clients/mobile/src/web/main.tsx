@@ -134,9 +134,11 @@ function bootstrap(): void {
     returnScheme: Capacitor.isNativePlatform() ? "traycer" : null,
   });
   // After the host exists: registration follows the token store (sign-in,
-  // app start while signed in, sign-out), and the plugin listeners attach
-  // now so a cold-start tap is captured before the GUI mounts.
-  pushRegistration?.start(host.tokenStore);
+  // app start while signed in, sign-out) and the host's resume edge (a
+  // permission granted later in the OS Settings app), and the plugin
+  // listeners attach now so a cold-start tap is captured before the GUI
+  // mounts.
+  pushRegistration?.start(host.tokenStore, host);
   const container = document.getElementById("root");
   if (container === null) {
     throw new Error("#root element not found in index.html");

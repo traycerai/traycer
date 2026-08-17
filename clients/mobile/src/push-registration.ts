@@ -86,6 +86,18 @@ export interface PushTokenSource {
   subscribe(listener: (change: TokenStoreChange) => void): Disposable;
 }
 
+/**
+ * The shell's foreground-resume edge (`IRunnerHost.onSystemResumed`, which
+ * `MobileRunnerHost` satisfies structurally). Registration follows it for ONE
+ * reason: a person who tapped "Don't Allow" and later flipped Traycer on in
+ * the OS Settings app comes back to the SAME running app - iOS does not
+ * restart it - and without a resume hook nothing would notice until the next
+ * cold start or sign-in.
+ */
+export interface SystemResumeSource {
+  onSystemResumed(handler: () => void): Disposable;
+}
+
 export interface PushRegistrationTarget {
   readonly platform: DevicePushPlatform;
   readonly environment: DevicePushEnvironment;
@@ -155,12 +167,12 @@ export class MobilePushRegistration {
   constructor(private readonly options: MobilePushRegistrationOptions) {}
 
   /**
-   * Attaches the plugin listeners and starts following the token store.
-   * Called once from bootstrap; listeners attach as early as possible so a
-   * cold-start tap (retained by Capacitor until a listener exists) is
-   * captured even though the GUI subscribes later.
+   * Attaches the plugin listeners and starts following the token store and
+   * the shell's resume edge. Called once from bootstrap; listeners attach as
+   * early as possible so a cold-start tap (retained by Capacitor until a
+   * listener exists) is captured even though the GUI subscribes later.
    */
-  start(tokenStore: PushTokenSource): void {
+  start(tokenStore: PushTokenSource, systemResume: SystemResumeSource): void {
     if (this.started) return;
     this.started = true;
 
@@ -193,6 +205,11 @@ export class MobilePushRegistration {
     });
     // App start while already signed in: same path as a sign-in event.
     void this.ensureRegistered(tokenStore);
+    // Foreground resume: the narrow late-grant path, NOT a re-run of the
+    // sign-in path (see `registerAfterResume`).
+    systemResume.onSystemResumed(() => {
+      void this.registerAfterResume(tokenStore);
+    });
   }
 
   /**
@@ -254,6 +271,40 @@ export class MobilePushRegistration {
       await this.registerCurrentToken();
     } catch (error) {
       logPushFailure("ensure registration")(error);
+    }
+  }
+
+  /**
+   * The late-grant path: permission was refused at the sign-in prompt, the
+   * person enabled Traycer in the OS Settings app, and came back to the same
+   * running app. Deliberately narrower than `ensureRegistered`, cheapest gate
+   * first, so a resume is free for everyone it does not concern:
+   *
+   *   1. already registered      -> in-memory read, stop (the common case)
+   *   2. signed out              -> local credential read, stop
+   *   3. permission not granted  -> local OS read, stop (still refused)
+   *   4. register once           -> APNs/FCM + one authn call; the guard set
+   *                                 by `registerCurrentToken` then makes every
+   *                                 later resume stop at (1)
+   *
+   * `requestPermissions` is never called from here: a resume must not raise
+   * the OS prompt (and on iOS it cannot after a refusal anyway).
+   */
+  private async registerAfterResume(
+    tokenStore: PushTokenSource,
+  ): Promise<void> {
+    if (this.lastRegisteredKey !== null) return;
+    try {
+      const credentials = await tokenStore.get();
+      if (credentials === null) return;
+      const permission = await this.options.plugin.checkPermissions();
+      if (permission.receive !== "granted") return;
+      this.bearerToken = credentials.token;
+      this.userId = credentials.user.id;
+      await this.options.plugin.register();
+      await this.registerCurrentToken();
+    } catch (error) {
+      logPushFailure("register after resume")(error);
     }
   }
 
