@@ -126,6 +126,30 @@ describe("historyItemMatchesProject", () => {
     ).toBe(true);
   });
 
+  it("matches equivalent Windows paths that differ only in casing", () => {
+    const windowsProfile: ProjectProfile = {
+      ...PROFILE,
+      folderPaths: ["C:\\Users\\g\\work\\Titanos"],
+      primaryPath: "C:\\Users\\g\\work\\Titanos",
+      epicIds: [],
+    };
+    expect(
+      historyItemMatchesProject(
+        item("win-case", [], ["c:\\users\\g\\work\\titanos"]),
+        windowsProfile,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat POSIX paths as case-insensitive", () => {
+    expect(
+      historyItemMatchesProject(
+        item("posix-case", [], ["/Users/g/work/titanos"]),
+        PROFILE,
+      ),
+    ).toBe(false);
+  });
+
   it("does not match a chat that never touched the project folder", () => {
     expect(
       historyItemMatchesProject(

@@ -73,5 +73,13 @@ function pathIsInsideFolder(path: string, folder: string): boolean {
 }
 
 function normalizePathSeparators(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const withSlashes = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (isWindowsDrivePath(withSlashes)) {
+    return withSlashes.toLowerCase();
+  }
+  return withSlashes;
+}
+
+function isWindowsDrivePath(path: string): boolean {
+  return /^[A-Za-z]:(?:\/|$)/.test(path);
 }
