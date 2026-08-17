@@ -226,7 +226,11 @@ export function EpicSessionProvider(
       if (cleanupPatch !== null) {
         await desktopBridge.perWindowState.update(cleanupPatch);
       }
-      getOpenEpicRegistry().release(epicId);
+      // Another window won the ownership claim, so this one navigates away.
+      // Involuntary - no confirmation was shown - so retained buffers stay.
+      // They remain reachable through the unsynced-edits projection, which
+      // reports retentions whose live session is gone.
+      getOpenEpicRegistry().release(epicId, "keep");
       await desktopBridge.requestFocus(claim.currentOwner);
       void navigate({ to: "/epics", replace: true });
     })();
@@ -451,8 +455,19 @@ export function EpicSessionProvider(
     ) {
       // Identity changes are security boundaries, not re-points: discard the
       // old user/owner session before opening another stream.
+      //
+      // The two arms differ on RETAINED buffers, so they are decided
+      // separately rather than off the OR above. A different `userId` means
+      // another person is at the keyboard, and no prior identity's document
+      // may survive that - the same policy `disposeAll` applies at sign-out.
+      // An owner-identity rotation is not that: it is detected on ONE host,
+      // while the retained buffers can belong to others, so discarding here
+      // would delete host A's unsynced work because host B rotated.
       if (current !== null) {
-        registry.release(epicId);
+        registry.release(
+          epicId,
+          current.handle.userId !== sessionUserId ? "discard" : "keep",
+        );
       }
       const nextHandle = registry.acquireMounted(epicId, createHandle);
       // The stamp is written once, at construction (inside `createHandle`).

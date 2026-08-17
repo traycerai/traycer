@@ -1269,7 +1269,7 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(1);
 
     act(() => {
-      __getOpenEpicRegistryForTests().release("epic-session-test");
+      __getOpenEpicRegistryForTests().release("epic-session-test", "discard");
     });
     await waitFor(() => {
       expect(calls.releases).toEqual(["epic-session-test"]);

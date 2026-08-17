@@ -312,7 +312,7 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const th = buildTestHandle("e0", false);
     registry.acquire("e0", () => h(th));
-    registry.release("e0");
+    registry.release("e0", "discard");
     expect(th.disposed).toBe(true);
     expect(registry.get("e0")).toBeNull();
   });
@@ -558,7 +558,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     repoint(registry, previous.handle, next.handle, IDENTITY_A);
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
 
-    registry.release(EPIC);
+    registry.release(EPIC, "discard");
 
     // `prune()` cannot reach retentions and must not, so tab close is one of
     // the few real reclamation paths. It is also the point where the user has
@@ -584,5 +584,59 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     // holding that user's unsynced edits.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.retainedCountForTests(EPIC)).toBe(0);
+  });
+});
+
+// ── `release` means three different things to its three callers ───────────────
+// Reclaiming retentions inside `release` looked like the tab-close path alone,
+// because that is the caller its doc-comment names. It is also reached by a
+// DENIED desktop ownership claim and by the provider's rebuild arm - neither of
+// which offered the user a decision. The rebuild arm is the pointed one: it
+// fires on an owner-identity rotation, a rotation is only ever detected on ONE
+// host, and the retained buffers can belong to others.
+
+describe("release states its meaning for retained buffers", () => {
+  const EPIC = "epic-release";
+
+  it("keeps another host's buffer when THIS host's identity rotates", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const onHostA = buildRetentionHandle(EPIC, true, 6);
+    registry.acquireMounted(EPIC, () => onHostA.handle);
+    const onHostB = buildRetentionHandle(EPIC, false, 0);
+    registry.replaceMounted(EPIC, onHostA.handle, onHostB.handle, {
+      hostStamp: "host-a",
+      ownerIdentityKey: "key-a",
+    });
+    expect(registry.getUnsyncedEdits()).toHaveLength(1);
+
+    // Host B rotates its owner identity. The provider's rebuild arm releases
+    // the live session - it must not take host A's unsynced work with it.
+    // Deleting it here would be strictly more destructive than the
+    // cross-identity MERGE `findMergeTarget` refuses, and would happen with
+    // no decision and no log.
+    registry.release(EPIC, "keep");
+
+    expect(registry.retainedCountForTests(EPIC)).toBe(1);
+    const rows = registry.getUnsyncedEdits();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.queueSize).toBe(6);
+  });
+
+  it("still reclaims on tab close, where the user answered for the buffer", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const previous = buildRetentionHandle(EPIC, true, 6);
+    registry.acquireMounted(EPIC, () => previous.handle);
+    const next = buildRetentionHandle(EPIC, false, 0);
+    registry.replaceMounted(EPIC, previous.handle, next.handle, {
+      hostStamp: "host-a",
+      ownerIdentityKey: "key-a",
+    });
+
+    registry.release(EPIC, "discard");
+
+    // The control for the arm above: `"keep"` must not have made reclamation
+    // unreachable, or the retention would simply leak instead.
+    expect(registry.retainedCountForTests(EPIC)).toBe(0);
+    expect(registry.getUnsyncedEdits()).toHaveLength(0);
   });
 });

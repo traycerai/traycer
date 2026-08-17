@@ -139,7 +139,10 @@ export function drainEpicUnsyncedEdits(epicId: string): void {
  * user closes a tab in the strip.
  */
 export function releaseOpenEpicSession(epicId: string): void {
-  registry.release(epicId);
+  // Tab close is the one release path where a decision was offered: the close
+  // confirmation reads `epicHasUnsyncedEdits`, which covers retained buffers,
+  // so reaching here means the user has already answered for them too.
+  registry.release(epicId, "discard");
 }
 
 export function releaseOpenEpicSessionIfUnused(epicId: string): void {

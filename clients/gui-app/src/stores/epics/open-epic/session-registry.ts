@@ -456,13 +456,37 @@ export class OpenEpicSessionRegistry {
     return entry;
   }
 
-  release(epicId: string): void {
+  /**
+   * Dispose the live session for an epic.
+   *
+   * `retainedBuffers` is required, and every caller must state it, because
+   * this method has three callers meaning three different things and only one
+   * of them is a user decision:
+   *
+   *   - the tab-close wrappers - the user answered the close confirmation,
+   *     which reads the retained buffer too, so the answer covers it
+   *     (`"discard"`);
+   *   - a denied desktop ownership claim - an involuntary navigate-away when
+   *     another window wins, no decision offered (`"keep"`);
+   *   - the provider's rebuild arm, which is TWO conditions: a `userId`
+   *     change is a security boundary and matches `disposeAll`'s policy
+   *     (`"discard"`), while an owner-identity rotation is not
+   *     (`"keep"` - see below).
+   *
+   * A rotation is only ever detected on ONE host, and the retained buffers can
+   * belong to others. Destroying them here would delete a buffer for host A
+   * because host B rotated - no decision, no log, and strictly more
+   * destructive than the cross-identity MERGE `findMergeTarget` refuses three
+   * methods up on the grounds that the result has no owner it could honestly
+   * flush to.
+   */
+  release(epicId: string, retainedBuffers: "discard" | "keep"): void {
     const entry = this.entries.get(epicId);
-    // Retentions are reclaimed even when there is no live entry left: closing
-    // the tab is the user answering the close confirmation, which is now
-    // driven by the retained buffer too. Ordered before the early return so a
-    // retention cannot outlive the tab that could act on it.
-    this.disposeRetainedForEpic(epicId);
+    if (retainedBuffers === "discard") {
+      // Ordered before the early return: a retention must not outlive the tab
+      // that could have acted on it, even if the live entry is already gone.
+      this.disposeRetainedForEpic(epicId);
+    }
     if (entry === undefined) {
       this.emit();
       return;
