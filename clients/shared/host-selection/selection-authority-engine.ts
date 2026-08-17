@@ -1731,15 +1731,59 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     localHostId: string | null,
     leases: readonly HostLeaseSnapshot[],
   ): string | null {
+    // B3's eligibility half. `isUsableForSelection` answers on lease status
+    // alone, so it cannot tell "proved compatible" from "never asked" - both
+    // derive as `connecting`, which is usable. Taking the first usable host in
+    // MRU-then-fleet order therefore fails over onto an UNPROVEN machine while
+    // a proven one sits in the same fleet, which is what D13's "never a
+    // candidate" is protecting against.
+    //
+    // A rank, not a gate. Making unknown INELIGIBLE would be the obvious
+    // reading and it is wrong: a compat verdict is produced BY connecting, so
+    // on a cold start nothing has one, and a gate would make every host
+    // ineligible and ∅ universal. Unknown stays selectable - it just stops
+    // outranking evidence. When nothing is proved, every host is equally
+    // unknown and the second pass reproduces the previous order exactly.
+    //
+    // Deliberately NOT applied to the preferred-host arm: preference is the
+    // user's intent (D1/D5), and intent outranks the engine's ranking of
+    // hosts it picked for them. This is only the arm where the engine chooses.
+    const proved = this.firstUsableRemote(localHostId, leases, (hostId) =>
+      this.hasProvedCompatible(hostId),
+    );
+    if (proved !== null) return proved;
+    return this.firstUsableRemote(localHostId, leases, () => true);
+  }
+
+  /** MRU order first, then the fleet's own (hostId-sorted) order. */
+  private firstUsableRemote(
+    localHostId: string | null,
+    leases: readonly HostLeaseSnapshot[],
+    admits: (hostId: string) => boolean,
+  ): string | null {
     for (const hostId of this.mruEffectiveHostIds) {
       if (hostId === localHostId) continue;
+      if (!admits(hostId)) continue;
       if (this.isUsable(hostId, leases)) return hostId;
     }
     for (const lease of leases) {
       if (lease.hostId === localHostId) continue;
+      if (!admits(lease.hostId)) continue;
       if (isUsableForSelection(lease)) return lease.hostId;
     }
     return null;
+  }
+
+  /**
+   * Whether this host has ever returned a `compatible` verdict.
+   *
+   * Absence means "never asked", never "assumed fine" - which is the whole
+   * distinction B3 turns on. An `incompatible` verdict does not need to be
+   * excluded here: it already derives as `dead`, so `isUsable` refuses it a
+   * second time below.
+   */
+  private hasProvedCompatible(hostId: string): boolean {
+    return this.evidence.get(hostId)?.compat?.verdict === "compatible";
   }
 
   /** Records an effective host at the head of the MRU order. */

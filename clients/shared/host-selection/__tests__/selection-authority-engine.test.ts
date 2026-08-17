@@ -3452,6 +3452,105 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
   });
 });
 
+describe("SelectionAuthorityEngineImpl - compat eligibility (B3)", () => {
+  /**
+   * B3's eligibility half, which `ade7fe0f` did not touch. That mitigation
+   * fixed FRESHNESS - a stale `compatible` suppressing a fresh `incompatible`.
+   * This is the other half: `isUsableForSelection` answers on lease status
+   * alone, and a host whose compatibility has NEVER been established derives
+   * as `connecting`, which is usable. So candidate enumeration takes the first
+   * usable host in MRU-then-fleet order and cannot tell "proved compatible"
+   * from "never asked".
+   *
+   * The harm is not that an unknown host may be tried - it must be, or nothing
+   * is selectable on a cold start where no verdict exists yet. It is that an
+   * unknown host is taken **over a host already proved compatible**, which is
+   * D13's "never a candidate" in the sense that bites: failing over onto an
+   * unproven machine while a proven one sits in the same fleet.
+   */
+  it("prefers a host proved compatible over one never probed, when failing over", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        // Fleet order is by hostId, so the UNPROBED host is offered first -
+        // which is what makes this about ranking rather than luck.
+        localHostId: "L",
+        hosts: [
+          fleetHost("L", "local"),
+          fleetHost("A-unprobed", "remote"),
+          fleetHost("B-compatible", "remote"),
+        ],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      // The local host cannot be provisioned back to life, so the engine has
+      // to reach for a remote and keep it.
+      localHostEnsure: unavailableLocalHostEnsurePort,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatCompatible("B-compatible", null),
+    );
+    // The local host dies, so the engine must reach for a remote.
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    // The engine's own provisioning request outranks the death arm while it is
+    // in flight, so let the failed ensure settle before reading the verdict.
+    await Promise.resolve();
+    await Promise.resolve();
+    // A candidate must be continuously usable for the damping window before
+    // the engine will move onto it.
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS + 1);
+
+    expect(engine.snapshot().effectiveHostId).toBe("B-compatible");
+
+    authority.dispose();
+  });
+
+  /**
+   * The don't-over-fix guard, and the reason this is a RANK and not a gate.
+   *
+   * A compat verdict is produced BY connecting, so on a cold start no host has
+   * one. Making unknown ineligible - the obvious reading of "never a
+   * candidate" - would make every host ineligible and ∅ universal. When
+   * nothing is proved, every host is equally unknown and the previous order
+   * must survive untouched.
+   */
+  it("still selects an unprobed host when NO host has been proved compatible", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [
+          fleetHost("L", "local"),
+          fleetHost("A-unprobed", "remote"),
+          fleetHost("B-also-unprobed", "remote"),
+        ],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: unavailableLocalHostEnsurePort,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    await Promise.resolve();
+    await Promise.resolve();
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS + 1);
+
+    // Fleet order, exactly as before the rank existed.
+    expect(engine.snapshot().effectiveHostId).toBe("A-unprobed");
+
+    authority.dispose();
+  });
+});
+
 describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", () => {
   /**
    * B1's corpse path. The measured half was "48 s, zero updates"; the
