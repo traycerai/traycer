@@ -32,6 +32,11 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
+import { filterHistoryItemsForProject } from "@/lib/workspace/history-item-matches-project";
+import {
+  selectActiveProjectProfile,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useCallback, useMemo, useState } from "react";
 
@@ -168,6 +173,13 @@ export function useHistoryQuery(
     () => withHistoryItemWorktreeMetadata(allBaseItems, worktreesByEpicId),
     [allBaseItems, worktreesByEpicId],
   );
+  const activeProfile = useProjectProfilesStore((state) =>
+    selectActiveProjectProfile(state, hostId),
+  );
+  const projectItems = useMemo(
+    () => filterHistoryItemsForProject(allItems, activeProfile),
+    [activeProfile, allItems],
+  );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
     if (tasksQuery.data === undefined) {
@@ -180,9 +192,9 @@ export function useHistoryQuery(
     // When id-fetched extras joined the settled list they arrive appended out
     // of order, so that path re-sorts the union client-side instead.
     const items = shouldProjectLocally
-      ? projectHistoryItems(allItems, params.search)
+      ? projectHistoryItems(projectItems, params.search)
       : settledHistoryItems(
-          allItems,
+          projectItems,
           contextExtrasCount,
           params.search.sort,
           debouncedQuery,
@@ -213,6 +225,7 @@ export function useHistoryQuery(
     debouncedQuery,
     isQueryDebouncing,
     params.search,
+    projectItems,
     shouldProjectLocally,
     tasksQuery.data,
     tasksQuery.isPlaceholderData,
