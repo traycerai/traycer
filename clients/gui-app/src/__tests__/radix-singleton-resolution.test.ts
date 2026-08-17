@@ -63,9 +63,7 @@ describe("Radix module-scoped singletons", () => {
  */
 function resolvedVersions(lockfile: string, name: string): readonly string[] {
   const pattern = new RegExp(`\\["${escapeRegExp(name)}@([^"]+)"`, "g");
-  return [
-    ...new Set([...lockfile.matchAll(pattern)].map((match) => match[1])),
-  ];
+  return [...new Set([...lockfile.matchAll(pattern)].map((match) => match[1]))];
 }
 
 function escapeRegExp(value: string): string {
