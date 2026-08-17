@@ -1174,6 +1174,7 @@ function UserMessageTouchMenu({
             // invisible ::after slop widens the 24px visual control to the
             // 44px touch-target guideline without painting anything (Button
             // renders no ::after of its own, so nothing merges with it).
+            // muted-fill-ok: transcript row renders on bg-background/canvas
             className="relative bg-muted text-muted-foreground/70 hover:text-foreground after:absolute after:-inset-2.5 after:content-['']"
           >
             <MoreHorizontal className="size-3.5" aria-hidden />

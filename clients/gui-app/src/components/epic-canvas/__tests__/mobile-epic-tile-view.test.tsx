@@ -20,6 +20,7 @@ const VIEW_TAB_ID = "view-tab-1";
 // EpicSessionProvider (mirrors tab-group-view.test).
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
+  useEpicChatRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
@@ -83,6 +84,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     isPending: false,
     isFetching: false,
   }),
+  cloudChatListAuthorizesRecordSweep: () => false,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
