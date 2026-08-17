@@ -76,15 +76,29 @@ const MUTED_FILL =
  * trusted. Prefer attribute position (inside the opening tag), which is a
  * real comment in every context; `{@literal {}/* … *}` also works in children.
  *
- * ⚠ `[A-Za-z]` RATHER THAN `\S`, and this was a live defect rather than a
- * tightening. With `\S`, a bare JSX-comment waiver is HONOURED: the comment's own
- * closing `*` is a non-space character following the colon, so the mechanism built
- * to force a reason accepted one with none - in the comment form JSX uses most,
- * and across all 46 waivers in the tree. Found by the sibling
+ * ⚠ NOT a bare `\S`, and that was a live defect rather than a tightening. With
+ * `\S`, a bare JSX-comment waiver is HONOURED: the comment's own closing `*` is a
+ * non-space character following the colon, so the mechanism built to force a
+ * reason accepted one with none - in the comment form JSX uses most, and across
+ * all 46 waivers in the tree. Found by the sibling
  * `local-bootstrap-alignment-lint` guard, whose own reasonless-waiver arm caught
  * the identical hole in its copy of this marker.
+ *
+ * ⚠⚠ The first fix for that was `[A-Za-z]`, and it OVERSHOT. A reason is prose,
+ * and prose does not have to begin with a letter: `shell-settings-panel.tsx:724`
+ * carries `muted-fill-ok: /15 wash under its own border-b border-border/40` - a
+ * perfectly good reason, silently NOT HONOURED, because it opens with a slash.
+ * That was invisible only because `isLoadBearing` filters that fill before the
+ * waiver is ever consulted; raise the alpha or drop the border and the guard
+ * reddens on a line that already carries the reason it is demanding, and the
+ * cheapest way green is to reword prose until a regex likes it.
+ *
+ * So the exclusion is the COMMENT TERMINATOR specifically, which is the only
+ * thing that was ever masquerading as a reason - not "anything unlike a word".
+ * ⇒ a validator tightened against one bad input should exclude THAT input, not
+ * narrow to the shape of the examples that happened to be in the tree.
  */
-const ALLOW_MARKER = /muted-fill-ok:\s*[A-Za-z]/;
+const ALLOW_MARKER = /muted-fill-ok:\s*(?!\*\/)\S/;
 
 /**
  * How many lines above a fill an annotation may sit and still cover it.
@@ -222,6 +236,23 @@ function importedLocalFiles(source: string, from: string): readonly string[] {
  * (`picker-panel` -> `picker-group` -> `picker-item`) and is invisible here,
  * so it was found and fixed by hand. A fill inside a component this scan
  * never reaches still needs the AGENTS.md rule applied by a human.
+ *
+ * ⚠ THE HOP COUNT IS NOT THE ONLY LIMIT, and reading it as one is misleading -
+ * a whole shape of surface is unreachable at ANY depth. This scan follows
+ * imports DOWNWARD from a file that spells a raised-surface token. When a
+ * dialog's body is composed by its CALLER and passed in as a prop, that edge
+ * runs the other way: the caller imports both the shell and the body, while
+ * the shell - the thing nearest the actual `DialogContent` - imports neither.
+ *
+ * MEASURED, not reasoned: `components/local-host-loading.tsx` is the body of
+ * the window host modal and renders inside a real dialog, and it is out of
+ * scope at 1, 2 AND 3 hops (scope grows 387 -> 470 -> 519 of 823 files and
+ * never includes it). Widening the radius does not reach it; only seeding from
+ * the caller would, which is a different scan. It carries two `muted-fill-ok`
+ * waivers today that nothing evaluates.
+ *
+ * ⇒ a waiver is a claim that a guard looked. In a file this scan cannot reach,
+ * that claim is false, and it is more misleading than no annotation at all.
  */
 function raisedSurfaceFiles(files: readonly string[]): ReadonlySet<string> {
   const sources = new Map(files.map((f) => [f, readFileSync(f, "utf8")]));
@@ -322,6 +353,22 @@ describe("muted fills on raised surfaces", () => {
       ALLOW_MARKER.test(
         "{/* muted-fill-ok: sits on bg-canvas, which cannot collapse */}",
       ),
+    ).toBe(true);
+
+    // A REASON IS PROSE AND NEED NOT START WITH A LETTER. The first fix for the
+    // hole above was `[A-Za-z]`, which rejected these three - the first is a
+    // real waiver in the tree (`shell-settings-panel.tsx:724`), un-honoured and
+    // unnoticed because `isLoadBearing` filters its fill first. These arms are
+    // what stop the next tightening from narrowing to whatever shape the current
+    // waivers happen to have.
+    expect(
+      ALLOW_MARKER.test("// muted-fill-ok: /15 wash under its own border-b"),
+    ).toBe(true);
+    expect(
+      ALLOW_MARKER.test("// muted-fill-ok: 40% over a bordered row"),
+    ).toBe(true);
+    expect(
+      ALLOW_MARKER.test("{/* muted-fill-ok: --canvas remaps here, no collapse */}"),
     ).toBe(true);
   });
 

@@ -78,14 +78,22 @@ const CENTRING = /\bself-center\b|\bjustify-center\b|\btext-center\b/;
  * contents are centred within a fixed-size box (an icon in a square button) is
  * not competing with the card's alignment.
  *
- * ⚠ `[A-Za-z]` rather than `\S`, and that was a real defect found by the
- * reasonless-waiver test below. With `\S`, a bare `{/* align-ok: *}` is HONOURED:
- * the comment's own closing `*` satisfies "some non-space character followed the
- * colon". So the mechanism designed to force a reason accepted a waiver with
- * none, in the one comment form used most often in JSX. The sibling
- * `muted-fill-ok` marker still uses `\S` and has the same hole.
+ * ⚠ NOT a bare `\S`, and that was a real defect found by the reasonless-waiver
+ * test below. With `\S`, a bare `{/* align-ok: *}` is HONOURED: the comment's own
+ * closing `*` satisfies "some non-space character followed the colon". So the
+ * mechanism designed to force a reason accepted a waiver with none, in the one
+ * comment form used most often in JSX. The sibling `muted-fill-ok` marker had the
+ * identical hole; it was closed in `a61df520`.
+ *
+ * ⚠⚠ Both markers were first fixed to `[A-Za-z]`, which OVERSHOT - a reason is
+ * prose and may open with a digit or a slash (`/15 wash under its own border-b`
+ * is a real one in this tree). Excluding the comment terminator is what was
+ * actually needed; excluding everything that is not a letter also rejects
+ * legitimate reasons, and the cheapest way green is to reword prose until a
+ * regex likes it. Kept identical to the sibling's on purpose: two copies of one
+ * mechanism are only useful as a cross-check while they agree.
  */
-const ALLOW_MARKER = /align-ok:\s*[A-Za-z]/;
+const ALLOW_MARKER = /align-ok:\s*(?!\*\/)\S/;
 
 /** How many lines above an offence an annotation may sit and still cover it. */
 const MARKER_LOOKBEHIND = 4;
@@ -189,6 +197,17 @@ describe("the local-bootstrap body's one alignment", () => {
       '  <span className="flex size-6 justify-center" />',
     ].join("\n");
     expect(findCentring(bare, "bare.tsx")).toHaveLength(1);
+
+    // ...but a reason that does not begin with a LETTER is still a reason. The
+    // first fix for the bare-marker hole was `[A-Za-z]`, which rejected this
+    // shape - and the sibling guard has a real waiver in the tree that opens
+    // with a slash. Pinned here so neither copy narrows back to the shape of
+    // whatever reasons happen to exist today.
+    const punctuationLed = [
+      "  {/* align-ok: /2 of a row - the icon centres in its own box */}",
+      '  <span className="flex size-6 justify-center" />',
+    ].join("\n");
+    expect(findCentring(punctuationLed, "punctuation.tsx")).toEqual([]);
   });
 });
 
