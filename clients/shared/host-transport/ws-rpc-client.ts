@@ -995,7 +995,7 @@ function openSession(options: SessionOptions): Session {
    */
   let dialOutcomeReported = false;
   const reportDialOutcome = (
-    outcome: "success" | "refusal" | "timeout",
+    outcome: "success" | "refusal" | "timeout" | "indeterminate",
   ): void => {
     if (dialOutcomeReported) return;
     dialOutcomeReported = true;
@@ -1005,6 +1005,16 @@ function openSession(options: SessionOptions): Session {
     }
     if (outcome === "timeout") {
       evidence.reportDialTimeout(hostId, requestId, "local-ws");
+      return;
+    }
+    // An attempt we abandoned ourselves. Inert by contract - it advances no
+    // counter - but still reported, because the attempt did happen and one
+    // attempt owes exactly one outcome. Staying silent would keep death
+    // detection honest too, yet it would lose the diagnostic and quietly
+    // invent a third convention next to the remote path, which already
+    // classifies its own teardowns this way.
+    if (outcome === "indeterminate") {
+      evidence.reportDialIndeterminate(hostId, requestId, "local-ws");
       return;
     }
     // A close before the socket ever opened IS host-plane evidence: the
@@ -1282,10 +1292,32 @@ function openSession(options: SessionOptions): Session {
   };
 
   socket.onclose = (event: WebSocketCloseEvent) => {
+    // `closed` is the ONLY thing that distinguishes a close we initiated -
+    // `abort()` and `close()` both set it before calling `socket.close()` -
+    // from one the host delivered. It has to be read BEFORE the assignment
+    // below overwrites it; that assignment used to be the first statement
+    // here, which destroyed the discriminator one line above the code that
+    // needs it. Reporting our own teardown as a refusal is not a cosmetic
+    // mislabel: refusals feed the selection authority's death detection, and
+    // a HEALTHY host was measured accumulating three suppressed refusals -
+    // exactly the death threshold - so there is no headroom for manufactured
+    // ones.
+    //
+    // This is the same defect the remote path already fixed and wrote down
+    // ("a client's own teardown request is self-evidence", `remote-session.ts`),
+    // where it let three app-driven reconnects reach the confirmed-death
+    // streak on a host that never stopped answering. The local leg never got
+    // the treatment; the classification below is deliberately the same one.
+    //
+    // `failAll` stays unconditional: the first failure wins and the resolvers
+    // are already settled, so it is a no-op on the paths that reach here
+    // having already failed, and this fix does not quietly change which error
+    // a caller sees.
+    const selfInitiated = closed;
     closed = true;
     endLiveness();
     if (!opened) {
-      reportDialOutcome("refusal");
+      reportDialOutcome(selfInitiated ? "indeterminate" : "refusal");
       failAll(
         transientFailure(
           `WebSocket closed before open (code=${event.code}, reason='${event.reason}')`,

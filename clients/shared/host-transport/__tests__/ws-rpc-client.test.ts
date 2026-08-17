@@ -642,6 +642,124 @@ describe("WsRpcClient", () => {
     });
   });
 
+  /**
+   * C5. A socket that never opened reports a dial REFUSAL on close, which is
+   * correct only when the host is the one that closed it. Every teardown we
+   * initiate - an authority abort, or the `finally` close - also produces a
+   * close event, and reporting those attributes our own decision to the host.
+   *
+   * The consequence is not cosmetic: refusals feed the selection authority's
+   * death detection, and a healthy host was measured accumulating three
+   * suppressed refusals - exactly the death threshold - so there is no
+   * headroom for manufactured ones.
+   */
+  describe("self-closed sockets are not host refusals (C5)", () => {
+    function makeDialScenario(requestId: string): {
+      readonly sockets: RecordedSocket[];
+      readonly recorder: RecordingEvidence;
+      readonly client: WsRpcClient<typeof testRegistry>;
+    } {
+      const { factory, sockets } = makeFactory();
+      const recorder = new RecordingEvidence();
+      const client = new WsRpcClient<typeof testRegistry>({
+        registry: testRegistry,
+        requestId: () => requestId,
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: recorder,
+      });
+      return { sockets, recorder, client };
+    }
+
+    /**
+     * Every dial verdict, in order. Asserting on the whole outcome list rather
+     * than on the absence of one method keeps a fix that merely swaps refusal
+     * for a different manufactured verdict from passing.
+     */
+    function dialOutcomes(recorder: RecordingEvidence): string[] {
+      return recorder.calls
+        .map((call) => call.method)
+        .filter(
+          (method) =>
+            method === "reportDialSuccess" ||
+            method === "reportDialRefusal" ||
+            method === "reportDialTimeout" ||
+            method === "reportDialIndeterminate",
+        );
+    }
+
+    function requestWithSignal(
+      client: WsRpcClient<typeof testRegistry>,
+      signal: AbortSignal,
+    ): Promise<ResponseOfMethod<typeof testRegistry, "host.echo">> {
+      return client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: signal,
+        },
+      );
+    }
+
+    it("an authority abort before open reports no dial outcome - the close event is ours", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-abort-dial");
+      const lifetime = new AbortController();
+      const pending = requestWithSignal(client, lifetime.signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      lifetime.abort("host-replaced");
+      await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+      // A socket we tore down still delivers a close event, exactly as a real
+      // one does. Nothing about it is evidence concerning the host.
+      sockets[0].socket.fireClose(1000, "authority-aborted", true);
+
+      // Indeterminate, not silence: the attempt happened and owes one
+      // outcome, and the kernel documents this verdict as inert - it advances
+      // no counter - so it is diagnostics without death-detection weight.
+      expect(dialOutcomes(recorder)).toEqual(["reportDialIndeterminate"]);
+    });
+
+    // Boundary pin, not a defect repro: this one passes on the unfixed tree.
+    // It records WHY C5 is reachable only mid-dial, so a refactor that moves
+    // the early abort check reddens here instead of silently widening C5.
+    it("an already-aborted authority never dials, so it cannot report against a host", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-abort-early");
+      const lifetime = new AbortController();
+      lifetime.abort("host-replaced");
+
+      const pending = requestWithSignal(client, lifetime.signal);
+      await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+
+      // `throwIfAuthorityAborted` runs before the socket is built, so the
+      // synchronous `onAbort()` at session construction covers only the race
+      // between that check and the listener registration - never a fresh dial.
+      expect(sockets).toEqual([]);
+      expect(dialOutcomes(recorder)).toEqual([]);
+    });
+
+    it("a host-initiated close before open is still reported as a refusal", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-refused");
+      const pending = requestWithSignal(client, new AbortController().signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      // Nobody on this side asked for this: the connection was refused, or
+      // something answered and hung up before the handshake.
+      sockets[0].socket.fireClose(1006, "connection refused", false);
+
+      await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+      expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
+    });
+  });
+
   it("refcounts the local logical session to one host: overlapping RPCs announce and retract exactly once, on the 0->1 and 1->0 edges only", async () => {
     const { factory, sockets } = makeFactory();
     const recorder = new RecordingEvidence();
