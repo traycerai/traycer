@@ -1152,3 +1152,170 @@ describe("useHostProvisioning lastProgress producer", () => {
     expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
   });
 });
+
+/**
+ * THE STAGED WAIT VERSUS LIVE PROGRESS.
+ *
+ * `slow` is what puts Retry in front of the user, and its threshold's own doc
+ * justifies 10s against a healthy bundled-host BOOT - "typically well under a
+ * second", so a 10x margin. The same timer also governs the first-run
+ * download/install, a population that doc never contemplates, and there 10s is
+ * routine. A threshold justified against one population silently governed every
+ * other population sharing its timer.
+ *
+ * Progress is read from the MUTATION LANE, not from `provisioning.progress`.
+ * That is not a style choice: a first launch is driven by the desktop's own
+ * reconciler, so a renderer-side mutation observer sees no episode at all and
+ * `isProvisioning` is false throughout - see `useHostProvisioningProgress`,
+ * which exists because of exactly that. Keying this on the renderer's own
+ * mutation state would have fixed nothing for the only population that hits it.
+ */
+const DOWNLOAD_AT = (percent: number, bytes: number): MutationProgress => ({
+  stage: "download",
+  percent,
+  bytes,
+  totalBytes: 250_609_664,
+  message: "downloading host 1.2.3",
+});
+
+describe("HostProvisioningController - the staged wait versus live progress", () => {
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function mountWithLane(): {
+    readonly queryClient: QueryClient;
+    readonly management: IHostManagement;
+    readonly readLifecycle: () => HostProvisioningLifecycle | null;
+  } {
+    const management = makeHostManagement(() =>
+      Promise.resolve({
+        kind: "ok",
+        value: { running: true, version: validSnapshot.version },
+      }),
+    );
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+    return { queryClient, management, readLifecycle };
+  }
+
+  it("does NOT promote to slow while the install is actively advancing past the threshold", () => {
+    vi.useFakeTimers();
+    const { queryClient, management, readLifecycle } = mountWithLane();
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+
+    // A real download: advancing events, wall-clock well past the threshold.
+    // Nothing has failed, the progress bar is on screen, and the user is being
+    // told to Retry - which is the complaint that started this whole epic.
+    for (const [percent, bytes] of [
+      [10, 25_000_000],
+      [30, 75_000_000],
+      [60, 150_000_000],
+      [85, 210_000_000],
+    ] as ReadonlyArray<readonly [number, number]>) {
+      pushEnsureProgress(
+        queryClient,
+        management,
+        DOWNLOAD_AT(percent, bytes),
+        "2026-05-15T00:00:01Z",
+      );
+      act(() => {
+        vi.advanceTimersByTime(LOCAL_HOST_SLOW_START_THRESHOLD_MS - 1_000);
+      });
+    }
+
+    // Total elapsed is ~36s, far beyond the threshold, and the snapshot is still
+    // unavailable - so the ONLY thing that may keep this out of `slow` is the
+    // progress itself.
+    expect(readLifecycle()?.localHostState).toBe("unavailable");
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+  });
+
+  it("STILL promotes to slow when the lane is chatty but stuck at the same point", () => {
+    // The over-suppression guard, and the reason the predicate keys on the lane
+    // reaching a NEW POSITION rather than on a progress event ARRIVING. A stalled
+    // download that keeps re-emitting the same percent would reset an
+    // arrival-keyed timer for ever, and the escape hatch would never appear for
+    // the user who most needs it.
+    //
+    // THE ARITHMETIC IS THE TEST. No single gap here reaches the threshold, so an
+    // arrival-keyed timer never fires; the total time since the lane last MOVED
+    // does, so a position-keyed one does. Measured while building this: the first
+    // observed position is itself a real advance (null is not a position), so the
+    // clock that matters starts at the first event and not at mount - an earlier
+    // version of this test assumed otherwise and failed for that reason rather
+    // than for the behaviour it was checking.
+    vi.useFakeTimers();
+    const { queryClient, management, readLifecycle } = mountWithLane();
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+
+    const gapMs = LOCAL_HOST_SLOW_START_THRESHOLD_MS / 4 + 100;
+    for (let i = 0; i < 7; i += 1) {
+      pushEnsureProgress(
+        queryClient,
+        management,
+        // Byte-identical every time: chatty, not advancing.
+        DOWNLOAD_AT(42, 105_000_000),
+        "2026-05-15T00:00:01Z",
+      );
+      act(() => {
+        vi.advanceTimersByTime(gapMs);
+      });
+      // Guard against the assertion below passing because ONE gap was long
+      // enough: that would make this test pass on the arrival-keyed build it
+      // exists to reject.
+      expect(gapMs).toBeLessThan(LOCAL_HOST_SLOW_START_THRESHOLD_MS);
+    }
+
+    expect(readLifecycle()?.slowStartStage).toBe("slow");
+  });
+
+  it("STILL promotes to slow for a lane accepted but silent, and for no lane at all", () => {
+    // Two more stalled shapes, both of which must keep the escape hatch.
+    // `useHostProvisioningProgress` is explicit that a null `progress` on a
+    // RUNNING lane means "accepted but has not pushed an event" rather than "no
+    // progress yet" - so an install that was accepted and then said nothing for
+    // the whole threshold is precisely the stall this stage exists to surface.
+    vi.useFakeTimers();
+    const { queryClient, management, readLifecycle } = mountWithLane();
+
+    pushEnsureProgress(queryClient, management, null, "2026-05-15T00:00:01Z");
+    advancePastSlowStartThreshold();
+    expect(readLifecycle()?.slowStartStage).toBe("slow");
+  });
+
+  /**
+   * DECLARED GAP: `laneProgressAdvanceKey`'s "all comparable fields null" branch
+   * is NOT pinned by anything above, and three attempts at an arm for it were
+   * each vacuous. Recorded rather than left to read as covered.
+   *
+   *   attempt 1 - `progress: null` (the arm above): short-circuits on the key's
+   *     FIRST guard, so the all-null branch is never evaluated.
+   *   attempt 2 - a repeating message-only event: the mutated key is a CONSTANT,
+   *     exactly as stable as `null`, so the wait restarts once at t≈0 either way
+   *     and promotes on the same schedule.
+   *   attempt 3 - a LATE message-only event, which should have distinguished
+   *     them: instrumented and confirmed the lane lands and the mutated key is
+   *     live, yet the promotion time did not move. Whatever absorbs it is in the
+   *     effect/fake-timer interaction, not in the predicate.
+   *
+   * So the branch is DEFENSIVE and unproven: mutating it to report an advance
+   * passes this whole suite. It is kept because a message is genuinely not
+   * evidence of movement and the alternative fails toward withholding the escape
+   * hatch - but nobody should read the green suite as having checked it. Anyone
+   * touching it should reach for a real-browser or integration-level measurement
+   * rather than trusting these arms.
+   */
+});
