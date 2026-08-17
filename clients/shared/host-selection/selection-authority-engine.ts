@@ -1938,6 +1938,43 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       });
       return;
     }
+    if (token.hostId !== this.fleet.localHostId) {
+      // THE LOCAL HOST CHANGED UNDER THE REQUEST (A -> B), WITHIN ONE
+      // IDENTITY. Re-enrolment or a PID-metadata change republishes the fleet
+      // at the SAME `identityGeneration`, so `applyFleetSnapshot` swaps
+      // `localHostId` and the generation stamped on this token still matches -
+      // the token's own fencing cannot see this transition, and neither can
+      // the object-identity check above, because nothing retired the token.
+      //
+      // Both outcomes misattribute, in opposite directions:
+      //
+      //  - SUCCESS would credit A with `onHostProvedAlive`, clearing the very
+      //    refusal streak that killed it and RE-CREATING the evidence entry
+      //    `pruneEvidenceOutsideFleet` just deleted. With A's registry row
+      //    still present as a remote, derivation can then select it.
+      //  - FAILURE would arm `localEnsureFailedUntil`, so a provisioning run
+      //    that was about A gates B - which derives B `dead` and puts ∅ in
+      //    front of a user whose new local host was never asked for at all.
+      //
+      // The `hostId !== this.fleet.localHostId` guard inside
+      // `onHostProvedAlive` is NOT this rule: it withholds the
+      // `localProofGeneration` bump, but only after the credit has already
+      // been applied - a guard one step downstream of the damage.
+      //
+      // Clearing the token is part of the fix, not bookkeeping: while it
+      // stands, `requestLocalEnsureIfWanted` refuses to start anything, so B
+      // could not ask for its own ensure until A's ceiling lapsed. No
+      // cooldown is armed - the failure describes a host this engine is no
+      // longer pointed at - and the commit re-derives so B may ask at once.
+      this.localEnsureToken = null;
+      this.localEnsureExpiresAt = null;
+      this.options.log.warn(
+        "[selection-authority] ensure completed for a superseded local host",
+        { tokenHostId: token.hostId, localHostId: this.fleet.localHostId, ok },
+      );
+      this.commit("failover");
+      return;
+    }
     this.localEnsureToken = null;
     this.localEnsureExpiresAt = null;
     if (ok) {

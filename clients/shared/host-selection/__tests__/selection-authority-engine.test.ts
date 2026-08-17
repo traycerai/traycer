@@ -3452,6 +3452,107 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
   });
 });
 
+// ------------------------------------------------------- :1799 owed pins
+// `completeLocalEnsure` used to match a completion to its request by object
+// identity alone. Re-enrolment / a PID-metadata change can republish the
+// fleet at the SAME `identityGeneration` with a different `localHostId`
+// (A -> B); the token's generation still matches, so neither the identity
+// fence nor the object-identity check sees the swap, and A's in-flight
+// completion lands into a fleet whose local host is B. The fix compares
+// `token.hostId` to the CURRENT `this.fleet.localHostId` and discards a
+// mismatch - clearing the token too, which is a second, separately
+// assertable defect: while it stood, `requestLocalEnsureIfWanted` refused to
+// start anything, so B could not ask for its own ensure until A's ceiling
+// lapsed.
+
+describe("SelectionAuthorityEngineImpl - completeLocalEnsure fences on the local host across a swap (:1799 fix)", () => {
+  it("R1a: a successful ensure for A credits A after the local host became B", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "A",
+        hosts: [fleetHost("A", "local"), fleetHost("R", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "rep");
+
+    killHostWithRefusals(engine, "rep", incarnation, "R");
+    killHostWithRefusals(engine, "rep", incarnation, "A");
+    expect(ensure.calls.count).toBe(1);
+
+    // PREMISE, asserted positively before the harm: the local host really is
+    // A right now, and A's lease reads `connecting` only because the
+    // engine's own ensure is in flight (D14) - never because anything
+    // observed A alive.
+    expect(engine.snapshot().targetHostId).toBe("A");
+    expect(findLease(engine.snapshot().leases, "A")?.status).toBe("connecting");
+
+    // Re-enrolment: same identity generation, local host becomes B, A's
+    // registry row survives as a remote.
+    fleet.publish(0, "B", [
+      fleetHost("B", "local"),
+      fleetHost("A", "remote"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(engine.snapshot().targetHostId).toBe("B");
+    // A is now a REMOTE with its refusal streak intact, so it derives `dead`.
+    // This is the state the stale completion must not be able to undo.
+    expect(findLease(engine.snapshot().leases, "A")?.status).toBe("dead");
+
+    await ensure.resolve(true);
+
+    // THE HARM the fence closes: A was credited with proof of life by a
+    // request that was about A but completed into a fleet whose local host
+    // is B.
+    const aLease = findLease(engine.snapshot().leases, "A");
+    if (aLease === undefined) throw new Error("expected a lease for A");
+    expect(aLease.status).toBe("dead");
+    expect(isUsableForSelection(aLease)).toBe(false);
+    expect(ensure.calls.count).toBe(2);
+
+    authority.dispose();
+  });
+
+  it("R1b/R1c: a failed ensure for A arms the cooldown against B, and B cannot ask for its own", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "A",
+        hosts: [fleetHost("A", "local")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "rep");
+    killHostWithRefusals(engine, "rep", incarnation, "A");
+    expect(ensure.calls.count).toBe(1);
+
+    fleet.publish(0, "B", [fleetHost("B", "local"), fleetHost("A", "remote")]);
+    expect(engine.snapshot().targetHostId).toBe("B");
+
+    await ensure.resolve(false);
+
+    // B is local and never dialed: it WANTS an ensure. A second call means B
+    // got to ask for itself; one call would mean A's failure armed the
+    // cooldown over it instead - and clearing the token is what lets B ask at
+    // all rather than waiting out A's ceiling.
+    expect(ensure.calls.count).toBe(2);
+    expect(findLease(engine.snapshot().leases, "B")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+});
+
 describe("SelectionAuthorityEngineImpl - compat eligibility (B3)", () => {
   /**
    * B3's eligibility half, which `ade7fe0f` did not touch. That mitigation
