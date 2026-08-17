@@ -1,7 +1,7 @@
-import { type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { WindowHostModal } from "@/components/layout/dialogs/window-host-modal";
 import {
-  gateDrawsOwnCard,
+  gateCardReadiness,
   presentsLocalHostLifecycle,
   useHostReadinessController,
   type DefaultHostReadinessPresentation,
@@ -18,6 +18,7 @@ import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-trayc
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { getClientAppVersion } from "@/lib/app-version";
+import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateActionApplies,
@@ -87,6 +88,41 @@ export function WindowHostModalHost(props: {
 }
 
 /**
+ * Records that this modal stood down, and for which card.
+ *
+ * A suppression is invisible by construction - the surface renders nothing, so
+ * the only evidence a user can give is a screenshot of the card that WON, which
+ * looks identical whether the suppression fired or was never needed. Without
+ * this, "the modal is missing" and "the modal correctly deferred" are the same
+ * report, and the first triage step is unanswerable from logs.
+ *
+ * Both halves are needed and they answer different questions. `by` is the gate
+ * kind now on screen; `suppressedCause`/`suppressedVariant` is what this surface
+ * would have said instead - which is how a WRONG suppression shows up at all,
+ * since a stand-down for a cause the gate's card does not describe is a
+ * user-visible loss of narration, not a tidy-up.
+ *
+ * Edge-triggered on the (gate kind x narration) pair rather than logged per
+ * render: this is a render path under a lane that ticks, and a per-render line
+ * would bury the transition it exists to record in its own repetitions.
+ */
+function useSuppressionLog(
+  gateKind: string | null,
+  narration: Extract<WindowNarrationState, { readonly kind: "narrating" }>,
+): void {
+  const cause = narration.cause;
+  const variant = narration.variant.kind;
+  useEffect(() => {
+    if (gateKind === null) return;
+    appLogger.info("[window-narration] modal stood down for the gate's card", {
+      by: gateKind,
+      suppressedCause: cause,
+      suppressedVariant: variant,
+    });
+  }, [gateKind, cause, variant]);
+}
+
+/**
  * Everything the modal needs to DRAW, read only once it is actually drawing.
  *
  * Split from the component above so that a silent narrator - which is every
@@ -137,7 +173,7 @@ function NarratingWindowHostModal(props: {
   // replacing the app and draws no card at all, and this modal is then the only
   // thing that can narrate. Standing down on the kind alone would go silent there
   // too - a failure nobody reports, which is strictly worse than two cards.
-  // `gateDrawsOwnCard` is the gate's own predicate, shared rather than restated:
+  // `gateCardReadiness` is the gate's own predicate, shared rather than restated:
   // a second copy of it here would be the very defect this suppression fixes,
   // planted by hand.
   //
@@ -145,17 +181,20 @@ function NarratingWindowHostModal(props: {
   // mounts at the app root and reading the controller there made the ROOT depend
   // on `RunnerHostProvider`, costing two root-route suites their whole tree. By
   // this point the narrator has already decided it is speaking.
-  if (
-    gateDrawsOwnCard({
-      readiness: controller.readinessFor("default-host", null),
-      hasBeenReady: controller.hasBeenDefaultHostReady,
-      signedIn: authStatus === "signed-in",
-      // The `/settings` bypass is already handled: `WindowHostModalHost` returns
-      // null on it before this component mounts, so the gate is not drawing
-      // there either and there is nothing to stand down from.
-      bypassed: false,
-    })
-  ) {
+  const gateDrawn = gateCardReadiness({
+    readiness: controller.readinessFor("default-host", null),
+    hasBeenReady: controller.hasBeenDefaultHostReady,
+    signedIn: authStatus === "signed-in",
+    // The `/settings` bypass is already handled: `WindowHostModalHost` returns
+    // null on it before this component mounts, so the gate is not drawing
+    // there either and there is nothing to stand down from.
+    bypassed: false,
+  });
+  // `gateCardReadiness` rather than the boolean wrapper: the log's whole value
+  // is naming WHICH card won, and re-deriving that from the readiness here
+  // would be the second copy this suppression exists to avoid.
+  useSuppressionLog(gateDrawn?.kind ?? null, narration);
+  if (gateDrawn !== null) {
     return null;
   }
   return (

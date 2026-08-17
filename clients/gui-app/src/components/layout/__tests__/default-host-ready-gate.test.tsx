@@ -23,6 +23,7 @@ import {
 // every test still green.
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { appLogger } from "@/lib/logger";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -764,6 +765,70 @@ describe("<HostReadyGate />", () => {
       // fails for a reason that has nothing to do with the latch. The first
       // draft of this assertion did exactly that.
       expect(screen.getByText("app")).toBeTruthy();
+    });
+
+    /**
+     * F: the stand-down leaves a trace, and only when it happens.
+     *
+     * A suppression is invisible by construction: the surface renders nothing,
+     * so from a screenshot "the modal correctly deferred" and "the modal is
+     * broken and missing" are the same picture. Without a line naming WHICH
+     * card won and WHAT was suppressed, the first question triage asks about
+     * this mechanism has no answer in the logs.
+     *
+     * Both halves are asserted, and the second is the one that makes the first
+     * mean something: a log that fires on every render of this component -
+     * including case E, where nothing is suppressed - would satisfy the
+     * positive arm while telling a reader nothing. Existence, then absence.
+     */
+    it("F: records the stand-down, naming the card that won and what it silenced", () => {
+      // `mockClear` is load-bearing, not hygiene. This suite has no mock reset
+      // in `afterEach`, and `vi.spyOn` on an already-spied method hands back the
+      // EXISTING spy with its accumulated calls - so without this, arms C and D
+      // (which drive the same suppression) leak their lines into these counts.
+      // The negative arm below caught exactly that, and read as a code defect
+      // until the spy was checked.
+      const info = vi.spyOn(appLogger, "info");
+      info.mockClear();
+      applyEmptyFleet();
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        false,
+      );
+
+      const standDowns = info.mock.calls.filter((call) =>
+        call[0].includes("stood down"),
+      );
+      expect(standDowns).toHaveLength(1);
+      expect(standDowns[0][1]).toEqual({
+        by: "provisioning-error",
+        suppressedCause: "no-usable-host",
+        suppressedVariant: "offline",
+      });
+    });
+
+    it("F (negative): says nothing when there is nothing to suppress", () => {
+      const info = vi.spyOn(appLogger, "info");
+      info.mockClear();
+      applyEmptyFleet();
+      // Case E's state: post-latch, the gate draws no card and the modal is the
+      // sole narrator. It did not stand down, so it must not claim to have.
+      renderGateWithModal(
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("bootstrap exited 1") },
+        true,
+        true,
+      );
+
+      // The premise, asserted rather than assumed: this arm is only meaningful
+      // while the modal is actually on screen. If it were absent the "no log"
+      // assertion would pass for the wrong reason.
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(
+        info.mock.calls.filter((call) => call[0].includes("stood down")),
+      ).toEqual([]);
     });
   });
 
