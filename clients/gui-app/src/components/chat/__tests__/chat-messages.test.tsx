@@ -51,6 +51,8 @@ import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
@@ -850,6 +852,7 @@ describe("ChatMessages scroll policy", () => {
       chatTurnMinimapSide: "right",
       quoteReplyEnabled: false,
     });
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
 
   afterEach(() => {
@@ -858,6 +861,7 @@ describe("ChatMessages scroll policy", () => {
     // Do not restoreAllMocks - it clears module mocks for isMac / activity store.
     platformMock.isMac = true;
     tileLiveness.live = false;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setLegendListScrollContainerScrollHeightOverride(null);
     useSettingsStore.setState({ chatTurnMinimapSide: "right" });
     // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
@@ -1087,6 +1091,81 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(afterUp);
     });
 
+    it("maps macOS Command-Up and Command-Down to absolute transcript boundaries", async () => {
+      const messages = makeTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "kbd-mac-command-boundaries",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.scrollTop).toBeGreaterThan(0);
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandUp);
+      });
+
+      expect(commandUp.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(0);
+      fireEvent.scroll(scrollNode);
+      await waitFor(() => {
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      });
+
+      const next = appendAssistant(messages, "command-up-stream", 50_000);
+      rerenderMessages(next);
+      await settleLegendList();
+      expect(scrollNode.scrollTop).toBe(0);
+
+      const commandDown = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandDown);
+      });
+
+      expect(commandDown.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(maxScrollTopFor(scrollNode));
+    });
+
+    it("leaves a macOS command-arrow chord to a custom keybinding", async () => {
+      useKeybindingStore.setState({
+        bindings: {
+          ...getDefaultBindings(),
+          "app.sidebar.toggle": "mod+arrowup",
+        },
+      });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "kbd-custom-command-boundary",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const before = scrollNode.scrollTop;
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandUp);
+      });
+
+      expect(commandUp.defaultPrevented).toBe(false);
+      expect(scrollNode.scrollTop).toBe(before);
+    });
+
     it("does not claim arrows when the target is an input/textarea/combobox", async () => {
       const messages = makeTranscript(8);
       renderChatMessages({ messages, scrollStateKey: "kbd-owner-key" });
@@ -1106,6 +1185,18 @@ describe("ChatMessages scroll policy", () => {
           }),
         );
       });
+      expect(getScrollNode().scrollTop).toBe(scrollBefore);
+
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        input.dispatchEvent(commandUp);
+      });
+      expect(commandUp.defaultPrevented).toBe(false);
       expect(getScrollNode().scrollTop).toBe(scrollBefore);
 
       act(() => {

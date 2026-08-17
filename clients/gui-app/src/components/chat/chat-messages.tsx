@@ -46,8 +46,10 @@ import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle"
 import {
   isPlainBoundaryKey,
   isPlatformModifiedBoundaryKey,
+  type ChordString,
 } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
@@ -420,34 +422,68 @@ function sharesCanvasPane(tile: HTMLElement, target: Node): boolean {
   return paneId !== null && canvasPaneIdOf(target) === paneId;
 }
 
-function chatKeyboardScrollAction(
+function hasConfiguredKeybinding(chord: ChordString): boolean {
+  return Object.values(useKeybindingStore.getState().bindings).some(
+    (binding) => binding === chord,
+  );
+}
+
+function isMacCommandArrow(event: globalThis.KeyboardEvent): boolean {
+  return (
+    isMac() &&
+    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+/** Chromium's macOS document-boundary chord, unless a user binding owns it. */
+function macCommandArrowBoundaryScrollAction(
   event: globalThis.KeyboardEvent,
 ): ChatKeyboardScrollAction | null {
-  if (event.key === "PageUp") return "page-up";
-  if (event.key === "PageDown") return "page-down";
-  // Plain arrows step the transcript. The transcript rows are not focusable, so
-  // the browser never adopts the scroller as its default keyboard scroller and
-  // would otherwise scroll nothing at all. Targets that own the arrows
-  // themselves keep them (see `ownsArrowKeys`), and any modifier makes it an
-  // editor/selection chord we must not claim.
+  if (!isMacCommandArrow(event) || ownsArrowKeys(event.target)) return null;
+  const chord: ChordString =
+    event.key === "ArrowUp" ? "mod+arrowup" : "mod+arrowdown";
+  if (hasConfiguredKeybinding(chord)) return null;
+  return event.key === "ArrowUp" ? "top" : "bottom";
+}
+
+function plainArrowScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
   if (
-    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
-    isUnmodified(event) &&
-    !ownsArrowKeys(event.target)
+    (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
+    !isUnmodified(event) ||
+    ownsArrowKeys(event.target)
   ) {
-    return event.key === "ArrowUp" ? "line-up" : "line-down";
+    return null;
   }
-  // Plain Home/End scroll the transcript. On macOS they scroll even from the
-  // composer (Cocoa editors never use them for caret movement - that's
-  // Cmd+arrows); elsewhere an editable target keeps them for line navigation
-  // and the modified chord (Ctrl+Home/End) is the always-available form. The
-  // minimap rail keeps both forms for its own first/last-turn navigation.
+  return event.key === "ArrowUp" ? "line-up" : "line-down";
+}
+
+function homeEndBoundaryScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
   if (ownsBoundaryKeys(event.target)) return null;
   const boundary =
     isPlatformModifiedBoundaryKey(event) ||
     (isPlainBoundaryKey(event) && (isMac() || !isEditableTarget(event.target)));
   if (!boundary) return null;
   return event.key === "Home" ? "top" : "bottom";
+}
+
+function chatKeyboardScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
+  if (event.key === "PageUp") return "page-up";
+  if (event.key === "PageDown") return "page-down";
+  const macCommandBoundary = macCommandArrowBoundaryScrollAction(event);
+  if (macCommandBoundary !== null) return macCommandBoundary;
+  const plainArrow = plainArrowScrollAction(event);
+  if (plainArrow !== null) return plainArrow;
+  return homeEndBoundaryScrollAction(event);
 }
 
 /** The relative steps - `top`/`bottom` are absolute and carry no delta. */
