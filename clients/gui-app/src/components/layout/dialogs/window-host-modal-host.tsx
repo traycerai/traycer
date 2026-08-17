@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { WindowHostModal } from "@/components/layout/dialogs/window-host-modal";
 import {
+  gateDrawsOwnCard,
   presentsLocalHostLifecycle,
   useHostReadinessController,
   type DefaultHostReadinessPresentation,
@@ -15,6 +16,7 @@ import {
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { getClientAppVersion } from "@/lib/app-version";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
@@ -104,7 +106,9 @@ function NarratingWindowHostModal(props: {
 }): ReactNode {
   const { narration } = props;
   const progress = useHostProvisioningProgress();
-  const presentation = useHostReadinessController().defaultHostPresentation;
+  const controller = useHostReadinessController();
+  const authStatus = useAuthStore((state) => state.status);
+  const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
   const settled = hasSettledFailure(narration.cause, presentation);
   const retry = resolveRetry(
@@ -113,6 +117,47 @@ function NarratingWindowHostModal(props: {
     localLifecycle,
     settled,
   );
+  // ONE NARRATOR PER SCOPE, enforced from this side too.
+  //
+  // The gate draws its own full-screen card for the kinds the narrator does not
+  // own - `provisioning-error` and `removed-host`, local lifecycle terminals
+  // P3.4 deliberately left with the machinery that owns them. This modal derives
+  // from the authority's LEASES rather than from readiness, so on a single-host
+  // account whose local provision threw, both conditions held at once and the
+  // user got this modal at `z-[60]` behind its blur, floating over that card,
+  // each with its own copy and its own recovery actions.
+  //
+  // The GATE CARD wins, and not arbitrarily: its Retry is unconditionally
+  // `retryProvisioning`, where `resolveRetry` above degrades to
+  // `refreshDirectory` when the shell cannot manage the host - refreshing a host
+  // directory is not a recovery for a local install that just failed. It also
+  // names the actual error, where this surface says "No host is available".
+  //
+  // GATED ON THE LATCH, NOT ON THE KIND. After the gate latches it stops
+  // replacing the app and draws no card at all, and this modal is then the only
+  // thing that can narrate. Standing down on the kind alone would go silent there
+  // too - a failure nobody reports, which is strictly worse than two cards.
+  // `gateDrawsOwnCard` is the gate's own predicate, shared rather than restated:
+  // a second copy of it here would be the very defect this suppression fixes,
+  // planted by hand.
+  //
+  // Read HERE rather than in `WindowHostModalHost`, deliberately. That component
+  // mounts at the app root and reading the controller there made the ROOT depend
+  // on `RunnerHostProvider`, costing two root-route suites their whole tree. By
+  // this point the narrator has already decided it is speaking.
+  if (
+    gateDrawsOwnCard({
+      readiness: controller.readinessFor("default-host", null),
+      hasBeenReady: controller.hasBeenDefaultHostReady,
+      signedIn: authStatus === "signed-in",
+      // The `/settings` bypass is already handled: `WindowHostModalHost` returns
+      // null on it before this component mounts, so the gate is not drawing
+      // there either and there is nothing to stand down from.
+      bypassed: false,
+    })
+  ) {
+    return null;
+  }
   return (
     <WindowHostModal
       cause={narration.cause}

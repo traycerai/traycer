@@ -114,6 +114,7 @@ function controllerFor(
   return {
     readinessFor: () => ({ kind: "ready" }),
     defaultHostPresentation: presentation,
+    hasBeenDefaultHostReady: false,
   };
 }
 

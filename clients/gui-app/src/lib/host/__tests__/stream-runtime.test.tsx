@@ -477,6 +477,7 @@ function streamController(ready: boolean): HostReadinessController {
     readinessFor: () =>
       ready ? { kind: "ready" } : { kind: "unavailable-host" },
     defaultHostPresentation: DEFAULT_PRESENTATION,
+    hasBeenDefaultHostReady: false,
   };
 }
 

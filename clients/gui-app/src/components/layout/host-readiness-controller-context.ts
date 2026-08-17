@@ -177,6 +177,113 @@ export interface HostReadinessController {
     tabHostId: string | null,
   ) => SurfaceReadiness;
   readonly defaultHostPresentation: DefaultHostReadinessPresentation;
+  /**
+   * Whether default-host readiness has reached `ready` at least once in this
+   * window - the gate's latch, LIFTED here because two surfaces need it.
+   *
+   * It lived as `useState` inside `DefaultHostReadyGate`, which was correct
+   * while the gate was its only reader. The window modal now has to know
+   * whether the gate is drawing a card (see {@link gateDrawsOwnCard}), and
+   * that answer depends on this latch: before it, the gate draws its card for a
+   * gate-owned kind; after it, the gate steps aside entirely and the modal is
+   * the only narrator. A modal that suppressed itself on the KIND alone would
+   * go silent in the second case too, leaving a failure nobody narrates.
+   *
+   * Still adjusted DURING RENDER by its owner (React's documented "adjusting
+   * state when props change" pattern) rather than in an effect: the gate's whole
+   * output is a function of it, so it has to be render-visible, and React re-runs
+   * the render immediately - before committing - instead of painting an
+   * un-latched frame first.
+   *
+   * MONOTONIC, and the widened re-render scope depends on that. It goes `false`
+   * -> `true` exactly once per mount and is never set back, so lifting it costs
+   * one extra render of this context's consumers per window rather than a
+   * repeated global invalidation. A future change that could clear it would turn
+   * that cost into a recurring one.
+   */
+  readonly hasBeenDefaultHostReady: boolean;
+}
+
+/**
+ * Whether the default-host gate is replacing the app right now.
+ *
+ * Exported and shared rather than re-derived per caller, in the image of
+ * {@link windowNarratorOwns}: ONE function, several readers. Two independent
+ * derivations of "what is on screen" is what let a gate card and a window modal
+ * narrate the same provisioning failure at once, so a second copy of this
+ * predicate would be the same defect planted by hand.
+ */
+export function gateBlocksApp(args: {
+  readonly readiness: SurfaceReadiness;
+  readonly hasBeenReady: boolean;
+  readonly signedIn: boolean;
+  readonly bypassed: boolean;
+}): boolean {
+  // Only a signed-in user can HAVE a ready default host, so blocking anyone
+  // else would hide the sign-in surface behind a host that cannot exist yet.
+  if (!args.signedIn) return false;
+  // Settings is the escape hatch for a host that cannot start - its Shell page
+  // edits the launch config through the CLI with no running host involved.
+  if (args.bypassed) return false;
+  if (args.readiness.kind === "ready") return false;
+  // After the first `ready` render the gate LATCHES and never replaces the app
+  // again; `mobile-no-host` is the one kind that keeps its full-screen surface.
+  if (args.hasBeenReady && !keepsSplashAfterLatch(args.readiness.kind)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the gate is drawing a CARD of its own - which is a different question
+ * from whether it is blocking.
+ *
+ * For a narrator-owned kind the gate still blocks (the app must not mount
+ * against a host that cannot serve it) but draws only the frame, leaving the
+ * words to the window modal. So "blocks" and "draws a card" come apart, and the
+ * modal needs the second one: it must stand down exactly when this card is on
+ * screen, and only then.
+ *
+ * Defined over the whole gate-drawn SET rather than a kind at a time. Every kind
+ * `windowNarratorOwns` does not claim co-renders with the modal identically, so
+ * naming one of them in a caller would fix one row and leave its neighbour
+ * broken - while a test named for the fix passed. Any deliberate exclusion
+ * belongs in here, with its reason, not at a call site.
+ */
+export function gateCardReadiness(args: {
+  readonly readiness: SurfaceReadiness;
+  readonly hasBeenReady: boolean;
+  readonly signedIn: boolean;
+  readonly bypassed: boolean;
+}): GateDrawnReadiness | null {
+  if (!gateBlocksApp(args)) return null;
+  // Returns the NARROWED readiness rather than a boolean, and that is the whole
+  // reason for this shape. `GateDrawnReadiness` excludes `ready` and every
+  // narrator-owned kind, so answering with the value means the gate's renderer
+  // can only ever be handed a kind it is allowed to draw - a COMPILE error
+  // otherwise. That guarantee is why the type exists: it caught two full-screen
+  // renderers sitting compiled-but-unreachable back when reachability was a
+  // runtime predicate and nothing could see it. A boolean would have made the
+  // caller re-narrow, which is one more place to get it wrong.
+  if (args.readiness.kind === "ready") return null;
+  if (windowNarratorOwns(args.readiness)) return null;
+  return args.readiness;
+}
+
+/**
+ * The boolean form, for readers that only need to know whether to stand down.
+ *
+ * A wrapper rather than a second implementation: the window modal suppresses
+ * itself exactly when this card is on screen, and both surfaces must be answering
+ * the same question with the same code.
+ */
+export function gateDrawsOwnCard(args: {
+  readonly readiness: SurfaceReadiness;
+  readonly hasBeenReady: boolean;
+  readonly signedIn: boolean;
+  readonly bypassed: boolean;
+}): boolean {
+  return gateCardReadiness(args) !== null;
 }
 
 const READY: SurfaceReadiness = { kind: "ready" };
@@ -211,6 +318,7 @@ export const HostReadinessControllerContext =
   createContext<HostReadinessController>({
     readinessFor: () => READY,
     defaultHostPresentation: EMPTY_DEFAULT_HOST_PRESENTATION,
+    hasBeenDefaultHostReady: false,
   });
 
 export function useHostReadinessController(): HostReadinessController {

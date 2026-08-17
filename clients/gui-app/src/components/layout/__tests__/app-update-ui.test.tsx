@@ -285,6 +285,7 @@ function readinessController(
   return {
     readinessFor: () => readiness,
     defaultHostPresentation: READINESS_STUB_PRESENTATION,
+    hasBeenDefaultHostReady: false,
   };
 }
 
@@ -1066,11 +1067,7 @@ describe("desktop app update UI", () => {
 
   it("shows the toast exactly as before when the narrator never owns the frame", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
-    renderWithReadiness(
-      <AppUpdateToastController />,
-      bridge,
-      READY_READINESS,
-    );
+    renderWithReadiness(<AppUpdateToastController />, bridge, READY_READINESS);
     await waitFor(() => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
