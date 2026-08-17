@@ -30,9 +30,9 @@ describe("<ProjectProfileSwitcher />", () => {
 
   it("labels the trigger All projects when no profile is active", () => {
     mount();
-    expect(screen.getByTestId("project-profile-switcher").textContent).toContain(
-      "All projects",
-    );
+    expect(
+      screen.getByRole("button", { name: "Project: All projects" }),
+    ).toBeTruthy();
   });
 
   it("labels the trigger with the active profile name", () => {
@@ -44,8 +44,8 @@ describe("<ProjectProfileSwitcher />", () => {
     });
     useProjectProfilesStore.getState().setActiveProfile(HOST, id);
     mount();
-    expect(screen.getByTestId("project-profile-switcher").textContent).toContain(
-      "Titanos",
-    );
+    expect(
+      screen.getByRole("button", { name: "Project: Titanos" }),
+    ).toBeTruthy();
   });
 });

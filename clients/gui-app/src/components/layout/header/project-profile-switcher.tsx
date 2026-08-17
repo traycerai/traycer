@@ -56,7 +56,7 @@ export function ProjectProfileSwitcher() {
               disabled={disabled}
               aria-label={`Project: ${label}`}
               data-testid="project-profile-switcher"
-              className="max-w-[11rem] text-muted-foreground hover:text-foreground"
+              className="max-w-[min(40vw,11rem)] text-muted-foreground hover:text-foreground"
             >
               <FolderKanban className="size-3.5 shrink-0" />
               {active !== null ? (
@@ -73,7 +73,10 @@ export function ProjectProfileSwitcher() {
             </Button>
           </DropdownMenuTrigger>
         </TooltipWrapper>
-        <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuContent
+          align="end"
+          className="min-w-[min(12rem,92vw)] max-w-[min(92vw,20rem)]"
+        >
           <DropdownMenuItem
             data-testid="project-profile-all"
             onSelect={() => activateProfile(hostId, null)}
@@ -123,7 +126,7 @@ export function ProjectProfileSwitcher() {
               onSelect={() => deleteActiveProfile(hostId, active.id)}
             >
               <Trash2 className="size-3.5" />
-              Delete {active.name}
+              <span className="min-w-0 truncate">Delete {active.name}</span>
             </DropdownMenuItem>
           ) : null}
         </DropdownMenuContent>
