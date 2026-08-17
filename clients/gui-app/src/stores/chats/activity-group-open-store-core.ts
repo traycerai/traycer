@@ -54,9 +54,12 @@ export function createActivityGroupOpenStore(
   }));
 }
 
-// Ticket 5: chat tiles fully remount per tab switch (decision #17). Retaining
-// the same store instance across that remount (instead of always creating a
-// fresh one) is what makes expanded activity groups survive it. Keyed by tile
+// Ticket 5: a chat tile still fully remounts - on eviction past its pane's
+// chat retention cap, a real close, or a reopen. (It no longer remounts on
+// every inner tab switch; decision #17 was reversed by pane chat retention -
+// see `stores/epics/canvas/retained-pane-chats.ts`.) Retaining the same store
+// instance across that remount (instead of always creating a fresh one) is
+// what makes expanded activity groups survive it. Keyed by tile
 // instance id, at module scope so it outlives the React tree; evicted only
 // when a tab permanently closes (see the canvas store's tile-removal
 // subscriber in `stores/epics/canvas/store.ts`), never on a mere remount.

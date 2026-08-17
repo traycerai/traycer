@@ -753,9 +753,10 @@ export function ChatMessages(props: ChatMessagesProps) {
     clearReadingPositionTombstones(readingPositionIdentityForChat(identity));
   }, [identity]);
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
-  // cards survive the chat tile's full remount on tab switch (decision #17) -
-  // evicted only when the tab permanently closes (canvas store's
-  // tile-removal subscriber), never on a mere remount.
+  // cards survive the chat tile's full remount - on retention-cap eviction,
+  // close, or reopen, no longer on every inner tab switch (decision #17 was
+  // reversed by pane chat retention) - evicted only when the tab permanently
+  // closes (canvas store's tile-removal subscriber), never on a mere remount.
   //
   // Ticket 15 review round 3 (mandated simplification): no longer commits
   // to durable on its OWN unmount - the canvas close sweep's promotion
@@ -1522,7 +1523,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, []);
 
   // Persist the reading position on unmount and synchronously on transcript
-  // pointerdown. Chat tiles fully remount per tab switch (decision #17), and
+  // pointerdown. A chat tile can still fully remount (retention-cap eviction,
+  // close, reopen - no longer every inner tab switch), and
   // inline artifact/A2A navigation can hand control to browser history in the
   // same interaction; the eager capture guarantees Back observes the source
   // viewport even if unmount ordering changes. The unmount capture remains
@@ -1638,9 +1640,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   });
 
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded
-  // activity groups survive the chat tile's full remount on tab switch
-  // (decision #17) - evicted only when the tab permanently closes (canvas
-  // store's tile-removal subscriber), never on a mere remount.
+  // activity groups survive the chat tile's full remount - on retention-cap
+  // eviction, close, or reopen, no longer on every inner tab switch (decision
+  // #17 was reversed by pane chat retention) - evicted only when the tab
+  // permanently closes (canvas store's tile-removal subscriber), never on a
+  // mere remount.
   //
   // Ticket 15 review round 3: no longer commits to durable on its own
   // unmount - see the matching comment on `a2aOpenStore` above.

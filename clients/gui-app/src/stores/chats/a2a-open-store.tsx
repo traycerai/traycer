@@ -11,7 +11,8 @@ interface A2AOpenStoreProviderProps {
   /** `null` uses a fresh per-mount store (test isolation - see
    *  `ChatExpansionTestProviders`); production passes the registry-backed
    *  store keyed by tile instance id (ticket 5) so it survives a chat tile's
-   *  full remount on tab switch (decision #17). */
+   *  full remount - on retention-cap eviction, close, or reopen; no longer on
+   *  every inner tab switch (see `retained-pane-chats.ts`). */
   readonly store: StoreApi<A2AOpenState> | null;
 }
 
