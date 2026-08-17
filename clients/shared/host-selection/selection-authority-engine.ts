@@ -425,6 +425,20 @@ interface LocalEnsureToken {
 /** The selection tuple the engine currently holds. */
 interface SelectionState {
   readonly preferredHostId: string | null;
+  /**
+   * The fleet-wide selection target: preferred, or the local host when preferred
+   * is null (M5), or null when neither exists. Canonical wording lives on
+   * `SelectionChange.targetHostId` in `selection-authority-contract.ts`.
+   *
+   * ⚠ NOT the epic-session `targetHostId`, which is a different concept two
+   * layers away: the host a single epic session is being established on, paired
+   * there with `originalHostId` (`lib/registries/epic-session-registry.ts`,
+   * `providers/epic-session-provider.tsx`). Nine declarations share this
+   * identifier across the two meanings, and two careful readers reached a wrong
+   * shared conclusion from it inside a day - which is why every declaration of
+   * this one now says which it is at the point of declaration, rather than
+   * relying on the reader knowing the layer they are in.
+   */
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
 }
