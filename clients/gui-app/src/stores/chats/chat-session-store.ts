@@ -2484,8 +2484,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return null;
         }
-        const turnActive =
-          state.turnInProgress ?? state.activeTurn !== null;
+        const turnActive = state.turnInProgress ?? state.activeTurn !== null;
         if (turnActive) {
           // Phase one: end the turn cleanly first. The host refuses a session
           // stop under a live turn (killing the provider mid-turn reads as a

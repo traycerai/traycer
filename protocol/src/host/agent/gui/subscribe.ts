@@ -348,9 +348,7 @@ export const backgroundItemSchema = z.discriminatedUnion("kind", [
   mcpBackgroundItemSchema,
 ]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
-export type CommandBackgroundItem = z.infer<
-  typeof commandBackgroundItemSchema
->;
+export type CommandBackgroundItem = z.infer<typeof commandBackgroundItemSchema>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
 export type ChatActionAckStatus = z.infer<typeof chatActionAckStatusSchema>;
@@ -1379,10 +1377,10 @@ export type ChatSubscribeClientFrame = z.infer<
 
 // `1.4` and `1.5` are released lines. Keep their client frames on the
 // pre-collision intent shape while the live `1.6` line uses the current one.
-const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion(
-  "kind",
-  [...chatSubscribeClientFrameSchemaBeforeV14Options, activeProfileUpdateClientFrameSchema],
-);
+const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion("kind", [
+  ...chatSubscribeClientFrameSchemaBeforeV14Options,
+  activeProfileUpdateClientFrameSchema,
+]);
 
 // ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
 //

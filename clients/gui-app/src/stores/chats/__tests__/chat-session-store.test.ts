@@ -3458,7 +3458,11 @@ describe("createChatSessionStore", () => {
     expect(harness.sent[0].kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
 
     // The turn settles but the gated command is still running - the
     // session-stop frame dispatches now instead of waiting forever.
@@ -3592,7 +3596,9 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().pendingBackgroundSessionStop,
     ).toBeNull();
     // Stop all re-enables: re-issuing the escalation works.
-    expect(harness.handle.store.getState().stopBackgroundSession()).not.toBeNull();
+    expect(
+      harness.handle.store.getState().stopBackgroundSession(),
+    ).not.toBeNull();
   });
 
   it("clears a session stop whose phase-one turn-stop frame died with the connection", () => {
@@ -3630,7 +3636,11 @@ describe("createChatSessionStore", () => {
     expect(harness.sent.at(-1)?.kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
 
     // The turn-stop frame died with the connection before any ack arrived;
     // the reconnect snapshot still reports the turn as active.
@@ -3708,7 +3718,11 @@ describe("createChatSessionStore", () => {
     });
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
 
     // The connection drops before `turnStateChanged` reports the turn
     // settled; the reconnect snapshot is the only signal that arrives, and
@@ -3898,7 +3912,10 @@ describe("createChatSessionStore", () => {
       blockId: "tool-1",
       parentTaskId: null,
       scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
     };
     const ungatedCommand: BackgroundItem = {
       taskId: "task-ungated",
@@ -3940,7 +3957,11 @@ describe("createChatSessionStore", () => {
     expect(harness.sent.at(-1)?.kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
 
     // The gated command finished on its own during wind-down - only the
     // ungated one is still running when the turn settles.
@@ -4008,7 +4029,11 @@ describe("createChatSessionStore", () => {
     expect(sent).not.toBeNull();
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true, turnId: "turn-1" });
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
 
     // A different turn is now running - a queued send started while the
     // escalation was in flight. Firing at ITS end would stop work the user
