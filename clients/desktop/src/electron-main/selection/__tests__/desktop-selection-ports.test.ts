@@ -774,6 +774,49 @@ describe("DesktopHostFleetSource", () => {
     }
   });
 
+  it("declines a superseded same-identity completion - an older response landing last must not resurrect removed rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    authSession.set(signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    // Two overlapping refreshes under ONE identity - the 60s poll racing a
+    // deregistration's fire-and-forget refresh. The generation stamp cannot
+    // order these (same generation); only the request sequence can.
+    const first = fleet.refresh();
+    await registry.started(0);
+    const second = fleet.refresh();
+    await registry.started(1);
+
+    // The NEWER response (post-deregister: the host is gone) completes first.
+    registry.calls[1]?.resolve({ kind: "ok", response: { hosts: [] } });
+    await second;
+    // The OLDER response (still carrying the deregistered host) lands last.
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("deregistered-host")] },
+    });
+    await first;
+
+    // Completion order must not become fleet order: the older rows are
+    // declined, and the deregistered host stays out of the authority. The
+    // synthesized LOCAL host is fleet membership of its own and stays.
+    const hostIds = fleet.snapshot().hosts.map((row) => row.hostId);
+    expect(hostIds).not.toContain("deregistered-host");
+    expect(hostIds).toContain("local-host");
+  });
+
   it("publishes an empty fleet with localHostId: null when signed out", async () => {
     const authSession = new DesktopAuthSession();
     const identity = new FakeIdentitySource(null, 0);

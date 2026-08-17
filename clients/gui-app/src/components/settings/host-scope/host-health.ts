@@ -208,7 +208,21 @@ function localServiceHealth(
     };
   }
   // Running. The process is right here, so this is firsthand and outranks
-  // every derived signal.
+  // every derived signal - about LIVENESS. Incompatibility is not a liveness
+  // claim: the process is running AND this app cannot speak to it, and
+  // reading that as "Online" hides the one affordance that fixes it (the
+  // update action gates on `update-required`, which only `leaseHealth` can
+  // word). Fall through for exactly that lease; every other derived signal
+  // stays outranked.
+  const { lease, authorityAttached } = options;
+  if (
+    authorityAttached &&
+    lease !== null &&
+    lease.status === "dead" &&
+    lease.dead.reason === "incompatible"
+  ) {
+    return null;
+  }
   return {
     state: "online",
     label: "Online",

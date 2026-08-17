@@ -395,7 +395,13 @@ export function ActiveHostWorkspaceControls(
   // unpinned path changes. Only a pin resolves its own host's requester - and
   // that is what stops a pinned composer from sending to the machine the
   // window happens to be bound to.
-  const pinResolvedHostClient = useHostClientForHostId(composerPin.selection);
+  // `honoredSelection`, not `selection`: a deposed pin still NAMES the dead
+  // host in `selection` (sticky return), but must not READ through it - the
+  // chip auto-follows, and the rows must describe the machine the chip shows
+  // (the same F3 rule `use-composer-placement.ts` applies).
+  const pinResolvedHostClient = useHostClientForHostId(
+    composerPin.honoredSelection,
+  );
   const activeHostClient =
     props.hostScope.kind === "active"
       ? pinResolvedHostClient

@@ -175,6 +175,17 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private revisionCounter = 0;
   private rows: readonly string[] = [];
   private localHostId: string | null = null;
+  /**
+   * Monotonic refresh sequence (same-identity ordering). The generation stamp
+   * orders completions ACROSS identities; within one identity, two overlapping
+   * refreshes (the 60s poll racing a registration's fire-and-forget refresh)
+   * complete in network order, and adopting the older completion last would
+   * resurrect rows the newer one removed - a deregistered host reappearing in
+   * the authority for up to a full poll interval. Stamped at fetch START,
+   * adopted only if no newer same-generation completion beat it.
+   */
+  private refreshSeq = 0;
+  private adoptedSeq = 0;
   private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -265,11 +276,13 @@ export class DesktopHostFleetSource implements HostFleetSource {
     // when the response happens to land.
     const identity = this.options.identity.current();
     const generation = identity.generation;
+    this.refreshSeq += 1;
+    const seq = this.refreshSeq;
     const bearerToken = this.options.authSession.get().token;
     if (bearerToken === null) {
       // Signed out: the account fleet is empty, and the local host is not
       // addressable without a credential context either.
-      this.applyFetched(generation, null, []);
+      this.applyFetched(generation, seq, null, []);
       return;
     }
     const localHostId = await this.readLocalHostId();
@@ -295,6 +308,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     });
     this.applyFetched(
       generation,
+      seq,
       localHostId,
       result.response.hosts.map((row) => row.hostId),
     );
@@ -358,6 +372,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
 
   private applyFetched(
     generation: number,
+    seq: number,
     localHostId: string | null,
     rows: readonly string[],
   ): void {
@@ -372,6 +387,19 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.publishSnapshot(generation, localHostId, rows);
       return;
     }
+    if (seq < this.adoptedSeq) {
+      // Same-identity ordering (see `refreshSeq`): a newer completion was
+      // adopted while this one awaited. Declining keeps request order - an
+      // older response landing last must not resurrect rows the newer one
+      // removed. Ordered AFTER the generation branch above on purpose: a
+      // retired identity's stale-stamped publish is a contract of its own.
+      this.options.log.debug("[selection-fleet] dropped a superseded refresh", {
+        seq,
+        adopted: this.adoptedSeq,
+      });
+      return;
+    }
+    this.adoptedSeq = seq;
     this.localHostId = localHostId;
     this.rows = rows;
     this.publishAt(generation);

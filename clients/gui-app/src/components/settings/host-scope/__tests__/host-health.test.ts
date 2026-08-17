@@ -56,6 +56,38 @@ const BASE = {
 };
 
 describe("deriveHostHealth — the two actionable local states", () => {
+  it("says update-required, not Online, for a RUNNING local host whose lease is dead(incompatible)", () => {
+    // The process being right here answers LIVENESS - but incompatibility is
+    // not a liveness claim: the host runs AND this app cannot speak to it.
+    // Reading it as Online hid the one affordance that fixes it (the update
+    // action gates on `update-required`).
+    const health = deriveHostHealth({
+      ...BASE,
+      isLocalMachine: true,
+      authorityAttached: true,
+      lease: {
+        hostId: "host-local",
+        status: "dead",
+        dead: {
+          reason: "incompatible",
+          detail: {
+            code: "HOST_INCOMPATIBLE",
+            hostVersion: "1.0.0",
+            minSupportedVersion: "2.0.0",
+          },
+        },
+      },
+      service: {
+        state: "running",
+        version: "1.0.0",
+        listenUrl: "ws://127.0.0.1:1",
+        pid: 4242,
+      },
+    });
+
+    expect(health.state).toBe("update-required");
+  });
+
   it("says Stopped, not Offline, for an installed local host that is not running", () => {
     const health = deriveHostHealth({
       ...BASE,

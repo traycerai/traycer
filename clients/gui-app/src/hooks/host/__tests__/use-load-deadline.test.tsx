@@ -86,6 +86,34 @@ describe("useLoadDeadline", () => {
     expect(result.current).toBe(false);
   });
 
+  it("re-arms a repeated wait for the SAME key with a fresh budget", () => {
+    const initialProps: { readonly key: string | null } = { key: "host-1" };
+    const { result, rerender } = renderHook(
+      ({ key }) => useLoadDeadline(key, BUDGET_MS),
+      { initialProps },
+    );
+    act(() => {
+      vi.advanceTimersByTime(BUDGET_MS);
+    });
+    expect(result.current).toBe(true);
+
+    // Disarm, then wait for the same host again - a restart of the host that
+    // just timed out. The second wait is a NEW episode: answering `true` on
+    // its opening frame (the stored verdict of the first wait) rendered a
+    // recovering host unreachable before its budget ever started.
+    rerender({ key: null });
+    rerender({ key: "host-1" });
+    expect(result.current).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(BUDGET_MS - 1);
+    });
+    expect(result.current).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("clears its timer on unmount", () => {
     const { unmount } = renderHook(() => useLoadDeadline("host-1", BUDGET_MS));
 

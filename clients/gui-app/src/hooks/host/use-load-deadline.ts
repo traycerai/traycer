@@ -20,17 +20,30 @@ import { useEffect, useState } from "react";
  * Deliberately one `setTimeout` and not a poll: the answer changes once.
  */
 export function useLoadDeadline(key: string | null, budgetMs: number): boolean {
-  const [elapsedKey, setElapsedKey] = useState<string | null>(null);
+  // The EPISODE, not just the key: a wait for "host-x", a disarm (`null`),
+  // and a second wait for "host-x" are two different waits, and the second
+  // must get a fresh budget. Storing only the elapsed KEY made the second
+  // wait read the first one's verdict on its opening frame. The episode
+  // advances during render on every key change (the derived-state idiom), so
+  // the re-arm stays flash-free: on the change render the stored episode no
+  // longer matches, and the answer is `false` with no reset effect.
+  const [episode, setEpisode] = useState(0);
+  const [prevKey, setPrevKey] = useState<string | null>(key);
+  if (key !== prevKey) {
+    setPrevKey(key);
+    setEpisode((value) => value + 1);
+  }
+  const [elapsedEpisode, setElapsedEpisode] = useState(-1);
 
   useEffect(() => {
     if (key === null) return;
     const timer = window.setTimeout(() => {
-      setElapsedKey(key);
+      setElapsedEpisode(episode);
     }, budgetMs);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [key, budgetMs]);
+  }, [key, episode, budgetMs]);
 
-  return key !== null && elapsedKey === key;
+  return key !== null && elapsedEpisode === episode;
 }

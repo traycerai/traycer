@@ -9,6 +9,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostClient } from "@/lib/host/runtime";
 import { queryKeys } from "@/lib/query-keys";
@@ -245,6 +246,21 @@ export function useHostCompatibilityProbe(): HostCompatibility {
   // `useHostQuery` reads it, so the anchor can never be recorded against a
   // different host than the one whose cache slot the answer lands in.
   const probedHostId = useReactiveHostReadiness(client).hostId;
+  return useHostCompatibilityProbeForClient(client, probedHostId);
+}
+
+/**
+ * The `…ForClient` variant of the probe (the composer-RPC idiom): identical
+ * machinery, caller-supplied client and host. The recovery path mounts one
+ * per `dead("incompatible")` host, because that host can never re-earn a
+ * compatible verdict through the app-wide probe - it is not effective, and it
+ * cannot BECOME effective until this very probe clears it. Without this, an
+ * updated host stayed permanently ineligible until a renderer restart.
+ */
+export function useHostCompatibilityProbeForClient(
+  client: HostRequester<HostRpcRegistry> | null,
+  probedHostId: string | null,
+): HostCompatibility {
   const probe = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "host.status",
@@ -487,6 +503,34 @@ export function useHostCompatibilityAuthorityReport(
             },
     });
   }, [compatibility, hostId]);
+}
+
+/**
+ * Re-probes ONE host when its directory row's `version` changes - the signal
+ * that an update landed. The repoint hook above covers the EFFECTIVE host;
+ * this covers a host parked on `dead("incompatible")`, whose row version
+ * moving is the only observable trace of the update that could clear it.
+ * Same exact-entry narrowness as the repoint sweep, same held-data contract:
+ * the invalidation refetches in the background and the fresh verdict replaces
+ * the stored one through the same report seam.
+ */
+export function useHostStatusReprobeOnRowVersionChange(
+  hostId: string,
+  version: string | null,
+): void {
+  const queryClient = useQueryClient();
+  const previousVersion = useRef<string | null>(version);
+  useEffect(() => {
+    const previous = previousVersion.current;
+    previousVersion.current = version;
+    if (previous === null || version === null || previous === version) {
+      return;
+    }
+    void queryClient.invalidateQueries({
+      queryKey: hostStatusProbeQueryKey(hostId),
+      exact: true,
+    });
+  }, [queryClient, hostId, version]);
 }
 
 /**
