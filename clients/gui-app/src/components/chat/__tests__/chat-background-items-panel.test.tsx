@@ -602,7 +602,7 @@ describe("<BackgroundItemsPanel />", () => {
     );
 
     const gatedStopButton = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Stopping this command needs Codex 0.146.0 or newer — use Stop all to stop the Codex session",
+      name: "Stopping this command needs Codex 0.146.0 or newer. Use Stop all to stop the Codex session.",
     });
     expect(gatedStopButton.disabled).toBe(true);
 
@@ -718,6 +718,51 @@ describe("<BackgroundItemsPanel />", () => {
     expect(
       screen.getByTestId("confirm-destructive-dialog").textContent,
     ).toContain("The active turn will also be stopped.");
+  });
+
+  it("counts every affected row, not just root groups, in the session-stop confirm dialog", () => {
+    const gatedCommand = backgroundItem({
+      taskId: "gated-command",
+      kind: "command",
+      title: "Codex command",
+      blockId: "gated-command-tool",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: {
+        providerLabel: "Codex",
+        minVersion: "0.146.0",
+      },
+    });
+    const firstChild = backgroundItem({
+      taskId: "child-one",
+      kind: "subagent",
+      title: "Child one",
+      blockId: "child-one",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+    });
+    const secondChild = backgroundItem({
+      taskId: "child-two",
+      kind: "subagent",
+      title: "Child two",
+      blockId: "child-two",
+      parentTaskId: "gated-command",
+      scheduledFor: null,
+    });
+
+    renderPanel({
+      items: [gatedCommand, firstChild, secondChild],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => "action-1",
+    });
+
+    fireEvent.click(screen.getByTestId("background-stop-all"));
+
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("Stopping the session ends all 3 background items.");
   });
 });
 

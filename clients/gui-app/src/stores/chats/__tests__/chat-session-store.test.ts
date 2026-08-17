@@ -7,10 +7,12 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BackgroundItem,
+  ChatActiveTurn,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueueState,
   ChatRunSettings,
+  ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -356,6 +358,12 @@ interface SnapshotFrameInput {
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
+  // Default to the idle/no-turn snapshot every existing caller relies on;
+  // the session-stop reconnect tests need a snapshot that reports a live
+  // turn instead.
+  readonly runStatus?: ChatRunStatus;
+  readonly activeTurn?: ChatActiveTurn | null;
+  readonly turnInProgress?: boolean;
 }
 
 function emitSnapshotFrame(input: SnapshotFrameInput): void {
@@ -390,8 +398,8 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         canAct: input.access === "owner",
       },
       queue: input.queue,
-      runStatus: "idle",
-      activeTurn: null,
+      runStatus: input.runStatus ?? "idle",
+      activeTurn: input.activeTurn ?? null,
       pendingApprovals: [],
       pendingInterviews: [...(input.pendingInterviews ?? [])],
       worktreeBinding: null,
@@ -402,6 +410,9 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
+      ...(input.turnInProgress === undefined
+        ? {}
+        : { turnInProgress: input.turnInProgress }),
     },
   });
 }
@@ -3526,7 +3537,7 @@ describe("createChatSessionStore", () => {
     expect(harness.sent[0].kind).toBe("stop");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: null, awaitingTurnEnd: true });
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
 
     // The turn settles but the gated command is still running - the
     // session-stop frame dispatches now instead of waiting forever.
@@ -3542,11 +3553,17 @@ describe("createChatSessionStore", () => {
     });
 
     expect(harness.sent).toHaveLength(2);
-    const sessionFrame = harness.sent[1];
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
     expect(sessionFrame.kind).toBe("stopBackgroundSession");
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
-    ).toEqual({ clientActionId: sessionFrame.clientActionId, awaitingTurnEnd: false });
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+    });
   });
 
   it("clears the pending session stop and records an error notice when the host rejects it", () => {
@@ -3625,6 +3642,373 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
     ).toBeNull();
+  });
+
+  it("clears a session stop whose phase-two frame died with the connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: false });
+
+    // The frame died with the connection before any ack arrived.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    // Stop all re-enables: re-issuing the escalation works.
+    expect(harness.handle.store.getState().stopBackgroundSession()).not.toBeNull();
+  });
+
+  it("clears a session stop whose phase-one turn-stop frame died with the connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("stop");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
+
+    // The turn-stop frame died with the connection before any ack arrived;
+    // the reconnect snapshot still reports the turn as active.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    // No session-stop frame was dispatched off the still-active-turn snapshot.
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  it("advances a deferred session stop from the reconnect snapshot when the settled turnStateChanged was missed", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The turn-stop ack lands and is accepted - the slot survives, still
+    // awaiting the settled frame, and its clientActionId is no longer a
+    // pending action (so a later reconnect sweep can't clear it that way).
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({ clientActionId: sent, awaitingTurnEnd: true });
+
+    // The connection drops before `turnStateChanged` reports the turn
+    // settled; the reconnect snapshot is the only signal that arrives, and
+    // it must advance the deferred stop on its own.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+    });
+
+    expect(harness.sent).toHaveLength(2);
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+    expect(sessionFrame.kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+    });
+  });
+
+  it("releases the escalation when the turn stop is rejected while the turn still runs", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The host rejects the turn stop while the turn is genuinely still
+    // running (no NO_ACTIVE_TURN race) - the escalation is dead.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "rejected",
+      reason: "Turn is still running.",
+      code: "TURN_ACTIVE",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  it("still advances when the turn stop's rejection loses the race with the turn's natural end", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "codex exec",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
+    };
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    const stopFrame = harness.sent.at(-1);
+    if (stopFrame === undefined || stopFrame.kind === "ping") {
+      throw new Error("Expected stop frame");
+    }
+
+    // The turn ends naturally before the turn-stop's rejected ack arrives -
+    // `onTurnStateChanged`'s state-based dispatch already advances to phase
+    // two here, ahead of the ack.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [gatedCommand],
+    });
+
+    expect(harness.sent).toHaveLength(2);
+    const sessionFrame = harness.sent.at(-1);
+    if (sessionFrame === undefined || sessionFrame.kind === "ping") {
+      throw new Error("Expected stopBackgroundSession frame");
+    }
+    expect(sessionFrame.kind).toBe("stopBackgroundSession");
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+    });
+
+    // The turn-stop's late rejection targets a clientActionId the slot has
+    // already moved past (phase two now), so it changes nothing.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: stopFrame.clientActionId,
+      action: stopFrame.kind,
+      status: "rejected",
+      reason: "No active turn.",
+      code: "NO_ACTIVE_TURN",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sessionFrame.clientActionId,
+      awaitingTurnEnd: false,
+    });
   });
 
   it("does not apply an ownerless detached background tool terminal to the active turn", () => {

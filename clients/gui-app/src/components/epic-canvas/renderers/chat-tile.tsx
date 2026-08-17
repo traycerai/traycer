@@ -2305,6 +2305,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       cancelQueueEditMode,
       chatActions.stopBackgroundItem,
       chatActions.stopAllBackgroundItems,
+      chatActions.stopBackgroundSession,
       reorderQueuedItem,
       steerQueuedItemNow,
     ],

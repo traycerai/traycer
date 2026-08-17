@@ -401,11 +401,15 @@ export interface ChatSessionState {
    * `awaitingTurnEnd` means the turn-stop frame went out first and the
    * session-stop frame is dispatched the moment a turn-state frame reports
    * the turn settled - the host refuses a session stop under a live turn, so
-   * the client owns this sequencing. `clientActionId` is the session-stop
-   * frame's ack handle, null until phase two dispatches it.
+   * the client owns this sequencing. `clientActionId` is the ack handle of
+   * whichever frame the current phase is waiting on: the turn-stop frame
+   * while `awaitingTurnEnd`, the session-stop frame after. Tracking the
+   * phase-one id lets a rejected turn stop (turn genuinely still running)
+   * release the escalation instead of stranding it, and lets the reconnect
+   * sweep drop either phase when its frame died with the connection.
    */
   readonly pendingBackgroundSessionStop: {
-    readonly clientActionId: string | null;
+    readonly clientActionId: string;
     readonly awaitingTurnEnd: boolean;
   } | null;
   readonly restore: ChatRestoreSlot | null;
@@ -886,9 +890,10 @@ export function createChatSessionStoreWithNotificationDependencies(
   };
 
   // Deliberately state-based rather than edge-based: called after every
-  // turn-state AND action-ack reduction, so a phase-one turn stop that races
-  // the turn's natural end (its `stop` rejected with NO_ACTIVE_TURN, no
-  // further turn frame due) still advances instead of waiting forever.
+  // turn-state, action-ack AND snapshot reduction, so a phase-one turn stop
+  // that races the turn's natural end (its `stop` rejected with
+  // NO_ACTIVE_TURN, no further turn frame due) or a reconnect that ate the
+  // settled frame still advances instead of waiting forever.
   const maybeDispatchPendingBackgroundSessionStop = (
     set: ChatSessionSetState,
     get: ChatSessionGetState,
@@ -1148,6 +1153,18 @@ export function createChatSessionStoreWithNotificationDependencies(
                     state.pendingBackgroundStopAll,
                     frame.snapshot.backgroundItems,
                   ),
+            // A session stop whose in-flight frame died with the connection
+            // (either phase) was just swept - drop it so Stop all re-enables.
+            // One whose frame was already accepted survives; the dispatch
+            // call after this set advances or clears it against the
+            // snapshot's turn and item state.
+            pendingBackgroundSessionStop:
+              state.pendingBackgroundSessionStop !== null &&
+              sweep.sweptActionIds.has(
+                state.pendingBackgroundSessionStop.clientActionId,
+              )
+                ? null
+                : state.pendingBackgroundSessionStop,
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -1178,6 +1195,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             liveTurnUsage: null,
           };
         });
+        // A deferred session stop that survived the sweep (its turn stop was
+        // accepted before the connection dropped) may never see another
+        // turn-state frame - the turn could have settled while offline - so
+        // advance it against the snapshot state directly.
+        maybeDispatchPendingBackgroundSessionStop(set, get);
         // This snapshot is authoritative for which interviews are still
         // pending, so any stored draft whose block has left the set is an
         // orphan (its interview resolved, possibly while this window was
@@ -1243,14 +1265,11 @@ export function createChatSessionStoreWithNotificationDependencies(
                   (message) => message.clientActionId !== frame.clientActionId,
                 );
           const backgroundStopAck = reconcileBackgroundStopAck(state, frame);
-          // Either verdict on the session stop ends its in-flight state: on
-          // accept the panel empties via the host's broadcast, on reject the
-          // generic errorNotice below carries the host's reason.
-          const nextSessionStop =
-            state.pendingBackgroundSessionStop?.clientActionId ===
-            frame.clientActionId
-              ? null
-              : state.pendingBackgroundSessionStop;
+          const nextSessionStop = reconcileSessionStopAck(
+            state.pendingBackgroundSessionStop,
+            frame,
+            state.turnInProgress ?? state.activeTurn !== null,
+          );
           if (frame.status === "accepted") {
             if (pending === null) {
               return {
@@ -2376,7 +2395,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           if (stopSent === null) return null;
           set(() => ({
             pendingBackgroundSessionStop: {
-              clientActionId: null,
+              clientActionId: stopSent,
               awaitingTurnEnd: true,
             },
           }));
@@ -3017,6 +3036,28 @@ function reconcileBackgroundStopAck(
     pendingStops,
     pendingStopAll: stopAllAcked ? null : state.pendingBackgroundStopAll,
   };
+}
+
+function reconcileSessionStopAck(
+  sessionStop: ChatSessionState["pendingBackgroundSessionStop"],
+  frame: ChatActionAckFrame,
+  turnActive: boolean,
+): ChatSessionState["pendingBackgroundSessionStop"] {
+  if (sessionStop === null) return null;
+  if (sessionStop.clientActionId !== frame.clientActionId) return sessionStop;
+  if (!sessionStop.awaitingTurnEnd) {
+    // Phase two (the session-stop frame itself): either verdict ends the
+    // in-flight state - on accept the panel empties via the host's broadcast,
+    // on reject the generic errorNotice carries the host's reason.
+    return null;
+  }
+  // Phase one (the turn stop). Accepted: keep waiting for the settled frame.
+  // Rejected with the turn genuinely still running: the escalation is dead,
+  // release it so Stop all re-enables. Rejected because the turn already
+  // ended on its own (the NO_ACTIVE_TURN race): keep the slot - the
+  // state-based dispatch that runs after every ack advances it to phase two.
+  if (frame.status === "accepted") return sessionStop;
+  return turnActive ? null : sessionStop;
 }
 
 function withoutRecordKey(

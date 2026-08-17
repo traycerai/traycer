@@ -211,7 +211,7 @@ function individualStopUnavailableLabel(item: BackgroundItem): string | null {
     minVersion === null
       ? `a newer ${providerLabel}`
       : `${providerLabel} ${minVersion} or newer`;
-  return `Stopping this command needs ${versionClause} — use Stop all to stop the ${providerLabel} session`;
+  return `Stopping this command needs ${versionClause}. Use Stop all to stop the ${providerLabel} session.`;
 }
 
 function BackgroundStopButton(props: {
@@ -786,7 +786,10 @@ export function BackgroundItemsPanel(props: {
     props.onStopSession();
     stopAllManaged();
   };
-  const panelItemCount = runningGroupCount + managedCommands.length;
+  // Count every affected row, not just root tree groups - a parent command
+  // with running children would otherwise understate the dialog's blast
+  // radius.
+  const panelItemCount = items.length + managedCommands.length;
 
   return (
     <Collapsible
@@ -891,8 +894,7 @@ export function BackgroundItemsPanel(props: {
 /**
  * The escalation dialog's body, assembled from wire data so the panel never
  * hardcodes a provider or version. Sentence order is the agreed copy: the
- * limitation, the blast radius, the turn (only when one is live), the
- * reassurance.
+ * limitation, the blast radius, the turn (only when one is live).
  */
 function sessionStopDialogDescription(input: {
   readonly providerLabel: string;
@@ -907,6 +909,5 @@ function sessionStopDialogDescription(input: {
     `This ${input.providerLabel} version can't stop background commands individually.`,
     blastRadius,
     ...(input.turnActive ? ["The active turn will also be stopped."] : []),
-    "The chat resumes normally on your next message.",
   ].join(" ");
 }
