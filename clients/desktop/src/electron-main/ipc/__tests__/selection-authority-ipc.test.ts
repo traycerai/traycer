@@ -567,6 +567,36 @@ async function buildBridge(options: {
   return { bridge, registry, authSession };
 }
 
+/**
+ * The LAST message on `channel` this window has received, waiting for one to
+ * exist first.
+ *
+ * The fan-out crosses a scheduling boundary: an awaited invoke resolves when
+ * the ENGINE has applied the change, which is not when the broadcast has
+ * reached the other windows. Reading `sentMessages` synchronously right after
+ * therefore passes on a fast machine and fails under CI load - three separate
+ * tests in this file have failed that way.
+ *
+ * Waits only for the message to EXIST. Callers assert its payload themselves,
+ * unchanged: waiting on the payload would make those assertions true by
+ * construction, which is the opposite of what they are for.
+ */
+async function lastMessageOn(
+  window: CapturingWindow,
+  channel: string,
+): Promise<SentMessage> {
+  await vi.waitFor(() => {
+    expect(window.sentMessages.some((m) => m.channel === channel)).toBe(true);
+  });
+  const found = window.sentMessages
+    .filter((message) => message.channel === channel)
+    .at(-1);
+  if (found === undefined) {
+    throw new Error(`no ${channel} message after wait`);
+  }
+  return found;
+}
+
 function attachHandler(): InvokeHandler {
   const handler = ipcMainState.handlers.get(
     SelectionAuthorityChannels.invoke.attach,
@@ -801,8 +831,9 @@ describe("selection authority IPC binding", () => {
 
       // Membership landed: a leasesChanged fan-out carrying evidence-host in
       // "connecting" state should already have reached the window.
-      const membershipMessage = windowA.sentMessages.find(
-        (message) => message.channel === RunnerHostEvent.selectionLeasesChanged,
+      const membershipMessage = await lastMessageOn(
+        windowA,
+        RunnerHostEvent.selectionLeasesChanged,
       );
       expect(membershipMessage).toBeDefined();
       windowA.sentMessages.length = 0;
@@ -825,8 +856,9 @@ describe("selection authority IPC binding", () => {
         });
       }
 
-      const deadMessage = windowA.sentMessages.find(
-        (message) => message.channel === RunnerHostEvent.selectionLeasesChanged,
+      const deadMessage = await lastMessageOn(
+        windowA,
+        RunnerHostEvent.selectionLeasesChanged,
       );
       expect(deadMessage).toBeDefined();
       expect(deadMessage?.payload).toMatchObject({
@@ -907,8 +939,9 @@ describe("selection authority IPC binding", () => {
       // There is exactly one authority; a second window's view is never a
       // separately-derived answer.
       for (const window of [windowA, windowB]) {
-        const selectionMessage = window.sentMessages.find(
-          (message) => message.channel === RunnerHostEvent.selectionChanged,
+        const selectionMessage = await lastMessageOn(
+          window,
+          RunnerHostEvent.selectionChanged,
         );
         expect(selectionMessage).toBeDefined();
         expect(selectionMessage?.payload).toMatchObject({
@@ -948,6 +981,7 @@ describe("selection authority IPC binding", () => {
     authSession.set(signedInSnapshot("user-b", "token-2"));
 
     for (const window of [windowA, windowB]) {
+      await lastMessageOn(window, RunnerHostEvent.selectionReattachRequired);
       const channels = new Set(window.sentMessages.map((m) => m.channel));
       expect(channels.has(RunnerHostEvent.selectionReattachRequired)).toBe(
         true,
@@ -1258,10 +1292,10 @@ describe("selection authority IPC binding", () => {
         });
       }
 
-      const leaseMessages = windowB.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.selectionLeasesChanged,
+      const deadMessage = await lastMessageOn(
+        windowB,
+        RunnerHostEvent.selectionLeasesChanged,
       );
-      const deadMessage = leaseMessages.at(-1);
       expect(deadMessage).toBeDefined();
       expect(deadMessage?.payload).toMatchObject({
         change: [{ hostId: "crash-host", status: "dead" }],
@@ -1393,10 +1427,10 @@ describe("selection authority IPC binding", () => {
         });
       }
 
-      const leaseMessages = windowB.sentMessages.filter(
-        (message) => message.channel === RunnerHostEvent.selectionLeasesChanged,
+      const deadMessage = await lastMessageOn(
+        windowB,
+        RunnerHostEvent.selectionLeasesChanged,
       );
-      const deadMessage = leaseMessages.at(-1);
       expect(deadMessage).toBeDefined();
       expect(deadMessage?.payload).toMatchObject({
         change: [{ hostId: "detach-host", status: "dead" }],

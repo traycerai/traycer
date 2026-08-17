@@ -113,9 +113,14 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
   // `landing-draft-store.ts` (real, unmocked) and `use-landing-composer-actions.ts`
   // (also real - invoked through the mocked `LandingComposer`'s `handleClick`)
-  // both resolve the per-host workspace-folder bucket through this imperative
-  // snapshot, not through a hook. A whole-module mock without it would leave
-  // the import `undefined` and throw on the very first call.
+  // both resolve the per-host workspace-folder bucket through an imperative
+  // read, not through a hook. A whole-module mock missing one leaves the
+  // import `undefined` and throws on the very first call.
+  //
+  // `activeHostIdOrNull` is that read now: the spine stopped carrying an
+  // identity at P4.2/D17, so it resolves the authority projection instead.
+  // Same knob as the spine below, so a test that moves the host moves both.
+  activeHostIdOrNull: () => homeMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
