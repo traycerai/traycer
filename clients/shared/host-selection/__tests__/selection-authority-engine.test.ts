@@ -3452,6 +3452,56 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
   });
 });
 
+describe("SelectionAuthorityEngineImpl - an in-flight ensure is bounded (B2)", () => {
+  /**
+   * B2 was filed PLAUSIBLE - derived end to end, never executed. This is the
+   * execution.
+   *
+   * `nextDeadline()` has an arm for the cooldown after a FAILED ensure and no
+   * arm for an ensure still running, and the in-flight arm of `deriveHostStatus`
+   * reports `connecting`, which is usable. So a `convergeReady()` that never
+   * settles holds the local lease selectable with no bound at all, and the
+   * empty state the user needs in order to act is unreachable.
+   *
+   * The advance below is 30 minutes - twice `LOCAL_EXPECTED_OUTAGE_CEILING_MS`
+   * - deliberately. A small advance would leave "the ceiling is too short" as
+   * an explanation; this size can only be read as unbounded.
+   */
+  it("an ensure that never settles stops holding the local lease usable", () => {
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine } = authority;
+
+    // Derivation wants the local host and it has never been dialed, so the
+    // engine's one sanctioned process action fires and stays outstanding.
+    expect(ensure.calls.count).toBe(1);
+    const held = findLease(engine.snapshot().leases, "L");
+    if (held === undefined) throw new Error("expected a lease for L");
+    expect(held.status).toBe("connecting");
+    expect(isUsableForSelection(held)).toBe(true);
+
+    // Nothing will ever settle this ensure: the provisioning controller hung.
+    clock.advance(30 * 60_000);
+
+    const after = findLease(engine.snapshot().leases, "L");
+    if (after === undefined) throw new Error("expected a lease for L");
+    expect(isUsableForSelection(after)).toBe(false);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    authority.dispose();
+  });
+});
+
 describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely differ (P5.2 T5/P7)", () => {
   it("T5a/P7: a fresh incompatible verdict anchored to a later session displaces a held compatible verdict", () => {
     const clock = createFakeAuthorityClock(0);

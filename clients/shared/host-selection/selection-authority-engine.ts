@@ -197,6 +197,30 @@ export const FAILOVER_CANDIDATE_STABILITY_MS = 5_000;
 export const LOCAL_ENSURE_RETRY_COOLDOWN_MS = 30_000;
 
 /**
+ * Ceiling on ONE in-flight local `ensureReady()` before the engine stops
+ * treating it as a reason to keep the local lease usable (B2).
+ *
+ * `nextDeadline()` had an arm for the cooldown after a FAILED ensure and none
+ * for an ensure still running, while the in-flight arm of `deriveLease`
+ * reports `connecting` - which is usable. So a `convergeReady()` that never
+ * settled held the local lease selectable with no bound at all and made ∅
+ * unreachable, which is invariant 6's exact prohibition. Measured: still
+ * usable after 30 minutes of clock.
+ *
+ * Deliberately the same span as {@link LOCAL_EXPECTED_OUTAGE_CEILING_MS}, and
+ * not shorter. The two describe the SAME physical event - the local mutation
+ * lane is busy, because this engine's own ensure is what busies it - so a
+ * second, tighter number here would contradict the ceiling already chosen for
+ * that state. It would also fight a documented trade: the in-flight arm is
+ * ranked ahead of the outage arm precisely so a user whose host is being
+ * started FOR them is never shown ∅, and a short ceiling would put ∅ in
+ * front of exactly those users mid-install. The bound exists to make ∅
+ * REACHABLE, not to make it prompt.
+ */
+export const LOCAL_ENSURE_IN_FLIGHT_CEILING_MS =
+  LOCAL_EXPECTED_OUTAGE_CEILING_MS;
+
+/**
  * The engine's own clock and timer source (mechanism 7: "authority deadlines
  * come from its own ceilings, never renderer or host clocks"). A composition
  * input, not wire surface - tests inject a fake.
@@ -616,6 +640,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * is still waiting on may mutate state or commit.
    */
   private localEnsureToken: LocalEnsureToken | null = null;
+  /**
+   * When the in-flight ensure stops holding the local lease usable, or null
+   * when none is running (B2). Paired with `localEnsureToken` at every site -
+   * a deadline outliving its token would expire an ensure nobody is waiting
+   * on, and a token outliving its deadline is the unbounded state itself.
+   */
+  private localEnsureExpiresAt: number | null = null;
   /**
    * End of the cooldown after a FAILED ensure, or null. While it runs the
    * local lease is `dead` - which is exactly what registry §5 means by "the
@@ -1385,6 +1416,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // may ask for its own. Its completion is now state-neutral by token
     // mismatch, so nothing it does can reach B.
     this.localEnsureToken = null;
+    this.localEnsureExpiresAt = null;
     // THE OUTGOING SELECTION IS NOT AN INCUMBENT FOR THE INCOMING IDENTITY.
     //
     // Everything else here is wiped, but `this.selection` was not - and it is
@@ -1750,6 +1782,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       proofGeneration: this.localProofGeneration,
     };
     this.localEnsureToken = token;
+    this.localEnsureExpiresAt = now + LOCAL_ENSURE_IN_FLIGHT_CEILING_MS;
     void this.options.localHostEnsure.ensureReady().then(
       (outcome) => {
         this.completeLocalEnsure(
@@ -1789,6 +1822,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       return;
     }
     this.localEnsureToken = null;
+    this.localEnsureExpiresAt = null;
     if (ok) {
       // FIRSTHAND proof of life, and legitimately so under invariant 5: this
       // is not a cloud DTO but the desktop's own provisioning controller
@@ -1986,6 +2020,37 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * the local ceiling lapsing. Without this the lease would stay
    * `restarting-expected` until something else happened to arrive.
    */
+  /**
+   * Retires an in-flight ensure that passed its ceiling (B2), landing it in
+   * the same terminal state a FAILED ensure reaches.
+   *
+   * The cooldown rather than a bare clear, because a bare clear would let the
+   * very next derivation ask again immediately - a hung provisioning lane
+   * would be re-requested every pass forever, and the lease would flip back to
+   * `connecting` before any surface could show ∅. The cooldown is also already
+   * what registry §5 means by "the ensure path is unavailable or has failed",
+   * so ∅ can say so honestly, and its lapse is what lets the engine try again.
+   *
+   * C7 is satisfied by construction rather than by a second guard: nulling the
+   * token is what makes the eventual completion state-neutral, because
+   * `completeLocalEnsure` already drops any callback whose token is no longer
+   * the one being waited on. There is deliberately no separate "expired" flag
+   * for it to consult - a late completion cannot tell, and must not need to.
+   */
+  private expireLocalEnsureIfLapsed(now: number): void {
+    const expiresAt = this.localEnsureExpiresAt;
+    if (expiresAt === null) return;
+    if (now < expiresAt) return;
+    const token = this.localEnsureToken;
+    this.localEnsureToken = null;
+    this.localEnsureExpiresAt = null;
+    this.localEnsureFailedUntil = now + LOCAL_ENSURE_RETRY_COOLDOWN_MS;
+    this.options.log.warn(
+      "[selection-authority] local ensure exceeded its ceiling",
+      { hostId: token === null ? null : token.hostId },
+    );
+  }
+
   private nextDeadline(now: number): number | null {
     let earliest: number | null = null;
     const consider = (deadline: number): void => {
@@ -2010,6 +2075,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // engine ask again.
     const ensureCooldown = this.localEnsureFailedUntil;
     if (ensureCooldown !== null) consider(ensureCooldown);
+    // An ensure still running holds the local lease usable, so its ceiling is
+    // a lease change with no new evidence behind it - the same shape as the
+    // cooldown above, and the arm whose absence was B2.
+    const ensureCeiling = this.localEnsureExpiresAt;
+    if (ensureCeiling !== null) consider(ensureCeiling);
     return earliest;
   }
 
@@ -2083,6 +2153,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // revisions), so a client never sees leases for a selection it has not
     // been told about.
     const now = this.options.clock.now();
+    // Before ANY derivation this pass: an ensure past its ceiling must not
+    // still be reporting `connecting` into the leases computed below (B2).
+    this.expireLocalEnsureIfLapsed(now);
     // TWO PASSES, because the two answers depend on each other: the ensure
     // decision needs the leases to know whether the local host is down and
     // whether the target can serve, and the leases then need to reflect that a
