@@ -12,14 +12,15 @@ const listState = vi.hoisted<{ isFetching: boolean }>(() => ({
   isFetching: false,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
-  useHostRuntimeClient: () => null,
+// The sidebar is outside every tile `TabHostProvider`, so its client and its
+// ref host both come from the Epic SESSION - not from the app-wide effective
+// host, which this panel deliberately no longer reads.
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
 }));
 
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => "host-1",
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-1",
 }));
 
 // The stranded state this guards: `terminal.list` errored (transport already
