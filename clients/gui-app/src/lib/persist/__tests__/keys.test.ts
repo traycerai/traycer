@@ -112,6 +112,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("workspace-folders")).toBe(
       "traycer-gui-app:workspace-folders",
     );
+    // Source: src/stores/workspace/project-profiles-store.ts
+    expect(persistKey("project-profiles")).toBe(
+      "traycer-gui-app:project-profiles",
+    );
   });
 
   it("emits the current localStorage key for each scoped persistence family", () => {

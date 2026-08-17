@@ -23,6 +23,7 @@ import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
 import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -126,6 +127,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useWorkspaceFoldersStore",
     useWorkspaceFoldersStore,
     "traycer-gui-app:workspace-folders",
+  ],
+  [
+    "useProjectProfilesStore",
+    useProjectProfilesStore,
+    "traycer-gui-app:project-profiles",
   ],
   [
     "useSetupTerminalsStore",

@@ -64,6 +64,7 @@ import {
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type {
   DesktopJsonValue,
@@ -129,6 +130,7 @@ function resetStore(): void {
     activeDraftId: null,
   });
   useWorkspaceFoldersStore.setState({ byHost: {} });
+  useProjectProfilesStore.setState({ byHost: {} });
   useSettingsStore.setState({
     composerMode: "chat",
   });
@@ -460,6 +462,78 @@ describe("useLandingDraftStore", () => {
     expect(useLandingDraftStore.getState().activeDraftId).toBe(preMintedId);
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
     expect(useLandingDraftStore.getState().drafts[0].id).toBe(preMintedId);
+  });
+
+  it("createDraft snapshots only the active project profile's folders", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders(HOST_A, [
+      { ...WORKSPACE_A, hostId: HOST_A },
+      { ...WORKSPACE_B, hostId: HOST_A },
+    ]);
+    const profileId = useProjectProfilesStore.getState().createProfile(HOST_A, {
+      name: "Titanos",
+      color: "orange",
+      folderPaths: [WORKSPACE_A.path],
+      primaryPath: WORKSPACE_A.path,
+    });
+    useProjectProfilesStore.getState().setActiveProfile(HOST_A, profileId);
+
+    const id = useLandingDraftStore.getState().createDraft(null);
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(draft?.workspace.folders).toEqual([WORKSPACE_A.path]);
+    expect(draft?.workspace.primaryPath).toBe(WORKSPACE_A.path);
+  });
+
+  it("replaceActiveDraftWorkspaceFromStores narrows an already-open draft", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders(HOST_A, [
+      { ...WORKSPACE_A, hostId: HOST_A },
+      { ...WORKSPACE_B, hostId: HOST_A },
+    ]);
+    const id = useLandingDraftStore.getState().createDraft(null);
+    expect(
+      useLandingDraftStore.getState().drafts.find((entry) => entry.id === id)
+        ?.workspace.folders,
+    ).toEqual([WORKSPACE_A.path, WORKSPACE_B.path]);
+
+    const profileId = useProjectProfilesStore.getState().createProfile(HOST_A, {
+      name: "Titanos",
+      color: "orange",
+      folderPaths: [WORKSPACE_A.path],
+      primaryPath: WORKSPACE_A.path,
+    });
+    useProjectProfilesStore.getState().setActiveProfile(HOST_A, profileId);
+    useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
+
+    expect(
+      useLandingDraftStore.getState().drafts.find((entry) => entry.id === id)
+        ?.workspace.folders,
+    ).toEqual([WORKSPACE_A.path]);
+  });
+
+  it("replaceActiveDraftWorkspaceFromStores mints a draft when none is active", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders(HOST_A, [
+      { ...WORKSPACE_A, hostId: HOST_A },
+      { ...WORKSPACE_B, hostId: HOST_A },
+    ]);
+    const profileId = useProjectProfilesStore.getState().createProfile(HOST_A, {
+      name: "Titanos",
+      color: "orange",
+      folderPaths: [WORKSPACE_A.path],
+      primaryPath: WORKSPACE_A.path,
+    });
+    useProjectProfilesStore.getState().setActiveProfile(HOST_A, profileId);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+
+    useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
+
+    const activeId = useLandingDraftStore.getState().activeDraftId;
+    expect(activeId).not.toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === activeId)?.workspace.folders,
+    ).toEqual([WORKSPACE_A.path]);
   });
 
   it("setDraftContent stores content on the target draft and bails on no-op writes", () => {

@@ -29,10 +29,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  selectWorkspaceFoldersBucket,
-  useWorkspaceFoldersStore,
-} from "@/stores/workspace/workspace-folders-store";
+import { readEffectiveWorkspaceSnapshot } from "@/lib/workspace/effective-workspace-folders";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
@@ -1046,12 +1043,10 @@ function readLandingWorkspaceContext(
       hostId,
     };
   }
-  // The launch host's own folder bucket - the same `hostId` the cached
-  // default-intent read below is keyed by.
-  const globalBucket = selectWorkspaceFoldersBucket(
-    useWorkspaceFoldersStore.getState(),
-    hostId,
-  );
+  // The launch host's own effective folder set (profile-narrowed when a
+  // Project Profile is active) - the same `hostId` the cached default-intent
+  // read below is keyed by.
+  const globalBucket = readEffectiveWorkspaceSnapshot(hostId);
   const globalWorkspace = {
     folders: globalBucket.folders,
     folderInfoByPath: globalBucket.folderInfoByPath,

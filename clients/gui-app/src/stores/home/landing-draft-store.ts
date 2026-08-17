@@ -11,10 +11,11 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
-  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
+import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -119,6 +120,12 @@ interface LandingDraftStoreState {
   ) => ReadonlyArray<string>;
   removeDraftFolder: (id: string, folderPath: string) => void;
   setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
+  /**
+   * Re-snapshot the active draft from the effective (profile-narrowed)
+   * workspace. Used when the user switches Project Profile so the next
+   * send cannot inherit folders from another project.
+   */
+  replaceActiveDraftWorkspaceFromStores: () => void;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -487,6 +494,23 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ),
         );
       },
+
+      replaceActiveDraftWorkspaceFromStores: () => {
+        // Isolation applies at profile switch (this method) and at new-draft
+        // create. A background draft keeps the folder set it was minted with —
+        // activating it does not re-snapshot, so in-progress folder edits
+        // survive a profile change.
+        const id = get().activeDraftId;
+        if (id === null) {
+          get().createDraft(null);
+          return;
+        }
+        set((state) =>
+          updateDraftWorkspace(state, id, () =>
+            readCurrentLandingDraftWorkspaceSnapshot(),
+          ),
+        );
+      },
     }),
     {
       ...basePersistOptions(LANDING_DRAFT_PERSIST_KEY),
@@ -784,9 +808,12 @@ function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapsh
   // app-wide effective host - snapshot THAT host's folder bucket, not another
   // machine's paths. Through the shared reader: the spine stopped carrying an
   // identity at P4.2, so asking it here selected the unresolved-host bucket
-  // and silently dropped the real host's folders.
-  const bucket = selectWorkspaceFoldersBucket(
+  // and silently dropped the real host's folders. An active Project Profile
+  // then narrows that bucket so a Titanos chat cannot inherit every
+  // remembered repo.
+  const bucket = selectEffectiveWorkspaceFoldersBucket(
     useWorkspaceFoldersStore.getState(),
+    useProjectProfilesStore.getState(),
     activeHostIdOrNull(),
   );
   return normalizeLandingDraftWorkspace({
