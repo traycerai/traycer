@@ -830,13 +830,18 @@ function isCanonicalBase64(value: string): boolean {
 }
 
 /**
- * v1.1 of one summary file: the byte-path sidecars.
+ * One summary file WITH the byte-path sidecars - the shape
+ * `pr.getLocalDiffSummary@1.0` binds.
+ *
+ * The `V11` in the name is historical: the sidecars were built on an
+ * unreleased 1.1 that the release collapsed into 1.0, so this is now the only
+ * line, not the upper half of a pair. There is no sidecar-less peer to project
+ * for - `pr.getLocalDiffSummary` had never shipped at all.
  *
  * `pathBytes` / `previousPathBytes` are canonical base64
  * ({@link prPathBytesTokenSchema}) of the raw path bytes exactly as git
- * reported them, non-null IFF those bytes are not valid UTF-8. `path` stays
- * what it always was - the (possibly lossy, U+FFFD-bearing) UTF-8 decode,
- * display-only - so a v1.0 reader sees exactly the strings it saw before.
+ * reported them, non-null IFF those bytes are not valid UTF-8. `path` remains
+ * the (possibly lossy, U+FFFD-bearing) UTF-8 decode, display-only.
  * Each rename side is derived independently: a clean source beside a byte
  * destination legitimately carries `previousPathBytes: null`. Clients treat
  * tokens as opaque: never decoded, only echoed into `pr.getLocalFileDiff`
@@ -886,12 +891,30 @@ export type PrGetLocalDiffSummaryResponse = z.infer<
 >;
 
 /**
- * v1.1 `pr.getLocalDiffSummary` response: the v1.0 shape with
- * {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the v1.0
- * schema). Only a 1.1-negotiated peer may receive two rows whose lossy
- * `path` strings collide (distinct `pathBytes`); the host folds such rows
- * back into the legacy lossy merge for a 1.0 caller, which keys rows and its
- * client-side patch map by `path` alone.
+ * `pr.getLocalDiffSummary@1.0` response: the summary shape with
+ * {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the sidecar-less
+ * schema above, which survives only as the base this extends).
+ *
+ * EVERY negotiated peer receives these rows, including two rows whose lossy
+ * `path` strings collide under distinct `pathBytes`. The host's legacy
+ * fold-back-to-lossy-merge BRANCH went with the 1.0 line that needed it, so a
+ * client keying rows or its patch map by `path` alone is now the broken case.
+ *
+ * Key by a DISCRIMINATED identity - tag the side, then the value: byte-
+ * addressed when `pathBytes` is non-null, clean otherwise. Neither half works
+ * alone. Keying on the token is not implementable, because `pathBytes` is null
+ * for every byte-exact UTF-8 path, which is most rows; and `pathBytes ?? path`
+ * collapses both into one string space, where a clean file literally named
+ * like some token collides with that token's file. The tag is what keeps the
+ * two domains disjoint.
+ *
+ * The GUI already does this - `clients/gui-app/src/lib/pr/pr-local-diff-file-
+ * key.ts` is the one function every row key, collapse entry, find id and patch
+ * cache scope derives from. A new consumer should reuse it rather than
+ * re-deriving an identity here.
+ *
+ * (`pr.getLocalDiff`, a separate released method, still folds; that fold is
+ * unrelated to this line.)
  */
 export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
   "kind",
@@ -959,14 +982,15 @@ export type PrGetLocalFileDiffRequest = z.infer<
 >;
 
 /**
- * v1.1 `pr.getLocalFileDiff` request: the summary row's byte-path sidecars,
+ * `pr.getLocalFileDiff@1.0` request: the summary row's byte-path sidecars,
  * echoed verbatim per side (never derived client-side).
  *
- * `null` from a 1.1 peer means "this side's `path` IS the byte-exact UTF-8
- * path". A request that arrived through the 1.0->1.1 bridge carries
- * bridge-filled `null`s that mean only "legacy peer - token unavailable";
- * the host treats both identically as the plain string pathspec (today's
- * behavior) and must never infer byte-validity from them.
+ * `null` now carries exactly ONE meaning - "this side's `path` IS the
+ * byte-exact UTF-8 path". The 1.0->1.1 bridge that used to manufacture
+ * ambiguous `null`s meaning "legacy peer, token unavailable" was deleted with
+ * the 1.0 line it bridged from, so the host may read `null` as a positive
+ * byte-validity fact rather than an absence. It still resolves both cases to
+ * the plain string pathspec today; that is now a choice, not a requirement.
  */
 export const prGetLocalFileDiffRequestV11Schema =
   prGetLocalFileDiffRequestSchema.extend({

@@ -1,29 +1,30 @@
 import {
   chatSubscribeServerFrameSchema,
-  chatSubscribeV16,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import { describe, expect, it } from "vitest";
 
 /**
- * The Stop fence's held updates on `chat.subscribe@1.7` - the snapshot's
+ * The Stop fence's held updates on `chat.subscribe@1.6` - the snapshot's
  * `heldUpdates` and the `heldUpdatesChanged` frame that gives
  * `managedCommand.deliverHeld` something to act on (see `unary-schemas.ts`
  * and `contracts.ts`).
  *
- * The regression this suite exists to catch: `chat.subscribe@1.6` is the line
- * the whole Shells surface arrived on, hand-frozen to
- * `managedCommandSchemaPreImage` precisely so a LIVE addition can never leak
- * onto it. `heldUpdates`/`heldUpdatesChanged` are `1.7`-only - a `1.6` peer
- * must never observe either.
+ * These arrived on a `1.7` opened above a `1.6` that was hand-frozen to
+ * `managedCommandSchemaPreImage`, so that a live addition could not leak onto
+ * it. The release collapsed the two: neither minor had ever been negotiated -
+ * no released baseline carries `chat.subscribe` above `1.5` - so the freeze
+ * separating them protected no peer, and shipping both would have announced
+ * two lines where one peer set exists.
  *
- * `1.6` has NOT shipped - no released baseline carries `chat.subscribe` above
- * `1.5` - so this guards the freeze DISCIPLINE rather than a peer in the field.
- * That is the point: the discipline is what will still be correct once `1.7`
- * ships and `1.6` becomes a line someone really negotiates.
+ * The regression this suite exists to catch therefore points one line lower,
+ * at `1.5`, which is where the freeze starts protecting something real: it
+ * shipped, it predates the whole Shells surface, and a `1.5` peer must never
+ * observe `heldUpdates`/`heldUpdatesChanged`.
  *
- * Note what these two tests do NOT cover: the host serializes frames as-is, so
- * a frozen schema only STRIPS on parse. Keeping the field off an older peer's
+ * Note what those tests do NOT cover: the host serializes frames as-is, so a
+ * frozen schema only STRIPS on parse. Keeping the field off an older peer's
  * wire is the host's job, in `chat-frame-projection.ts`, and no schema test can
  * see a regression there.
  */
@@ -96,7 +97,7 @@ const heldUpdatesChangedFrame = {
   heldUpdates: [HELD],
 };
 
-describe("chat.subscribe@1.7 (held updates)", () => {
+describe("chat.subscribe@1.6 (held updates)", () => {
   it("carries the chat's held updates on a live snapshot", () => {
     const parsed = chatSubscribeServerFrameSchema.parse(
       snapshotFrameWithHeldUpdates([HELD]),
@@ -138,18 +139,19 @@ describe("chat.subscribe@1.7 (held updates)", () => {
     expect(parsed.heldUpdates).toEqual([]);
   });
 
-  // THE regression guard: `1.6` is bound to hand-frozen pre-image schemas
-  // exactly so a live addition cannot leak onto it - and nothing else catches
-  // a leak, since the live serverFrame union happily accepts either shape.
-  it("the frozen 1.6 line has no variant for heldUpdatesChanged and rejects it", () => {
+  // THE regression guard, aimed at `1.5` - the newest line with peers in the
+  // field. It is bound to hand-frozen schemas exactly so a live addition
+  // cannot leak onto it, and nothing else catches a leak, since the live
+  // serverFrame union happily accepts either shape.
+  it("the frozen 1.5 line has no variant for heldUpdatesChanged and rejects it", () => {
     expect(
-      chatSubscribeV16.serverFrameSchema.safeParse(heldUpdatesChangedFrame)
+      chatSubscribeV15.serverFrameSchema.safeParse(heldUpdatesChangedFrame)
         .success,
     ).toBe(false);
   });
 
-  it("a 1.6 snapshot carrying heldUpdates strips the field rather than growing", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+  it("a 1.5 snapshot carrying heldUpdates strips the field rather than growing", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse(
       snapshotFrameWithHeldUpdates([HELD]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");

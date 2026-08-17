@@ -138,10 +138,10 @@ function completeHandshakeAtVersion(
 }
 
 /**
- * A `chat.subscribe@1.6`-shaped assistant message: no `imageResolutions` key
+ * A `chat.subscribe@1.5`-shaped assistant message: no `imageResolutions` key
  * at all, matching how a pre-image host actually persisted/emitted it (see
  * `chat-subscribe.test.ts`'s "stays frozen without image fields on every
- * released minor 1.0-1.6"). Only the deep schema's compatibility default
+ * released minor 1.0-1.5"). Only the deep schema's compatibility default
  * (`imageResolutions: []`) up-converts this; the shallow schema is
  * structural-only and leaves it exactly as sent.
  */
@@ -573,7 +573,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     };
   }
 
-  it("takes the deep parse path and up-converts a down-negotiated (1.6) snapshot's pre-image assistant message", () => {
+  it("takes the deep parse path and up-converts a down-negotiated (1.5) snapshot's pre-image assistant message", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
 
@@ -585,7 +585,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
         deliveredMessages.push(...frame.snapshot.chat.messages);
       }),
     });
-    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 5 });
 
     sockets[0].fireText(
       snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
@@ -594,7 +594,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     expect(deliveredMessages).toHaveLength(1);
     const [assistant] = deliveredMessages;
     // The deep schema's compatibility default filled the field the frozen
-    // 1.6 wire shape never carried - proof the deep parse ran, not the
+    // 1.5 wire shape never carried - proof the deep parse ran, not the
     // structural-only shallow one, which would have left it absent.
     expect(assistant).toMatchObject({
       messageId: "assistant-1",
@@ -604,7 +604,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     client.close();
   });
 
-  it("takes the shallow parse path and passes a live (1.7) snapshot's message through structurally unchanged", () => {
+  it("takes the shallow parse path and passes a live (1.6) snapshot's message through structurally unchanged", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
 
@@ -618,7 +618,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     });
     // Default handshake echoes the client's own manifest verbatim, which
     // negotiates to the client's canonical chat.subscribe version - today
-    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:7}).
+    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:6}).
     completeHandshake(sockets[0]);
 
     sockets[0].fireText(

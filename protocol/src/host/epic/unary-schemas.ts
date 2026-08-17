@@ -947,6 +947,28 @@ export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
  * forever, since `epic.createChat@1.0` is already in released hosts (see
  * `epicCreateChatV11`'s own doc in `contracts.ts` for why this is a new
  * minor rather than an in-place edit).
+ *
+ * Carries the same `sourceOwnerUserId` hint the latest-checkpoint variant
+ * below has had since ticket 37, for the CROSS-HOST fork: the target host of
+ * a cross-host fork holds no local registry facts about the source chat, so
+ * the cloud tier's anti-squatting guard (ticket 34 B2) has nothing to check
+ * the resolved publication's owner against and refuses to seed.
+ *
+ * A HINT, never an authority, with UNLOCK-ONLY semantics: the host prefers
+ * its own registry facts and REFUSES the cloud tier outright when the two
+ * disagree - the registry outranks the client, and a disagreement is
+ * suspicious rather than a tiebreak to resolve. The hint only unlocks the
+ * case where the host holds no facts of its own. See
+ * `resolveExpectedForkOwner` / `chat-fork-cloud-source.ts`.
+ *
+ * NULLABLE WITH A `null` DEFAULT, unlike the latest-checkpoint variant: that
+ * one was a brand-new arm with no producers to be compatible with, so it can
+ * demand the field explicitly. This shape's other producers - every
+ * message-level fork the dialog already sends - predate the field, so the
+ * default makes an omitting payload parse to the honest `null` instead of
+ * failing validation outright. `null` stays the honest value for "the client
+ * genuinely does not know who owns this", which must never be fabricated
+ * into a guess the host would then trust.
  */
 export const createChatForkSourceAssistantBoundarySchema = z.object({
   boundary: z.literal("assistantMessage"),
@@ -954,6 +976,7 @@ export const createChatForkSourceAssistantBoundarySchema = z.object({
   assistantMessageId: z.string(),
   interviewBlockId: z.string().nullish(),
   carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+  sourceOwnerUserId: z.string().min(1).nullable().default(null),
 });
 export type CreateChatForkSourceAssistantBoundary = z.infer<
   typeof createChatForkSourceAssistantBoundarySchema
@@ -1008,71 +1031,6 @@ export type CreateChatForkSourceV11 = z.infer<
   typeof createChatForkSourceSchemaV11
 >;
 
-/**
- * v1.2's precise-boundary fork source: v1.1's shape plus the same owner hint
- * v1.1 gave the latest-checkpoint variant. A SEPARATE schema, not an edit of
- * {@link createChatForkSourceAssistantBoundarySchema} - that instance is
- * `epic.createChat@1.1`'s wire shape and stays byte-identical forever, the
- * same rule v1.1 followed for v1.0's `createChatForkSourceSchema`.
- *
- * Exists for the CROSS-HOST fork: the user picks a target host that is not
- * the source chat's host, so the target has no local registry facts about
- * the source chat at all - it must pull the transcript from the cloud tier,
- * and that tier refuses to seed unless the host can check the resolved
- * publication's owner against an expectation it holds (the anti-squatting
- * guard from ticket 34 B2). Same problem ticket 37 solved for the clone
- * path, now on the precise-boundary variant the fork dialog sends.
- *
- * `sourceOwnerUserId` is a HINT, never an authority, with UNLOCK-ONLY
- * semantics: the host prefers its own registry facts and REFUSES the cloud
- * tier outright when the two disagree - the registry outranks the client,
- * and a disagreement is suspicious rather than a tiebreak to resolve. The
- * hint only unlocks the case where the host holds no facts of its own.
- * See `resolveExpectedForkOwner` / `chat-fork-cloud-source.ts`.
- *
- * NULLABLE WITH A `null` DEFAULT, unlike ticket 37's variant: that one was a
- * brand-new arm in v1.1 with no producers to be compatible with, so it could
- * demand the field be passed explicitly. This arm is v1.1's precise-boundary
- * shape widened on a minor, and the shape's OTHER producers - every
- * message-level fork the dialog already sends - predate the field. The
- * default makes an omitting payload parse to the honest `null` instead of
- * failing validation outright, so a caller adopts the hint when it has one
- * without every existing call site having to change in lockstep. (Both forms
- * pass the framework's minor-additivity check, verified against
- * `findAdditivityViolation`; the difference is runtime tolerance, not
- * registry validity.) `null` stays the honest value for "the client
- * genuinely does not know who owns this", which must never be fabricated
- * into a guess the host would then trust.
- *
- * NOTE for producers: a v1.1 host Zod-STRIPS this field silently (same-major
- * downgrade), so a caller that depends on the hint must gate on the
- * negotiated minor rather than assume it arrived.
- */
-export const createChatForkSourceAssistantBoundarySchemaV12 = z.object({
-  boundary: z.literal("assistantMessage"),
-  sourceChatId: z.string(),
-  assistantMessageId: z.string(),
-  interviewBlockId: z.string().nullish(),
-  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
-  sourceOwnerUserId: z.string().min(1).nullable().default(null),
-});
-export type CreateChatForkSourceAssistantBoundaryV12 = z.infer<
-  typeof createChatForkSourceAssistantBoundarySchemaV12
->;
-
-/**
- * v1.2 fork source: the widened precise-boundary variant above beside v1.1's
- * latest-checkpoint variant, which is unchanged (it has carried
- * `sourceOwnerUserId` since ticket 37).
- */
-export const createChatForkSourceSchemaV12 = z.discriminatedUnion("boundary", [
-  createChatForkSourceAssistantBoundarySchemaV12,
-  createChatForkSourceLatestCheckpointBoundarySchema,
-]);
-export type CreateChatForkSourceV12 = z.infer<
-  typeof createChatForkSourceSchemaV12
->;
-
 export const createChatRequestSchema = z.object({
   epicId: z.string(),
   parentId: z.string().nullable(),
@@ -1114,17 +1072,6 @@ export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
   forkSource: createChatForkSourceSchemaV11.nullable().optional(),
 });
 export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
-
-/**
- * v1.2 request: `forkSource`'s precise-boundary variant gains the
- * `sourceOwnerUserId` hint (see {@link
- * createChatForkSourceAssistantBoundarySchemaV12}). Every other field is
- * identical to v1.1.
- */
-export const createChatRequestSchemaV12 = createChatRequestSchema.extend({
-  forkSource: createChatForkSourceSchemaV12.nullable().optional(),
-});
-export type CreateChatRequestV12 = z.infer<typeof createChatRequestSchemaV12>;
 
 export const createChatResponseSchema = z.object({
   chatId: z.string(),

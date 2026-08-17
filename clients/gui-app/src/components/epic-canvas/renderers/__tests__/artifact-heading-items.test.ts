@@ -13,6 +13,7 @@ import {
   measureArtifactHeadingTops,
   resolveArtifactHeadingActiveIndex,
   resolveArtifactHeadingHitStripWidth,
+  resolveArtifactHeadingTickWidth,
   sameArtifactHeadingOutline,
   toArtifactHeadingOutline,
   type ArtifactHeadingOutlineEntry,
@@ -342,6 +343,24 @@ describe("resolveArtifactHeadingHitStripWidth", () => {
         scrollerLeft: 0,
       }),
     ).toBe(0);
+  });
+});
+
+describe("resolveArtifactHeadingTickWidth", () => {
+  it("uses the full 24px/12px hierarchy when the gutter is wide enough", () => {
+    expect(resolveArtifactHeadingTickWidth(40, 1)).toBe(24);
+    expect(resolveArtifactHeadingTickWidth(40, 2)).toBe(12);
+  });
+
+  it("scales both heading levels into a narrow gutter", () => {
+    expect(resolveArtifactHeadingTickWidth(12, 1)).toBe(12);
+    expect(resolveArtifactHeadingTickWidth(12, 2)).toBe(6);
+  });
+
+  it("hides ticks when no finite positive gutter remains", () => {
+    expect(resolveArtifactHeadingTickWidth(0, 1)).toBe(0);
+    expect(resolveArtifactHeadingTickWidth(-1, 2)).toBe(0);
+    expect(resolveArtifactHeadingTickWidth(Number.NaN, 1)).toBe(0);
   });
 });
 

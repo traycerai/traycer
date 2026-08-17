@@ -18,10 +18,9 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
-  agentGetProviderProfileRateLimitsDowngradeV50ToV10,
-  agentGetProviderProfileRateLimitsDowngradeV50ToV20,
-  agentGetProviderProfileRateLimitsDowngradeV50ToV30,
-  agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV40ToV30,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
@@ -574,15 +573,16 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // list/configure stay on the Hugging-Face-inclusive v4.0 line. Rate-limit
-    // reads opened v5.0 for the OpenCode arm and credentialGeneration.
+    // list/configure and rate-limit reads all sit on the v4.0 line: the
+    // OpenCode arm and credentialGeneration ride major 4 rather than a
+    // separate 5, since 4 has never shipped.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 4,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 5, minor: 0 });
+    ).toEqual({ major: 4, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 4,
       minor: 0,
@@ -652,10 +652,6 @@ describe("optional-method capability negotiation", () => {
     expect(
       hostRpcRegistry["agent.configure"][4].versions[0].contract.schemaVersion,
     ).toEqual({ major: 4, minor: 0 });
-    expect(
-      hostRpcRegistry["agent.getProviderProfileRateLimits"][5].versions[0]
-        .contract.schemaVersion,
-    ).toEqual({ major: 5, minor: 0 });
   });
 });
 
@@ -957,7 +953,7 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
   });
 });
 
-describe("agent.getProviderProfileRateLimits v5 OpenCode downgrade", () => {
+describe("agent.getProviderProfileRateLimits v4 OpenCode downgrade", () => {
   const openCodeAvailable = {
     rateLimits: {
       provider: "opencode" as const,
@@ -994,51 +990,67 @@ describe("agent.getProviderProfileRateLimits v5 OpenCode downgrade", () => {
     usageUpdatedAt: 1_784_678_400_000,
   };
 
-  it("degrades an available OpenCode snapshot to unsupported_provider on every v5 bridge", () => {
+  it("degrades an available OpenCode snapshot to unsupported_provider on every v4 bridge", () => {
     expect(
-      agentGetProviderProfileRateLimitsDowngradeV50ToV40.downgradeResponse(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV30.downgradeResponse(
         openCodeAvailable,
       ),
     ).toEqual({ ok: true, value: openCodeUnsupported });
     expect(
-      agentGetProviderProfileRateLimitsDowngradeV50ToV30.downgradeResponse(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV20.downgradeResponse(
         openCodeAvailable,
       ),
     ).toEqual({ ok: true, value: openCodeUnsupported });
     expect(
-      agentGetProviderProfileRateLimitsDowngradeV50ToV20.downgradeResponse(
-        openCodeAvailable,
-      ),
-    ).toEqual({ ok: true, value: openCodeUnsupported });
-    expect(
-      agentGetProviderProfileRateLimitsDowngradeV50ToV10.downgradeResponse(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV10.downgradeResponse(
         openCodeAvailable,
       ),
     ).toEqual({ ok: true, value: openCodeUnsupported });
   });
 
-  it("keeps an unavailable OpenCode reason and strips credentialGeneration on v4", () => {
-    const result =
-      agentGetProviderProfileRateLimitsDowngradeV50ToV40.downgradeResponse({
-        rateLimits: {
-          provider: "opencode",
-          available: false,
-          reason: "usage_fetch_failed",
-          credentialGeneration: "gen-opencode-1",
-        },
-        usageUpdatedAt: null,
-      });
-    expect(result).toEqual({
+  // The AVAILABLE arm is the one the maps rewrite; an already-unavailable
+  // OpenCode row passes them untouched and is degraded by the frozen re-parse
+  // alone. That is only safe because `opencode` is a member of the pinned
+  // `providerIdSchemaV40` enum, so the older `available: false` arm accepts the
+  // id rather than failing the union - the collapse onto 4.0 made this path
+  // reachable for every peer, not just a hypothetical 5.0 one.
+  it("strips the cache generation from an unavailable OpenCode snapshot on every v4 bridge, keeping its reason", () => {
+    const openCodeUnavailable = {
+      rateLimits: {
+        provider: "opencode" as const,
+        available: false as const,
+        reason: "usage_fetch_failed" as const,
+        credentialGeneration: "gen-opencode-1",
+      },
+      usageUpdatedAt: 1_784_678_400_000,
+    };
+    const expected = {
       ok: true,
       value: {
         rateLimits: {
-          provider: "opencode",
-          available: false,
-          reason: "usage_fetch_failed",
+          provider: "opencode" as const,
+          available: false as const,
+          reason: "usage_fetch_failed" as const,
         },
-        usageUpdatedAt: null,
+        usageUpdatedAt: 1_784_678_400_000,
       },
-    });
+    };
+
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV30.downgradeResponse(
+        openCodeUnavailable,
+      ),
+    ).toEqual(expected);
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV20.downgradeResponse(
+        openCodeUnavailable,
+      ),
+    ).toEqual(expected);
+    expect(
+      agentGetProviderProfileRateLimitsDowngradeV40ToV10.downgradeResponse(
+        openCodeUnavailable,
+      ),
+    ).toEqual(expected);
   });
 });
 

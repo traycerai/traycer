@@ -1,21 +1,21 @@
 /**
  * Schema unit tests for the skills-settings redesign additions:
  * inspect / edit / update mutate actions, inspect result, ProviderSkill
- * origin/conflict, live capability skew-gate keys, and the frozen v7.0
+ * origin/conflict, live capability skew-gate keys, and the v7.0 pre-image
  * copies that must not grow those keys.
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   nativeListResultSchema,
-  nativeListResultSchemaV70,
+  nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
   nativeMutationSchema,
   providerSkillInspectCandidateSchema,
   providerSkillSchema,
-  providerSkillSchemaV70,
+  providerSkillSchemaV70Preimage,
   providerSkillsCapabilitiesSchema,
-  providerSkillsCapabilitiesSchemaV70,
+  providerSkillsCapabilitiesSchemaV70Preimage,
   providersSkillsInspectResultSchema,
 } from "@traycer/protocol/host/provider-native-schemas";
 
@@ -657,7 +657,7 @@ describe("providerSkillsCapabilitiesSchema actionScopes skew gate", () => {
 
 describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   it("V70 skills capabilities JSON schema rejects inspect / edit / update keys", () => {
-    const json = z.toJSONSchema(providerSkillsCapabilitiesSchemaV70, {
+    const json = z.toJSONSchema(providerSkillsCapabilitiesSchemaV70Preimage, {
       unrepresentable: "any",
     });
     expect(json).toMatchObject({ additionalProperties: false });
@@ -679,13 +679,13 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 skills capabilities parse without the new keys and drop them if sent", () => {
-    const withoutNew = providerSkillsCapabilitiesSchemaV70.parse({
+    const withoutNew = providerSkillsCapabilitiesSchemaV70Preimage.parse({
       actionScopes: BASE_ACTION_SCOPES,
     });
     expect(withoutNew.actionScopes).toEqual(BASE_ACTION_SCOPES);
     expect(withoutNew.actionScopes).not.toHaveProperty("inspect");
 
-    const withNew = providerSkillsCapabilitiesSchemaV70.parse({
+    const withNew = providerSkillsCapabilitiesSchemaV70Preimage.parse({
       actionScopes: {
         ...BASE_ACTION_SCOPES,
         inspect: ["global"],
@@ -700,7 +700,7 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 skill row JSON schema rejects origin and conflict", () => {
-    const json = z.toJSONSchema(providerSkillSchemaV70, {
+    const json = z.toJSONSchema(providerSkillSchemaV70Preimage, {
       unrepresentable: "any",
     });
     expect(json).toMatchObject({ additionalProperties: false });
@@ -712,11 +712,11 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 skill row parse drops origin and conflict", () => {
-    expect(providerSkillSchemaV70.parse(BASE_SKILL_ROW)).toEqual(
+    expect(providerSkillSchemaV70Preimage.parse(BASE_SKILL_ROW)).toEqual(
       BASE_SKILL_ROW,
     );
     expect(
-      providerSkillSchemaV70.parse({
+      providerSkillSchemaV70Preimage.parse({
         ...BASE_SKILL_ROW,
         origin: "Imported from github.com/org/skills",
         conflict: true,
@@ -725,7 +725,7 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 native list result does not keep origin or conflict on skill rows", () => {
-    const parsed = nativeListResultSchemaV70.parse({
+    const parsed = nativeListResultSchemaV70Preimage.parse({
       ok: true,
       kind: "skills",
       skills: [
