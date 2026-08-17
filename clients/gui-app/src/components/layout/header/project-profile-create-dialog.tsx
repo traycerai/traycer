@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { FolderPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,6 +25,10 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  preparedWorkspaceFolderToWorkspaceFolderInfo,
+  useWorkspaceFolderActions,
+} from "@/hooks/workspace/use-workspace-folder-actions";
 import { PROJECT_PROFILE_COLOR_DOT } from "./project-profile-colors";
 
 const EXTRA_SEEDS: ReadonlyArray<{
@@ -61,6 +66,7 @@ export function ProjectProfileCreateDialog(props: {
     catalog.primaryPath,
   );
   const selectedFolder = pickedFolder ?? catalogPrimary;
+  const { pickAndPrepareFolders, isPreparing } = useWorkspaceFolderActions();
 
   const reset = () => {
     setName("");
@@ -85,6 +91,21 @@ export function ProjectProfileCreateDialog(props: {
     useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
     reset();
     onOpenChange(false);
+  };
+
+  const chooseFolder = async () => {
+    const result = await pickAndPrepareFolders();
+    if (result === null || result.folders.length === 0) return;
+    const first = result.folders[0];
+    useWorkspaceFoldersStore.getState().addResolvedFolders(
+      result.hostId,
+      result.folders.map((folder) =>
+        preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
+      ),
+    );
+    if (hostId !== null && result.hostId !== hostId) return;
+    setSeed("folder");
+    setPickedFolder(first.workspacePath);
   };
 
   return (
@@ -148,7 +169,7 @@ export function ProjectProfileCreateDialog(props: {
             </legend>
             {catalog.folders.length === 0 ? (
               <p className="text-ui-xs text-muted-foreground">
-                Add a folder in the workspace picker first, then pick it here.
+                Choose the folder this project should open.
               </p>
             ) : (
               <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
@@ -181,6 +202,19 @@ export function ProjectProfileCreateDialog(props: {
                 ))}
               </div>
             )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="project-profile-choose-folder"
+              disabled={hostId === null || isPreparing}
+              onClick={() => {
+                void chooseFolder();
+              }}
+            >
+              <FolderPlus className="size-3.5" />
+              {isPreparing ? "Opening…" : "Choose folder"}
+            </Button>
           </fieldset>
           <fieldset className="flex flex-col gap-1.5">
             <legend className="text-ui-sm font-medium text-muted-foreground">
