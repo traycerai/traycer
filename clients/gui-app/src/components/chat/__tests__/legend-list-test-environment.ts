@@ -119,6 +119,21 @@ function isListItemShell(element: HTMLElement): boolean {
   );
 }
 
+/**
+ * LegendList wraps every row in its own absolutely-positioned container and
+ * measures THAT element, so the container has to report its row's height
+ * here. A container is only ever a single row's wrapper, so matching on the
+ * first element child is exact - the scroll container holds the content
+ * container, never a row, and so never matches. Without this, a row's
+ * wrapper falls through to the viewport height below and the list's content
+ * size (and with it `isAtEnd`) diverges from the DOM it is measuring.
+ */
+function listItemShellFor(element: HTMLElement): HTMLElement | null {
+  if (isListItemShell(element)) return element;
+  const child = element.firstElementChild;
+  return child instanceof HTMLElement && isListItemShell(child) ? child : null;
+}
+
 function isSpacerShell(element: HTMLElement): boolean {
   if (element.getAttribute("aria-hidden") === "true") {
     return true;
@@ -130,9 +145,10 @@ function isSpacerShell(element: HTMLElement): boolean {
 }
 
 function heightFor(element: HTMLElement): number {
-  if (isListItemShell(element)) {
-    const ownMessageId = element.getAttribute("data-message-id");
-    const nestedMessageId = element
+  const itemShell = listItemShellFor(element);
+  if (itemShell !== null) {
+    const ownMessageId = itemShell.getAttribute("data-message-id");
+    const nestedMessageId = itemShell
       .querySelector<HTMLElement>("[data-message-id]")
       ?.getAttribute("data-message-id");
     const messageId = ownMessageId ?? nestedMessageId;
@@ -191,7 +207,7 @@ export function installLegendListViewportMetrics(): void {
   const scrollHeightSpy = vi
     .spyOn(HTMLElement.prototype, "scrollHeight", "get")
     .mockImplementation(function (this: HTMLElement) {
-      if (isListItemShell(this) || isSpacerShell(this)) {
+      if (listItemShellFor(this) !== null || isSpacerShell(this)) {
         return heightFor(this);
       }
       if (scrollContainerScrollHeightOverridePx !== null) {
