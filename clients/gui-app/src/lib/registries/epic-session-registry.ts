@@ -160,13 +160,33 @@ export function releaseOpenEpicSession(epicId: string): void {
   registry.release(epicId, "discard");
 }
 
-export function releaseOpenEpicSessionIfUnused(epicId: string): void {
+/**
+ * Release an epic's session only if no tab in THIS window still shows it.
+ *
+ * `registry.release` keys on `epicId` and disposes unconditionally, but a
+ * window can legitimately hold the same epic in two tabs - so any path that
+ * has finished with ONE tab has to ask this question first, or it disposes the
+ * live session out from under the other one. That is the whole reason this
+ * wrapper exists, and it is the only thing standing between an epic-keyed
+ * registry and a tab-keyed UI.
+ *
+ * `retainedBuffers` is explicit at every call because the two answers are not
+ * interchangeable. `"discard"` belongs to paths where the user was ASKED - the
+ * close confirmation reads `epicHasUnsyncedEdits`, which covers retentions, so
+ * arriving there means they answered for them. `"keep"` belongs to involuntary
+ * paths, where nothing was shown and dropping the buffer would be a silent
+ * loss.
+ */
+export function releaseOpenEpicSessionIfUnused(
+  epicId: string,
+  retainedBuffers: "discard" | "keep",
+): void {
   const state = useEpicCanvasStore.getState();
   const stillOpen = state.openTabOrder.some(
     (tabId) => state.tabsById[tabId]?.epicId === epicId,
   );
   if (stillOpen) return;
-  releaseOpenEpicSession(epicId);
+  registry.release(epicId, retainedBuffers);
 }
 
 /**
