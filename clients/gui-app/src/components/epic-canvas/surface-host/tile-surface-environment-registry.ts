@@ -20,7 +20,10 @@
  * - Removal only by membership. The registry subscribes to
  *   `subscribeTileSurfaceMembership` and deletes a record (notifying its
  *   subscribers) only when the instance actually leaves membership - close,
- *   deselect (decision #17), or settled MRU eviction. Nothing else clears it.
+ *   eviction past the pane's chat retention cap, or settled top-level MRU
+ *   eviction. Deselecting a tab no longer removes anything (it did while
+ *   decision #17 stood); it only flips the record out of
+ *   `isTileSurfacePresented`. Nothing else clears it.
  *
  * Subscriptions are isolated per instance (`Map<instanceId, Set<listener>>`):
  * publishing or updating pane B's environment must not notify pane A's
@@ -179,6 +182,31 @@ export function getTileSurfaceEnvironment(
   instanceId: string,
 ): TileSurfaceEnvironment {
   return environments.get(instanceId) ?? null;
+}
+
+/**
+ * Whether a record should actually PAINT: its top-level surface is shown AND
+ * its pane still has it selected.
+ *
+ * Membership used to admit only the selected chat of each pane, so
+ * `topLevelVisible` alone answered this. Now that a pane retains its
+ * recently-active chats (`retained-pane-chats.ts`), a member can be live,
+ * mounted and measured while another tab holds the pane's foreground - and
+ * every record of a pane shares that pane's rect, so a retained one that kept
+ * painting would sit exactly on top of the selected one.
+ *
+ * The geometry guard in `StableTileSurfaceHost` keys off this SAME predicate
+ * deliberately: a concealed layer reports a rect its body must not reflow to,
+ * and "is this painting" is precisely the question that guard is asking.
+ */
+export function isTileSurfacePresented(
+  environment: TileSurfaceEnvironment,
+): boolean {
+  if (environment === null) return false;
+  return (
+    environment.presentation.topLevelVisible &&
+    environment.canvasActivity.tabSelected
+  );
 }
 
 export function subscribeTileSurfaceEnvironment(
