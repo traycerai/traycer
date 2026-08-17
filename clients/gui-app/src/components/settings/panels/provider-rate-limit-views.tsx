@@ -116,6 +116,7 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
 type HuggingFaceRateLimits = Extract<
   ProviderRateLimits,
   { provider: "huggingface" }
@@ -1236,8 +1237,12 @@ function formatGrokPeriodLabel(
   return formatWindowDuration(durationMinutes);
 }
 
-/** Compact calendar date ("Jul 22, 2026") for a grok billing-period bound. */
-function formatGrokPeriodDate(epochMs: number): string {
+/**
+ * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
+ * grok's billing period and Cursor's billing cycle - both render a plain epoch
+ * range, so neither provider owns this formatter.
+ */
+function formatBillingRangeDate(epochMs: number): string {
   return new Date(epochMs).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -1250,12 +1255,12 @@ function formatGrokPeriodDate(epochMs: number): string {
  * in grok's unmeasured-period fallback where there's no usage bar to carry a
  * reset date. `null` unless both bounds are known.
  */
-function formatGrokPeriodRange(
+function formatBillingRange(
   periodStart: number | null,
   periodEnd: number | null,
 ): string | null {
   if (periodStart === null || periodEnd === null) return null;
-  return `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+  return `${formatBillingRangeDate(periodStart)} - ${formatBillingRangeDate(periodEnd)}`;
 }
 
 /**
@@ -1288,7 +1293,7 @@ function GrokPeriodFallback({
       ) : null}
       <ProviderTextRow
         label="Billing period"
-        value={formatGrokPeriodRange(periodStart, periodEnd)}
+        value={formatBillingRange(periodStart, periodEnd)}
       />
     </>
   );
@@ -1357,6 +1362,72 @@ export function GrokRateLimitView({
           <ProviderNumberRow
             label="On-demand limit"
             value={data.onDemandCap}
+            format={formatProviderCurrency}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Cursor's usage detail. Structurally grok's twin - a synthesized billing-cycle
+ * window plus money rows - so it reuses the same `RateLimitWindowRow`, and its
+ * "% used · Resets <date>" reads identically to codex/claude.
+ *
+ * Two shapes are handled:
+ *
+ * - `cycle` present -> the included-usage bar. Its label is the cycle cadence
+ *   derived from the window duration ("Monthly"), not a provider token, since
+ *   Cursor reports cycle bounds rather than a cadence name.
+ * - `cycle` null -> an account whose plan limit wasn't reported, so no
+ *   percentage is computable. The cycle dates still render, keeping the card
+ *   meaningful rather than blank - the same fallback grok uses.
+ *
+ * Overview keeps the usage bar and the remaining included credits; the spend
+ * limit is single-provider-tab detail, matching how grok/OpenRouter trim.
+ */
+export function CursorRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: CursorRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      {data.cycle !== null ? (
+        <RateLimitWindowRow
+          label={formatWindowDuration(data.cycle.durationMinutes)}
+          window={data.cycle}
+        />
+      ) : (
+        <ProviderTextRow
+          label="Billing cycle"
+          value={formatBillingRange(data.cycleStart, data.cycleEnd)}
+        />
+      )}
+      <ProviderNumberRow
+        label="Included credits left"
+        value={data.remainingUsd}
+        format={formatProviderCurrency}
+      />
+      {!overview ? (
+        <>
+          <ProviderNumberRow
+            label="Included credits"
+            value={data.includedLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Spend limit"
+            value={data.spendLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Spend limit left"
+            value={data.spendLimitRemainingUsd}
             format={formatProviderCurrency}
           />
         </>
@@ -1524,5 +1595,10 @@ export function ProviderRateLimitDetail({
       return <HuggingFaceRateLimitView data={data} variant={variant} />;
     case "opencode":
       return <OpenCodeRateLimitView data={data} />;
+    // Cursor is windowed, not credit-shaped: its money fields back a real
+    // billing-cycle percentage, so it renders a usage bar like grok rather than
+    // the spend-only layout OpenRouter/Kilo Code/Hugging Face use.
+    case "cursor":
+      return <CursorRateLimitView data={data} variant={variant} />;
   }
 }

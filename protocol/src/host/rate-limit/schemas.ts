@@ -92,6 +92,7 @@ export const rateLimitCapableProviderIdSchema = z.enum([
   "grok",
   "huggingface",
   "opencode",
+  "cursor",
 ]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
@@ -294,6 +295,75 @@ const grokRateLimitsSchema = z
     }
   });
 
+// Cursor arm - httpFetch-class provider (two plain POSTs, no subprocess).
+//
+// Cursor's API-key-authenticated PUBLIC API carries no account quota at all:
+// it exposes `/v1/me`, `/v1/models`, `/v1/repositories`, `/v1/agents` and a
+// per-AGENT token/cost read, and signals pressure only reactively via
+// `retry-after` on a 429. The account-wide numbers live on the dashboard API
+// the Cursor app itself uses, so the host exchanges the configured API key for
+// a short-lived session token (`/auth/exchange_user_api_key`) and calls
+// `aiserver.v1.DashboardService/GetCurrentPeriodUsage` with it.
+//
+// Deriving the session FROM the same key that runs turns is load-bearing, not
+// incidental: it is what makes the account this arm reports and the account
+// Traycer bills the same account by construction. Reading Cursor's own CLI
+// session out of the OS keychain would report whichever account happened to
+// run `cursor-agent login`, which need not be the key's owner.
+//
+// Hybrid shape, like grok's: a synthesized `cycle` window (so severity
+// rollups, a2a `rateLimitStatus`, and GUI status logic reuse the shared window
+// primitive with no special-casing) plus the raw money fields.
+//
+// Every payload-derived field is nullable because the endpoint speaks proto3
+// JSON, which OMITS zero-valued fields entirely - an account with no
+// usage-based spend simply has no `spendLimitUsage.totalSpend` key rather than
+// a `0`. Absent therefore cannot be distinguished from zero here, and the host
+// sends null rather than inventing either.
+//
+// Money is USD. `planUsage`'s wire values are integer CENTS and the host
+// divides, so no consumer has to know the unit. The spend-limit fields are a
+// deliberate exception: they are reported in whole dollars on the same
+// payload (a `100` spend limit alongside a `40000` plan limit is $100 against
+// $400, not $1), so they are carried through as-is and named to say so.
+const cursorRateLimitsSchema = z
+  .object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.cursor),
+    available: z.literal(true),
+    cycleStart: z.number().nullable(),
+    cycleEnd: z.number().nullable(),
+    cycle: providerRateLimitWindowSchema.nullable(),
+    includedLimitUsd: z.number().nullable(),
+    usedUsd: z.number().nullable(),
+    remainingUsd: z.number().nullable(),
+    spendLimitType: z.string().nullable(),
+    spendLimitUsd: z.number().nullable(),
+    spendLimitRemainingUsd: z.number().nullable(),
+    // Cursor's own rendering of the headline number ("You've used 72% of your
+    // included usage"). Carried so the GUI can show the provider's wording
+    // rather than a second, subtly different sentence derived from `cycle`.
+    displayMessage: z.string().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    // Same invariant grok's arm enforces, for the same reason: the host
+    // synthesizes the window's reset FROM the billing-cycle end, so the two
+    // denote one instant by construction. `cycleEnd` is kept as its own field
+    // so the cycle bounds survive a snapshot whose usage could not be measured
+    // (`cycle` null, `cycleEnd` still known). Enforce it at the wire boundary
+    // so a measured cycle can never omit or disagree with the known reset.
+    if (
+      value.cycleEnd !== null &&
+      value.cycle !== null &&
+      value.cycle.resetsAt !== value.cycleEnd
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "cursor cycle.resetsAt must equal cycleEnd when cycle is set",
+        path: ["cycle", "resetsAt"],
+      });
+    }
+  });
+
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
 // that provider, legitimately forward-compat as a bare string), every one of
@@ -444,6 +514,7 @@ export const providerRateLimitsSchema = z.union([
   grokRateLimitsSchema,
   huggingFaceRateLimitsSchema,
   openCodeRateLimitsSchema,
+  cursorRateLimitsSchema,
   unavailableProviderRateLimitsSchema,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
@@ -513,6 +584,33 @@ export function mapHuggingFaceAvailableToUnavailable(
   ) {
     return {
       provider: "huggingface",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
+
+/**
+ * The Cursor analogue of `mapGrokAvailableToUnavailable`, for every bridge
+ * below the live 4.0 line. A cursor-available snapshot has no representation in
+ * any frozen union (Cursor was not a rate-limit-capable provider then), so it
+ * degrades to the unavailable `unsupported_provider` shape - the exact row a
+ * pre-Cursor host returns for it today. `"cursor"` is in EVERY frozen
+ * `provider` enum (it long predates Hermes/omp, and is present in
+ * `providerIdSchemaV40`/`V50`/`V60`), so the result reparses cleanly through
+ * every older union. Any other snapshot (or `null`) passes through unchanged.
+ */
+export function mapCursorAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "cursor"
+  ) {
+    return {
+      provider: "cursor",
       available: false,
       reason: "unsupported_provider",
     };

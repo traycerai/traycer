@@ -70,6 +70,11 @@ export function providerRateLimitWindows(
       // severity/rollup path. A period-less snapshot (tier + dates only, no
       // usage percentage) carries no window.
       return rateLimits.period !== null ? [rateLimits.period] : [];
+    case "cursor":
+      // Hybrid arm, like grok's: the synthesized billing-cycle window feeds the
+      // shared severity/rollup path. A snapshot whose usage could not be
+      // measured (no plan limit reported) carries no window.
+      return rateLimits.cycle !== null ? [rateLimits.cycle] : [];
     case "opencode":
       return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
     case "openrouter":

@@ -194,6 +194,26 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       `${formatWindowLine("monthly", rateLimits.monthly)} [${rateLimits.monthly.status}]`,
     ].join("\n");
   }
+  if (rateLimits.provider === "cursor") {
+    return [
+      formatWindowLine("included usage", rateLimits.cycle),
+      rateLimits.includedLimitUsd === null
+        ? null
+        : `included credits: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
+      // Only worth a line when the cycle window did not already carry the
+      // reset - otherwise it restates the instant `formatWindowLine` printed.
+      rateLimits.cycle !== null ||
+      rateLimits.cycleStart === null ||
+      rateLimits.cycleEnd === null
+        ? null
+        : `billing cycle: ${formatTimestamp(rateLimits.cycleStart)} - ${formatTimestamp(rateLimits.cycleEnd)}`,
+      rateLimits.spendLimitUsd === null
+        ? null
+        : `spend limit${rateLimits.spendLimitType === null ? "" : ` (${rateLimits.spendLimitType})`}: ${formatNumber(rateLimits.spendLimitRemainingUsd)}/${formatNumber(rateLimits.spendLimitUsd)} remaining`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
   return [
     `credit balance: ${formatNumber(rateLimits.creditBalance)}`,
     `pass: ${rateLimits.passState ?? "unknown"}`,

@@ -1256,3 +1256,125 @@ describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
   });
 
 });
+
+describe("cursor rate-limit arm", () => {
+  const CYCLE_START = 1786921855000;
+  const CYCLE_END = 1789600255000;
+
+  const cursorAvailable = {
+    provider: "cursor",
+    available: true,
+    cycleStart: CYCLE_START,
+    cycleEnd: CYCLE_END,
+    cycle: {
+      usedPercent: 72.115,
+      resetsAt: CYCLE_END,
+      durationMinutes: (CYCLE_END - CYCLE_START) / 60_000,
+    },
+    includedLimitUsd: 400,
+    usedUsd: 288.46,
+    remainingUsd: 111.54,
+    spendLimitType: "user",
+    spendLimitUsd: 100,
+    spendLimitRemainingUsd: 100,
+    displayMessage: "You've used 72% of your included usage",
+  } as const;
+
+  // The exact row a pre-Cursor host returns for cursor today.
+  const cursorUnsupported = {
+    provider: "cursor",
+    available: false,
+    reason: "unsupported_provider",
+  } as const;
+
+  it("rides the live 4.0 line but not the frozen 3.0 one", () => {
+    expect(providerRateLimitsSchema.parse(cursorAvailable)).toEqual(
+      cursorAvailable,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    ).toMatchObject({ providerRateLimits: cursorAvailable });
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    ).toThrow();
+  });
+
+  // The wire-boundary invariant: the host synthesizes the window's reset FROM
+  // the cycle end, so the two can never disagree on the same payload.
+  it("rejects a measured cycle whose resetsAt disagrees with cycleEnd", () => {
+    expect(() =>
+      providerRateLimitsSchema.parse({
+        ...cursorAvailable,
+        cycle: { ...cursorAvailable.cycle, resetsAt: CYCLE_END + 1 },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts an unmeasured snapshot that keeps only the cycle bounds", () => {
+    const unmeasured = {
+      ...cursorAvailable,
+      cycle: null,
+      includedLimitUsd: null,
+      usedUsd: null,
+      remainingUsd: null,
+    };
+    expect(providerRateLimitsSchema.parse(unmeasured)).toEqual(unmeasured);
+  });
+
+  it("degrades a cursor-available snapshot through the 4.0 -> 3.0 bridge", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorAvailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse(result.value),
+    ).not.toThrow();
+  });
+
+  // `"cursor"` is in every frozen provider enum (it long predates Hermes/omp),
+  // so the degraded row must reparse cleanly all the way down - this is what
+  // lets the arm ride 4.0 instead of forcing a new major.
+  it("degrades cursor down the 4.0 -> 2.1 and 4.0 -> 1.2 bridges too", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: cursorAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+    }
+  });
+
+  it("leaves an already-unavailable cursor snapshot untouched", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: cursorUnsupported,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+  });
+});

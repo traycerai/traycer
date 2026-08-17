@@ -369,6 +369,23 @@ function projectedLiveWindows(
       const credits = huggingFaceCreditProjection(rateLimits);
       return credits === null ? [] : [credits];
     }
+    case "cursor":
+      // Cursor rides the shared window path via its synthesized billing-cycle
+      // window, exactly like grok - NOT the credit projection its money-shaped
+      // fields might suggest - so severity and the compact bar come straight
+      // from `classifyProviderRateLimits`. This is also why cursor is absent
+      // from the credit-provider severity exception below: that exception
+      // exists for providers whose `providerRateLimitWindows` is empty by
+      // design, and cursor's is not.
+      return [
+        windowProjection({
+          id: "cycle",
+          role: "primary",
+          name: null,
+          window: rateLimits.cycle,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
   }
