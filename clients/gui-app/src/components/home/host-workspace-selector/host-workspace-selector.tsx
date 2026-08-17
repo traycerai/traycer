@@ -33,11 +33,12 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
@@ -1831,22 +1832,22 @@ interface InEpicSurfaceProps {
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
+  // Held for the clone handler below, which needs the DIRECTORY and the spine,
+  // not a host-resolved client.
   const binding = useHostBinding();
-  const appEffectiveHostId = useEffectiveHostId();
   const sourceChatRecord = useChatById(
     surface.kind === "chat" ? surface.ownerId : null,
   );
   // Ticket 37: the owner this surface is showing for the chat it would clone,
-  // resolved through the same hook the dead-tile banner uses. Read off the
-  // app-wide HOST rather than `props.hostClient` so it shares the cloud list
-  // already fetched elsewhere in the app - and resolved from the effective
-  // host id, because the binding's spine stopped naming a host when P4.2
-  // deleted the active slot.
+  // resolved through the same hook the dead-tile banner uses. APP-WIDE BY
+  // INTENT, and this is the strongest case of it in the app: the surface
+  // already HOLDS a host client (`props.hostClient`) and deliberately declines
+  // it, because sharing the cloud list already fetched elsewhere is the whole
+  // point. Not the spine either, which stopped naming a host when P4.2 deleted
+  // the active slot.
+  const appEffectiveHostId = useEffectiveHostId();
   const appHostClient = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(appEffectiveHostId),
+    () => resolveAppWideHostClient(binding, appEffectiveHostId),
     [binding, appEffectiveHostId],
   );
   const sourceOwnerUserId = useCloneSourceOwnerUserId({

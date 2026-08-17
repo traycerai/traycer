@@ -244,7 +244,6 @@ vi.mock("react-virtuoso", async () => {
 });
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useDefaultHostClient: () => null,
   harnessCatalogEntryNeedsRefresh: () => true,
   useGuiHarnessesQueryForClient: () => ({
     data: {

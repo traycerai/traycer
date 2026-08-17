@@ -40,6 +40,7 @@ import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { useHostBinding } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
@@ -74,11 +75,14 @@ export function HostReadinessControllerProvider(props: {
   // The app-wide client, resolved from that id. It used to be the spine, whose
   // answer came from the active slot; P4.2 deleted the slot, so the id-pinned
   // requester is what reports "the effective host, once its row exists".
+  //
+  // APP-WIDE BY CONSTRUCTION: this controller is a top-level provider, so every
+  // host-scoped surface renders INSIDE it and none can re-provide above it. The
+  // explicit hook is what keeps that true if the tree ever moves - this is the
+  // app's readiness authority, and a controller reporting a settings panel's
+  // host would gate the whole window on a machine the user is only inspecting.
   const client = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(effectiveHostId),
+    () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
   );
   const readiness = useReactiveHostReadiness(client);

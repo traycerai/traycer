@@ -24,10 +24,12 @@ import {
   type ModelOption,
 } from "@/components/home/data/landing-options";
 import {
-  useDefaultHostClient,
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useHostBinding } from "@/lib/host";
+import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-composer-entry";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import {
@@ -317,7 +319,12 @@ const MODEL_SUBPAGE: CommandSubpage = {
  */
 function useFocusedComposerCatalog(): GuiHarnessCatalog {
   const entry = useFocusedComposerEntry();
-  const defaultClient = useDefaultHostClient();
+  const defaultBinding = useHostBinding();
+  const defaultEffectiveHostId = useEffectiveHostId();
+  const defaultClient = useMemo(
+    () => resolveSubtreeHostClient(defaultBinding, defaultEffectiveHostId),
+    [defaultBinding, defaultEffectiveHostId],
+  );
   // `"cached-only"`: opening a palette subpage must not cold-start every
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds - on the default host that is the prefetcher's full

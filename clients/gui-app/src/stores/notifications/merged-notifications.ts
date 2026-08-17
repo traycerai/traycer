@@ -3,6 +3,8 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   Analytics,
   AnalyticsEvent,
@@ -11,7 +13,6 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
@@ -585,16 +586,16 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
+  // APP-WIDE BY INTENT. These actions mark notifications read ON a host, and
+  // the host is the one whose feed the bell is showing - an app-wide fact. A
+  // scoped panel's host would mark the wrong feed read, so this must not follow
+  // a re-provided binding even if one is ever mounted above it. Resolved from
+  // the effective host rather than read off the spine, which stopped naming one
+  // when P4.2 deleted the active slot.
   const binding = useHostBinding();
   const effectiveHostId = useEffectiveHostId();
-  // Resolved from the effective host, not read off the spine: these actions
-  // mark notifications read ON a host, and the spine stopped naming one when
-  // P4.2 deleted the active slot.
   const client = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(effectiveHostId),
+    () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
   );
   const queryClient = useQueryClient();

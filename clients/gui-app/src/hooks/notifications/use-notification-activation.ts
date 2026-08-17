@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useHostBinding } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
 import {
@@ -105,15 +106,15 @@ export function useNotificationActivationWithNavigate(
 ): NotificationActivationController {
   const binding = useHostBinding();
   const effectiveHostId = useEffectiveHostId();
-  // The app-wide client. `beforeRouteHostId`/`afterRouteHostId` below record
-  // which host the window was addressing across an activation (D7: it must
-  // not move); reading that off the spine stopped meaning anything when P4.2
+  // APP-WIDE BY INTENT, and it must stay that way if this ever mounts under a
+  // host-scoped subtree. `beforeRouteHostId`/`afterRouteHostId` below record
+  // which host the WINDOW was addressing across an activation (D7: it must not
+  // move) - that is a property of the window, not of whatever surface happens
+  // to be on screen, and a scoped panel's host would report a move that never
+  // happened. Reading it off the spine stopped meaning anything when P4.2
   // deleted the active slot, so it resolves the effective host id instead.
   const client = useMemo(
-    () =>
-      binding === null
-        ? null
-        : binding.hostClient.createRequesterForHostId(effectiveHostId),
+    () => resolveAppWideHostClient(binding, effectiveHostId),
     [binding, effectiveHostId],
   );
 

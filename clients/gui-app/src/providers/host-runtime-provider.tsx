@@ -59,6 +59,29 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly hostClient: HostClient<Registry>;
   readonly directory: HostDirectoryService;
   readonly auth: AuthService;
+  /**
+   * The host `hostClient` addresses, carried HERE rather than looked up beside
+   * it — the unary twin of `StreamRuntimeBinding.hostId`, for the same reason
+   * and after the same defect.
+   *
+   * `null` means "this binding names no host": read the app-wide effective one
+   * instead. That is the APP-WIDE binding's answer, and the whole point of the
+   * field is that a re-provided binding answers something else.
+   *
+   * Before this, a subtree that re-provided a pinned `hostClient` still had its
+   * NAME read from `useEffectiveHostId()`, and `useHostClient()` composed the
+   * two — so it rebuilt a requester for the ambient host off the pinned one and
+   * handed that back. `createRequesterForHostId` is not one of the six members
+   * `createPinnedRequester` intercepts, so the call fell through `Reflect.get`
+   * to the spine and the pin was simply gone. Every host-scoped panel shipped
+   * inert: the client moved, the name did not, and the name won.
+   *
+   * Do NOT infer this from `hostClient.getActiveHostId()`. A requester answers
+   * `null` there while its directory row is unresolved, which would drop a
+   * scoped subtree onto the ambient host for exactly that window — the same
+   * defect, re-armed on a timing condition instead of a structural one.
+   */
+  readonly hostId: string | null;
 }
 
 export interface HostRuntimeState<Registry extends VersionedRpcRegistry> {
@@ -461,6 +484,12 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
             hostClient: activeRuntime.hostClient,
             directory,
             auth,
+            // THE app-wide binding, and the only one that may answer `null`
+            // here: `activeRuntime.hostClient` is the spine, which addresses no
+            // host by design (P4.2 deleted the active slot). Naming a host
+            // would pin every consumer in the window to it and make the
+            // selection layer's `effectiveHostId` unreachable.
+            hostId: null,
           };
           setLatestBindingSnapshot(nextBinding);
           setBinding(nextBinding);
