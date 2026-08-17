@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -22,6 +23,8 @@ import {
   useSurfaceHostClient,
   useSurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { useGitPrefetchWorktreeStatus } from "@/hooks/git/use-git-prefetch-worktree-status";
 import { useGitCapabilitiesQuery } from "@/hooks/git/use-git-capabilities-query";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
@@ -144,6 +147,8 @@ export function GitDiffPanelBodyLive(
   const pin = useSurfaceHostPin(surfaceKey);
   const { latchOnFirstUse } = pin;
   const client = useSurfaceHostClient(pin.resolvedHostId);
+  const pinnedStreamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
+  const ambientStream = use(StreamRuntimeContext);
   // No dead arm: a pinned host that dies resolves to `effective`, so the panel
   // re-points instead of blanking. The selected repo is (hostId, path), so the
   // default-pick effect below finds it absent from the new host's rows and
@@ -310,20 +315,37 @@ export function GitDiffPanelBodyLive(
     latchOnFirstUse,
   ]);
 
-  return renderGitDiffPanelBody({
-    surfaceKey,
-    latchOnFirstUse: pin.latchOnFirstUse,
-    bindingsPending: bindingsQuery.isPending,
-    bindingsError: bindingsQuery.error !== null,
-    gitRows,
-    rows,
-    selectedRepo,
-    selectedRootRow,
-    epicId: props.epicId,
-    tabId: props.tabId,
-    retryUnavailableRoots,
-    unavailableGitRootKeys: unavailableGitRootKeys.keys,
-  });
+  // The pin moves the STREAM too, not just the unary reads above.
+  // `git.subscribeStatus` is opened by `GitDiffPanelLoaded` below out of
+  // `StreamRuntimeContext`, so before this the panel sent the pinned host's
+  // name as a subscribe PARAM over the APP-WIDE host's socket - watching the
+  // wrong machine's working tree while every unary read beside it was
+  // correctly pinned. One swap here re-targets the whole subtree.
+  //
+  // Rendered UNCONDITIONALLY, as `ResourceMonitorPopover` is and for the same
+  // reason: mounting the provider only when a pinned binding exists changes
+  // the element type at this position the instant a pick resolves, and React
+  // would unmount the subtree - discarding the panel's selection and scroll
+  // the moment a host is chosen. `null` means "following", where the ambient
+  // binding is already this host's.
+  return (
+    <StreamRuntimeContext.Provider value={pinnedStreamBinding ?? ambientStream}>
+      {renderGitDiffPanelBody({
+        surfaceKey,
+        latchOnFirstUse: pin.latchOnFirstUse,
+        bindingsPending: bindingsQuery.isPending,
+        bindingsError: bindingsQuery.error !== null,
+        gitRows,
+        rows,
+        selectedRepo,
+        selectedRootRow,
+        epicId: props.epicId,
+        tabId: props.tabId,
+        retryUnavailableRoots,
+        unavailableGitRootKeys: unavailableGitRootKeys.keys,
+      })}
+    </StreamRuntimeContext.Provider>
+  );
 }
 
 function renderGitDiffPanelBody(input: {

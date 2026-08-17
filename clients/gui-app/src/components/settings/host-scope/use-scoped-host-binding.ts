@@ -33,6 +33,19 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * happens to sit above a composer — a positional fact, not an invariant, which
  * is why it is written down here where the eighth re-provider gets added.
  *
+ * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
+ * note used to imply it did not by naming only the unary provider.
+ * `useDictationAvailability` (`speech.ensureModel`) is the unary half; the
+ * AUDIO itself goes through `useVoiceDictation`, which reads
+ * `useWsStreamClient()`. So the stream context is literally the transport a
+ * user's microphone rides, and a stream re-provider above a composer is the
+ * voice-to-the-wrong-machine outcome directly rather than by implication.
+ * That population is no longer a single surface: `resource-monitor-popover`
+ * was the only stream re-provider, and the epic sidebar's file tree and git
+ * diff panel are now two more. All three are file/diff browsers containing no
+ * composer, which is what keeps this safe — again positionally, not
+ * structurally.
+ *
  * Three arms, and which one you are in is the whole question:
  *
  *   - `status === "ready"` with an explicit pick re-provides `scope.client`.

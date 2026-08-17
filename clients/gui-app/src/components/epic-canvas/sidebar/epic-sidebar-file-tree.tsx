@@ -24,6 +24,7 @@
  * `FileTreeMode`.
  */
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -82,9 +83,11 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { gitChangedFileToPierreStatusEntry } from "@/lib/git/panel-file-rendering";
 import {
+  StreamRuntimeContext,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -445,13 +448,51 @@ function useHostPathSearch(args: {
   return { result, hostSearchUnavailable: unsupported };
 }
 
-export function FileTreePanelBodyForWorkspace(props: {
+interface FileTreePanelBodyForWorkspaceProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly workspacePath: string;
   readonly hostId: string | null;
   readonly onLatchHost: () => void;
-}) {
+}
+
+/**
+ * Re-provides this panel's STREAM transport for the host the pin resolved to,
+ * then renders the body.
+ *
+ * The body's unary reads were already pinned - every one of them takes
+ * `hostId` and resolves its own client. Its STREAMS were not: they read
+ * `useWsStreamClient()` out of context, so `git.subscribeStatus` and
+ * `workspace.subscribeFileList` carried the pinned host's name as a subscribe
+ * PARAM while riding the app-wide host's socket. That watches the wrong
+ * machine's working tree, and it does it without erroring, because the param
+ * is a key rather than a route.
+ *
+ * A separate component ONLY because the provider has to sit above the hooks:
+ * `useFileTreeSource` runs in the body, so a provider added inside it would be
+ * below its own consumers.
+ *
+ * Rendered UNCONDITIONALLY (`?? ambient`), mirroring `ResourceMonitorPopover`:
+ * swapping between a provider and no provider changes the element type at this
+ * position, so React would unmount the body - discarding the tree's expansion
+ * and filter - at the moment a host is picked. `null` means "following", and
+ * there the ambient binding IS this host's transport, so falling back to it
+ * also keeps this panel sharing one subscription with everything else on that
+ * host rather than opening a second.
+ */
+export function FileTreePanelBodyForWorkspace(
+  props: FileTreePanelBodyForWorkspaceProps,
+) {
+  const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  const ambientStream = use(StreamRuntimeContext);
+  return (
+    <StreamRuntimeContext.Provider value={pinnedStreamBinding ?? ambientStream}>
+      <FileTreeBodyForResolvedHost {...props} />
+    </StreamRuntimeContext.Provider>
+  );
+}
+
+function FileTreeBodyForResolvedHost(props: FileTreePanelBodyForWorkspaceProps) {
   // The file-tree panel resolves against its surface pin (`selection ??
   // effective`). Opened tabs stamp this host id onto their `WorkspaceFileRef`
   // so they keep resolving against the same host after a later swap

@@ -135,6 +135,15 @@ const testState = vi.hoisted<TestState>(() => ({
   permissionRole: "owner",
 }));
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
 }));

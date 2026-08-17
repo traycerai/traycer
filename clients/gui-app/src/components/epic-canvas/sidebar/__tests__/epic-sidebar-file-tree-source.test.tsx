@@ -36,7 +36,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { createRequestContext } from "@traycer/protocol/auth/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
-import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
 import {
   fileTreeExpansionScopeKey,
   useFileTreeStore,
@@ -68,6 +71,19 @@ interface RecordedReset {
 }
 const resetPathsCalls: RecordedReset[] = [];
 const setSearchCalls: Array<string | null> = [];
+
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+const pinnedStreamBindingRef = vi.hoisted(() => ({
+  value: null as StreamRuntimeBinding | null,
+}));
+
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => pinnedStreamBindingRef.value,
+}));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,
@@ -471,6 +487,33 @@ describe("sidebar file tree source selection", () => {
     cleanup();
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
+    pinnedStreamBindingRef.value = null;
+  });
+
+  it("opens the stream on the PINNED host's transport, not the app-wide one", async () => {
+    // The panel re-provides `StreamRuntimeContext` for the host its pin
+    // resolved to, and this is the arm that proves the provider actually sits
+    // ABOVE the hooks that read it - an adjacency neither the hook's own suite
+    // nor the subscription registry's can see, because each is correct in
+    // isolation either way.
+    //
+    // Before the re-point this panel passed the pinned host's id as a
+    // subscribe PARAM while riding the app-wide socket, which watches the
+    // wrong machine's working tree and reports nothing wrong: the param is a
+    // key, not a route. So the assertion is WHICH TRANSPORT carried the
+    // subscribe, and the ambient client is here as the control - without it a
+    // build that subscribed on both would pass.
+    const ambient = new MockWsStreamClient("unknown");
+    const pinned = new MockWsStreamClient("unknown");
+    pinnedStreamBindingRef.value = {
+      wsStreamClient: pinned,
+      hostId: HOST_ID,
+    };
+
+    renderPanel(ambient);
+
+    expect(pinned.subscribedMethods).toEqual(["workspace.subscribeFileList"]);
+    expect(ambient.subscribedMethods).toEqual([]);
   });
 
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {

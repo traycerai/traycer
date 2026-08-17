@@ -33,6 +33,16 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  * BESIDE that pair would be two lifecycles over one object, which is how the
  * same code produces both premature disposal and a leak in different races.
  *
+ * THE OBVIOUS FIX IS THE WRONG ONE, and it was proposed: leave `pin`/`unpin`
+ * as the owner and make the cache a lookup that its lifecycle evicts from.
+ * That cannot work, and the reason is worth keeping because it is not visible
+ * from the pair's own code. `pinCount` STARTS AT ZERO and almost no caller
+ * ever pins - it counts cross-hook CONSUMERS, not SHARERS. So under sharing it
+ * is zero for the ordinary case, and the first surface's unmount closes the
+ * object the second surface is still reading through. Keeping the pair as
+ * owner produces precisely the premature disposal the one-refcount invariant
+ * exists to prevent.
+ *
  * So the pair is not kept beside this count - it is EXPRESSED IN it. `pin` is
  * `retain` and `unpin` is `release` on the entry this consumer acquired, and
  * the hook's own effect holds exactly one reference of the same kind, taken at
