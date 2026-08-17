@@ -196,6 +196,13 @@ function mountProvisioningLifecycle(host: MockRunnerHost): {
   };
 }
 
+const runnerToastSpy = vi.fn<(error: unknown, fallback: string) => void>();
+vi.mock("@/lib/runner-error-toast", () => ({
+  toastFromRunnerError: (error: unknown, fallback: string): void => {
+    runnerToastSpy(error, fallback);
+  },
+}));
+
 describe("HostProvisioningController - staged wait and localHostState derivation", () => {
   afterEach(() => {
     cleanup();
@@ -488,6 +495,61 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
       expect(convergeReady).toHaveBeenCalledTimes(4);
     });
     expect(convergeReady).toHaveBeenLastCalledWith(true);
+  });
+
+  // Kills: dropping the `toastFromRunnerError` in `reinstall()`'s rejection
+  // handler. The state restore below is NOT the feedback - the Reinstall
+  // button reappearing is indistinguishable from a click that never
+  // registered, which is the whole defect.
+  it("reinstall() says so when the sentinel could not be cleared, and restores removed", async () => {
+    const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
+      Promise.resolve({ kind: "ok", value: { running: false, version: null } }),
+    );
+    const baseManagement = makeHostManagement(convergeReady);
+    const failure = new Error("sentinel write denied");
+    const clearRemoval = vi.fn(() => Promise.reject(failure));
+    const management: IHostManagement = {
+      ...baseManagement,
+      clearRemoval,
+    };
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: management,
+    });
+    const { queryClient, readLifecycle } = mountProvisioningLifecycle(host);
+
+    act(() => {
+      readLifecycle()?.provisioning.retry();
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.removed).toBe(true);
+    });
+    expect(convergeReady).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      readLifecycle()?.provisioning.reinstall();
+    });
+
+    await waitFor(() => {
+      expect(runnerToastSpy).toHaveBeenCalledTimes(1);
+    });
+    // The REJECTION REASON reaches the shared handler, not a swallowed
+    // generic: a typed bridge error keeps its own message there.
+    expect(runnerToastSpy.mock.calls[0]?.[0]).toBe(failure);
+
+    // And the surface is back where it was, so a retry is possible.
+    expect(readLifecycle()?.provisioning.removed).toBe(true);
+    expect(
+      queryClient.getQueryData(runnerQueryKeys.hostRemovalState(management)),
+    ).toEqual({ removedByUser: true });
+    // Nothing ran: a failed clear must not fall through to a converge.
+    expect(convergeReady).toHaveBeenCalledTimes(1);
   });
 });
 

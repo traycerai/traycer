@@ -20,6 +20,7 @@ import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { runnerQueryKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import {
   Analytics,
   AnalyticsEvent,
@@ -394,7 +395,7 @@ function useHostProvisioning(args: {
     });
     void management.clearRemoval().then(
       () => run(false, "reinstall"),
-      () => {
+      (error: unknown) => {
         // The sentinel couldn't be cleared, so convergeReady would just
         // short-circuit back to the removed outcome. Restore the removed
         // surface instead of flashing a spinner through a wasted round-trip;
@@ -403,6 +404,11 @@ function useHostProvisioning(args: {
         queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
           removedByUser: true,
         });
+        // The restore alone was the entire feedback, and it is ambiguous: the
+        // Reinstall button reappearing looks identical to a click that never
+        // registered. Say the request failed, through the shared runner
+        // handler so a typed bridge error keeps its own message.
+        toastFromRunnerError(error, "Couldn't reinstall the host. Try again.");
       },
     );
   }, [queryClient, run, runnerHost.hostManagement]);

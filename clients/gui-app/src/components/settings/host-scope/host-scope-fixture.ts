@@ -99,6 +99,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     client: null,
     setHostId: () => undefined,
     makeActive: () => undefined,
+    isActivating: false,
     isLoading: false,
     listsFailed: false,
     retryLists: () => undefined,

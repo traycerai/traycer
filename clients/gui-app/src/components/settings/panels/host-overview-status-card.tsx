@@ -479,6 +479,8 @@ export function HostOverviewHeaderActions(props: {
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
   readonly onMakeActive: () => void;
+  /** An Activate is already in flight - see `HostScope.isActivating`. */
+  readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
 }): ReactNode {
   const { hostName } = props;
@@ -521,7 +523,7 @@ export function HostOverviewHeaderActions(props: {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!props.connectable}
+              disabled={!props.connectable || props.activateBusy}
               onClick={props.onMakeActive}
               data-testid="host-make-active"
             >

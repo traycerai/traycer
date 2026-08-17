@@ -585,6 +585,7 @@ export function HostOverviewPanel(props: {
         }}
         onOpenDoctor={() => setDoctorOpen(true)}
         onMakeActive={() => scope.makeActive(host.hostId)}
+        activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
       />
     );

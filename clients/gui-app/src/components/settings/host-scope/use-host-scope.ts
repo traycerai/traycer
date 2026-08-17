@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ActivateRefusalReason,
@@ -50,6 +50,17 @@ export interface HostScope {
    * re-derives; the new effective host comes back down to every window.
    */
   readonly makeActive: (hostId: string) => void;
+  /**
+   * An Activate is in flight. The button MUST gate on this.
+   *
+   * `makeActive` is fire-and-forget by shape, and the write behind it is not
+   * cheap or idempotent-by-accident: `authority.activate` validates, persists
+   * and re-derives, and a successful one fires the app's only `HostSelected`
+   * analytics event. With the button live throughout, a double-click issued
+   * two of each - two persists racing to decide the window's host, and a
+   * duplicate event against a preference that landed once.
+   */
+  readonly isActivating: boolean;
   readonly isLoading: boolean;
   /**
    * A host list came back as an ERROR, so an empty `hosts` means "we could not
@@ -113,10 +124,27 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
 
   const { scopedHostId, setScopedHostId } = selection;
   const authority = runnerHost.selectionAuthority;
+  // ONE activation at a time, and the guard is here rather than only on the
+  // button: the button is one caller, and this is the seam every caller passes
+  // through. `requestActivate` never rejects - it renders its own refusal and
+  // transport arms as toasts - so the latch always clears.
+  const [activatingHostId, setActivatingHostId] = useState<string | null>(null);
+  // The GUARD is a ref and the flag is state, and they are not interchangeable.
+  // Guarding on the state value reads it through this callback's closure, which
+  // only refreshes on re-render - so two clicks delivered in one React batch
+  // both see `null` and both write. That is precisely the double-click this
+  // exists to stop, and it survived a state-only guard.
+  const activatingRef = useRef(false);
   const makeActive = useCallback(
     (hostId: string) => {
+      if (activatingRef.current) return;
       const option = findHostOption(hosts, hostId);
-      void requestActivate(authority, hostId, option);
+      activatingRef.current = true;
+      setActivatingHostId(hostId);
+      void requestActivate(authority, hostId, option).finally(() => {
+        activatingRef.current = false;
+        setActivatingHostId(null);
+      });
     },
     [authority, hosts],
   );
@@ -190,6 +218,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     client: status === "following" ? ambientClient : overrideClient,
     setHostId: setScopedHostId,
     makeActive,
+    isActivating: activatingHostId !== null,
     isLoading: options.isLoading,
     listsFailed,
     retryLists: options.retryLists,
