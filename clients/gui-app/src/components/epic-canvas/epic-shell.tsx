@@ -26,6 +26,7 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface EpicShellProps {
   readonly epicId: string;
@@ -103,9 +104,16 @@ function EpicShellSessionBody(
         }
         canvas={
           <div
-            className={
-              props.readOnly ? "pointer-events-none select-none" : undefined
-            }
+            // `h-full min-h-0` is load-bearing, not decoration: `TileCanvas`
+            // sizes itself with `h-full`, so every element between it and
+            // `CanvasColumn`'s `min-h-0 flex-1` slot must carry a definite
+            // height forward. A wrapper left at `height: auto` gives that
+            // percentage nothing to resolve against, and the canvas collapses
+            // to its tab strip (~36px) with the tile body at 0.
+            className={cn(
+              "h-full min-h-0",
+              props.readOnly && "pointer-events-none select-none",
+            )}
             data-epic-repoint-read-only={props.readOnly ? "true" : "false"}
             inert={props.readOnly}
           >
