@@ -66,13 +66,18 @@
  * - `cdc`,
  * - `hostPrivateShard`.
  *
- * These are PUBLISHER-DERIVED. A chat is single-owner, and the owner re-cuts
- * its parts and re-derives its cut plan from its own op log on every publish,
- * so the only round-trip these values ever make is through the owner's own
- * predecessor head. The one loss scenario is a same-host downgrade: the newer
- * part fields strip, and the next newer publish does a full recut instead of
- * an incremental one. That is an efficiency cost, never data loss - the op log
- * is the source of truth.
+ * These are PUBLISHER-DERIVED: a chat is single-owner, and the owner can always
+ * re-cut its parts and re-plan its cut from its own op log, which is the source
+ * of truth. **The only round-trip any of these values makes is through the
+ * owner's own predecessor head** - the extend road re-emits unchanged cohort
+ * entries verbatim and reads `cdc` back to check the plan is still the same
+ * one, so they are not literally re-derived on every publish; they are
+ * re-derivable, and derived afresh on every full recut.
+ *
+ * That is what bounds the loss. The one scenario is a same-host downgrade: the
+ * newer part fields strip on the older host's next publish, and the following
+ * newer publish does a full recut instead of an incremental one. An efficiency
+ * cost, never data loss.
  *
  * > A minor may add a publisher-derived field for the next publish to plan
  * > with. It must NOT put durable CHAT data there. Anything the chat is not

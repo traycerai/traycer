@@ -358,23 +358,26 @@ section that outgrew the head yet holds nothing — and it assembles to
 never had events. It also mints content addresses and fetches for nothing.
 
 **Publisher-derived levels carry no durable chat data.** The head's part entries,
-`cdc` and `hostPrivateShard` are re-derived from the owner's op log on **every**
-publish: a chat is single-owner, and the owner re-cuts its cohorts and re-plans
-its cut rather than reading them back. They are therefore the three head
-locations residual capture deliberately does **not** cover (§3, and the manifest
-note in `chat-sync/captured-levels.ts`), and the rule that follows binds every
-same-major minor:
+`cdc` and `hostPrivateShard` are always RE-DERIVABLE from the owner's op log,
+which is the source of truth: a chat is single-owner, so the owner can re-cut its
+cohorts and re-plan its cut at will, and a full recut does exactly that. They are
+not re-derived on every publish — the extend road re-emits unchanged cohort
+entries verbatim and reads `cdc` back to confirm the plan has not moved — and
+that is the point: **the only round-trip any of them makes is through the owner's
+own predecessor head.** They are therefore the three head locations residual
+capture deliberately does **not** cover (§3, and the manifest note in
+`chat-sync/captured-levels.ts`), and the rule that follows binds every same-major
+minor:
 
 > A minor may add a publisher-derived field for the next publish to plan with. It
 > must NOT put durable CHAT data there — anything the chat is not still true
 > without. Durable additions go at a captured level, or inside a message / event
 > body.
 
-The only round-trip such a field makes is through the owner's own predecessor
-head, so the only loss scenario is a same-host downgrade: the newer part fields
-strip, and the next newer publish does a full recut instead of an incremental
-one. That is an accepted efficiency cost, never data loss — the op log is the
-source of truth. Runtime capture for these levels was investigated and rejected:
+So the only loss scenario is a same-host downgrade: the newer part fields strip
+on the older host's next publish, and the following newer publish does a full
+recut instead of an incremental one. That is an accepted efficiency cost, never
+data loss. Runtime capture for these levels was investigated and rejected:
 it would cost a manifest id, a store op field and an encoder change per level,
 and a part-level key perturbs the head bytes the lineage digest is taken over.
 

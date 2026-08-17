@@ -266,9 +266,14 @@ export const chatHeadRecordShape = {
  * The 1.1 line's reader floor, as a value, for the day one is deliberately
  * imposed. **No writer stamps it today**, and that is the policy, not an
  * omission: the 1.1 reshape is additive and read-safe, so per
- * `minReaderVersion`'s own doc (and `COMPATIBILITY.md` §4) there is nothing
- * to gate - a 1.0 reader admits a 1.1 head, renders what it models, and
- * round-trips the cut-plan fields it does not through the residual bags.
+ * `minReaderVersion`'s own doc (and `COMPATIBILITY.md` §4) there is nothing to
+ * gate. A 1.0 reader admits a 1.1 head, reads each part entry as the address it
+ * is, ignores the membership fields beside it, and re-derives its own cut plan
+ * from its op log - so it renders and re-publishes the chat correctly without
+ * modelling any of it. (Head-level `cdc` additionally rides the head's residual
+ * bag; the per-part fields have no capture site, deliberately - see the
+ * publisher-derived-levels rule in `captured-levels.ts`. The floor is
+ * unnecessary either way, but for re-derivation, not for preservation.)
  *
  * Pinned literally rather than derived from `CHAT_SYNC_SCHEMA_VERSION` so
  * that raising the floor stays a DELIBERATE act. Deriving it made "every
