@@ -139,7 +139,7 @@ function nodeHostStatus(
 
 function pulseSenderAgentId(pulse: CommGraphPulse | null): string | null {
   if (pulse === null) return null;
-  return pulse.kind === "edge" ? pulse.fromAgentId : pulse.agentId;
+  return pulse.kind === "edge" ? pulse.fromAgentId : pulse.senderAgentId;
 }
 
 export function CommGraphCanvas(props: CommGraphCanvasProps) {

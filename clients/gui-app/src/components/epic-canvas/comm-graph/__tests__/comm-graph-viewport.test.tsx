@@ -178,7 +178,11 @@ function setCanvasSize(element: HTMLElement): void {
 }
 
 function playbackPulse(): CommGraphPulse {
-  return { kind: "agent", agentId: AGENT.id };
+  return { kind: "agent", agentId: AGENT.id, senderAgentId: AGENT.id };
+}
+
+function receiverOnlyPulse(senderAgentId: string): CommGraphPulse {
+  return { kind: "agent", agentId: AGENT.id, senderAgentId };
 }
 
 afterEach(() => {
@@ -233,6 +237,21 @@ describe("CommGraphCanvas viewport", () => {
         { zoom: 0.75, duration: 250 },
       );
     });
+  });
+
+  it("does not pan to the receiver when the sender is not rendered", () => {
+    const result = renderCanvas(DEFAULT_COMM_GRAPH_VIEW, {
+      playing: true,
+      pulse: receiverOnlyPulse("offscreen-sender"),
+    });
+    setCanvasSize(result.getByTestId("comm-graph-canvas"));
+    const { setCenter } = installFlowInstance({
+      x: -10_000,
+      y: -10_000,
+      zoom: 0.5,
+    });
+
+    expect(setCenter).not.toHaveBeenCalled();
   });
 
   it("does not move when the playback sender already intersects the viewport", () => {
