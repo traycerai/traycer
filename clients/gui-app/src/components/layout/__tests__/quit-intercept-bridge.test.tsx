@@ -326,16 +326,61 @@ describe("QuitInterceptBridge", () => {
       ]);
     });
 
-    expect(screen.getByText("Saving - please wait")).not.toBeNull();
+    // Neither half may promise that syncing is under way or that waiting is
+    // the user's only option: a buffer retained across a host re-point has no
+    // transport, so it never syncs, and `userCancelled` is a real exit.
+    expect(screen.getByText("You have unsynced changes.")).not.toBeNull();
     expect(
       screen.getByText(
-        "2 Epic(s) have unsynced changes. Wait for them to sync, or quit and discard.",
+        "2 Epic(s) have not finished syncing. Quitting continues on its own if they do, but some never will. Cancel to stay in the app, or quit and discard them.",
       ),
     ).not.toBeNull();
 
     const list = screen.getByTestId("quit-intercept-epic-list");
     expect(list.textContent).toContain("Alpha");
     expect(list.textContent).toContain("Beta");
+  });
+
+  it("ranks the acting safe exit above the inert one: Cancel is last and carries the only primary fill", () => {
+    const fake = installAppLifecycleFake();
+    const registry = __getOpenEpicRegistryForTests();
+    const handleA = buildHandle("eA", "Alpha");
+    registry.acquire("eA", () => handleA);
+    handleA.setDirty(true, 2);
+
+    render(<QuitInterceptBridge />);
+
+    act(() => {
+      fake.emitQuitRequest([{ epicId: "eA", title: "Alpha", queueSize: 2 }]);
+    });
+
+    const footer = screen.getByTestId("quit-intercept-discard").parentElement;
+    // Positive premise, thrown rather than asserted: without a real footer
+    // every ranking below would run over an empty list and pass by vacancy.
+    if (footer === null) throw new Error("the quit dialog footer is missing");
+    const buttons = Array.from(footer.querySelectorAll("button"));
+    expect(buttons.length).toBe(3);
+
+    // `DialogFooter` is `flex flex-col-reverse … sm:flex-row sm:justify-end`,
+    // so at `sm:` and above DOM order paints left to right: the last child is
+    // the rightmost control. This dialog family reserves that slot for the safe
+    // action (`unsynced-close-dialog`, `unsynced-epic-move-dialog`), and it
+    // used to hold "Wait" - which has no `onClick` and, against a retained
+    // buffer, can never resolve.
+    expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual([
+      "quit-intercept-discard",
+      "quit-intercept-wait",
+      "quit-intercept-cancel",
+    ]);
+
+    // Stated as "which controls carry the primary fill", not as "Wait does
+    // not", so the assertion reports the real ranking on failure and cannot be
+    // satisfied by a footer where nothing is emphasised at all. On the unfixed
+    // tree this reads `["quit-intercept-wait"]`.
+    const primaryFilled = buttons
+      .filter((button) => button.className.split(" ").includes("bg-primary"))
+      .map((button) => button.getAttribute("data-testid"));
+    expect(primaryFilled).toEqual(["quit-intercept-cancel"]);
   });
 
   it("acknowledges serviced quit requests and responds with the active request id across retries", () => {

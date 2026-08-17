@@ -311,9 +311,13 @@ export function QuitInterceptBridge(): null | React.ReactElement {
           // control, and adding a safe exit does not help a keyboard user if
           // the focused control is still the unsafe one.
           //
-          // Focus is moved rather than the footer reordered: DOM order puts the
-          // primary action rightmost on `sm:`, which is the layout convention,
-          // and reordering would trade this hazard for a visual one.
+          // DO NOT DELETE THIS AS REDUNDANT once the footer's order is read.
+          // The footer has since been reordered - but only its two
+          // non-destructive controls, to put the acting safe action rightmost.
+          // "Quit and discard" is deliberately still FIRST in DOM order, so the
+          // first tabbable descendant is still the destructive one and this
+          // handler is the only thing standing between Cmd+Q and data loss. The
+          // reorder made it more load-bearing, not less.
           const cancel = cancelButtonRef.current;
           // Fail safe: with nothing to move focus to, let Radix's own default
           // run rather than preventing it and leaving focus outside the trap.
@@ -323,9 +327,18 @@ export function QuitInterceptBridge(): null | React.ReactElement {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Saving - please wait</DialogTitle>
+          {/*
+            Not "Saving - please wait", which this said until the retained
+            buffer arrived and made it false twice over: nothing may be saving
+            (a buffer retained across a host re-point has no transport at all,
+            so it can never sync), and the user is no longer required to wait
+            (`userCancelled` is a real exit). Wording follows the rest of the
+            unsynced-edits family - `unsynced-close-dialog` and
+            `unsynced-epic-move-dialog` both open "You have unsynced changes".
+          */}
+          <DialogTitle>You have unsynced changes.</DialogTitle>
           <DialogDescription>
-            {`${epicCount} Epic(s) have unsynced changes. Wait for them to sync, or quit and discard.`}
+            {`${epicCount} Epic(s) have not finished syncing. Quitting continues on its own if they do, but some never will. Cancel to stay in the app, or quit and discard them.`}
           </DialogDescription>
         </DialogHeader>
         {displayedEntries.length > 0 ? (
@@ -347,27 +360,42 @@ export function QuitInterceptBridge(): null | React.ReactElement {
             Quit and discard
           </Button>
           {/*
+            Inert by design - it carries no `onClick` at all. The dialog closes
+            from the auto-proceed gate above once every affected session drains,
+            so there is nothing for a click to do. It stays a distinct
+            affordance from Cancel because the two mean opposite things about
+            the quit: Wait keeps it pending, Cancel abandons it.
+
+            `ghost`, and ranked below Cancel, because "keeps it pending" is not
+            an outcome on the path that matters: a RETAINED buffer never drains,
+            so the gate above holds open for ever by construction and waiting
+            resolves nothing. This control used to carry `variant="default"` -
+            the strongest weight in the footer on the one action that cannot
+            complete.
+          */}
+          <Button variant="ghost" data-testid="quit-intercept-wait">
+            Wait
+          </Button>
+          {/*
             Unconditional, and not a function of whether anything can still
             sync: a quit confirmation should always let the user not quit. Its
             absence is what made every other exit from this dialog destructive.
+
+            Primary weight and last in DOM order - so it paints rightmost on
+            `sm:` - because it is the only non-destructive action that acts.
+            That is where this dialog family already puts the safe action:
+            `unsynced-close-dialog` and `unsynced-epic-move-dialog` both order
+            [destructive, safe] for exactly this reason, and
+            `ui/confirm-destructive-dialog.tsx:69-98` reserves the same slot for
+            the action its dialog is asking about.
           */}
           <Button
             ref={cancelButtonRef}
-            variant="secondary"
+            variant="default"
             onClick={handleCancel}
             data-testid="quit-intercept-cancel"
           >
             Cancel
-          </Button>
-          {/*
-            Inert by design - the dialog closes from the auto-proceed gate above
-            once every affected session drains, so there is nothing for a click
-            to do. It stays a distinct affordance from Cancel because the two
-            mean opposite things about the quit: Wait keeps it pending, Cancel
-            abandons it.
-          */}
-          <Button variant="default" data-testid="quit-intercept-wait">
-            Wait
           </Button>
         </DialogFooter>
       </DialogContent>
