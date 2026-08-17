@@ -922,11 +922,15 @@ export function BackgroundItemsPanel(props: {
     stopAllManaged();
   };
   const confirmSessionStop = () => {
-    setConfirmingSessionStop(false);
     // The session kill covers every harness item (they share the provider
     // process); the managed shells ride their own host RPC, exactly as a
-    // plain Stop all would send it.
-    props.onStopSession();
+    // plain Stop all would send it. A null send means the stream can no
+    // longer act (disconnected, or access revoked after the dialog opened) -
+    // keep the dialog open and leave the managed shells alone rather than
+    // half-executing a confirmation that silently did nothing to the gated
+    // command.
+    if (props.onStopSession() === null) return;
+    setConfirmingSessionStop(false);
     stopAllManaged();
   };
   // Count every affected row, not just root tree groups - a parent command
