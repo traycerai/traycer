@@ -694,6 +694,31 @@ function provisioningErrorFallback(
         pending: presentation.provisioning,
         onClick: presentation.retryProvisioning,
       },
+      // THE ESCAPE HATCH, and it was missing here.
+      //
+      // This card is drawn when the local host could not start, offering Retry -
+      // an action that may keep failing for a reason only Settings ▸ Shell can
+      // fix, since that page edits the launch config through the CLI with no
+      // running host involved. A card that can only retry the thing that just
+      // failed is a dead end for exactly the user who is stuck.
+      //
+      // Unconditional, deliberately, and the same rule the window modal states
+      // for its own copy of this button: gating the escape hatch behind the
+      // failure it exists to fix is the lockout that surface exists to prevent.
+      // It is NOT disabled while provisioning either - a retry in flight is
+      // precisely when someone wants to go and change the shell it is using.
+      //
+      // Independent of whether anything ever suppresses the modal over this
+      // card: the gap is real on its own, and this card has to be survivable
+      // whether it is the only narrator or not.
+      {
+        label: "Open settings",
+        testId: "local-host-provisioning-open-settings",
+        variant: "outline",
+        disabled: false,
+        pending: false,
+        onClick: presentation.openSettings,
+      },
     ],
   };
 }

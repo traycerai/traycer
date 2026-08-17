@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   type RenderResult,
@@ -387,6 +388,53 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByRole("main")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByText("boom")).toBeTruthy();
+  });
+
+  it("offers Open settings on the provisioning-error card, and keeps it live while a retry is in flight", () => {
+    // A DISTINCT claim from the Retry pin above, not a wider version of it.
+    // Retry re-runs the thing that just failed; it can keep failing for a reason
+    // only Settings ▸ Shell can fix, since that page edits the launch config
+    // through the CLI with no running host involved. A card whose only action is
+    // "try the failure again" is a dead end for exactly the user who is stuck,
+    // and this card had no other exit.
+    const openSettings = vi.fn();
+    renderGate(
+      { kind: "provisioning-error" },
+      {
+        ...PRESENTATION,
+        provisioningError: new Error("boom"),
+        openSettings,
+      },
+    );
+
+    const escapeHatch = screen.getByTestId(
+      "local-host-provisioning-open-settings",
+    );
+    expect(escapeHatch).toBeTruthy();
+    // Wired, not merely present: a button that renders and does nothing is the
+    // same dead end with extra steps.
+    fireEvent.click(escapeHatch);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+
+    cleanup();
+
+    // UNCONDITIONAL, including mid-retry. A provision in flight is precisely
+    // when someone wants to go and change the shell it is using, and gating the
+    // escape hatch behind the failure it exists to fix is the lockout the window
+    // modal states the same rule about. Retry is disabled here (asserted
+    // elsewhere) - this must not be.
+    renderGate(
+      { kind: "provisioning-error" },
+      {
+        ...PRESENTATION,
+        provisioningError: new Error("boom"),
+        provisioning: true,
+      },
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Open settings" })
+        .disabled,
+    ).toBe(false);
   });
 
   it("defers the zero-dialable default-host card to the window modal too - no gate-drawn card, no tab wording", () => {
