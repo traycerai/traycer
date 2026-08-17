@@ -1099,7 +1099,19 @@ describe("selection authority IPC binding", () => {
     }
 
     // Several leasesChanged events fire across the close + refusal sequence;
-    // the final one is the one that must show `dead`.
+    // the final one is the one that must show `dead`. The fan-out crosses a
+    // scheduling boundary the awaited ingest does not cover, so wait for the
+    // FACT (a lease message arrived) with a bounded poll rather than assuming
+    // delivery landed by the time the awaits return - under CI load it has
+    // not (this went red on the darwin job while green in every local run).
+    await vi.waitFor(() => {
+      expect(
+        windowB.sentMessages.some(
+          (message) =>
+            message.channel === RunnerHostEvent.selectionLeasesChanged,
+        ),
+      ).toBe(true);
+    });
     const leaseMessages = windowB.sentMessages.filter(
       (message) => message.channel === RunnerHostEvent.selectionLeasesChanged,
     );

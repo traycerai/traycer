@@ -356,6 +356,12 @@ export default tseslint.config(
     // `hostSelectionReadAllowlist`, so their partition is boundary + posthog;
     // naming those two here reproduces it exactly, minus the one being lifted.
     files: testFileGlobs,
+    // ...except the adapter's own test: the earlier blocks exempt it via
+    // `ignores`, but flat config is last-block-wins, so WITHOUT this ignore
+    // the tests block would re-impose `posthog` on the one test whose job is
+    // to drive the real SDK through the sanitizer. (Caught by the PR's first
+    // full-package lint - scoped runs never visit this file.)
+    ignores: analyticsAdapterFiles,
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions("posthog"),
     },
