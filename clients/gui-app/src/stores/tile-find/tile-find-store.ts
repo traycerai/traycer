@@ -493,9 +493,15 @@ function flushPendingSearch(tileInstanceId: string): boolean {
 // target, re-registration keeps its per-tile session state (query, replace text,
 // open/expanded flags) intact.
 //
-// Ticket 5: a chat tile fully remounts on every tab switch (decision #17), so
-// its adapter unregisters far more than one microtask apart from switching
-// back - the swap-window check above never catches it. Also requiring the
+// Ticket 5: the SAME chat tile instance can still fully remount - evicted past
+// its pane's chat retention cap, evicted with its owning top-level surface, or
+// losing and regaining hosted eligibility (no longer on every inner tab switch;
+// decision #17 was reversed by pane chat retention - see
+// `stores/epics/canvas/retained-pane-chats.ts`). Across such a remount its
+// adapter unregisters far more than one microtask apart from coming back, so
+// the swap-window check above never catches it. An inner tab switch no longer
+// unregisters at all - the tile stays mounted - so it never reaches this path.
+// Also requiring the
 // tile to be gone from the canvas (a real close, not a live-but-unmounted
 // switch-away) is what makes the find session (query, open state, active
 // match) survive that remount: a live tile's fresh adapter re-registers on

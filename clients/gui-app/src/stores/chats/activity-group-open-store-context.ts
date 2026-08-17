@@ -19,7 +19,9 @@ export interface ActivityGroupOpenState {
    * nobody opened.
    *
    * So it latches, and it lives HERE rather than in component state for the
-   * reason `openIds` does: chat tiles fully remount per tab switch, and
+   * reason `openIds` does: a chat tile can still be remounted out from under
+   * this state (retention-cap or top-level eviction, a hosted-eligibility flip
+   * - though no longer a mere tab switch), and
    * LegendList can unmount a row that scrolls away. A latch that died with the
    * mount would let the header vanish and the trace unfold on the next remount -
    * the same discontinuity, just deferred.

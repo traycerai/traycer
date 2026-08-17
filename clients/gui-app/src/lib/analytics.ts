@@ -601,7 +601,7 @@ export interface AnalyticsEventProperties {
     readonly scope: "current" | "with_children";
   };
   readonly [AnalyticsEvent.ChatBackgroundItemStopped]: {
-    readonly scope: "one" | "all";
+    readonly scope: "one" | "all" | "session";
   };
   readonly [AnalyticsEvent.ChatQueuePaused]: null;
   readonly [AnalyticsEvent.ChatQueueResumed]: null;
