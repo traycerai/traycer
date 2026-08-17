@@ -693,7 +693,7 @@ function ProfileEditDialog({
                   <button
                     type="button"
                     aria-label="Switch account"
-                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!canOauth || savePending || invalid}
                     onClick={switchAccount}
                   >
@@ -725,7 +725,7 @@ function ProfileEditDialog({
             className={
               switchingAccount
                 ? "hidden"
-                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3"
+                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3"
             }
           >
             <div className="flex w-full flex-wrap items-center justify-between gap-2">

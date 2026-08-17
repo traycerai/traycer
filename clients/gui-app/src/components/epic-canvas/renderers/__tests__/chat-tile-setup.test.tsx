@@ -177,6 +177,7 @@ function emitSnapshot(
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
       worktreeBinding: null,
       missingWorktreePaths: [],
     },

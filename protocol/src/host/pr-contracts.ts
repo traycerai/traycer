@@ -20,8 +20,8 @@ import {
   prGetLocalDiffRequestSchema,
   prGetLocalDiffResponseSchema,
   prGetLocalDiffSummaryRequestSchema,
-  prGetLocalDiffSummaryResponseSchema,
-  prGetLocalFileDiffRequestSchema,
+  prGetLocalDiffSummaryResponseV11Schema,
+  prGetLocalFileDiffRequestV11Schema,
   prGetLocalFileDiffResponseSchema,
 } from "./pr-schemas";
 
@@ -101,8 +101,9 @@ export const prGetLocalDiffSummaryV10 = defineRpcContract({
   method: "pr.getLocalDiffSummary",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: prGetLocalDiffSummaryRequestSchema,
-  responseSchema: prGetLocalDiffSummaryResponseSchema,
+  responseSchema: prGetLocalDiffSummaryResponseV11Schema,
 });
+
 
 /**
  * `pr.getLocalFileDiff@1.0` - one file's patch from a range
@@ -121,6 +122,6 @@ export const prGetLocalDiffSummaryV10 = defineRpcContract({
 export const prGetLocalFileDiffV10 = defineRpcContract({
   method: "pr.getLocalFileDiff",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: prGetLocalFileDiffRequestSchema,
+  requestSchema: prGetLocalFileDiffRequestV11Schema,
   responseSchema: prGetLocalFileDiffResponseSchema,
 });

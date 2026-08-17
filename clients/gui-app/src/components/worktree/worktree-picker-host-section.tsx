@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { HostSection } from "@/components/home/host-workspace-selector/host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useHostBinding } from "@/lib/host";
 
@@ -32,6 +33,8 @@ export function WorktreePickerHostSection(): ReactNode {
         hosts={options.hosts}
         activeHostId={options.activeHostId}
         onSelect={handleSelectHost}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         disabled={false}
         isLoading={options.isLoading}
         listsFailed={options.listsFailed}

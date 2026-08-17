@@ -25,6 +25,7 @@ import type {
   EpicCanvasState,
   GitDiffTileRef,
   GitDiffTileViewState,
+  PrDiffTileViewState,
   TilesByInstanceId,
 } from "./types";
 import {
@@ -202,6 +203,9 @@ export interface PaneTabLocation {
  * hash), so dedup is plain id equality across all kinds. Used by global
  * dedup - opening content already present anywhere focuses that tab instead
  * of cloning.
+ *
+ * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
+ * host (a chat, a shell) are unique per host, not globally.
  */
 export function findPaneTabByContentId(
   state: EpicCanvasState,
@@ -214,6 +218,49 @@ export function findPaneTabByContentId(
       if (ref !== undefined && ref.id === contentId) {
         return { pane, index, instanceId, ref };
       }
+    }
+  }
+  return null;
+}
+
+/** The bound host of a tile kind that has one; null for the rest. */
+/**
+ * The identity a tab is deduped and looked up by: content id plus bound host,
+ * for the kinds that have one. Deliberately structural - callers that hold a
+ * ref-in-progress (a sidebar row about to open one) match on the same rule as
+ * callers holding a finished `EpicCanvasTileRef`.
+ */
+export interface TileIdentity {
+  readonly id: string;
+  readonly hostId?: string | null;
+}
+
+function tileHostId(ref: TileIdentity): string | null {
+  return ref.hostId ?? null;
+}
+
+/**
+ * The dedup lookup an opener uses, holding the whole ref rather than an id
+ * alone: same content id AND same bound host.
+ *
+ * Host-minted ids are unique per host, not globally - a cross-host clone
+ * carries the source's chat and shell ids verbatim - so id equality alone
+ * would let a door on host B focus host A's open tab and quietly hand back a
+ * window bound to the wrong machine. Kinds with no host (artifacts, diffs)
+ * compare null to null and dedup exactly as before.
+ */
+export function findPaneTabForRef(
+  state: EpicCanvasState,
+  node: TileIdentity,
+): PaneTabLocation | null {
+  const hostId = tileHostId(node);
+  for (const pane of collectPanes(state.root)) {
+    for (let index = 0; index < pane.tabInstanceIds.length; index += 1) {
+      const instanceId = pane.tabInstanceIds[index];
+      const ref = state.tilesByInstanceId[instanceId];
+      if (ref === undefined) continue;
+      if (ref.id !== node.id || tileHostId(ref) !== hostId) continue;
+      return { pane, index, instanceId, ref };
     }
   }
   return null;
@@ -480,7 +527,7 @@ export function openTile(
   preferredPaneId: string | null,
 ): EpicCanvasState {
   if (state.root === null) return seedRootPane(node, preview);
-  const existing = findPaneTabByContentId(state, node.id);
+  const existing = findPaneTabForRef(state, node);
   if (existing !== null) {
     const root = replacePane(state.root, existing.pane.id, (pane) => {
       const previewTabId =
@@ -606,7 +653,7 @@ export function openTileInBackgroundTab(
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
   if (state.root === null) return state;
-  if (findPaneTabByContentId(state, node.id) !== null) return state;
+  if (findPaneTabForRef(state, node) !== null) return state;
   const target = activePaneOrFirst(state);
   if (target === null) return state;
   const root = replacePane(state.root, target.id, (pane) => ({
@@ -637,7 +684,7 @@ export function openSingletonTileInPane(
   paneId: string,
   ref: EpicCanvasTileRef,
 ): EpicCanvasState {
-  if (state.root !== null && findPaneTabByContentId(state, ref.id) !== null) {
+  if (state.root !== null && findPaneTabForRef(state, ref) !== null) {
     return openTile(state, ref, false, null);
   }
   return openTileInPane(state, paneId, ref);
@@ -1114,7 +1161,7 @@ export function dropOnTabStrip(
   if (targetPane === null) return state;
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       if (existing.pane.id === targetPaneId) {
         return reorderTabInPane(
@@ -1230,7 +1277,7 @@ export function splitPaneAtEdge(
   }
 
   if (source.kind === "node") {
-    const existing = findPaneTabByContentId(state, source.node.id);
+    const existing = findPaneTabForRef(state, source.node);
     if (existing !== null) {
       return splitPaneAtEdge(state, targetPaneId, position, {
         kind: "tab",
@@ -1491,7 +1538,7 @@ export function toggleSnapshotDiffBundleFileCollapsed(
 export function updatePrDiffTileView(
   state: EpicCanvasState,
   tileId: string,
-  view: GitDiffTileViewState,
+  view: PrDiffTileViewState,
 ): EpicCanvasState {
   return updateTilesWhere(
     state,
@@ -1507,16 +1554,33 @@ export function updatePrDiffTileView(
  * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
  * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
  * there is no non-bundle variant to exclude.
+ *
+ * `fileKey` is a tagged canonical key (`prLocalDiffFileKey`), toggled in the
+ * PR tile's own `collapsedFileKeys` - deliberately NOT the shared
+ * `toggleCollapsedFilePath`, whose bare-path field the PR tile no longer
+ * reads or writes.
  */
 export function togglePrDiffFileCollapsed(
   state: EpicCanvasState,
   tileId: string,
-  filePath: string,
+  fileKey: string,
 ): EpicCanvasState {
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isPrDiffTileRef(ref),
-    (ref) => toggleCollapsedFilePath(ref, filePath),
+    (ref) => {
+      if (!isPrDiffTileRef(ref)) return ref;
+      const collapsed = new Set(ref.view.collapsedFileKeys);
+      if (collapsed.has(fileKey)) {
+        collapsed.delete(fileKey);
+      } else {
+        collapsed.add(fileKey);
+      }
+      return {
+        ...ref,
+        view: { ...ref.view, collapsedFileKeys: [...collapsed] },
+      };
+    },
   );
 }
 
@@ -1524,11 +1588,7 @@ function toggleCollapsedFilePath(
   ref: EpicCanvasTileRef,
   filePath: string,
 ): EpicCanvasTileRef {
-  if (
-    !isGitDiffTileRef(ref) &&
-    !isSnapshotDiffTileRef(ref) &&
-    !isPrDiffTileRef(ref)
-  ) {
+  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) {
     return ref;
   }
   const collapsed = new Set(ref.view.collapsedFilePaths);

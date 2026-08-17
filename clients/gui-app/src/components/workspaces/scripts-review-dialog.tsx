@@ -179,7 +179,7 @@ export function ScriptsReviewDialog(props: {
                 <span className="text-ui-xs font-medium text-muted-foreground">
                   {props.pathLabel}
                 </span>
-                <code className="rounded-md bg-muted/40 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
+                <code className="rounded-md bg-foreground/5 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
                   {props.pathValue}
                 </code>
               </div>
@@ -237,7 +237,7 @@ export function ScriptsReviewDialog(props: {
             </div>
           ) : null}
         </div>
-        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+        <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"

@@ -124,6 +124,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "managedCommandsChanged" }
     >,
   ) => void;
+  readonly onHeldUpdatesChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "heldUpdatesChanged" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -227,7 +233,7 @@ export class ChatStreamClient {
       // LIVE-LINE ONLY: the deep schemas' compatibility defaults
       // (`imageResolutions: []`, `serviceTier: null`, ...) are what
       // up-convert a down-negotiated host's pre-image messages; the
-      // structural check skips them, so a 1.6 snapshot taken shallow would
+      // structural check skips them, so a 1.5 snapshot taken shallow would
       // hand the GUI assistant messages missing fields it types as present
       // (`imageResolutions.map` throws). Down-negotiated hosts predate
       // full-chat-on-subscribe, so their snapshots are the small ones the
@@ -326,7 +332,21 @@ export class ChatStreamClient {
         this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
+      case "heldUpdatesChanged": {
+        this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
       case "pong": {
+        return;
+      }
+      default: {
+        // Exhaustiveness check, matching `epic-stream-client`: adding a new
+        // ChatSubscribeServerFrame kind to the Zod schema without wiring it
+        // here is a compile-time error rather than a silent no-op that leaves
+        // the renderer stale with no diagnostic. `heldUpdatesChanged` was added
+        // without this arm present, so nothing would have caught the omission.
+        const _exhaustive: never = frame;
+        void _exhaustive;
         return;
       }
     }

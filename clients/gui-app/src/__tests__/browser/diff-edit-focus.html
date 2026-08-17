@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diff edit focus regression</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      #test-state {
+        display: none;
+      }
+      #tile {
+        display: flex;
+        width: 620px;
+        height: 360px;
+        overflow: hidden;
+      }
+      #tile > [data-diffs-host] {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      #tile > [data-diffs-host] > div {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+      .grid {
+        display: grid;
+      }
+      .col-start-1 {
+        grid-column-start: 1;
+      }
+      .row-start-1 {
+        grid-row-start: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./diff-edit-focus.tsx"></script>
+  </body>
+</html>

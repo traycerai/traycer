@@ -95,7 +95,13 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => stubHostClient,
+  // `useReactiveActiveHostId` (the modal's per-host memory key for the
+  // unpinned path) subscribes through the binding; null = no active host, so
+  // memory reads fall to the legacy tier and writes no-op - inert here.
+  useHostBinding: () => null,
+}));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 
 // The body resolves its host through `useHostClientForHostId`, which reads the

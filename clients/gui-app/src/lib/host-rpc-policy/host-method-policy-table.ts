@@ -11,6 +11,7 @@ import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
+import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -289,6 +290,25 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
  * genuinely absent, and the first ok answer revives the region and ends the
  * lane.
  */
+/**
+ * A fork boundary waiting on the publisher: the chat has not been backed up
+ * yet, or the chosen turn is not covered by the last receipt.
+ *
+ * Backs off because the thing being waited on is a publish sweep rather than a
+ * transport fault - it lands when it lands, and the dialog is a foreground
+ * surface someone is looking at, so the first few asks are the ones worth
+ * making promptly.
+ *
+ * Entered ONLY while the answer can still move. A publication the host has
+ * called `definitive` never reaches this lane: it has no attempt cap, so a lane
+ * entered on a frozen answer is an unbounded poll of a fact, under copy that
+ * tells the user the wait is enough.
+ */
+export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
+  id: "epic-chat-publication-state.waiting",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
 export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   id: "host-update-check.cli-recovery",
   initialDelayMs: 5 * SECOND_MS,
@@ -500,8 +520,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Shell lifecycle from the Shells list and the output window header.
-  // `fifo` is what buys these three the guarantees the
+  // Shell lifecycle from the Shells list and the output window header. `fifo`
+  // is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
   // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
   // refuses to cancel one. A delete destroys the command's entire output
@@ -523,6 +543,23 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "managedCommand.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deliver takes `fifo` for a reason the other three do not have, and NOT the
+  // one about distinct params. The coordinator keys queues by
+  // [hostId, userId, method, params], so two Delivers naming different subsets
+  // are already distinct jobs - but the common press names no subset at all
+  // (`commandIds: null`), and two of THOSE are byte-identical params, one
+  // queue, and would coalesce under `latest`. Coalescing them is precisely what
+  // must not happen: releasing a hold advances a DURABLE delivery cursor, so a
+  // second press collapsed into the first, or a request aborted on a host swap,
+  // leaves the human looking at a list that may or may not still be held with
+  // no way to tell which.
+  // Never poll it - it is a mutation, and the held set it would poll for
+  // arrives unprompted on `chat.subscribe`.
+  "managedCommand.deliverHeld": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -765,6 +802,51 @@ export const HOST_METHOD_POLL_TABLE = {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
+  },
+  // Optional host capability, read-only: does the source chat's publication
+  // cover a chosen fork boundary? Asked when the fork dialog OPENS, and only
+  // when the account has a host other than the source, so a single-host user
+  // never pays for it.
+  "epic.chatPublicationState": {
+    // A pure read with no ordering requirement, like every other read here.
+    ...LATEST_SCHEDULING,
+    // Polled only while the answer is one the FORK DIALOG'S COPY promises will
+    // resolve on its own - "It backs up automatically - try again shortly" and
+    // the boundary-syncing sentence. `staleTime` alone only marks the cache
+    // stale and issues nothing for a mounted, idle observer, so an open dialog
+    // sitting on either answer would wait forever on a sentence that told the
+    // user waiting was enough.
+    //
+    // `false` for a covered chat: that is terminal for this boundary, and a
+    // host too old to answer at all never gets here (the read is gated on
+    // `useHostSupportsMethod`).
+    //
+    // This lane has no attempt cap and no terminal lane of its own, which is
+    // exactly why `definitive` has to be read BEFORE the other two fields. A
+    // permanently halted publication reports `published: false` - byte for byte
+    // what a chat mid-first-sweep reports - so without that read the wait lane
+    // is entered forever on a state nothing will ever move, under copy that
+    // promises it will.
+    poll: defineConditionPolicy("epic.chatPublicationState", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        // Terminal, and it outranks both readings below: `definitive` names a
+        // reason waiting cannot clear, so re-asking cannot clear it either. Any
+        // reason counts, including one this build does not recognise; the
+        // shared reader is also what keeps a host that predates the field
+        // (`undefined`, not `null`) in the wait lane where it belongs.
+        if (chatPublicationDefinitiveReason(data.definitive) !== null) {
+          return false;
+        }
+        if (!data.published) return CHAT_PUBLICATION_WAIT_POLL_LANE;
+        return data.boundaryCovered === false
+          ? CHAT_PUBLICATION_WAIT_POLL_LANE
+          : false;
+      },
+      initialErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      staleDataErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
   },
   // Archiving a chat or terminal-agent record persists its archived flag
   // (optional host capability).

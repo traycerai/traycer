@@ -800,6 +800,63 @@ export type PrLocalDiffSummaryFile = z.infer<
 >;
 
 /**
+ * A byte-path sidecar token: CANONICAL standard base64 of raw path bytes.
+ *
+ * Canonicality is enforced at the schema, not just documented: clients use
+ * the token STRING as file/cache/collapse identity, so a noncanonical alias
+ * of the same bytes (`/w` for `/w==`, the url-safe alphabet, embedded
+ * whitespace, nonzero padding bits) would otherwise become a distinct
+ * identity for the same file on any peer that trusts wire validation.
+ * `btoa(atob(x)) === x` is exactly that predicate, in browser and Node
+ * alike: forgiving-base64 tolerates every alias class, so round-tripping
+ * detects each one. The host still re-validates independently - plus the
+ * checks that need the decoded bytes and the sibling field (non-UTF-8-ness,
+ * companion-path equality) - because it cannot know its caller parsed a
+ * request at all.
+ */
+export const prPathBytesTokenSchema = z
+  .string()
+  .min(1)
+  .refine(isCanonicalBase64, {
+    message: "byte-path token must be canonical base64",
+  });
+
+function isCanonicalBase64(value: string): boolean {
+  try {
+    return btoa(atob(value)) === value;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One summary file WITH the byte-path sidecars - the shape
+ * `pr.getLocalDiffSummary@1.0` binds.
+ *
+ * The `V11` in the name is historical: the sidecars were built on an
+ * unreleased 1.1 that the release collapsed into 1.0, so this is now the only
+ * line, not the upper half of a pair. There is no sidecar-less peer to project
+ * for - `pr.getLocalDiffSummary` had never shipped at all.
+ *
+ * `pathBytes` / `previousPathBytes` are canonical base64
+ * ({@link prPathBytesTokenSchema}) of the raw path bytes exactly as git
+ * reported them, non-null IFF those bytes are not valid UTF-8. `path` remains
+ * the (possibly lossy, U+FFFD-bearing) UTF-8 decode, display-only.
+ * Each rename side is derived independently: a clean source beside a byte
+ * destination legitimately carries `previousPathBytes: null`. Clients treat
+ * tokens as opaque: never decoded, only echoed into `pr.getLocalFileDiff`
+ * and used as identity keys.
+ */
+export const prLocalDiffSummaryFileV11Schema =
+  prLocalDiffSummaryFileSchema.extend({
+    pathBytes: prPathBytesTokenSchema.nullable(),
+    previousPathBytes: prPathBytesTokenSchema.nullable(),
+  });
+export type PrLocalDiffSummaryFileV11 = z.infer<
+  typeof prLocalDiffSummaryFileV11Schema
+>;
+
+/**
  * `pr.getLocalDiffSummary` response - the `diff` variant of
  * `pr.getLocalDiff`'s response minus per-file `patch` and minus
  * `isTruncated` (nothing here is byte-capped, so nothing can truncate).
@@ -831,6 +888,55 @@ export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
 );
 export type PrGetLocalDiffSummaryResponse = z.infer<
   typeof prGetLocalDiffSummaryResponseSchema
+>;
+
+/**
+ * `pr.getLocalDiffSummary@1.0` response: the summary shape with
+ * {@link prLocalDiffSummaryFileV11Schema} rows (field docs on the sidecar-less
+ * schema above, which survives only as the base this extends).
+ *
+ * EVERY negotiated peer receives these rows, including two rows whose lossy
+ * `path` strings collide under distinct `pathBytes`. The host's legacy
+ * fold-back-to-lossy-merge BRANCH went with the 1.0 line that needed it, so a
+ * client keying rows or its patch map by `path` alone is now the broken case.
+ *
+ * Key by a DISCRIMINATED identity - tag the side, then the value: byte-
+ * addressed when `pathBytes` is non-null, clean otherwise. Neither half works
+ * alone. Keying on the token is not implementable, because `pathBytes` is null
+ * for every byte-exact UTF-8 path, which is most rows; and `pathBytes ?? path`
+ * collapses both into one string space, where a clean file literally named
+ * like some token collides with that token's file. The tag is what keeps the
+ * two domains disjoint.
+ *
+ * The GUI already does this - `clients/gui-app/src/lib/pr/pr-local-diff-file-
+ * key.ts` is the one function every row key, collapse entry, find id and patch
+ * cache scope derives from. A new consumer should reuse it rather than
+ * re-deriving an identity here.
+ *
+ * (`pr.getLocalDiff`, a separate released method, still folds; that fold is
+ * unrelated to this line.)
+ */
+export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: prLocalDiffUnavailableReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("summary"),
+      runningDir: z.string(),
+      resolvedBaseRef: z.string(),
+      baseOid: prLocalDiffOidSchema,
+      mergeBaseOid: prLocalDiffOidSchema,
+      localHeadOid: prLocalDiffOidSchema,
+      isStale: z.boolean(),
+      files: z.array(prLocalDiffSummaryFileV11Schema),
+    }),
+  ],
+);
+export type PrGetLocalDiffSummaryResponseV11 = z.infer<
+  typeof prGetLocalDiffSummaryResponseV11Schema
 >;
 
 /**
@@ -873,6 +979,26 @@ export const prGetLocalFileDiffRequestSchema = z.object({
 });
 export type PrGetLocalFileDiffRequest = z.infer<
   typeof prGetLocalFileDiffRequestSchema
+>;
+
+/**
+ * `pr.getLocalFileDiff@1.0` request: the summary row's byte-path sidecars,
+ * echoed verbatim per side (never derived client-side).
+ *
+ * `null` now carries exactly ONE meaning - "this side's `path` IS the
+ * byte-exact UTF-8 path". The 1.0->1.1 bridge that used to manufacture
+ * ambiguous `null`s meaning "legacy peer, token unavailable" was deleted with
+ * the 1.0 line it bridged from, so the host may read `null` as a positive
+ * byte-validity fact rather than an absence. It still resolves both cases to
+ * the plain string pathspec today; that is now a choice, not a requirement.
+ */
+export const prGetLocalFileDiffRequestV11Schema =
+  prGetLocalFileDiffRequestSchema.extend({
+    pathBytes: prPathBytesTokenSchema.nullable(),
+    previousPathBytes: prPathBytesTokenSchema.nullable(),
+  });
+export type PrGetLocalFileDiffRequestV11 = z.infer<
+  typeof prGetLocalFileDiffRequestV11Schema
 >;
 
 /**

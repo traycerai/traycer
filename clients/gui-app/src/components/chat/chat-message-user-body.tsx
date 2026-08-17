@@ -33,6 +33,7 @@ import { useComposerPickerItems } from "@/components/chat/composer/picker/use-co
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
@@ -572,9 +573,11 @@ function InlineUserMessageEditor({
 }): ReactNode {
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useTabHostClient();
+  const tabHostId = useTabHostId();
   const resolvedMentionRoots = useWorkspaceMentionRoots(
     editing.mentionRoots,
     editing.fallbackToGlobalMentionRoots,
+    tabHostId,
   );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();

@@ -751,3 +751,400 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     session.handle.dispose();
   });
 });
+
+/**
+ * `beginPendingChatCreation` / `clearPendingChatCreation` (chat-sync-v2
+ * ticket A5) - the registry that makes a just-created chat visible before its
+ * record completes the round trip. These drive the SAME store the two
+ * describe blocks above do, so a pending row and a record row are exercised
+ * through the one seam (`publishChatRecords`) both the poll and the push path
+ * share.
+ */
+describe("pending chat creations", () => {
+  it("survives the poll's clear-and-replace when the answer does not include it yet", () => {
+    signedInAs("user-a");
+    // Ablation: this is the whole point of the ticket. Fold the union out of
+    // `publishChatRecords` and the second `applyChatRecords` below - which
+    // rebuilds `chatRecordRows` from scratch and knows nothing about
+    // "just-created" - evicts it exactly like any other stale entry would be.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+    store.getState().beginPendingChatCreation({
+      chatId: "just-created",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.allIds.slice().sort()).toEqual([
+      "existing",
+      "just-created",
+    ]);
+
+    // A poll answer issued before the create was even sent - it cannot know
+    // about "just-created" - landing after.
+    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+
+    expect(store.getState().chats.allIds.slice().sort()).toEqual([
+      "existing",
+      "just-created",
+    ]);
+    expect(store.getState().chatRecords.allIds.slice().sort()).toEqual([
+      "existing",
+      "just-created",
+    ]);
+    expect(store.getState().tree.nodeById["just-created"]).toBeDefined();
+    session.handle.dispose();
+  });
+
+  it("is replaced, not duplicated, when its own record arrives via the poll", () => {
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "just-created",
+      hostId: "submit-host",
+      parentChatId: "parent-x",
+      title: "",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.byId["just-created"].hostId).toBe(
+      "submit-host",
+    );
+
+    store.getState().applyChatRecords([
+      record({
+        chatId: "just-created",
+        title: "Served title",
+        originHostId: "served-host",
+        parentChatId: null,
+      }),
+    ]);
+
+    const state = store.getState();
+    expect(
+      state.chats.allIds.filter((id) => id === "just-created"),
+    ).toHaveLength(1);
+    // The served row wins every field - the submit-time guess is gone, not
+    // merged with it.
+    expect(state.chats.byId["just-created"].title).toBe("Served title");
+    expect(state.chats.byId["just-created"].hostId).toBe("served-host");
+    expect(state.chats.byId["just-created"].parentId).toBeNull();
+    session.handle.dispose();
+  });
+
+  it("is replaced, not duplicated, when its own record arrives via a push delta", () => {
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "just-created",
+      hostId: "submit-host",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "just-created",
+        title: "Pushed title",
+        originHostId: "served-host",
+        revision: 1,
+      }),
+    });
+
+    const state = store.getState();
+    expect(
+      state.chats.allIds.filter((id) => id === "just-created"),
+    ).toHaveLength(1);
+    expect(state.chats.byId["just-created"].title).toBe("Pushed title");
+    expect(state.chats.byId["just-created"].hostId).toBe("served-host");
+    session.handle.dispose();
+  });
+
+  it("does not poison the record revision guard when a real row hands the pending one over", () => {
+    signedInAs("user-a");
+    // Pins the reason the pending map is held separately from
+    // `chatRecordRows` rather than seeded into it with a fabricated
+    // `revision: 0`: that would make the real row's own first delta (also
+    // revision 0) read as a replay of itself and be dropped, stranding the
+    // stand-in permanently.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "c",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "First", revision: 0 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("First");
+
+    // A re-delivery of that same first revision is still stale and dropped.
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "Replayed", revision: 0 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("First");
+
+    // A genuinely newer revision still applies normally.
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "Second", revision: 1 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("Second");
+    session.handle.dispose();
+  });
+
+  it("clearPendingChatCreation drops the row and republishes; a no-op for an unknown chat", () => {
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "doomed",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.allIds).toEqual(["doomed"]);
+
+    store.getState().clearPendingChatCreation("doomed");
+    expect(store.getState().chats.allIds).toEqual([]);
+
+    // Idempotent: clearing an id nothing is retained for writes nothing, so
+    // it must not hand out a fresh `chats` identity either.
+    const after = store.getState().chats;
+    store.getState().clearPendingChatCreation("no-such-chat");
+    expect(store.getState().chats).toBe(after);
+    session.handle.dispose();
+  });
+
+  it("is retired by a retraction, and a later registration for the same chat is refused", () => {
+    signedInAs("user-a");
+    // Removal is absorbing and outranks a creation this session is still
+    // holding open: a pending row is the weakest claim there is.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "doomed",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.allIds).toEqual(["doomed"]);
+
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "doomed",
+      reason: "deleted",
+    });
+    expect(store.getState().chats.allIds).toEqual([]);
+    expect(store.getState().chatRetractions).toEqual({ doomed: "deleted" });
+
+    store.getState().beginPendingChatCreation({
+      chatId: "doomed",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "retry",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.allIds).toEqual([]);
+    session.handle.dispose();
+  });
+
+  it("hides a pending creation from a different signed-in user, and restores it on switching back", () => {
+    // Same display filter the record and doc slices apply, at the same
+    // projection-time boundary - see the "keeps another signed-in user's rows
+    // out" test above for the record-row equivalent.
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "mine",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    expect(store.getState().chats.allIds).toEqual(["mine"]);
+
+    signedInAs("user-b");
+    expect(store.getState().chats.allIds).toEqual([]);
+
+    signedInAs("user-a");
+    expect(store.getState().chats.allIds).toEqual(["mine"]);
+    session.handle.dispose();
+  });
+
+  it("is not retired by a COLLABORATOR's same-id record, through either path", () => {
+    // The pending-side half of "never lets a collaborator's SAME-ID row evict
+    // the viewer's own chat" above, and the reason retirement keys on
+    // `(ownerUserId, chatId)` rather than the id: `chatId` is not globally
+    // unique, so two owners can hold the same one inside one task.
+    //
+    // Ablation: retire on `chatId` alone and user-b's row - which is filtered
+    // straight back out of the published table because it is not user-a's -
+    // silently takes user-a's just-created chat down with it. The user watches
+    // the agent they just made disappear because a collaborator's unrelated
+    // chat happened to collide.
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().beginPendingChatCreation({
+      chatId: "c",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    const theirs = record({
+      chatId: "c",
+      ownerUserId: "user-b",
+      originHostId: "host-2",
+      title: "Theirs",
+      origin: "foreign",
+      visibility: "task",
+      revision: 99,
+    });
+
+    // Push path.
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: theirs,
+    });
+    expect(store.getState().chats.allIds).toEqual(["c"]);
+    expect(store.getState().chats.byId.c.userId).toBe("user-a");
+    expect(store.getState().chats.byId.c.hostId).toBe("host-1");
+
+    // Poll path.
+    store.getState().applyChatRecords([theirs]);
+    expect(store.getState().chats.allIds).toEqual(["c"]);
+    expect(store.getState().chats.byId.c.userId).toBe("user-a");
+
+    // The viewer's OWN row still hands over normally - the narrowing is on
+    // identity, not a blanket refusal to reconcile.
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "c", title: "Mine", revision: 3 })]);
+    expect(store.getState().chats.byId.c.title).toBe("Mine");
+    expect(store.getState().chats.byId.c.hostId).toBe("host-1");
+    session.handle.dispose();
+  });
+
+  it("retains even when the record beat the create's answer, so a stale poll cannot leave nothing", () => {
+    // An ordering the create cannot control: the owning host pushes its record
+    // the moment it commits, so the delta can arrive BEFORE `epic.createChat`
+    // answers.
+    //
+    // Ablation: refuse the registration in that case - "there is already a real
+    // row, nothing to stand in for" - and the older list answer below, issued
+    // before the chat existed and landing after it, clear-and-replaces that row
+    // away leaving NEITHER a record nor a stand-in. The chat vanishes until
+    // another poll, which cross-host is the minutes-long replication path.
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    const served = record({ chatId: "c", title: "Served", revision: 4 });
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: served,
+    });
+    store.getState().beginPendingChatCreation({
+      chatId: "c",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+    // Retained, but SHADOWED: while the real row is there it wins every field.
+    expect(store.getState().chats.allIds).toEqual(["c"]);
+    expect(store.getState().chats.byId.c.title).toBe("Served");
+
+    // The stale answer lands.
+    store.getState().applyChatRecords([]);
+    expect(store.getState().chats.allIds).toEqual(["c"]);
+    expect(store.getState().chats.byId.c.title).toBe("");
+
+    // The next answer that carries the row hands over and retires the stand-in
+    // - proven by the answer after it, which now empties the table for real.
+    store.getState().applyChatRecords([served]);
+    expect(store.getState().chats.byId.c.title).toBe("Served");
+    store.getState().applyChatRecords([]);
+    expect(store.getState().chats.allIds).toEqual([]);
+    session.handle.dispose();
+  });
+
+  it("files the stand-in under the CAPTURED owner, not whoever is signed in when it lands", () => {
+    // The create was authorized as user-a; the profile changed while it was in
+    // flight, and the host's answer arrives with user-b signed in. Reading the
+    // profile here would file user-a's chat under user-b - visible to a user who
+    // never made it, and unretirable by user-a's real record, which arrives
+    // under its actual owner and so never matches the row.
+    signedInAs("user-a");
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+
+    signedInAs("user-b");
+    store.getState().beginPendingChatCreation({
+      chatId: "created-as-a",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-a",
+    });
+
+    // Invisible to the user now signed in...
+    expect(store.getState().chats.allIds).toEqual([]);
+
+    // ...and still user-a's when they come back, where its own record retires it.
+    signedInAs("user-a");
+    expect(store.getState().chats.allIds).toEqual(["created-as-a"]);
+    store.getState().applyChatRecords([record({ chatId: "created-as-a" })]);
+    expect(store.getState().chats.byId["created-as-a"].userId).toBe("user-a");
+    session.handle.dispose();
+  });
+
+  it("refuses to retain a creation the caller could not attribute", () => {
+    // A stand-in has to say whose it is: the registry keys on
+    // `(ownerUserId, chatId)`, and an unattributed row could be retired by a
+    // stranger's same-id record or rendered to whoever signs in next. Refusing
+    // degrades to the behavior that existed before this registry - the chat
+    // surfaces when its own record arrives - which is why every test above
+    // names an owner.
+    //
+    // `null` is how the CALLER reports "nobody was signed in when the request
+    // left". The store no longer reads the profile itself, so this is the whole
+    // of the unattributed case rather than a stand-in for an empty auth store.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+
+    store.getState().beginPendingChatCreation({
+      chatId: "unattributed",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: null,
+    });
+
+    expect(store.getState().chats.allIds).toEqual([]);
+    session.handle.dispose();
+  });
+});

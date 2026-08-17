@@ -11,6 +11,11 @@ import {
 } from "@/lib/git/git-diff-tile";
 import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import { makePrDiffTile } from "@/lib/pr/pr-diff-tile";
+import {
+  parsePrDiffTileViewState,
+  serializePrDiffTileViewState,
+} from "@/stores/epics/canvas/tile-schema/diff-tile-view";
+import { prDiffTileSchema } from "@/stores/epics/canvas/tile-schema/pr-diff-tile";
 import type {
   EpicArtifactRef,
   EpicTerminalRef,
@@ -418,5 +423,61 @@ describe("isTileRefRecordBacked", () => {
   it("treats stale unknown persisted tile kinds as not record-backed", () => {
     expect(isTileRefRecordBacked({ type: "workspaces" })).toBe(false);
     expect(isTileRefRecordBacked({ type: null })).toBe(false);
+  });
+});
+
+describe("parsePrDiffTileViewState / serializePrDiffTileViewState", () => {
+  it("ignores a legacy collapsedFilePaths field entirely - even an entry literally spelled like a tagged key", () => {
+    // `p:foo` here is a legacy BARE path (a file named "p:foo"), not a tagged
+    // key - the codec must not treat it as one just because it looks like it.
+    expect(
+      parsePrDiffTileViewState({
+        collapsedFilePaths: ["p:foo", "src/a.ts"],
+      }),
+    ).toEqual({ collapsedFileKeys: [] });
+  });
+
+  it("round-trips collapsedFileKeys through serialize -> parse", () => {
+    const view = { collapsedFileKeys: ["p:src/a.ts", "b:AAA="] };
+    expect(
+      parsePrDiffTileViewState(serializePrDiffTileViewState(view)),
+    ).toEqual(view);
+  });
+});
+
+describe("prDiffTileSchema persisted state", () => {
+  const base = makePrDiffTile({
+    hostId: HOST,
+    githubHost: "github.com",
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 42,
+  });
+
+  it("hydrates a persisted tile whose view carries only legacy collapsedFilePaths with an empty collapsedFileKeys", () => {
+    const legacyPersisted = {
+      id: base.id,
+      instanceId: base.instanceId,
+      type: "pr-diff",
+      name: base.name,
+      hostId: base.hostId,
+      githubHost: base.githubHost,
+      owner: base.owner,
+      repo: base.repo,
+      prNumber: base.prNumber,
+      view: { collapsedFilePaths: ["src/a.ts"] },
+    };
+    const parsed = prDiffTileSchema.parse(legacyPersisted);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.view).toEqual({ collapsedFileKeys: [] });
+  });
+
+  it("round-trips a tile carrying tagged collapse keys through serialize -> parse", () => {
+    const ref = {
+      ...base,
+      view: { collapsedFileKeys: ["p:src/a.ts", "b:AAA="] },
+    };
+    const parsed = prDiffTileSchema.parse(prDiffTileSchema.serialize(ref));
+    expect(parsed).toEqual(ref);
   });
 });

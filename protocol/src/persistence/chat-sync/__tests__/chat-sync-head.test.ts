@@ -1,5 +1,6 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
+  CHAT_SYNC_1_1_READER_FLOOR,
   CHAT_SYNC_READER_VERSION,
   chatHeadReaderSchema,
   decodeChatHeadDocument,
@@ -239,9 +240,9 @@ describe("chat-head minReaderVersion coherence", () => {
   });
 
   it("READER defaults to null when the key is absent", () => {
-    // The defaulting is reader tolerance for heads written before the field
-    // existed; the WRITER must stamp the 1.1 floor and refuses absence (see
-    // "the 1.1 writer stamps the reader floor" below).
+    // Reader tolerance for heads written before the field existed. The writer
+    // inherits the same default deliberately - see "the writer publishes a null
+    // reader floor" below.
     const withoutKey: JsonObject = { ...wireHead };
     delete withoutKey.minReaderVersion;
     expect(chatHeadReaderSchema.parse(withoutKey).minReaderVersion).toBeNull();
@@ -398,10 +399,9 @@ describe("chat-head canonical encoding", () => {
       agentMode: "regular",
       profileId: null,
     });
-    // The writer refuses an ABSENT minReaderVersion outright (the 1.1 floor
-    // is required), so the defaulted-field walk here exercises the settings
-    // levels; reader-side minReaderVersion defaulting is pinned in the
-    // coherence describe above.
+    // This fixture states a deliberate floor, so it survives the round trip
+    // verbatim; the DEFAULT (absent -> null, on the writer as on the reader) is
+    // pinned in the coherence and null-floor describes.
     expect(once.minReaderVersion).toEqual({ major: 1, minor: 1 });
 
     // Idempotent from there on - so the digest the next head chains to does not
@@ -513,28 +513,55 @@ describe("a claimed 1.1 head must carry its cut plan", () => {
   });
 });
 
-describe("the 1.1 writer stamps the reader floor", () => {
-  // Inherited nullable, an incorrectly-built publication could omit
-  // minReaderVersion, and a 1.0 reader's same-major gate would ADMIT a head
-  // whose cut plan it misreads instead of refusing cleanly.
-  it("rejects a null minReaderVersion", () => {
-    expect(
-      chatHeadSchema.safeParse({ ...wireHead, minReaderVersion: null }).success,
-    ).toBe(false);
+describe("the writer publishes a null reader floor", () => {
+  // The floor is reserved for a change an older reader cannot safely
+  // INTERPRET; the 1.1 reshape is additive and read-safe, so `null` is what a
+  // correct publisher stamps. The writer must therefore ACCEPT null - and it
+  // must not pin the floor to this build's own version, or the next additive
+  // minor would make a publisher's own stamp unparseable.
+  it("accepts a null minReaderVersion - the ordinary case", () => {
+    const published = chatHeadSchema.parse({
+      ...wireHead,
+      minReaderVersion: null,
+    });
+    expect(published.minReaderVersion).toBeNull();
   });
 
-  it("rejects an absent minReaderVersion", () => {
+  it("accepts an absent minReaderVersion, defaulting it to null", () => {
     const absent: JsonObject = { ...wireHead };
     delete absent.minReaderVersion;
-    expect(chatHeadSchema.safeParse(absent).success).toBe(false);
+    expect(chatHeadSchema.parse(absent).minReaderVersion).toBeNull();
   });
 
-  it("rejects a minReaderVersion below the 1.1 floor", () => {
+  it("still admits a DELIBERATE floor, including one below its own minor", () => {
+    // `CHAT_SYNC_1_1_READER_FLOOR` stays the documented mechanism for a future
+    // deliberate raise, and a floor from an earlier minor is coherent too - a
+    // 1.2 head may legitimately gate readers below 1.1. Only incoherent
+    // minimums are refused (see the coherence describe above).
     expect(
-      chatHeadSchema.safeParse({
+      chatHeadSchema.parse({
+        ...wireHead,
+        minReaderVersion: { ...CHAT_SYNC_1_1_READER_FLOOR },
+      }).minReaderVersion,
+    ).toEqual(CHAT_SYNC_1_1_READER_FLOOR);
+    expect(
+      chatHeadSchema.parse({
         ...wireHead,
         minReaderVersion: { major: 1, minor: 0 },
-      }).success,
-    ).toBe(false);
+      }).minReaderVersion,
+    ).toEqual({ major: 1, minor: 0 });
+  });
+
+  it("a freshly published null-floor head opens for a 1.0-shaped reader", () => {
+    // The regression this pins: stamping the floor from
+    // `CHAT_SYNC_SCHEMA_VERSION` made every minor bump lock out every older
+    // reader, which is the refusal a dev host actually hit.
+    const published = chatHeadSchema.parse({
+      ...wireHead,
+      minReaderVersion: null,
+    });
+    expect(gateChatHeadVersion(published, { major: 1, minor: 0 })).toEqual({
+      ok: true,
+    });
   });
 });

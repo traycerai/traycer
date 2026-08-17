@@ -92,7 +92,7 @@ export function HostAutoUpdateRow(props: {
       </div>
       {pill === null ? null : (
         <span
-          className="shrink-0 rounded-sm bg-muted/70 px-1.5 py-px text-ui-xs text-muted-foreground"
+          className="shrink-0 rounded-sm bg-foreground/8 px-1.5 py-px text-ui-xs text-muted-foreground"
           data-testid={`host-update-pill-${item.hostId}`}
         >
           {pill.label}

@@ -2148,6 +2148,7 @@ describe("T3 rev-3 adversarial: Resource Monitor nested + Phase completion", () 
             name: "Resource chat",
             hostId: "host-resource",
           },
+          preview: false,
         },
         includeNestedFocus: true,
       }),

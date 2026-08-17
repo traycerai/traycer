@@ -2,15 +2,18 @@ import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
+import { ManagedCommandTranscriptDoor } from "@/components/managed-commands/managed-command-transcript-door";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
-import { SegmentCard } from "./segment-card";
+import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 
 /**
@@ -147,27 +150,32 @@ function ResumeCompletionCardBody(props: {
  * Opens the output window for the command whose delivery woke this turn
  * (`UI.md` §5). Absent on an older trigger that carries no command id - there
  * is nothing to open, and a dead button would be worse than none.
+ *
+ * The same door the start and restart cards use, presence gate included: this
+ * card outlives its shell too, and a live button on a deleted one would open -
+ * or drag onto the canvas - a tile for output that no longer exists.
  */
 function ResumeManagedCommandDoor(props: {
   readonly trigger: AutonomousResumeTrigger;
 }) {
   const managedCommand = props.trigger.managedCommand;
+  const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const presence = useManagedCommandPresence({
+    epicId,
+    commandId: managedCommand?.commandId ?? "",
+    owner: useMaybeChatTranscript(),
+  });
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className="h-6 shrink-0 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-      data-testid={`resume-managed-command-door-${props.trigger.blockId}`}
-      onClick={(event) => {
-        event.stopPropagation();
-        openOutput(managedCommand.commandId);
-      }}
-    >
-      View output
-    </Button>
+    <SegmentCardHeaderActionCell>
+      <ManagedCommandTranscriptDoor
+        commandId={managedCommand.commandId}
+        gone={presence.kind === "absent"}
+        onOpen={openOutput}
+        testId={`resume-managed-command-door-${props.trigger.blockId}`}
+      />
+    </SegmentCardHeaderActionCell>
   );
 }
 

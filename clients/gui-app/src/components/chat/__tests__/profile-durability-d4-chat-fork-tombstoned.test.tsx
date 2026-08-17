@@ -29,11 +29,12 @@ import type {
  *
  * A cold reviewer flagged the FIRST version of this fix: the seed-resolution
  * hook originally read `providers.list` from the app-wide ACTIVE host
- * instead of the host the fork's `createChat` call actually targets - the
- * TAB's host (`useEpicCreateChatForHost` -> `useTabHostClient`). `mock
- * useHostQuery` here is keyed by the EXACT `client` reference it's called
- * with, so the cross-host tests below prove the dialog reads from
- * `useTabHostClient()`'s result and never a decoy "active host" client.
+ * instead of the host the fork's `createChat` call actually targets. The
+ * dialog now resolves that host through `useHostClientForHostId(selectedHostId)`
+ * (seeded to the tab host) and creates via `useEpicCreateChatForHostClient`.
+ * `useHostQuery` here is keyed by the EXACT `client` reference it's called
+ * with, so the selected-host tests below prove the dialog reads from that
+ * host's client and never a decoy "active host" client.
  */
 
 const dialogMocks = vi.hoisted(() => ({
@@ -42,17 +43,76 @@ const dialogMocks = vi.hoisted(() => ({
       (input: ChatForkCreateInput, options: ChatForkMutationOptions) => void
     >(),
   providersByClient: new Map<unknown, ProviderCliState[]>(),
+  clientsByHostId: new Map<string, unknown>(),
+  lastCreateClient: null as object | null,
+  createReset: vi.fn(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHost: () => ({
     mutate: dialogMocks.createMutate,
     isPending: false,
+    error: null,
+    variables: null,
+    reset: dialogMocks.createReset,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    status: "idle",
+  }),
+  // The dialog creates on the SELECTED host's client. The factory must accept
+  // that argument: a whole-module mock that only exported the tab-scoped
+  // wrapper dropped this export and crashed every case below.
+  useEpicCreateChatForHostClient: (client: object | null) => {
+    dialogMocks.lastCreateClient = client;
+    return {
+      mutate: dialogMocks.createMutate,
+      isPending: false,
+      error: null,
+      variables: null,
+      reset: dialogMocks.createReset,
+      data: null,
+      isError: false,
+      isSuccess: false,
+      status: "idle",
+    };
+  },
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null) return null;
+    return dialogMocks.clientsByHostId.get(hostId) ?? null;
+  },
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    // App-wide client: only the source-owner hint reads this. Profile
+    // validation and createChat hang off the selected host's client above.
+    useHostClient: () => TAB_HOST_CLIENT,
+  };
+});
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: "tab-host-id",
+        label: "Tab host",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:0/tab-host-id",
+        version: "0.0.0-mock",
+        transportDialability: "dialable",
+      },
+    ],
   }),
 }));
 
-vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => TAB_HOST_CLIENT,
+vi.mock("@/hooks/chats/use-clone-source-owner", () => ({
+  useCloneSourceOwnerUserId: () => null,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -94,7 +154,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -110,7 +170,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {
@@ -173,10 +233,17 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   return client;
 }
 
-// The tab's own host client (`useTabHostClient()`'s mocked result) - the
-// ONLY client the fork's `createChat` call and the seeded-profile
-// validation are supposed to read from.
-const TAB_HOST_CLIENT = buildHostClient("tab-host");
+// The tab's own host client (`useHostClientForHostId("tab-host-id")`'s
+// mocked result) - the client the default same-host fork's `createChat`
+// call and the seeded-profile validation are supposed to read from.
+//
+// Bound to the SAME id it is registered under. `submit` sends
+// `selectedHostClient.getActiveHostId()` as the request's `hostId`, and
+// `useEpicCreateChatForHostClient`'s preflight rejects the create when that
+// disagrees with the selected host - so a client bound to anything else stands
+// in for a state production refuses to reach, and only the mocked mutation
+// hides it.
+const TAB_HOST_CLIENT = buildHostClient("tab-host-id");
 // A decoy standing in for "the app-wide active host" - something the dialog
 // must NEVER read profiles from. Never returned by any mocked hook below.
 const DECOY_ACTIVE_HOST_CLIENT = buildHostClient("decoy-active-host");
@@ -294,7 +361,7 @@ async function submitFork(): Promise<void> {
 }
 
 function seedLiveForkWorkspace(): void {
-  const stagingKey = pendingForkChatStagingKey("epic-test");
+  const stagingKey = pendingForkChatStagingKey("tab-host-id", "epic-test");
   const folder = {
     path: "/repo/lifecycle",
     name: "lifecycle",
@@ -326,9 +393,14 @@ function expectForkWorkspaceCleared(): void {
 describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
   beforeEach(() => {
     dialogMocks.providersByClient.clear();
+    dialogMocks.clientsByHostId.clear();
+    dialogMocks.clientsByHostId.set("tab-host-id", TAB_HOST_CLIENT);
+    dialogMocks.lastCreateClient = null;
+    dialogMocks.createReset.mockReset();
   });
   afterEach(() => {
     dialogMocks.createMutate.mockReset();
+    dialogMocks.createReset.mockReset();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
@@ -355,6 +427,9 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
           assistantMessageId: "assistant-message-1",
           interviewBlockId: "question-tool:interview",
           carriedInterviews: "settled",
+          // This client does not know the source owner. `null` is the safe
+          // value — inventing the current user would be trusted by the host.
+          sourceOwnerUserId: null,
         },
       }),
     );
@@ -364,7 +439,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
       claudeState([profile("ambient", "ambient", "Terminal account")]),
     ]);
-    const stagingKey = pendingForkChatStagingKey("epic-test");
+    const stagingKey = pendingForkChatStagingKey("tab-host-id", "epic-test");
     const folder = {
       path: "/repo/added-after-open",
       name: "added-after-open",
@@ -583,8 +658,8 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     expect(request.settings?.profileId).toBeNull();
   });
 
-  describe("cross-host: validation must read the TAB host (useTabHostClient), never the active/decoy host", () => {
-    it("source profile alive on the TAB host but absent on the decoy host must be PRESERVED (no false null)", async () => {
+  describe("cross-host: validation must read the SELECTED host (defaults to the tab host), never the active/decoy host", () => {
+    it("source profile alive on the SELECTED (tab) host but absent on the decoy host must be PRESERVED (no false null)", async () => {
       dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
         claudeState([
           profile("ambient", "ambient", "Terminal account"),
@@ -593,7 +668,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       ]);
       // A decoy "active host" claims the profile doesn't exist there. If the
       // dialog ever silently fell back to an app-wide active-host client
-      // instead of `useTabHostClient()`, this would wrongly null the profile.
+      // instead of the selected host's client, this would wrongly null the profile.
       dialogMocks.providersByClient.set(DECOY_ACTIVE_HOST_CLIENT, [
         claudeState([profile("ambient", "ambient", "Terminal account")]),
       ]);
@@ -605,7 +680,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       expect(request.settings?.profileId).toBe("work-uuid");
     });
 
-    it("source profile tombstoned on the TAB host but alive on the decoy host must resolve to null", async () => {
+    it("source profile tombstoned on the SELECTED (tab) host but alive on the decoy host must resolve to null", async () => {
       dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
         claudeState([profile("ambient", "ambient", "Terminal account")]),
       ]);

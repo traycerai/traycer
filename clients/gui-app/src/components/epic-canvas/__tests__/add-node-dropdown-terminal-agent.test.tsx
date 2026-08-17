@@ -11,6 +11,43 @@ const mocks = vi.hoisted(() => ({
   onAddTerminalAgent: vi.fn(),
 }));
 
+// Records the `hostId` each call was made with, so tests can assert the
+// terminal-agent launcher resolves its picker's target host through THIS
+// primitive - keyed on the launch host scope - rather than the app-wide
+// default. The returned "client" is just the hostId echoed back: neither the
+// mocked `useComposerToolbarStore` nor `useProvidersListForClient` below read
+// it for content, only `add-node-dropdown.tsx` itself threads it through.
+const hostClientForHostIdMock = vi.hoisted(() => ({
+  calls: [] as Array<string | null>,
+}));
+
+// Records the host-scoped props each render passed to the picker, so tests
+// can assert `createProfileHostId` / `runTargetHostId` follow the launch host
+// scope without needing the real (heavy) picker to mount.
+const harnessModelPickerMock = vi.hoisted(() => ({
+  calls: [] as Array<{
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }>,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    hostClientForHostIdMock.calls.push(hostId);
+    return hostId;
+  },
+}));
+
+// The launcher's null-scope target follows the app-wide active host
+// (`add-node-dropdown.tsx`'s `memoryHostId = launchHostId ?? reactiveActiveHostId`).
+// This suite renders with no HostRuntimeProvider, so the real hook would
+// resolve null; mocking a fixed active host keeps the global-workspace
+// fallback (workspace-folders-store, bucketed by host) reachable exactly as
+// it was before that store was host-scoped.
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "active-host",
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
@@ -30,7 +67,16 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => <div>Claude Opus</div>,
+  HarnessModelPicker: (props: {
+    readonly createProfileHostId: string | null;
+    readonly runTargetHostId: string | null;
+  }) => {
+    harnessModelPickerMock.calls.push({
+      createProfileHostId: props.createProfileHostId,
+      runTargetHostId: props.runTargetHostId,
+    });
+    return <div>Claude Opus</div>;
+  },
 }));
 
 vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
@@ -39,6 +85,19 @@ vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
+    data: {
+      providers: [
+        {
+          providerId: "claude-code",
+          terminalAgentArgs: "",
+        },
+      ],
+    },
+  }),
+  // `TerminalAgentSubMenuContent` now reads through this (its fixed-scope
+  // launch host client) rather than the app-wide `useProvidersList` - same
+  // canned data, since this suite doesn't vary it by host.
+  useProvidersListForClient: () => ({
     data: {
       providers: [
         {
@@ -68,11 +127,9 @@ import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-worksp
 describe("<AddNodeDropdown /> terminal-agent launch", () => {
   afterEach(() => {
     mocks.onAddTerminalAgent.mockReset();
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    hostClientForHostIdMock.calls.length = 0;
+    harnessModelPickerMock.calls.length = 0;
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
@@ -128,13 +185,17 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
       },
     };
     useWorkspaceFoldersStore.setState({
-      folders: [folder.path],
-      folderInfoByPath: { [folder.path]: folder },
-      primaryPath: folder.path,
+      byHost: {
+        "active-host": {
+          folders: [folder.path],
+          folderInfoByPath: { [folder.path]: folder },
+          primaryPath: folder.path,
+        },
+      },
     });
     useWorktreeIntentStagingStore
       .getState()
-      .setIntent(pendingTerminalAgentStagingKey("epic-test"), {
+      .setIntent(pendingTerminalAgentStagingKey("active-host", "epic-test"), {
         entries: [entry],
       });
 
@@ -175,6 +236,88 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
           workspaceMode: "inherit",
         }),
       );
+    });
+  });
+
+  it("resolves the picker's target host through useHostClientForHostId, keyed on the launch host scope", async () => {
+    render(
+      <AddNodeDropdown
+        open
+        onOpenChange={() => undefined}
+        menuPlacement="row"
+        menuTestId="add-node-menu"
+        itemTestId={(type) => `add-${type}`}
+        onAdd={() => undefined}
+        epicId="epic-test"
+        onAddTerminalAgent={mocks.onAddTerminalAgent}
+        terminalAgentWorkspaceSeed={null}
+        terminalAgentHostScope={{
+          kind: "fixed",
+          hostId: "host-b",
+          hostClient: null,
+        }}
+        terminalAgentStagingKey={undefined}
+        tuiAgentPending={false}
+        disabled={false}
+        disabledTooltip={null}
+        disabledTypes={undefined}
+        excludeTypes={undefined}
+      >
+        <button type="button">Add node</button>
+      </AddNodeDropdown>,
+    );
+
+    const terminalAgentTrigger = await screen.findByTestId(
+      "add-node-menu-terminal-agent",
+    );
+    terminalAgentTrigger.focus();
+    fireEvent.keyDown(terminalAgentTrigger, { key: "ArrowRight" });
+    await screen.findByRole("button", { name: "Start" });
+
+    expect(hostClientForHostIdMock.calls.at(-1)).toBe("host-b");
+    expect(harnessModelPickerMock.calls.at(-1)).toEqual({
+      createProfileHostId: "host-b",
+      runTargetHostId: "host-b",
+    });
+
+    cleanup();
+    hostClientForHostIdMock.calls.length = 0;
+    harnessModelPickerMock.calls.length = 0;
+
+    render(
+      <AddNodeDropdown
+        open
+        onOpenChange={() => undefined}
+        menuPlacement="row"
+        menuTestId="add-node-menu"
+        itemTestId={(type) => `add-${type}`}
+        onAdd={() => undefined}
+        epicId="epic-test"
+        onAddTerminalAgent={mocks.onAddTerminalAgent}
+        terminalAgentWorkspaceSeed={null}
+        terminalAgentHostScope={undefined}
+        terminalAgentStagingKey={undefined}
+        tuiAgentPending={false}
+        disabled={false}
+        disabledTooltip={null}
+        disabledTypes={undefined}
+        excludeTypes={undefined}
+      >
+        <button type="button">Add node</button>
+      </AddNodeDropdown>,
+    );
+
+    const undefinedScopeTrigger = await screen.findByTestId(
+      "add-node-menu-terminal-agent",
+    );
+    undefinedScopeTrigger.focus();
+    fireEvent.keyDown(undefinedScopeTrigger, { key: "ArrowRight" });
+    await screen.findByRole("button", { name: "Start" });
+
+    expect(hostClientForHostIdMock.calls.at(-1)).toBeNull();
+    expect(harnessModelPickerMock.calls.at(-1)).toEqual({
+      createProfileHostId: null,
+      runTargetHostId: null,
     });
   });
 });

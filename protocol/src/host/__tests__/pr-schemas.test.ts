@@ -31,10 +31,13 @@ import {
   prGetLocalDiffResponseSchema,
   prGetLocalDiffSummaryRequestSchema,
   prGetLocalDiffSummaryResponseSchema,
+  prGetLocalDiffSummaryResponseV11Schema,
   prGetLocalFileDiffRequestSchema,
+  prGetLocalFileDiffRequestV11Schema,
   prGetLocalFileDiffResponseSchema,
   prLocalDiffFileSchema,
   prLocalDiffSummaryFileSchema,
+  prLocalDiffSummaryFileV11Schema,
   prLocalDiffOidSchema,
   prLinkGroupKeySchema,
   prRepoIdentifierSchema,
@@ -1565,11 +1568,14 @@ describe("pr split RPC contracts", () => {
     expect(summaryContract.requestSchema).toBe(
       prGetLocalDiffSummaryRequestSchema,
     );
+    // The single minor binds the SIDECAR-BEARING schemas: `pathBytes` /
+    // `previousPathBytes` never had a peer that predated them, so they ride
+    // 1.0 rather than a 1.1.
     expect(summaryContract.responseSchema).toBe(
-      prGetLocalDiffSummaryResponseSchema,
+      prGetLocalDiffSummaryResponseV11Schema,
     );
     expect(fileDiffContract.requestSchema).toBe(
-      prGetLocalFileDiffRequestSchema,
+      prGetLocalFileDiffRequestV11Schema,
     );
     expect(fileDiffContract.responseSchema).toBe(
       prGetLocalFileDiffResponseSchema,
@@ -1578,6 +1584,15 @@ describe("pr split RPC contracts", () => {
     expect(fileDiffContract.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(summaryContract.method).toBe("pr.getLocalDiffSummary");
     expect(fileDiffContract.method).toBe("pr.getLocalFileDiff");
+
+    // That 1.0 is the ONLY minor: the collapse left no 1.1 above it, and
+    // nothing below it to upgrade from.
+    expect(summary[1].latestMinor).toBe(0);
+    expect(fileDiff[1].latestMinor).toBe(0);
+    expect(Object.keys(summary[1].versions)).toEqual(["0"]);
+    expect(Object.keys(fileDiff[1].versions)).toEqual(["0"]);
+    expect(summary[1].versions[0].upgradeFromPreviousVersion).toBeNull();
+    expect(fileDiff[1].versions[0].upgradeFromPreviousVersion).toBeNull();
   });
 
   it("keeps both additive methods optional and unsupported on older hosts", () => {
@@ -1603,5 +1618,121 @@ describe("pr split RPC contracts", () => {
       major: 1,
       minor: 0,
     });
+  });
+});
+
+const SUMMARY_FILE_V11_BASE_FIXTURE = {
+  path: LOCAL_DIFF_FILE_FIXTURE.path,
+  previousPath: null,
+  status: LOCAL_DIFF_FILE_FIXTURE.status,
+  insertions: LOCAL_DIFF_FILE_FIXTURE.insertions,
+  deletions: LOCAL_DIFF_FILE_FIXTURE.deletions,
+  isBinary: LOCAL_DIFF_FILE_FIXTURE.isBinary,
+};
+
+describe("prLocalDiffSummaryFileV11Schema", () => {
+  it("accepts a non-null token string, independently per side", () => {
+    const parsed = prLocalDiffSummaryFileV11Schema.parse({
+      ...SUMMARY_FILE_V11_BASE_FIXTURE,
+      pathBytes: "dG9rZW4=",
+      previousPathBytes: null,
+    });
+    expect(parsed.pathBytes).toBe("dG9rZW4=");
+    expect(parsed.previousPathBytes).toBeNull();
+  });
+
+  it("accepts null, independently per side", () => {
+    const parsed = prLocalDiffSummaryFileV11Schema.parse({
+      ...SUMMARY_FILE_V11_BASE_FIXTURE,
+      pathBytes: null,
+      previousPathBytes: "dG9rZW4=",
+    });
+    expect(parsed.pathBytes).toBeNull();
+    expect(parsed.previousPathBytes).toBe("dG9rZW4=");
+  });
+
+  it("rejects an empty string for either sidecar rather than treating it as a real (empty) token", () => {
+    expect(
+      prLocalDiffSummaryFileV11Schema.safeParse({
+        ...SUMMARY_FILE_V11_BASE_FIXTURE,
+        pathBytes: "",
+        previousPathBytes: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      prLocalDiffSummaryFileV11Schema.safeParse({
+        ...SUMMARY_FILE_V11_BASE_FIXTURE,
+        pathBytes: null,
+        previousPathBytes: "",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects every noncanonical alias of a token at the schema, so an alias can never become a distinct identity", () => {
+    // Each decodes (forgivingly) to bytes whose canonical encoding differs:
+    // missing padding, url-safe alphabet, embedded whitespace, trailing
+    // junk, nonzero padding bits, and a plainly non-base64 string.
+    const aliases = ["/w", "_w==", " dG9rZW4=", "dG9rZW4=junk", "Yf==", "not-base64"];
+    for (const alias of aliases) {
+      expect(
+        prLocalDiffSummaryFileV11Schema.safeParse({
+          ...SUMMARY_FILE_V11_BASE_FIXTURE,
+          pathBytes: alias,
+          previousPathBytes: null,
+        }).success,
+      ).toBe(false);
+      expect(
+        prGetLocalFileDiffRequestV11Schema.safeParse({
+          ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+          pathBytes: null,
+          previousPathBytes: alias,
+        }).success,
+      ).toBe(false);
+    }
+    // The canonical spelling of the first alias's bytes IS accepted.
+    expect(
+      prLocalDiffSummaryFileV11Schema.safeParse({
+        ...SUMMARY_FILE_V11_BASE_FIXTURE,
+        pathBytes: "/w==",
+        previousPathBytes: null,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("prGetLocalFileDiffRequestV11Schema", () => {
+  it("accepts a non-null token string and null, independently per side", () => {
+    const withToken = prGetLocalFileDiffRequestV11Schema.parse({
+      ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+      pathBytes: "dG9rZW4=",
+      previousPathBytes: null,
+    });
+    expect(withToken.pathBytes).toBe("dG9rZW4=");
+    expect(withToken.previousPathBytes).toBeNull();
+
+    const withPreviousToken = prGetLocalFileDiffRequestV11Schema.parse({
+      ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+      pathBytes: null,
+      previousPathBytes: "dG9rZW4=",
+    });
+    expect(withPreviousToken.pathBytes).toBeNull();
+    expect(withPreviousToken.previousPathBytes).toBe("dG9rZW4=");
+  });
+
+  it("rejects an empty string for either sidecar", () => {
+    expect(
+      prGetLocalFileDiffRequestV11Schema.safeParse({
+        ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+        pathBytes: "",
+        previousPathBytes: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      prGetLocalFileDiffRequestV11Schema.safeParse({
+        ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
+        pathBytes: null,
+        previousPathBytes: "",
+      }).success,
+    ).toBe(false);
   });
 });

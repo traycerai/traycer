@@ -173,9 +173,18 @@ function MentionSuggestionListContent({
               aria-selected={isSelected}
               data-selected={isSelected ? "true" : undefined}
               className={cn(
-                "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none",
-                "data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
-                "hover:bg-muted/70",
+                // `border-transparent` in the base so the selected border
+                // below does not shift the row.
+                "flex w-full items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-left outline-none",
+                // The ACTIVE option (keyboard navigation) takes the same
+                // treatment `ui/command.tsx` gives its selected item, rather
+                // than a heavier foreground alpha: `--primary` never
+                // collapses into a surface token in any theme, and a
+                // selection this list drives with ArrowUp/Down has to be
+                // unmistakable next to the plain hover tint below - which a
+                // foreground alpha one step up from it would not be.
+                "data-[selected=true]:border-primary/35 data-[selected=true]:bg-primary/12 data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
+                "hover:bg-foreground/6",
               )}
               onMouseEnter={() => setSelectedIndex(index)}
               onMouseDown={(event) => {

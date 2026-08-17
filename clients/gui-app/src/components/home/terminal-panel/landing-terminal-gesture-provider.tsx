@@ -72,11 +72,24 @@ export function LandingTerminalGestureProvider(props: {
   // gesture pins), so the folder picker writes the captured draft's workspace,
   // not the focused partner's.
   const effectiveDraftId = openGesture === null ? draftId : openGesture.draftId;
+  // ...and the EFFECTIVE host, for the same reason: folder paths are
+  // host-local and now bucketed by host, so a pinned gesture's chooser must
+  // list the folders of the host its terminal will actually launch on, not
+  // the bucket of a host the landing picker has since switched to. Outside a
+  // gesture the landing surface follows the app-wide active host. The staged
+  // slot is keyed by the same pair, so a pick made under the gesture's host
+  // cannot surface on the one the picker moved to.
+  const workspaceHostId =
+    openGesture === null ? activeHostId : openGesture.hostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
-    () => ({ surface: "landing", draftId: effectiveDraftId }),
-    [effectiveDraftId],
+    () => ({
+      surface: "landing",
+      hostId: workspaceHostId,
+      draftId: effectiveDraftId,
+    }),
+    [effectiveDraftId, workspaceHostId],
   );
-  const workspace = useHomeWorkspaceSource(stagingKey, null);
+  const workspace = useHomeWorkspaceSource(stagingKey, null, workspaceHostId);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
   const liveWorkspacePaths = workspace.folders;
 
@@ -105,12 +118,19 @@ export function LandingTerminalGestureProvider(props: {
     // that cannot pin its host is fail-closed (null client -> disabled action).
     const pinnedClient =
       entry === null ? null : buildTransientHostClient(defaultClient, entry);
+    // `workspace` above tracks a pinned gesture's captured host, and the one
+    // path that captures while another gesture pins (`togglePanel` on a start
+    // page whose own panel is closed) can be capturing a DIFFERENT host. Those
+    // folders are then another machine's, so the new gesture starts folderless
+    // instead of inheriting paths its host may not even have.
+    const ownWorkspace = workspaceHostId === activeHostId;
+    const capturedPath = ownWorkspace ? liveWorkspacePath : null;
     const gesture: LandingTerminalTarget = {
       draftId,
       hostId: activeHostId,
-      primaryWorkspacePath: liveWorkspacePath,
-      workspacePaths: [...liveWorkspacePaths],
-      launchWorkspacePath: liveWorkspacePath,
+      primaryWorkspacePath: capturedPath,
+      workspacePaths: ownWorkspace ? [...liveWorkspacePaths] : [],
+      launchWorkspacePath: capturedPath,
       availability,
       generation: gestureGenerationRef.current + 1,
       client: pinnedClient,
@@ -127,12 +147,18 @@ export function LandingTerminalGestureProvider(props: {
     hostDirectory,
     liveWorkspacePath,
     liveWorkspacePaths,
+    workspaceHostId,
   ]);
 
   const selectWorkspacePath = useCallback(
     (workspacePath: string): LandingTerminalTarget | null => {
       if (
         pendingGesture === null ||
+        // The live list belongs to `workspaceHostId`. A gesture whose page has
+        // since closed no longer pins the source, so it can be pinned to a
+        // different host than the one these paths came from - and a path the
+        // gesture's host may not have must never become its launch directory.
+        pendingGesture.hostId !== workspaceHostId ||
         !liveWorkspacePaths.includes(workspacePath)
       ) {
         return null;
@@ -148,7 +174,7 @@ export function LandingTerminalGestureProvider(props: {
       setPendingGesture(next);
       return next;
     },
-    [liveWorkspacePath, liveWorkspacePaths, pendingGesture],
+    [liveWorkspacePath, liveWorkspacePaths, pendingGesture, workspaceHostId],
   );
 
   const clearPending = useCallback(() => {

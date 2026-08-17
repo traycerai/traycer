@@ -35,6 +35,13 @@ export interface ChatLowerDockProps {
    * `chatBackgroundSectionVisible`.
    */
   readonly runningManagedCommandCount: number;
+  /**
+   * This chat's held shells, counted by the parent for the same reason - and
+   * counted separately because the hold a human has to clear sits on a shell
+   * that has FINISHED, which the running count above will never see. A chat
+   * whose only background state is a hold opens the section on this alone.
+   */
+  readonly heldManagedCommandCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
   readonly backgroundSessionStopPending: boolean;
@@ -74,6 +81,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount: props.runningManagedCommandCount,
+    heldManagedCommandCount: props.heldManagedCommandCount,
   });
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {

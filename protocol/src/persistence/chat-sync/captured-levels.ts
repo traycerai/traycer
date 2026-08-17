@@ -46,15 +46,55 @@
  *
  * A same-major minor that gets this wrong loses data silently: an older client
  * clones the chat, the field is simply absent from the re-published shards, and
- * nothing anywhere reports a loss. The client surface states the gap explicitly
- * for that reason - see `chatCloneResidualsOf`, where `shard` is recorded
- * `{ kind: "unavailable" }` rather than `dropped`, because the difference
- * between "we chose not to carry it" and "it never reached us" is the whole
- * content of that table.
+ * nothing anywhere reports a loss. Nothing downstream can report it either,
+ * which is why the rule has to be stated here rather than enforced there: a
+ * shard bag never reaches a re-publishing reader at all, so the difference
+ * between "we chose not to carry it" and "it never reached us" is invisible on
+ * the other side.
+ *
+ * The completeness guard below is what makes the level list itself
+ * non-optional, and it does bind across the package boundary: a consumer holds
+ * an exhaustive `Record<CapturedResidualLevelId, …>` deciding what each level
+ * carries, so adding a level here is a compile error there until somebody
+ * answers for it. (The Traycer host's chat-sync record adapter is that
+ * consumer today; named as a role rather than a symbol, since it lives in a
+ * different repository and this file must not depend on it.)
  *
  * `hostPrivate` under a GRADUATED shard is not an exception to this: it is one
  * schema instance and one level, and a clone blanks it deliberately (origin-host
  * session state must not follow a chat onto a new machine).
+ *
+ * ## The deliberate boundary: publisher-DERIVED levels carry no bag, ever
+ *
+ * The list below is not the set of levels that happen to have capture wired
+ * up; it is the set of levels a chat's durable data may live at. Three head
+ * locations are deliberately absent and must stay absent:
+ *
+ * - the head's part entries (`chatHeadPartSchema` elements),
+ * - `cdc`,
+ * - `hostPrivateShard`.
+ *
+ * These are PUBLISHER-DERIVED: a chat is single-owner, and the owner can always
+ * re-cut its parts and re-plan its cut from its own op log, which is the source
+ * of truth. **The only round-trip any of these values makes is through the
+ * owner's own predecessor head** - the extend road re-emits unchanged cohort
+ * entries verbatim and reads `cdc` back to check the plan is still the same
+ * one, so they are not literally re-derived on every publish; they are
+ * re-derivable, and derived afresh on every full recut.
+ *
+ * That is what bounds the loss. The one scenario is a same-host downgrade: the
+ * newer part fields strip on the older host's next publish, and the following
+ * newer publish does a full recut instead of an incremental one. An efficiency
+ * cost, never data loss.
+ *
+ * > A minor may add a publisher-derived field for the next publish to plan
+ * > with. It must NOT put durable CHAT data there. Anything the chat is not
+ * > still true without goes at a captured level below, or inside a message /
+ * > event body.
+ *
+ * Wiring capture here would cost a manifest id, a store op field, and an
+ * encoder change per level, and a part-level key perturbs the head bytes the
+ * lineage digest is taken over. Deliberately rejected in favour of the rule.
  *
  * ## Why there are no extract/replace accessors yet
  *

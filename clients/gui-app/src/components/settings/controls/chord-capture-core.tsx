@@ -161,7 +161,8 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
       "hover:opacity-75 focus-visible:ring-1 focus-visible:ring-primary/60";
   } else {
     buttonStateClass =
-      "border border-border/60 bg-muted/40 px-2.5 py-1 font-mono text-code-xs font-medium tabular-nums text-muted-foreground hover:bg-muted focus-visible:border-primary/60";
+      // muted-fill-ok: the chord chip is delimited by border-border/60
+      "border border-border/60 bg-muted/40 px-2.5 py-1 font-mono text-code-xs font-medium tabular-nums text-muted-foreground hover:bg-foreground/5 focus-visible:border-primary/60";
   }
 
   let buttonContent: ReactNode;

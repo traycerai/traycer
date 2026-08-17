@@ -24,6 +24,9 @@ import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { reportableWarningToast } from "@/lib/reportable-error-toast";
+import { appLogger } from "@/lib/logger";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -171,6 +174,17 @@ export function openNewChatInActiveTile(
  * function tears down the subscription and the 30s safety timeout.
  * React callers should plumb it into a `useEffect` cleanup so an
  * unmount mid-wait doesn't leave a dangling subscription.
+ *
+ * ## The wait is now a fallback, and it is no longer silent
+ *
+ * A chat created through the shared `epic.createChat` hooks is retained in the
+ * open-epic store's pending-creation registry as soon as the create is
+ * answered, so it is already in the projection when this runs and the open
+ * happens on the first attempt - no subscription, no timer. The wait remains
+ * for the cases the registry cannot cover (most concretely: the epic session
+ * being rebuilt between the request and its answer, which loses the retained
+ * row), and when it now runs out it SAYS SO. Burning 30s and doing nothing is
+ * what made "clicked Fork, nothing happened for a minute" unreadable.
  */
 export function openCreatedChatWhenProjected(
   intent: CreatedChatOpenIntent,
@@ -218,8 +232,49 @@ function openCreatedChatWhenProjectedInternal(
     }
     cleanup();
   });
-  timeoutId = window.setTimeout(cleanup, CHAT_PROJECTION_WAIT_MS);
+  timeoutId = window.setTimeout(() => {
+    if (cancelled) return;
+    cleanup();
+    reportChatProjectionWaitExpired(intent);
+  }, CHAT_PROJECTION_WAIT_MS);
   return cleanup;
+}
+
+/**
+ * The agent exists - `epic.createChat` answered - but this window never saw it
+ * arrive, so there is nothing to open. Said out loud rather than swallowed:
+ * the user's click produced a real chat on a real host, and the only thing that
+ * failed is this client's view of it, which is exactly the distinction a silent
+ * expiry destroyed.
+ *
+ * Logged as well as toasted, and the split is deliberate: the report context
+ * below carries no ids, because an issue report is a privacy-safe payload and
+ * naming the epic, chat and host in it would leak the user's workspace into
+ * something they send to us. The renderer's own log is not that payload - it is
+ * this device's console dump - so it is where the correlation belongs. Without
+ * it a support engineer receives "an agent never arrived" and has no way to tie
+ * it to which agent, on which host.
+ */
+function reportChatProjectionWaitExpired(intent: CreatedChatOpenIntent): void {
+  appLogger.warn("[new-chat] created chat never reached this device", {
+    epicId: intent.epicId,
+    chatId: intent.chatId,
+    hostId: intent.hostId,
+  });
+  reportableWarningToast(
+    "Your new agent hasn't shown up here yet.",
+    {
+      description:
+        "It was created - this device just hasn't received it yet. It should appear shortly; reopening the Epic re-reads the list.",
+      id: "chat-projection-wait-expired",
+    },
+    createReportIssueContext({
+      title: "New agent never reached this device",
+      message: null,
+      code: null,
+      source: "Chat",
+    }),
+  );
 }
 
 const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>

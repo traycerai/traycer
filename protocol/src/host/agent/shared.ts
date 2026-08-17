@@ -234,25 +234,59 @@ export const tuiHarnessIdSchema = harnessIdSchema.extract([
 ]);
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
-/**
- * Agent-to-agent participation gate — the single source of truth for which
- * agents can take part in A2A messaging:
- *
- *   - every GUI agent (A2A is provider-native via the MCP bridge), and
- *   - Claude Code TUI agents (the only TUI with monitor-backed inbox/reply).
- *
- * Other TUI harnesses (codex, opencode, cursor) have no inbox transport. Use
- * this for create/send gates; read-only discovery/transcript paths can still
- * show them.
- *
- * Note: this is purely the A2A gate. It is intentionally NOT the gate for
- * epic activity tracking — every agent (including codex/opencode TUI) still
- * contributes activity for the YJS-warmth signal.
- */
-export function canParticipateInA2A(target: {
+export type A2ACapabilityTarget = {
   readonly surface: "gui" | "tui";
   readonly harnessId: string | null;
-}): boolean {
+};
+
+/**
+ * A2A participation is TWO capabilities, not one, because the host owns two
+ * independent transports and they do not cover the same harnesses:
+ *
+ *   1. OUTBOUND TOOLS ({@link canUseA2ATools}) — the agent is handed the
+ *      host-owned `traycer_a2a` catalog at launch, so it can create, send,
+ *      inspect, and hold roles. Delivered over each provider's native MCP
+ *      path (GUI turns, Claude/Codex terminal launches) or the loopback HTTP
+ *      tool bridge (OpenCode).
+ *   2. INBOUND DELIVERY ({@link canReceiveA2AMessages}) — something can WAKE
+ *      the agent and hand it a message it never asked for. GUI agents get a
+ *      turn injected; a Claude Code terminal agent gets it through the
+ *      bundled `traycer monitor` background command (and can be spawned
+ *      headless for it). No other terminal harness has an inbox transport.
+ *
+ * Conflating the two is what the split exists to prevent: gating tool access
+ * on inbox capability starves Codex/OpenCode terminal agents of the shared
+ * catalog, while gating delivery on tool access accepts durable inbox rows
+ * that nothing will ever drain.
+ *
+ * Cursor is absent from both arms deliberately: `CursorAdapter` declares
+ * `surfaces: ["gui"]` and implements no `ITuiHarnessAdapter`, so a Cursor
+ * terminal agent cannot be launched at all, let alone handed a catalog.
+ *
+ * Note: neither predicate gates epic activity tracking — every agent
+ * (including codex/opencode TUI) still contributes activity for the
+ * YJS-warmth signal.
+ */
+export function canUseA2ATools(target: A2ACapabilityTarget): boolean {
+  if (target.surface === "gui") return true;
+  return (
+    target.harnessId === "claude" ||
+    target.harnessId === "codex" ||
+    target.harnessId === "opencode"
+  );
+}
+
+/**
+ * Can this agent be the RECEIVER of an A2A message — i.e. is there a
+ * transport that will wake it and hand the message over? See
+ * {@link canUseA2ATools} for why this is a separate question.
+ *
+ * Use this for send/create-target admission, role-awareness routing, and any
+ * "can I message this agent" capability the client renders. A tool-capable
+ * agent that fails this check can still send; it just cannot be sent to, so
+ * it must never be promised a reply.
+ */
+export function canReceiveA2AMessages(target: A2ACapabilityTarget): boolean {
   if (target.surface === "gui") return true;
   return target.harnessId === "claude";
 }

@@ -477,3 +477,147 @@ describe("resourcesRegistry", () => {
     expect(global.owners).toHaveLength(2);
   });
 });
+
+describe("global scope support", () => {
+  afterEach(() => {
+    resourcesRegistry.disposeAll();
+  });
+
+  it("starts unknown and records the verdict the stream publishes", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "global" },
+      streamClientFactory: fake.factory,
+    });
+
+    expect(handle.store.getState().scopeSupport).toBe("unknown");
+
+    fake.callbacks().onScopeSupport("unsupported");
+    expect(handle.store.getState().scopeSupport).toBe("unsupported");
+
+    handle.dispose();
+  });
+
+  // A remote session that is already ready but does not advertise the method
+  // rejects the subscribe synchronously, and `LogicalStream.onStatusChange`
+  // REPLAYS that terminal close the moment a handler is installed — which the
+  // typed wrapper does in its constructor. So the verdict lands while
+  // `streamClientFactory` is still running. Nothing follows a terminal close to
+  // republish it, so losing it here strands the surface forever.
+  it("keeps a verdict published while the stream was still being constructed", () => {
+    const handle = createResourcesStore({
+      scope: { kind: "global" },
+      streamClientFactory: (_scope, callbacks) => {
+        callbacks.onScopeSupport("unsupported");
+        callbacks.onConnectionStatus("closed", {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "host does not advertise resources.subscribe",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        });
+        return { close: () => undefined };
+      },
+    });
+
+    expect(handle.store.getState().scopeSupport).toBe("unsupported");
+    expect(handle.store.getState().connectionStatus).toBe("closed");
+
+    handle.dispose();
+  });
+
+  it("reads unknown with no global entry to ask", () => {
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("unknown");
+  });
+
+  it("repeats the verdict for the host the stream was opened against", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe(
+      "unsupported",
+    );
+  });
+
+  // The entry is a module singleton that outlives a swap, so the verdict it
+  // holds routinely belongs to the machine we just STOPPED watching. Repeating
+  // it for whoever asks would print "cannot report its processes" under the
+  // name of a host that never said any such thing.
+  it("refuses to repeat one host's verdict for another", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport("host-b")).toBe("unknown");
+  });
+
+  // Two unnamed things are not the same thing. An entry whose mount could not
+  // name its host, asked about a scope that has not resolved one either, would
+  // match on `null === null` and convict a machine neither side identified.
+  // Following the ACTIVE host nothing on screen names a machine, so no
+  // incompatible notice is shown — the surface just renders the projection. An
+  // `@1.0` host's global entry outranks the per-epic fallback purely by
+  // existing, so leaving it in place publishes emptiness from a stream that
+  // will never carry anything, while the per-epic streams on the very same
+  // transport hold that host's real numbers. That read as "Waiting for resource
+  // data." forever.
+  it("falls back to the per-epic entries when the global stream cannot serve the scope", () => {
+    const globalFake = makeFakeClient();
+    const epicFake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-global", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: globalFake.factory,
+      }),
+    );
+    resourcesRegistry.acquire("epic-1", "token-epic", "host-a", () =>
+      createResourcesStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        streamClientFactory: epicFake.factory,
+      }),
+    );
+    epicFake.callbacks().onSnapshot(
+      projection({
+        sampledAt: 1_000,
+        owners: [makeOwner("terminal", "term-1", { cpuPercent: 11 })],
+      }),
+    );
+
+    // While the global stream has not judged itself, it still owns the answer -
+    // and it is empty, because an `@1.0` host answered about `__global__`.
+    expect(resourcesRegistry.getGlobalProjection().owners).toHaveLength(0);
+
+    globalFake.callbacks().onScopeSupport("unsupported");
+
+    const projected = resourcesRegistry.getGlobalProjection();
+    expect(projected.owners).toHaveLength(1);
+    expect(projected.owners[0].cpuPercent).toBe(11);
+    expect(projected.hostId).toBe("host-a");
+  });
+
+  it("does not match an unnamed entry to an unnamed claim", () => {
+    const fake = makeFakeClient();
+    resourcesRegistry.acquireGlobal("token-a", null, () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory: fake.factory,
+      }),
+    );
+    fake.callbacks().onScopeSupport("unsupported");
+
+    expect(resourcesRegistry.getGlobalScopeSupport(null)).toBe("unknown");
+  });
+});

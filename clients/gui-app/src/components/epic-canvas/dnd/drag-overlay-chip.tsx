@@ -3,21 +3,19 @@
  * from the drag payload (tile ref resolved once at drag start, rail panel
  * definition, header tab) - the overlay mounts at the app shell, outside
  * any epic session provider, so chips must not read live epic projections.
- * Titles therefore show the payload's snapshot `name`, not the live title.
+ * Titles therefore show the payload's snapshot `name`, not the live title. The
+ * one exception is a shell's output window, whose tile carries no name worth
+ * showing at all - see `ManagedCommandOutputTileDragOverlay`.
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import {
-  Activity,
-  FileDiff,
-  FilePlus,
-  Folder,
-  GitPullRequest,
-  Lock,
-} from "lucide-react";
+import { FileDiff, FilePlus, Folder, GitPullRequest, Lock } from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
@@ -177,7 +175,12 @@ function EpicCanvasNodeDragOverlay(props: {
     return <BlankTileDragOverlay node={props.node} />;
   }
   if (isManagedCommandOutputTileRef(props.node)) {
-    return <ManagedCommandOutputTileDragOverlay node={props.node} />;
+    return (
+      <ManagedCommandOutputTileDragOverlay
+        node={props.node}
+        epicId={props.epicId}
+      />
+    );
   }
   if (isCommGraphTileRef(props.node)) {
     return (
@@ -199,16 +202,35 @@ function EpicCanvasNodeDragOverlay(props: {
 }
 
 /**
- * The dragged output window carries no label of its own (its tile is just the
- * command pointer), so the chip names the surface rather than the command.
+ * The dragged output window has no label of its own (its tile is just the
+ * command pointer), so the chip reads the shell's live title the way the tab it
+ * came from does - dragging "Output" out of a strip that says "Monitor · deploy
+ * watcher" is the chip disagreeing with the thing under the cursor.
+ *
+ * The exception to this module's no-live-projections rule (see the header): the
+ * chat-session registry is a module singleton, not an epic-scoped provider, so
+ * it is readable from the app shell. Falls back to the payload's snapshot name
+ * when the owning chat has no live session, exactly as the tab does.
  */
 function ManagedCommandOutputTileDragOverlay(props: {
   readonly node: ManagedCommandOutputTileRef;
+  readonly epicId: string;
 }) {
+  const command = useManagedCommandOnHost({
+    epicId: props.epicId,
+    hostId: props.node.hostId,
+    commandId: props.node.id,
+  });
   return (
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
-      <Activity className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      <ManagedCommandMonitorIcon
+        monitoring={command !== null && command.monitoring}
+        decorative
+        className="size-3.5"
+      />
+      <span className="min-w-0 truncate font-medium">
+        {command === null ? props.node.name : managedCommandTitle(command)}
+      </span>
     </m.div>
   );
 }

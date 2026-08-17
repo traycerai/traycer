@@ -65,6 +65,11 @@ import {
   readArtifactKind,
   readMaybeString,
 } from "./projection-helpers";
+import {
+  unionPendingChatCreations,
+  type PendingChatCreation,
+  type RetainedChatCreation,
+} from "./pending-chat-creations";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
@@ -513,6 +518,40 @@ export interface OpenEpicState {
    * Retained rows make that lossless; see `applyChatRecords`.
    */
   republishChatRecordsForCurrentUser: () => void;
+  /**
+   * Retains a chat this client has had a host create, so it renders from the
+   * moment the create is answered instead of when its record completes the
+   * round trip - see `./pending-chat-creations`.
+   *
+   * Idempotent per `(ownerUserId, chatId)`. Refused for a chat this session has
+   * already seen retracted (removal is absorbing, and a creation cannot argue
+   * with it), and refused while no user is signed in (a stand-in that cannot say
+   * whose it is could be retired by a stranger's same-id row, or shown to
+   * whoever signs in next). Every creation surface gets this for free: the shared
+   * `epic.createChat` mutation hooks call it, so the registration cannot drift
+   * from the request the way a per-surface copy would. A surface with a create
+   * slow enough to want a row BEFORE the answer may call it earlier and pair it
+   * with {@link OpenEpicState.clearPendingChatCreation}.
+   */
+  beginPendingChatCreation: (pending: PendingChatCreation) => void;
+  /**
+   * Drops a retained creation because it will never produce a record - the
+   * create call failed.
+   *
+   * Keyed by `chatId` ALONE, unlike the retention itself, because the failing
+   * caller knows the id it sent and not the profile that was signed in when the
+   * retention happened. Deliberate rather than sloppy: this map holds only
+   * creations THIS session initiated, so an id names at most one of them, while
+   * narrowing to the currently signed-in user would strand a ghost row for a
+   * chat that does not exist whenever the account moves between a request and
+   * its refusal. It is NOT a claim that `chatId` is unique - it is not, and
+   * every path that reconciles against a RECORD keys on the owner too.
+   *
+   * NOT the success path - a creation that lands is expired by its own record
+   * arriving, through whichever of the poll or the delta stream gets there
+   * first, so the row never blinks out between the two.
+   */
+  clearPendingChatCreation: (chatId: string) => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
 
@@ -1623,6 +1662,66 @@ export function createOpenEpicStore(
    */
   const chatRetractions = new Map<string, ChatRecordRemovalReason>();
 
+  /**
+   * Locally initiated creations with no record back yet, keyed like
+   * {@link chatRecordRows} - `(ownerUserId, chatId)` - and held in their OWN map
+   * rather than seeded into that one.
+   *
+   * Separate because these are not records and must not be treated as any: the
+   * row map's entries carry a per-chat `revision` that the delta path's
+   * staleness test compares against, and a synthesized entry would have to
+   * invent one. A fabricated `revision: 0` would then make the real row's first
+   * delta (also revision 0) read as a replay and be DROPPED - the optimistic row
+   * would outlive the truth it stands in for. Held apart, the record path's
+   * ordering rules are untouched and the union happens at publish.
+   */
+  const pendingChatCreations = new Map<string, RetainedChatCreation>();
+  /**
+   * Retires the stand-in that an ARRIVING RECORD has just made redundant.
+   *
+   * Keyed on the record's full identity, not on its id: `chatId` is not globally
+   * unique, and a collaborator's legitimate same-id row must not be able to
+   * retire the viewer's own in-flight creation - the row that replaces a
+   * stand-in has to be the SAME chat, not merely a chat with the same id. This
+   * is the pending-side half of the invariant `chatRecordRows`' own keying
+   * exists for; see the collaborator regression test in
+   * `__tests__/chat-records-union.test.ts`.
+   */
+  const expirePendingChatCreationForRecord = (
+    ownerUserId: string,
+    chatId: string,
+  ): boolean => pendingChatCreations.delete(recordKey(ownerUserId, chatId));
+  /**
+   * Drops every retained creation for `chatId`, whoever it was registered for.
+   *
+   * The id-coarse arm, for the two callers that genuinely have no owner to
+   * narrow by, both of which are addressing THIS CLIENT'S OWN creations rather
+   * than reconciling somebody's record:
+   *
+   *  - a `remove` frame, which carries `(epicId, chatId, reason)` and no owner
+   *    at all - the same coarseness `chatRetractions` is keyed at, and bounded
+   *    the same way;
+   *  - a create that failed, whose caller knows the id it sent and not the
+   *    profile that was signed in when the retention happened.
+   *
+   * Scoping the failure arm to the CURRENT user instead was considered and
+   * rejected: it strands a stand-in for a chat that does not exist whenever the
+   * account moves between the request and its refusal, and a ghost row for a
+   * chat nobody can open is worse than dropping a stand-in for one that exists
+   * (which the record channel restores on its next answer). This map only ever
+   * holds creations THIS session initiated, and an id names at most one of
+   * them, so the coarseness has nothing to hit in practice.
+   */
+  const dropPendingChatCreationsForChat = (chatId: string): boolean => {
+    let dropped = false;
+    for (const [key, retained] of pendingChatCreations) {
+      if (retained.pending.chatId !== chatId) continue;
+      pendingChatCreations.delete(key);
+      dropped = true;
+    }
+    return dropped;
+  };
+
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId` (NOT the store's `userId` option,
   // which is the email used for persist namespacing). Read lazily so a session
@@ -1748,7 +1847,15 @@ export function createOpenEpicStore(
             if (!isChatVisibleToUser(row.ownerUserId, currentUserId)) continue;
             visible.push(row);
           }
-          const next = chatRecordsSlice(visible);
+          // Creations this client has asked for but has no record back for,
+          // folded in HERE - the one seam both the poll and the push path
+          // publish through, so neither can see a table the other cannot. A
+          // real row always wins over its pending stand-in.
+          const next = unionPendingChatCreations(
+            chatRecordsSlice(visible),
+            pendingChatCreations.values(),
+            currentUserId,
+          );
           const nextSlice = next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
           if (extra === null && chatSlicesEq(chatRecords, nextSlice)) return;
           chatRecords = nextSlice;
@@ -2848,6 +2955,14 @@ export function createOpenEpicStore(
               // was gone. See `OpenEpicState.chatRetractions`.
               if (chatRetractions.has(row.chatId)) continue;
               chatRecordRows.set(recordKey(row.ownerUserId, row.chatId), row);
+              // The record for a creation this client is holding open has
+              // arrived: the stand-in has served its purpose and the served row
+              // takes over. Retiring it HERE (rather than only in the union) is
+              // what keeps the clear-and-replace above from being the only
+              // reader that knows the difference. Runs for EVERY ingested row,
+              // not only newly-seen ones, which is what lets a later answer
+              // retire a stand-in registered while the row was already held.
+              expirePendingChatCreationForRecord(row.ownerUserId, row.chatId);
             }
             publishChatRecords(null);
           },
@@ -2866,12 +2981,20 @@ export function createOpenEpicStore(
               const doomed = Array.from(chatRecordRows.entries())
                 .filter(([, row]) => row.chatId === delta.chatId)
                 .map(([key]) => key);
+              // A retraction outranks a creation this client is still holding
+              // open: removal is terminal and absorbing, and an optimistic row
+              // is the weakest claim there is. Id-coarse like the frame itself
+              // and like `chatRetractions`, since a `remove` names no owner.
+              // Dropped BEFORE the idempotence test so a redelivered removal
+              // that is the first one to race a registration still retires it.
+              const hadPending = dropPendingChatCreationsForChat(delta.chatId);
               // Idempotent: a redelivered removal for the same reason is not a
               // state change, and re-publishing on it would re-project the epic
               // for nothing.
               if (
                 chatRetractions.get(delta.chatId) === delta.reason &&
-                doomed.length === 0
+                doomed.length === 0 &&
+                !hadPending
               ) {
                 return;
               }
@@ -2896,11 +3019,63 @@ export function createOpenEpicStore(
             // `updatedAt` is display metadata no ordering decision may read.
             if (held !== undefined && record.revision <= held.revision) return;
             chatRecordRows.set(key, record);
+            // Same handover as the poll's, on the same full identity: whichever
+            // path delivers the real row first retires the stand-in, so the row
+            // never blinks out between the two.
+            expirePendingChatCreationForRecord(
+              record.ownerUserId,
+              record.chatId,
+            );
             publishChatRecords(null);
           },
 
           republishChatRecordsForCurrentUser: () => {
             if (disposed) return;
+            publishChatRecords(null);
+          },
+
+          beginPendingChatCreation: (pending) => {
+            if (disposed) return;
+            // A chat this session has already seen retracted cannot be created
+            // back into view - the same absorbing rule the record paths apply.
+            if (chatRetractions.has(pending.chatId)) return;
+            // No signed-in user means no identity to retain this under, and an
+            // unattributed stand-in is worse than none: it could be retired by a
+            // stranger's same-id row, or rendered to whoever signs in next. The
+            // chat still surfaces when its own record arrives - i.e. exactly the
+            // behavior that existed before this registry.
+            //
+            // Taken from the CALLER, who captured it when the request left,
+            // rather than read live here. This runs when the host answers, and a
+            // profile change while the create was in flight would otherwise file
+            // a chat authorized as user A under user B - visible to B, and
+            // unretirable by A's real record when it arrives under its actual
+            // owner. See `CreateChatMutationContext.ownerUserId`.
+            const ownerUserId = pending.ownerUserId;
+            if (ownerUserId === null) return;
+            // NOT gated on whether a served row for this chat is already held.
+            // It can be - the owning host pushes its record the moment it
+            // commits, so a delta can beat the create's own answer - and
+            // retaining anyway is deliberate: the union shadows the stand-in for
+            // as long as the real row is there, and a stale list answer that
+            // clear-and-replaces that row (one issued before the chat existed,
+            // landing after) would otherwise leave NEITHER, which is the exact
+            // disappearance this registry exists to prevent. The redundant entry
+            // costs one map slot and is retired by the next answer carrying the
+            // row.
+            const key = recordKey(ownerUserId, pending.chatId);
+            if (pendingChatCreations.has(key)) return;
+            pendingChatCreations.set(key, {
+              pending,
+              ownerUserId,
+              createdAt: Date.now(),
+            });
+            publishChatRecords(null);
+          },
+
+          clearPendingChatCreation: (chatId) => {
+            if (disposed) return;
+            if (!dropPendingChatCreationsForChat(chatId)) return;
             publishChatRecords(null);
           },
 

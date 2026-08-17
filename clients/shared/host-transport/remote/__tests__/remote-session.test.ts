@@ -42,6 +42,7 @@ import {
   RetryableTransportError,
 } from "../../host-messenger";
 import {
+  getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "../../negotiated-manifest-registry";
@@ -1460,6 +1461,38 @@ describe("RemoteSession negotiated-manifest publication", () => {
             ),
           WAIT,
         );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  /**
+   * The version half of the same publish, mirroring `WsRpcClient`'s pin in
+   * `ws-rpc-client.test.ts`. A2/critique finding 5: without the exact
+   * negotiated `{major, minor}` per method, a same-major feature gate cannot
+   * tell a V12 host from a V11 host that silently degraded the request.
+   */
+  it(
+    "records the exact negotiated version from the session openAck",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 2, minor: 4 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      expect(
+        getNegotiatedHostMethodVersion("host-1", "host.usage.summary"),
+      ).toBeNull();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(
+          getNegotiatedHostMethodVersion("host-1", "host.usage.summary"),
+        ).toEqual({ major: 2, minor: 4 });
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();

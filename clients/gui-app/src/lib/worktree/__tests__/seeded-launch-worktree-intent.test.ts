@@ -8,6 +8,7 @@ import { deriveWorkspaceMode } from "../workspace-mode";
 import { readSeededLaunchWorkspace } from "../seeded-launch-worktree-intent";
 
 const STAGING_KEY = {
+  hostId: "host-a",
   surface: "owner" as const,
   epicId: "epic-1",
   ownerKind: "chat" as const,
@@ -43,14 +44,12 @@ function stagedWorktreeEntry(workspacePath: string, isPrimary: boolean) {
   };
 }
 
+const HOST_A = "host-a";
+
 beforeEach(() => {
   useWorktreeIntentStagingStore.getState().resetForTests();
   useSeededWorkspaceSnapshotStore.getState().resetForTests();
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
 });
 
 afterEach(() => {
@@ -73,6 +72,7 @@ describe("readSeededLaunchWorkspace", () => {
       stagingKey: STAGING_KEY,
       seedIntent,
       fallbackWorkspace,
+      hostId: HOST_A,
     });
 
     expect(result).toEqual({ worktreeIntent: seedIntent, folderCount: 1 });
@@ -106,6 +106,7 @@ describe("readSeededLaunchWorkspace", () => {
       stagingKey: STAGING_KEY,
       seedIntent,
       fallbackWorkspace,
+      hostId: HOST_A,
     });
 
     expect(result.worktreeIntent).not.toBeNull();
@@ -142,6 +143,7 @@ describe("readSeededLaunchWorkspace", () => {
       stagingKey: STAGING_KEY,
       seedIntent: null,
       fallbackWorkspace,
+      hostId: HOST_A,
     });
 
     const primaries =
@@ -154,9 +156,13 @@ describe("readSeededLaunchWorkspace", () => {
 
   it("uses the live global workspace for an unseeded add-node launch", () => {
     useWorkspaceFoldersStore.setState({
-      folders: [GIT_FOLDER.path],
-      folderInfoByPath: { [GIT_FOLDER.path]: GIT_FOLDER },
-      primaryPath: GIT_FOLDER.path,
+      byHost: {
+        [HOST_A]: {
+          folders: [GIT_FOLDER.path],
+          folderInfoByPath: { [GIT_FOLDER.path]: GIT_FOLDER },
+          primaryPath: GIT_FOLDER.path,
+        },
+      },
     });
     useWorktreeIntentStagingStore.getState().setIntent(STAGING_KEY, {
       entries: [stagedWorktreeEntry(GIT_FOLDER.path, true)],
@@ -166,6 +172,7 @@ describe("readSeededLaunchWorkspace", () => {
       stagingKey: STAGING_KEY,
       seedIntent: null,
       fallbackWorkspace: null,
+      hostId: HOST_A,
     });
 
     expect(result.folderCount).toBe(1);
@@ -196,6 +203,7 @@ describe("readSeededLaunchWorkspace", () => {
       stagingKey: STAGING_KEY,
       seedIntent: null,
       fallbackWorkspace: emptySeed,
+      hostId: HOST_A,
     });
 
     expect(result.folderCount).toBe(1);
@@ -222,6 +230,7 @@ describe("readSeededLaunchWorkspace", () => {
         entries: [stagedWorktreeEntry(GIT_FOLDER.path, true)],
       },
       fallbackWorkspace: seededWorkspace,
+      hostId: HOST_A,
     });
 
     expect(result).toEqual({ worktreeIntent: null, folderCount: 0 });

@@ -25,7 +25,8 @@ export function effectiveWorktreeIntent(input: {
 }): WorktreeIntent | null {
   const fallback =
     input.seedIntent ??
-    buildForkWorkspaceSeedFromWorkspaceFolders(input.workspace.folders).intent;
+    buildForkWorkspaceSeedFromWorkspaceFolders(input.workspace.folders, null)
+      .intent;
   const resolvedPrimary = resolvePrimaryPath(
     input.workspace.folders,
     input.workspace.primaryPath,

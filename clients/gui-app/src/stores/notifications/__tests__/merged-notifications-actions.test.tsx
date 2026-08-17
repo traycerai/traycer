@@ -282,16 +282,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
-  const call = hostRequestMock.mock.calls.find(
-    (entry) => entry[0] === "host.notifications.markAllRead",
-  );
+  return hostBeforeUpdatedAtCallParams("host.notifications.markAllRead");
+}
+
+function clearAllCallParams(): { readonly beforeUpdatedAt: number } {
+  return hostBeforeUpdatedAtCallParams("host.notifications.clearAll");
+}
+
+function hostBeforeUpdatedAtCallParams(
+  method: "host.notifications.markAllRead" | "host.notifications.clearAll",
+): { readonly beforeUpdatedAt: number } {
+  const call = hostRequestMock.mock.calls.find((entry) => entry[0] === method);
   const params: unknown = call === undefined ? undefined : call[1];
   if (!isRecord(params)) {
-    throw new Error("expected host.notifications.markAllRead params");
+    throw new Error(`expected ${method} params`);
   }
   const beforeUpdatedAt = params["beforeUpdatedAt"];
   if (typeof beforeUpdatedAt !== "number") {
-    throw new Error("expected host.notifications.markAllRead params");
+    throw new Error(`expected ${method} params`);
   }
   return { beforeUpdatedAt };
 }
@@ -740,6 +748,26 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
         cloudNotificationFeedId("entry-later")
       ]?.entryId,
     ).toBe("entry-later");
+  });
+
+  it("clears the active host feed through the local clear-all RPC", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("entry-local", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllCallParams().beforeUpdatedAt).toBeTypeOf("number");
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+    });
   });
 
   it("quotes the newest version to clear-all even when the rendered feed did not change", async () => {

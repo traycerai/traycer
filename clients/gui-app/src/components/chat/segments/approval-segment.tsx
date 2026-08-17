@@ -60,6 +60,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}

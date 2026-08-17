@@ -641,16 +641,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
-  const call = hostRequestMock.mock.calls.find(
-    (entry) => entry[0] === "host.notifications.markAllRead",
-  );
+  return hostBeforeUpdatedAtCallParams("host.notifications.markAllRead");
+}
+
+function clearAllCallParams(): { readonly beforeUpdatedAt: number } {
+  return hostBeforeUpdatedAtCallParams("host.notifications.clearAll");
+}
+
+function hostBeforeUpdatedAtCallParams(
+  method: "host.notifications.markAllRead" | "host.notifications.clearAll",
+): { readonly beforeUpdatedAt: number } {
+  const call = hostRequestMock.mock.calls.find((entry) => entry[0] === method);
   const params: unknown = call === undefined ? undefined : call[1];
   if (!isRecord(params)) {
-    throw new Error("expected host.notifications.markAllRead params");
+    throw new Error(`expected ${method} params`);
   }
   const beforeUpdatedAt = params["beforeUpdatedAt"];
   if (typeof beforeUpdatedAt !== "number") {
-    throw new Error("expected host.notifications.markAllRead params");
+    throw new Error(`expected ${method} params`);
   }
   return { beforeUpdatedAt };
 }
@@ -1015,6 +1023,8 @@ describe("NotificationsPopover", () => {
     ).toBeDefined();
     const row = screen.getByTestId("notification-entry");
     expect(row.dataset.notificationId).toMatch(/^app-local:terminal\.crashed:/);
+    expect(row.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(row.querySelector(".lucide-message-square-x")).toBeNull();
     fireEvent.click(activateButtonFor(row));
 
     await waitFor(() => {
@@ -1151,6 +1161,34 @@ describe("NotificationsPopover", () => {
     });
   });
 
+  it("uses the same clear-notifications action for the local host feed", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("entry-local", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const clearAll = await screen.findByRole("button", {
+      name: "Clear notifications",
+    });
+    expect((clearAll as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(clearAll);
+    expect(screen.getByText("Clear all notifications?")).toBeDefined();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(clearAllCallParams().beforeUpdatedAt).toBeTypeOf("number");
+    });
+  });
+
   it("renders a relative timestamp on every notification row", async () => {
     const twoMinutesAgo = Date.now() - 150_000;
     const captured: TargetCapture = {
@@ -1247,8 +1285,12 @@ describe("NotificationsPopover", () => {
     expect(row.className).not.toMatch(/bg-accent\/55|bg-muted\/35/);
     expect(row.className.split(/\s+/)).toEqual(
       expect.arrayContaining([
-        "hover:bg-muted/70",
-        "has-[:focus-visible]:bg-muted/70",
+        // Foreground-alpha, not `bg-muted/70`: these rows render on the
+        // notifications popover, whose surface IS `--muted`'s value in every
+        // preset dark theme, so a muted tint left the hover/focus states
+        // invisible there.
+        "hover:bg-foreground/6",
+        "has-[:focus-visible]:bg-foreground/6",
         "py-2.5",
         "pl-6",
         "pr-4",
@@ -1287,6 +1329,8 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const row = await screen.findByTestId("notification-entry");
+    expect(row.querySelector(".lucide-message-square-x")).not.toBeNull();
+    expect(row.querySelector(".lucide-square-terminal")).toBeNull();
     const acknowledge = within(row).getByTestId("notification-acknowledge");
     expect(acknowledge.getAttribute("aria-label")).toBe("Acknowledge");
     expect(acknowledge.hasAttribute("disabled")).toBe(false);

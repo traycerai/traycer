@@ -128,7 +128,9 @@ function renderText(node: JsonContent): ReactNode {
         return <em>{acc}</em>;
       case "code":
         return (
-          <code className="rounded bg-muted px-1 py-0.5 text-ui-xs">{acc}</code>
+          <code className="rounded bg-foreground/8 px-1 py-0.5 text-ui-xs">
+            {acc}
+          </code>
         );
       case "strike":
         return <s>{acc}</s>;

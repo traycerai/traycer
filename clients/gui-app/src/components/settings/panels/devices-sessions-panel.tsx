@@ -402,11 +402,11 @@ function SessionRow(props: {
     <li
       className={cn(
         "flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
-        session.revoked && "bg-muted/30 text-muted-foreground",
+        session.revoked && "bg-foreground/3 text-muted-foreground",
       )}
     >
       <div className="flex min-w-0 gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           {sessionIcon(session)}
         </div>
         <div className="min-w-0 space-y-1">

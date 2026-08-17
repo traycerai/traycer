@@ -8,6 +8,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import {
+  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
@@ -45,10 +46,16 @@ export interface WorkspaceFoldersSource {
 export function useResolvedWorkspaceFolders(
   source: WorkspaceFoldersSource | null,
   client: HostClient<HostRpcRegistry> | null,
+  // Scopes the `source === null` global fallback to the same host `client`
+  // resolves against - folder paths are host-local, so the fallback bucket
+  // and the resolution host must agree.
+  hostId: string | null,
 ): ResolvedWorkspaceFoldersQueryResult {
-  const globalFolders = useWorkspaceFoldersStore((s) => s.folders);
+  const globalFolders = useWorkspaceFoldersStore(
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folders,
+  );
   const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (s) => s.folderInfoByPath,
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folderInfoByPath,
   );
   const folders = source === null ? globalFolders : source.folders;
   const folderInfoByPath =

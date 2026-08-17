@@ -47,7 +47,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     __resetAppLocalNotificationsStoreForTests();
   });
 
-  it("shows and clears the app-local crash dot for the exact terminal tile", () => {
+  it("shows and clears the app-local terminal crash icon for the exact tile", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
@@ -69,10 +69,9 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     const indicator = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    expect(indicator.firstElementChild?.className).toContain(
-      "text-destructive",
-    );
-    expect(indicator.textContent).toBe("⠿");
+    const terminalGlyph = indicator.querySelector(".lucide-square-terminal");
+    expect(terminalGlyph?.getAttribute("class")).toContain("text-destructive");
+    expect(indicator.querySelector(".lucide-message-square-x")).toBeNull();
 
     act(() => {
       useAppLocalNotificationsStore

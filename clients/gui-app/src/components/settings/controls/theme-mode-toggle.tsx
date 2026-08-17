@@ -20,7 +20,7 @@ const MODES: ReadonlyArray<{
 export function ThemeModeToggle(props: ThemeModeToggleProps) {
   const { value, onChange } = props;
   return (
-    <div className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5">
+    <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
       {MODES.map((mode) => {
         const Icon = mode.icon;
         const active = mode.id === value;

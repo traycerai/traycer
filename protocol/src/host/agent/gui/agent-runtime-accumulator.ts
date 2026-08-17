@@ -599,6 +599,7 @@ export function accumulateEvent(
     case "session.resumed":
     case "turn.started":
     case "user_message.anchor_resolved":
+    case "user_message.anchor_tail_updated":
     case "usage.updated":
       return blocks;
 
@@ -782,6 +783,7 @@ export function accumulateEvent(
         ...blocks,
         {
           type: "tool_call",
+          managedCommand: null,
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
@@ -811,6 +813,11 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          // The shell this call created, known only now that it has returned.
+          // Kept if a later event does not re-send it, exactly like
+          // `agentMessageSend`: re-completing a block must not erase identity
+          // the first completion established.
+          managedCommand: event.managedCommand ?? existing.managedCommand,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
@@ -842,6 +849,7 @@ export function accumulateEvent(
           taskTodoItems: null,
           error: null,
           agentMessageSend: event.agentMessageSend,
+          managedCommand: event.managedCommand ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
@@ -878,6 +886,7 @@ export function accumulateEvent(
         ...blocks,
         {
           type: "tool_call",
+          managedCommand: null,
           blockId: event.blockId,
           status: "errored",
           timestamp: event.timestamp,

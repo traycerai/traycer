@@ -76,6 +76,11 @@ export function UsageActivityHeatmap(props: {
         aria-hidden
         className="w-full overflow-x-auto"
         data-testid="usage-activity-scroller"
+        // On screen this scroller is anchored to the newest weeks and the
+        // rest is behind a scrollbar. A shared image has no scrollbar, so
+        // the export scales the full year down to the region's width
+        // instead of capturing whatever slice happened to be in view.
+        data-usage-export-fit=""
       >
         <div className="flex min-w-max flex-col gap-1">
           <MonthLabelRow calendar={calendar} />

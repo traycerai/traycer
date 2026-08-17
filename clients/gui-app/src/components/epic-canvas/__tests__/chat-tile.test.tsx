@@ -29,10 +29,16 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
+  reset: vi.fn<() => void>(),
 }));
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
+// The one host this suite runs on. The mocked binding/directory, the tile
+// fixtures, and the per-host run-settings buckets all key off it, so they
+// cannot drift apart into a fixture that tests a host the tile never sees.
+// Hoisted because the module mocks below read it from their factories.
+const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -56,12 +62,12 @@ vi.mock(
 
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
-  getActiveHostId: () => "host-test",
+  getActiveHostId: () => HOST_ID,
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
 const MOCK_HOST_ENTRY = {
-  hostId: "host-test",
+  hostId: HOST_ID,
   label: "Test host",
   kind: "local" as const,
   websocketUrl: "ws://127.0.0.1:1/rpc",
@@ -130,6 +136,35 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
   }),
+  // The fork dialog creates on the SELECTED host's client, not the tab's, so
+  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
+  // only that wrapper left the spread's REAL client hook in place: the fork
+  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
+  // an undefined call.
+  //
+  // Unlike the wrapper above - which the tile tree reads for `mutate` and
+  // `isPending` alone - this hook has consumers that call `reset()` and read
+  // the result channel, so the stub carries the WHOLE `UseMutationResult`
+  // surface. A partial one type-checks (the factory is untyped) and then
+  // fails every case in the file at once on a member the test never mentions.
+  useEpicCreateChatForHostClient: () => ({
+    mutate: forkCreateTestState.mutate,
+    isPending: false,
+    reset: forkCreateTestState.reset,
+    error: null,
+    variables: null,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    isIdle: true,
+    status: "idle",
+    failureCount: 0,
+    failureReason: null,
+    isPaused: false,
+    submittedAt: 0,
+    context: null,
+    mutateAsync: () => Promise.resolve(undefined),
+  }),
 }));
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
@@ -141,8 +176,16 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 // production-legitimate value (useProvidersListForClient/useHostQuery own the
 // client === null disabled gate) so no consumer downstream needs a real
 // client here.
+//
+// The fork dialog is the exception, and only since it began creating on the
+// SELECTED host's client: its submit reads `getActiveHostId()` back off that
+// client and RETURNS EARLY when it cannot resolve one, so a blanket `null`
+// turned every fork submit in this file into a silent no-op. This suite's own
+// host therefore resolves; every other id still answers null, leaving the
+// gate's downstream queries disabled exactly as before.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
 }));
 
 // The chat registry now OWNS its transport (built in its factory) and drives
@@ -166,7 +209,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+  useReactiveActiveHostId: () => HOST_ID,
 }));
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
@@ -192,7 +235,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
       chats: [...cloudChatListTestState.knownChatIds].map(
         (chatId): CloudChatSummary => ({
           identity: { taskId: EPIC_ID, chatId, ownerUserId: "owner-1" },
-          ownerHostId: "host-test",
+          ownerHostId: HOST_ID,
           createdAt: 1,
           visibility: "task",
           title: null,
@@ -263,7 +306,7 @@ const CHAT_ARTIFACT = {
   instanceId: "inst-chat-1",
   type: "chat" as const,
   name: "Chat 1",
-  hostId: "host-test",
+  hostId: HOST_ID,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -525,6 +568,7 @@ function emitChatSnapshotWithMessages(input: {
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
     },
   });
 }
@@ -925,7 +969,7 @@ function getButtonContainingText(text: string): HTMLButtonElement {
 
 function registerWaitingChatHandoff(): void {
   const scope = {
-    hostId: "host-test",
+    hostId: HOST_ID,
     userId: "owner-1",
     epicId: EPIC_ID,
   };
@@ -973,6 +1017,7 @@ describe("<ChatTile />", () => {
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
     forkCreateTestState.mutate.mockReset();
+    forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -1232,7 +1277,7 @@ describe("<ChatTile />", () => {
 
   it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
     renderChatTile();
 
@@ -1318,7 +1363,7 @@ describe("<ChatTile />", () => {
 
   it("seeds composer settings from last-used local settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: SESSION_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: SESSION_SETTINGS },
     });
     chatHarness.teardown();
     chatHarness.install("owner", []);
@@ -1712,7 +1757,7 @@ describe("<ChatTile />", () => {
 
   it("falls back to client-local last-used settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: UPDATED_QUEUE_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: UPDATED_QUEUE_SETTINGS },
     });
 
     renderChatTile();
@@ -1729,10 +1774,10 @@ describe("<ChatTile />", () => {
   it("uses per-epic settings before global settings when the chat has no session settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings(HOST_ID, UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 2);
 
     renderChatTile();
 
@@ -1748,7 +1793,7 @@ describe("<ChatTile />", () => {
   it("keeps an existing null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 1);
 
     renderChatTile();
 
@@ -1757,7 +1802,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, HOST_ID, UPDATED_QUEUE_SETTINGS, 2);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -1770,7 +1815,7 @@ describe("<ChatTile />", () => {
   it("keeps a remounted null-settings chat on its first copied epic settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 1);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 1);
 
     const rendered = renderChatTile();
 
@@ -1781,7 +1826,7 @@ describe("<ChatTile />", () => {
     act(() => {
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(EPIC_ID, UPDATED_QUEUE_SETTINGS, 2);
+        .setEpicRunSettings(EPIC_ID, HOST_ID, UPDATED_QUEUE_SETTINGS, 2);
     });
 
     renderChatTile();
@@ -1798,10 +1843,10 @@ describe("<ChatTile />", () => {
   it("seeds composer settings from persisted chat settings", async () => {
     useComposerRunSettingsStore
       .getState()
-      .setGlobalRunSettings(UPDATED_QUEUE_SETTINGS, 1);
+      .setGlobalRunSettings(HOST_ID, UPDATED_QUEUE_SETTINGS, 1);
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings(EPIC_ID, QUEUED_SETTINGS, 2);
+      .setEpicRunSettings(EPIC_ID, HOST_ID, QUEUED_SETTINGS, 2);
     chatHarness.teardown();
     chatHarness.installWithSettings("owner", [], SESSION_SETTINGS);
 
@@ -1926,16 +1971,18 @@ describe("<ChatTile />", () => {
     });
 
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings(EPIC_ID),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings(EPIC_ID, HOST_ID),
     ).toEqual(UPDATED_QUEUE_SETTINGS);
     expect(
-      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_ID),
     ).toBeNull();
   });
 
   it("sends next-step clicks as current-setting slash commands during active turns", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
 
     renderChatTile();
@@ -2191,7 +2238,7 @@ describe("<ChatTile />", () => {
 
   it("sends active permission updates when the toolbar permission changes during a turn", async () => {
     useComposerRunSettingsStore.setState({
-      globalLastRunSettings: QUEUED_SETTINGS,
+      globalLastRunSettingsByHostId: { [HOST_ID]: QUEUED_SETTINGS },
     });
 
     renderChatTile();

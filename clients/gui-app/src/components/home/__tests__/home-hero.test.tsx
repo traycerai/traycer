@@ -1,13 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { HomeHero } from "@/components/home/home-hero";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
+// `HomeHero` resolves its global-folder fallback through the active host's
+// bucket (`useReactiveActiveHostId()`), which needs a `<HostRuntimeProvider>`
+// this bare-render suite doesn't set up. Pin it to a fixed host id so the
+// tests below can seed/assert that host's bucket directly.
+const TEST_HOST_ID = "host-a";
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => TEST_HOST_ID,
+}));
+
+function setGlobalFolders(folders: ReadonlyArray<string>): void {
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [TEST_HOST_ID]: {
+        folders,
+        folderInfoByPath: {},
+        primaryPath: null,
+      },
+    },
+  });
+}
+
 describe("<HomeHero />", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useWorkspaceFoldersStore.setState({ folders: [] });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -17,7 +38,7 @@ describe("<HomeHero />", () => {
 
   afterEach(() => {
     cleanup();
-    useWorkspaceFoldersStore.setState({ folders: [] });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -86,7 +107,7 @@ describe("<HomeHero />", () => {
   });
 
   it("uses draft workspace folders over global folders", () => {
-    useWorkspaceFoldersStore.setState({ folders: ["/tmp/global-app"] });
+    setGlobalFolders(["/tmp/global-app"]);
 
     render(<HomeHero workspaceFolders={["/tmp/draft-app"]} />);
 
@@ -95,7 +116,7 @@ describe("<HomeHero />", () => {
   });
 
   it("does not fall back to global folders for an explicit empty draft workspace", () => {
-    useWorkspaceFoldersStore.setState({ folders: ["/tmp/global-app"] });
+    setGlobalFolders(["/tmp/global-app"]);
 
     render(<HomeHero workspaceFolders={[]} />);
 

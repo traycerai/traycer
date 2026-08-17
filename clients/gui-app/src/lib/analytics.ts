@@ -74,6 +74,13 @@ export type AnalyticsSettingsSection =
 
 export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
 
+/** Which usage surface ran the image export. Deliberately NOT
+ * `AnalyticsSource`: that union names the UI gesture that reached a feature
+ * (menu, palette, shortcut), while this names the surface whose region was
+ * captured - an export is always a direct button press, so the gesture axis
+ * carries no signal here. */
+export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
+
 export type AnalyticsEditor = "cursor" | "vscode" | "windsurf" | "zed";
 
 export type AnalyticsHarness =
@@ -336,6 +343,7 @@ export enum AnalyticsEvent {
   ArtifactStatusChanged = "artifact_status_changed",
   ArtifactDeleted = "artifact_deleted",
   ArtifactExported = "artifact_exported",
+  UsageImageExported = "usage_image_exported",
   CommentCreated = "comment_created",
   CommentReplied = "comment_replied",
   CommentEdited = "comment_edited",
@@ -657,6 +665,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ArtifactExported]: {
     readonly format: "markdown" | "pdf";
     readonly artifact_count: number;
+  };
+  readonly [AnalyticsEvent.UsageImageExported]: {
+    readonly action: "copy" | "download";
+    readonly source: AnalyticsUsageImageExportSource;
   };
   readonly [AnalyticsEvent.CommentCreated]: { readonly has_mention: boolean };
   readonly [AnalyticsEvent.CommentReplied]: { readonly has_mention: boolean };
@@ -1287,6 +1299,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.ArtifactExported],
     ["format", "artifact_count"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.UsageImageExported], ["action", "source"]),
   ...eventKeyEntries(
     [AnalyticsEvent.CommentCreated, AnalyticsEvent.CommentReplied],
     ["has_mention"],
@@ -1594,6 +1607,18 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ],
     "kind",
     new Set(["agent", "shell"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.UsageImageExported],
+    "action",
+    new Set(["copy", "download"]),
+  ),
+  // Event-scoped so this `source` validates against the export surfaces, not
+  // the global gesture-origin `ANALYTICS_SOURCES` fallback.
+  ...eventValueEntries(
+    [AnalyticsEvent.UsageImageExported],
+    "source",
+    new Set(["epic_dialog", "settings"]),
   ),
   ...eventValueEntries(
     [

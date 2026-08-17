@@ -448,6 +448,73 @@ function turnStoppedInfoFromEvents(
   return out;
 }
 
+interface TurnLifecycleTiming {
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
+}
+
+/**
+ * Durable evidence and timing for provider turns, keyed by `turnId`.
+ *
+ * An autonomous-resume block can be persisted before the provider resumes: it
+ * first serves as the visible background-completion notification and is only
+ * later adopted if the adapter emits autonomous activity. A lifecycle entry
+ * proves the row crossed the provider-turn boundary; its timestamps keep a
+ * silent resume's elapsed interval separate from the earlier notification.
+ *
+ * The entry is the turn's LATEST attempt window, not a min/max collapse:
+ * safe-point steering continuations legitimately reuse a turnId, so a later
+ * `turn.started` opens a fresh window — retaining the earliest start would
+ * stretch a silent resume's elapsed interval across the pre-steer attempt. A
+ * terminal event closes the open window; a duplicate terminal after a closed
+ * window is ignored (the host's terminal latch makes that defensive only).
+ */
+function turnLifecycleTimingFromEvents(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyMap<string, TurnLifecycleTiming> {
+  const out = new Map<string, TurnLifecycleTiming>();
+  for (const event of events) {
+    if (event.turnId === null) continue;
+    switch (event.type) {
+      case "turn.started":
+        out.set(event.turnId, { startedAt: event.timestamp, endedAt: null });
+        break;
+      case "turn.completed":
+      case "turn.stopped":
+      case "turn.interrupted": {
+        const current = out.get(event.turnId) ?? {
+          startedAt: null,
+          endedAt: null,
+        };
+        if (current.endedAt === null) {
+          out.set(event.turnId, {
+            startedAt: current.startedAt,
+            endedAt: event.timestamp,
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether the turn's latest attempt window is provably finished: both the
+ * matching `turn.started` and a terminal event exist. A start alone is not
+ * completion evidence — a fatal connection close clears the active turn
+ * while the provider may still be running, and fabricating a completion
+ * there would render a zero-length "Resumed" footer for a turn that never
+ * ended.
+ */
+function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
+  return (
+    timing !== null && timing.startedAt !== null && timing.endedAt !== null
+  );
+}
+
 function nestedSteeredUsersSignature(
   blocks: ReadonlyArray<ContentBlock>,
   userMessagesById: ReadonlyMap<string, UserMessage>,
@@ -489,6 +556,8 @@ const NO_PENDING_INTERVIEWS: ReadonlyArray<ChatPendingInterviewState> = [];
 interface TurnPauseAccounting {
   readonly pausedDurationMs: number;
   readonly pausedSinceMs: number | null;
+  /** Merged, start-sorted user-wait intervals backing the totals above. */
+  readonly intervals: ReadonlyArray<PauseInterval>;
 }
 
 interface PauseInterval {
@@ -517,6 +586,7 @@ interface ActiveTurnProjection {
 const NO_TURN_PAUSE: TurnPauseAccounting = {
   pausedDurationMs: 0,
   pausedSinceMs: null,
+  intervals: [],
 };
 
 const NO_PENDING_TURN_META_INPUT: PendingTurnMetaInput = {
@@ -732,45 +802,66 @@ function mergePauseIntervals(
         interval.endedAt === null || interval.endedAt > interval.startedAt,
     )
     .sort((a, b) => a.startedAt - b.startedAt);
-  let pausedDurationMs = 0;
-  let openStart: number | null = null;
-  let current: PauseInterval | null = null;
-
-  const flushCurrent = (): void => {
-    if (current === null) return;
-    if (current.endedAt === null) {
-      openStart = current.startedAt;
-    } else {
-      pausedDurationMs += current.endedAt - current.startedAt;
-    }
-    current = null;
-  };
-
+  const merged: PauseInterval[] = [];
   for (const interval of sorted) {
-    if (current === null) {
-      current = interval;
+    const last = merged.at(-1);
+    if (last === undefined) {
+      merged.push(interval);
       continue;
     }
-    if (current.endedAt === null) continue;
-    if (interval.startedAt > current.endedAt) {
-      flushCurrent();
-      current = interval;
+    // An open interval absorbs everything after it.
+    if (last.endedAt === null) continue;
+    if (interval.startedAt > last.endedAt) {
+      merged.push(interval);
       continue;
     }
-    current = {
-      startedAt: current.startedAt,
+    merged[merged.length - 1] = {
+      startedAt: last.startedAt,
       endedAt:
         interval.endedAt === null
           ? null
-          : Math.max(current.endedAt, interval.endedAt),
+          : Math.max(last.endedAt, interval.endedAt),
     };
   }
-  flushCurrent();
+  return pauseAccountingFromMergedIntervals(merged);
+}
 
-  return {
-    pausedDurationMs,
-    pausedSinceMs: openStart,
-  };
+function pauseAccountingFromMergedIntervals(
+  merged: ReadonlyArray<PauseInterval>,
+): TurnPauseAccounting {
+  let pausedDurationMs = 0;
+  let pausedSinceMs: number | null = null;
+  for (const interval of merged) {
+    if (interval.endedAt === null) {
+      pausedSinceMs = interval.startedAt;
+    } else {
+      pausedDurationMs += interval.endedAt - interval.startedAt;
+    }
+  }
+  return { pausedDurationMs, pausedSinceMs, intervals: merged };
+}
+
+/**
+ * Clip whole-turn pause accounting to the displayed lifecycle window. Pause
+ * intervals accumulate per turnId across every attempt, but a row rendered
+ * from its latest attempt window (an adopted autonomous resume) measures only
+ * that window - subtracting an earlier attempt's user-wait would under-report
+ * the resumed attempt's duration. The persisted-timing path passes `null` and
+ * keeps whole-turn accounting.
+ */
+function pauseScopedToWindow(
+  pause: TurnPauseAccounting,
+  windowStartedAt: number | null,
+): TurnPauseAccounting {
+  if (windowStartedAt === null || pause.intervals.length === 0) return pause;
+  const clipped = pause.intervals.flatMap((interval) => {
+    if (interval.endedAt !== null && interval.endedAt <= windowStartedAt) {
+      return [];
+    }
+    if (interval.startedAt >= windowStartedAt) return [interval];
+    return [{ startedAt: windowStartedAt, endedAt: interval.endedAt }];
+  });
+  return pauseAccountingFromMergedIntervals(clipped);
 }
 
 function addPauseInterval(
@@ -881,6 +972,10 @@ export function useRenderedMessages(
   );
   const turnStoppedByTurnKey = useMemo(
     () => turnStoppedInfoFromEvents(input.events),
+    [input.events],
+  );
+  const turnLifecycleTimingByTurnKey = useMemo(
+    () => turnLifecycleTimingFromEvents(input.events),
     [input.events],
   );
   // The setup card row(s) are derived from the same event log, keyed on events
@@ -1018,6 +1113,7 @@ export function useRenderedMessages(
       turnPauseAccounting,
       steeredMessageIds,
       turnStoppedByTurnKey,
+      turnLifecycleTimingByTurnKey,
       sweepRetainedTurnKeys: retainedTurnKeys,
       ctx: displayContext,
       epicId,
@@ -1035,6 +1131,7 @@ export function useRenderedMessages(
     turnPauseAccounting,
     steeredMessageIds,
     turnStoppedByTurnKey,
+    turnLifecycleTimingByTurnKey,
     displayContext,
     epicId,
     ownerId,
@@ -1060,6 +1157,7 @@ export function useRenderedMessages(
             turnPauseAccounting,
             steeredMessageIds,
             turnStoppedByTurnKey,
+            turnLifecycleTimingByTurnKey,
             // The tail walk runs per streamed delta; only the settled-head
             // walk (once per snapshot) sweeps the turn cache.
             sweepRetainedTurnKeys: null,
@@ -1078,6 +1176,7 @@ export function useRenderedMessages(
       turnPauseAccounting,
       steeredMessageIds,
       turnStoppedByTurnKey,
+      turnLifecycleTimingByTurnKey,
       displayContext,
       epicId,
       ownerId,
@@ -1510,6 +1609,11 @@ interface PersistedMessagesRenderInput {
   readonly steeredMessageIds: ReadonlySet<string>;
   /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoFromEvents`. */
   readonly turnStoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>;
+  /** Provider-turn lifecycle evidence and timing by `turnId`. */
+  readonly turnLifecycleTimingByTurnKey: ReadonlyMap<
+    string,
+    TurnLifecycleTiming
+  >;
   /**
    * Turn keys to retain in the per-context assistant-turn cache; entries for
    * any other turn are evicted after the walk. Non-null only on the
@@ -1709,6 +1813,154 @@ function assistantTurnKey(message: AssistantMessage): string {
   return message.turnId ?? `ts:${message.timestamp}`;
 }
 
+function hasOnlyAutonomousResumeAssistantBlocks(
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  let foundAutonomousResume = false;
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    if (block.type !== "autonomous_resume") return false;
+    foundAutonomousResume = true;
+  }
+  return foundAutonomousResume;
+}
+
+/**
+ * Whether the turn began as an autonomous resume: its first non-steer block
+ * is the resume divider. Unlike `hasOnlyAutonomousResumeAssistantBlocks` this
+ * stays true after the resumed provider turn produces response blocks, so an
+ * adopted resume keeps measuring from its provider start instead of jumping
+ * back to the pre-resume persisted timestamp once output arrives.
+ */
+function turnInitiatedByAutonomousResume(
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  return autonomousResumeNotifiedAt(blocks) !== null;
+}
+
+/**
+ * Timestamp of the resume divider (the first non-steer block, when it is an
+ * `autonomous_resume`), or `null` for a turn not initiated by one.
+ */
+function autonomousResumeNotifiedAt(
+  blocks: ReadonlyArray<ContentBlock>,
+): number | null {
+  for (const block of blocks) {
+    if (block.type === "steer") continue;
+    return block.type === "autonomous_resume" ? block.timestamp : null;
+  }
+  return null;
+}
+
+/**
+ * The lifecycle window as evidence for the row's resume state. A reused
+ * `turnId` can carry a completed attempt from BEFORE the resume divider was
+ * persisted (an interrupted pre-steer run whose notification landed later);
+ * that window predates the thing it would prove, so it can neither adopt the
+ * notification nor lend it timing — discard it. A same-timestamp start stays:
+ * the host stamps the divider before launching the adopting provider turn.
+ * Non-resume turns and windows without a start pass through unchanged (a
+ * bare terminal event is already rejected by `hasCompletedProviderTurn`).
+ */
+function lifecycleWindowSinceResume(
+  timing: TurnLifecycleTiming | null,
+  blocks: ReadonlyArray<ContentBlock>,
+): TurnLifecycleTiming | null {
+  if (timing === null || timing.startedAt === null) return timing;
+  const notifiedAt = autonomousResumeNotifiedAt(blocks);
+  if (notifiedAt === null || timing.startedAt >= notifiedAt) return timing;
+  return null;
+}
+
+function isNotificationOnlyAutonomousResume(
+  turnComplete: boolean,
+  hasCompletedLifecycle: boolean,
+  blocks: ReadonlyArray<ContentBlock>,
+): boolean {
+  return (
+    turnComplete &&
+    !hasCompletedLifecycle &&
+    hasOnlyAutonomousResumeAssistantBlocks(blocks)
+  );
+}
+
+interface AssistantTurnTimingInput {
+  readonly lifecycle: TurnLifecycleTiming | null;
+  readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly persistedStartedAt: number | null;
+  readonly lastUserTimestamp: number | null;
+  readonly persistedCompletedAt: number;
+  readonly stoppedAt: number | null;
+}
+
+interface AssistantTurnTiming {
+  readonly rowAnchorAt: number;
+  readonly elapsedStartedAt: number;
+  readonly completedAt: number;
+  readonly cacheToken: string;
+  /**
+   * Start of the lifecycle window the row displays, when timing selected one;
+   * `null` on the persisted-timing path. Pause accounting is clipped to this
+   * so an earlier attempt's user-wait never subtracts from the resumed
+   * attempt's duration.
+   */
+  readonly lifecycleWindowStartedAt: number | null;
+}
+
+function assistantTurnTiming(
+  input: AssistantTurnTimingInput,
+): AssistantTurnTiming {
+  const fallbackStartedAt =
+    input.persistedStartedAt ??
+    input.lastUserTimestamp ??
+    input.persistedCompletedAt;
+  const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
+  if (
+    input.lifecycle === null ||
+    !turnInitiatedByAutonomousResume(input.blocks) ||
+    input.lifecycle.startedAt === null
+  ) {
+    return {
+      rowAnchorAt: fallbackStartedAt,
+      elapsedStartedAt: fallbackStartedAt,
+      completedAt: fallbackCompletedAt,
+      cacheToken: "lifecycle:none",
+      lifecycleWindowStartedAt: null,
+    };
+  }
+  const elapsedStartedAt = input.lifecycle.startedAt;
+  const terminalAt = input.stoppedAt ?? input.lifecycle.endedAt;
+  // A start without terminal proof adopts the live timer only: completion
+  // stays anchored to persisted state, and the classification keeps such a
+  // row footerless until the matching terminal event lands.
+  if (terminalAt === null) {
+    return {
+      rowAnchorAt: fallbackStartedAt,
+      elapsedStartedAt,
+      completedAt: fallbackCompletedAt,
+      cacheToken: `lifecycle:${elapsedStartedAt}:pending`,
+      lifecycleWindowStartedAt: elapsedStartedAt,
+    };
+  }
+  return {
+    rowAnchorAt: fallbackStartedAt,
+    elapsedStartedAt,
+    completedAt: Math.max(elapsedStartedAt, terminalAt),
+    cacheToken: `lifecycle:${elapsedStartedAt}:${terminalAt}`,
+    lifecycleWindowStartedAt: elapsedStartedAt,
+  };
+}
+
+function assistantCompletionCacheToken(
+  turnComplete: boolean,
+  notificationOnlyAutonomousResume: boolean,
+  timestamp: number,
+): string {
+  if (!turnComplete) return "live";
+  const state = notificationOnlyAutonomousResume ? "notification" : "done";
+  return `${state}:${timestamp}`;
+}
+
 function renderPersistedAssistantMessageTurn(
   args: PersistedAssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
@@ -1726,23 +1978,47 @@ function renderPersistedAssistantMessageTurn(
   // group suppressed.
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
-  const pause = input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE;
   const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
-  const startedAt = acc.startedAt ?? args.lastUserTimestamp ?? acc.timestamp;
-  // Signature includes `acc.timestamp` (when complete) and `startedAt` so a
-  // post-completion snapshot re-emit that moves either instant (cloud-sync
-  // replica swap, canonicalized timestamps) invalidates the cached model.
-  // Without it, a stale `completedAt`/anchor would be served for the lifetime
-  // of the ctx.
-  const completionToken = turnComplete ? `done:${acc.timestamp}` : "live";
+  const lifecycleTiming = lifecycleWindowSinceResume(
+    input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null,
+    acc.blocks,
+  );
+  const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
+    turnComplete,
+    hasCompletedProviderTurn(lifecycleTiming),
+    acc.blocks,
+  );
+  const timing = assistantTurnTiming({
+    lifecycle: lifecycleTiming,
+    blocks: acc.blocks,
+    persistedStartedAt: acc.startedAt,
+    lastUserTimestamp: args.lastUserTimestamp,
+    persistedCompletedAt: acc.timestamp,
+    stoppedAt: stopped?.stoppedAt ?? null,
+  });
+  const pause = pauseScopedToWindow(
+    input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE,
+    timing.lifecycleWindowStartedAt,
+  );
+  // Signature includes the persisted timing plus the lifecycle timing token,
+  // so either a canonicalized snapshot timestamp or a later terminal event
+  // invalidates the cached model. Without both, a stale `completedAt`/elapsed
+  // would be served for the lifetime of the ctx.
+  const completionToken = assistantCompletionCacheToken(
+    turnComplete,
+    notificationOnlyAutonomousResume,
+    acc.timestamp,
+  );
   const cacheKey = [
     acc.messageId,
     turnBlocksSignature(acc),
     checkpointSignature(checkpointView),
     nestedSteeredUsersSignature(acc.blocks, args.userMessagesById),
     completionToken,
+    timing.cacheToken,
     runState ?? "none",
-    String(startedAt),
+    String(timing.rowAnchorAt),
+    String(timing.elapsedStartedAt),
     acc.profileLabel ?? "profile:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
@@ -1756,11 +2032,17 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
+    // A plain completion/interruption without a matching start remains a
+    // notification-only row. A user Stop is itself a transcript boundary and
+    // must retain its stopped marker even when it lands before `turn.started`.
+    showCompletionFooter: !notificationOnlyAutonomousResume || stopped !== null,
+    completedAt: timing.completedAt,
     runState,
     pause,
     stopped,
     userMessagesById: args.userMessagesById,
-    startedAt,
+    rowAnchorAt: timing.rowAnchorAt,
+    elapsedStartedAt: timing.elapsedStartedAt,
     ctx: input.ctx,
     epicId: input.epicId,
     chatId: input.chatId,
@@ -2021,20 +2303,19 @@ interface AssistantTurnRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** False for a background notification row that no provider turn adopted. */
+  readonly showCompletionFooter: boolean;
+  /** Wall-clock terminal instant stamped onto the completed assistant row. */
+  readonly completedAt: number;
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
   /** `turn.stopped` event info for this turn, if any. See `withTurnCompletion`. */
   readonly stopped: TurnStoppedEventInfo | null;
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
-  /**
-   * Wall-clock turn start used to anchor `createdAt` on EVERY row this turn
-   * emits (assistant slices and nested steer rows alike). A single per-turn
-   * anchor keeps the turn's rows contiguous under the stable `createdAt` sort
-   * (intra-turn order falls out of push order) and lets the final assistant
-   * slice's `completedAt - createdAt` measure the whole turn, not just its
-   * trailing chunk.
-   */
-  readonly startedAt: number;
+  /** Stable transcript-sort anchor for every row this turn emits. */
+  readonly rowAnchorAt: number;
+  /** Wall-clock turn start used only for elapsed-duration calculations. */
+  readonly elapsedStartedAt: number;
   readonly ctx: RenderedMessagesDisplayContext;
   readonly epicId: string;
   readonly chatId: string;
@@ -2077,7 +2358,8 @@ function renderAssistantTurnRows(
         blocks: chunk,
         chunkIndex,
         split,
-        createdAt: input.startedAt,
+        rowAnchorAt: input.rowAnchorAt,
+        elapsedStartedAt: input.elapsedStartedAt,
         rowIdByBlockId,
       }),
     );
@@ -2097,7 +2379,7 @@ function renderAssistantTurnRows(
           input.ctx,
           input.userMessagesById.get(entry.block.messageId) ?? null,
         ),
-        createdAt: input.startedAt,
+        createdAt: input.rowAnchorAt,
       });
       continue;
     }
@@ -2121,7 +2403,8 @@ function renderAssistantTurnRows(
           blocks: [],
           chunkIndex: 0,
           split: false,
-          createdAt: input.startedAt,
+          rowAnchorAt: input.rowAnchorAt,
+          elapsedStartedAt: input.elapsedStartedAt,
           rowIdByBlockId,
         }),
       ],
@@ -2144,13 +2427,14 @@ function renderAssistantTurnRows(
 }
 
 /**
- * Stamp `completedAt` (and, when the turn ended via a user Stop, `stopped`)
- * onto the LAST assistant row of a completed turn so the elapsed footer
- * renders once, on the turn's final slice, measuring the whole turn (every
- * row already anchors `createdAt` at the turn start). Live turns get `null`
- * for both so the footer stays hidden until completion - `input.stopped` is
- * looked up unconditionally by the caller, but only takes effect here, behind
- * the same `turnComplete` gate as `completedAt`.
+ * Stamp `completedAt`, footer visibility, and (when the turn ended via a user
+ * Stop) `stopped` onto the LAST assistant row of a completed turn. This gives
+ * every completed row terminal state while allowing a notification-only row
+ * to suppress the elapsed footer. When visible, the footer renders once on
+ * the turn's final slice and measures from that row's separate
+ * `elapsedStartedAt`. Live turns get `null` for terminal fields until
+ * completion - `input.stopped` is looked up unconditionally by the caller, but
+ * only takes effect here behind the same `turnComplete` gate as `completedAt`.
  */
 function withTurnCompletion(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -2161,29 +2445,36 @@ function withTurnCompletion(
   if (lastAssistantIndex === -1) return rows;
   // The stamped row is sometimes a content-less boundary marker (synthesized
   // after a trailing steer bubble by `attachRunStateToTrailingAssistantSlice`),
-  // so both "did the turn produce output" and "what is the turn's copyable
-  // reply text" must be derived across every row of the turn, not just the
-  // one being stamped - otherwise a turn that DID answer before the steer
-  // would misreport as having produced nothing, and its copy button would
-  // have no text to copy (the boundary row's own segments are empty).
+  // so both "did the turn produce response output", "is this a silent
+  // autonomous resume", and "what is the turn's copyable reply text" must be
+  // derived across every row of the turn, not just the one being stamped -
+  // otherwise a turn that DID answer before the steer would misreport as
+  // having produced nothing, and its copy button would have no text to copy
+  // (the boundary row's own segments are empty).
+  const turnReplySegments = rows.flatMap((row) =>
+    row.role === "assistant" ? row.segments : [],
+  );
+  const turnHasOnlyAutonomousResumeSegments =
+    turnReplySegments.length > 0 &&
+    turnReplySegments.every((segment) => segment.kind === "autonomous_resume");
   const stopped: ChatMessageStoppedInfo | null =
     input.stopped === null
       ? null
       : {
           stoppedAt: input.stopped.stoppedAt,
           reason: input.stopped.reason,
-          turnHadOutput: rows.some(
-            (row) => row.role === "assistant" && row.segments.length > 0,
+          turnHadOutput: turnReplySegments.some(
+            (segment) => segment.kind !== "autonomous_resume",
           ),
-          turnReplySegments: rows.flatMap((row) =>
-            row.role === "assistant" ? row.segments : [],
-          ),
+          turnReplySegments,
         };
   return rows.map((row, index) =>
     index === lastAssistantIndex
       ? {
           ...row,
-          completedAt: stopped?.stoppedAt ?? input.acc.timestamp,
+          turnHasOnlyAutonomousResumeSegments,
+          showCompletionFooter: input.showCompletionFooter,
+          completedAt: input.completedAt,
           stopped,
         }
       : row,
@@ -2228,7 +2519,8 @@ interface AssistantTurnSliceRenderInput {
   readonly blocks: ReadonlyArray<ContentBlock>;
   readonly chunkIndex: number;
   readonly split: boolean;
-  readonly createdAt: number | null;
+  readonly rowAnchorAt: number | null;
+  readonly elapsedStartedAt: number;
   readonly epicId: string;
   readonly chatId: string;
   readonly rowIdByBlockId: ReadonlyMap<string, string>;
@@ -2253,8 +2545,8 @@ function renderAssistantTurnSlice(
   };
   const firstBlock = input.blocks.at(0) ?? null;
   const createdAt =
-    input.createdAt !== null
-      ? input.createdAt
+    input.rowAnchorAt !== null
+      ? input.rowAnchorAt
       : (firstBlock?.timestamp ?? input.acc.timestamp);
   return {
     id: assistantSliceRowId(input.turnKey, input.chunkIndex, input.split),
@@ -2276,6 +2568,9 @@ function renderAssistantTurnSlice(
     attachments: [],
     settings: null,
     createdAt,
+    ...(input.elapsedStartedAt === createdAt
+      ? {}
+      : { elapsedStartedAt: input.elapsedStartedAt }),
     // Stamped onto the turn's last slice by `withTurnCompletion`; null on
     // every other slice and while the turn is still live.
     completedAt: null,
@@ -2348,19 +2643,16 @@ function attachRunStateToTrailingAssistantSlice(
     );
   }
   // Live case (unchanged): bump past every existing row so the trailing
-  // indicator sorts last - its `createdAt` only ever feeds a live, still-
-  // ticking timer, so this ordering-only offset is harmless there.
+  // indicator sorts last.
   // Stopped case: every other row in this turn already anchors `createdAt` to
-  // `input.startedAt` (see the steer-row comment below) and relies on push
+  // `input.rowAnchorAt` (see the steer-row comment below) and relies on push
   // order + the stable `createdAt` sort for position, not on a numerically
-  // later value - reuse that anchor exactly so `AssistantElapsedFooter`'s
-  // frozen `completedAt - createdAt - pausedDurationMs` measures the real
-  // turn duration instead of landing 1ms short (which `formatWorkedFor`'s
-  // second-flooring would round down at an exact-second boundary).
+  // later value - reuse that anchor exactly. Elapsed timing is carried
+  // separately by `elapsedStartedAt`.
   const createdAt =
     input.runState !== null
       ? rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0) + 1
-      : input.startedAt;
+      : input.rowAnchorAt;
   return [
     ...rows,
     renderAssistantTurnSlice({
@@ -2376,7 +2668,8 @@ function attachRunStateToTrailingAssistantSlice(
       blocks: [],
       chunkIndex: nextChunkIndex,
       split: true,
-      createdAt,
+      rowAnchorAt: createdAt,
+      elapsedStartedAt: input.elapsedStartedAt,
       rowIdByBlockId,
     }),
   ];
@@ -2620,10 +2913,19 @@ function renderLiveAssistant(
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
     turnComplete: false,
+    showCompletionFooter: true,
+    // Unused while `turnComplete` is false; keep the input total and explicit.
+    completedAt: liveAssistant.timestamp,
     // Track the host's run state exactly: a live row lingering for one frame
     // after the turn completes (runStatus idle) must not show a spinner.
     runState: input.activeRunState,
-    pause: input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+    // Scoped to the live attempt's own start: a steer continuation reuses the
+    // turnId, and an earlier attempt's user-wait must not subtract from an
+    // elapsed measured from this attempt's start.
+    pause: pauseScopedToWindow(
+      input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+      liveAssistant.startedAt,
+    ),
     // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps
     // this - the persisted re-render (once the `turn.stopped` event lands)
     // owns the stopped marker.
@@ -2633,7 +2935,8 @@ function renderLiveAssistant(
     // turn-start) so the live row sorts at the same `createdAt` the persisted
     // form will use post-swap - prevents a sort-position jump at
     // live→persisted reconciliation.
-    startedAt: liveAssistant.startedAt,
+    rowAnchorAt: liveAssistant.startedAt,
+    elapsedStartedAt: liveAssistant.startedAt,
     ctx: input.ctx,
     epicId: input.epicId,
     chatId: input.chatId,
@@ -3453,6 +3756,7 @@ const BLOCK_HANDLERS: {
     taskTodoItems: block.taskTodoItems,
     error: block.error,
     agentMessageSend: block.agentMessageSend,
+    managedCommand: block.managedCommand,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

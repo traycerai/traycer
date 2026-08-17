@@ -8,6 +8,13 @@ export interface UsageHarnessSplitProps {
   readonly rows: readonly UsageHarnessSplitRow[];
   /** Ties each row's dot/bar color to the daily chart's legend - same entity, same color, never re-derived. */
   readonly scale: UsageSeriesScale;
+  /**
+   * Whether each row carries its token total after the cost. Settings shows
+   * it; the epic usage dialog passes `false` - there the stat tiles beside
+   * this split already carry the token detail, so the column would repeat
+   * them at every width.
+   */
+  readonly showTokens: boolean;
 }
 
 /**
@@ -27,6 +34,7 @@ export function UsageHarnessSplit(props: UsageHarnessSplitProps): ReactNode {
           key={row.harnessId}
           row={row}
           scale={props.scale}
+          showTokens={props.showTokens}
         />
       ))}
     </ul>
@@ -36,6 +44,7 @@ export function UsageHarnessSplit(props: UsageHarnessSplitProps): ReactNode {
 function UsageHarnessSplitItem(props: {
   readonly row: UsageHarnessSplitRow;
   readonly scale: UsageSeriesScale;
+  readonly showTokens: boolean;
 }): ReactNode {
   const { row, scale } = props;
   const color = scale.colorVar(row.harnessId);
@@ -64,7 +73,7 @@ function UsageHarnessSplitItem(props: {
         {scale.labelFor(row.harnessId)}
       </span>
       <span
-        className="h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-muted"
+        className="h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-foreground/8"
         role="img"
         aria-label={`${percentLabel} of cost`}
       >
@@ -82,9 +91,11 @@ function UsageHarnessSplitItem(props: {
       <span className="min-w-16 shrink-0 text-right tabular-nums text-ui-sm font-medium text-foreground">
         {formatUsd(row.costUsd)}
       </span>
-      <span className="min-w-16 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
-        {row.tokens.toLocaleString()}
-      </span>
+      {props.showTokens ? (
+        <span className="min-w-16 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
+          {row.tokens.toLocaleString()}
+        </span>
+      ) : null}
     </li>
   );
 }

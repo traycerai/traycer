@@ -25,6 +25,12 @@ import type {
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
+import {
+  disposeManagedCommandChatSessions,
+  installManagedCommandChatSession,
+} from "@/stores/managed-commands/test-support/managed-command-chat-session";
+import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -439,5 +445,116 @@ describe("<TabStrip />", () => {
     expect(tooltip.getByTestId("git-diff-tooltip-path").textContent).toBe(
       "Path/worktrees/right-click-context-menu/traycer",
     );
+  });
+});
+
+/**
+ * A shell's tab used to draw lucide `Activity` - a glyph no other shell surface
+ * uses - so the strip was the one place a watcher did not look like a watcher.
+ * It reads the same live record the tab TITLE already resolves, so the icon and
+ * the name in one tab can never disagree.
+ */
+describe("<TabStrip /> shell output tabs", () => {
+  const EPIC_ID = "epic-1";
+  const CHAT_ID = "chat-shell";
+  const HOST_ID = "host-A";
+
+  afterEach(() => {
+    cleanup();
+    disposeManagedCommandChatSessions();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  function renderShellTab(monitoring: boolean | null): void {
+    const tab = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: HOST_ID,
+    });
+    if (monitoring !== null) {
+      const session = installManagedCommandChatSession({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+      });
+      session.setCommands([
+        managedCommandSchema.parse({
+          id: "cmd-1",
+          monitoring,
+          description: "deploy watcher",
+          command: "tail -f deploy.log",
+          cwd: "/work/repo",
+          cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+          status: { state: "running", pid: 41, startedAtMs: 1 },
+          chatId: CHAT_ID,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+        }),
+      ]);
+    }
+    renderTabStripForTab(tab, {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+  }
+
+  it("draws the shared shell glyph, following the live monitor flag", () => {
+    renderShellTab(true);
+    expect(document.querySelector("[data-monitor-icon='on']")).not.toBeNull();
+  });
+
+  it("draws the quiet glyph for a shell that is not watching", () => {
+    renderShellTab(false);
+    expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
+  });
+
+  it("falls back to the quiet glyph when the owning chat has no live session", () => {
+    // A restored tab whose chat was never opened resolves to no record. A
+    // watcher announces itself the moment its record lands; guessing "on"
+    // meanwhile would be the strip inventing state.
+    renderShellTab(null);
+    expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
+  });
+
+  it("ignores a same-id shell living on another host", () => {
+    // A cross-host clone keeps the source transcript's command ids. The tab is
+    // bound to its own host for life, so a watching shell of the same id over
+    // on the source host must not lend this tab its glyph - the tab cannot
+    // open that shell's output at all.
+    const session = installManagedCommandChatSession({
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      hostId: "host-source",
+    });
+    session.setCommands([
+      managedCommandSchema.parse({
+        id: "cmd-1",
+        monitoring: true,
+        description: "deploy watcher",
+        command: "tail -f deploy.log",
+        cwd: "/work/repo",
+        cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+        status: { state: "running", pid: 41, startedAtMs: 1 },
+        chatId: CHAT_ID,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      }),
+    ]);
+    renderTabStripForTab(
+      makeManagedCommandOutputTileRef({ commandId: "cmd-1", hostId: HOST_ID }),
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+    );
+
+    expect(document.querySelector("[data-monitor-icon='on']")).toBeNull();
+    expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
+    // ...and the title stays the tile's own name rather than the other host's
+    // shell: the glyph and the name read the same lookup.
+    expect(screen.queryByText("Monitor · deploy watcher")).toBeNull();
   });
 });

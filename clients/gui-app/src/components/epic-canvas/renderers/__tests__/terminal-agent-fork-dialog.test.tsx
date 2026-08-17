@@ -161,7 +161,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -177,7 +177,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {
@@ -273,11 +273,14 @@ describe("<TerminalAgentForkDialog />", () => {
     };
     useSeededWorkspaceSnapshotStore
       .getState()
-      .setSnapshot(pendingForkTerminalAgentStagingKey("epic-test"), {
-        folders: [],
-        folderInfoByPath: {},
-        primaryPath: null,
-      });
+      .setSnapshot(
+        pendingForkTerminalAgentStagingKey("host-test", "epic-test"),
+        {
+          folders: [],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      );
     dialogMocks.create.mockResolvedValue("forked-agent");
     render(
       <TerminalAgentForkDialog
@@ -309,7 +312,10 @@ describe("<TerminalAgentForkDialog />", () => {
     // live snapshot over the new target's own `workspaceSeed`. Cancelling
     // must therefore drop this fork's scratch workspace, or fork B silently
     // launches into fork A's folders and primary.
-    const stagingKey = pendingForkTerminalAgentStagingKey("epic-test");
+    const stagingKey = pendingForkTerminalAgentStagingKey(
+      "host-test",
+      "epic-test",
+    );
     const onOpenChange = vi.fn();
 
     const { rerender } = render(

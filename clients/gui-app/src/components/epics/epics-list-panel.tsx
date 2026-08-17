@@ -1503,7 +1503,7 @@ function HistoryPinControl(props: {
           data-testid="epics-list-row-pin"
           disabled={props.isPending}
           className={cn(
-            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
+            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
             props.item.isPinned
               ? "text-primary opacity-100"
               : "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100",
@@ -1638,7 +1638,7 @@ function HistoryRowSweepControl(props: {
             aria-label={`Sweep worktrees for ${props.displayTitle}`}
             aria-haspopup="dialog"
             data-testid="epics-list-row-sweep"
-            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover:opacity-100"
             onClick={props.sweep.requestSweep}
           >
             <Paintbrush />
@@ -1731,7 +1731,7 @@ function HistoryTitleEditControl(props: {
         aria-label={`Edit title for ${historyItemDisplayTitle(props.item)}`}
         data-testid="epics-list-row-edit-title"
         disabled={props.isRenamePending}
-        className="pointer-events-auto size-5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+        className="pointer-events-auto size-5 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover:opacity-100"
         onClick={props.onStartRename}
       >
         <Pencil className="size-3.5" />

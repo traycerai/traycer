@@ -371,7 +371,11 @@ function renderControls(layout: "inline" | "stacked"): {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          stagingKey={{
+            surface: "landing",
+            hostId: mocks.activeHostId.current,
+            draftId: null,
+          }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,6 +12,27 @@ import type { HeaderRateLimitBar } from "@/hooks/rate-limits/use-header-rate-lim
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+
+const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
 
 let bars: ReadonlyArray<HeaderRateLimitBar> = [];
 /** Default: one host, followed — the glyph's pre-picker world. */
@@ -122,6 +144,18 @@ afterEach(() => {
 });
 
 describe("<RateLimitIconButton />", () => {
+  it("opens through the usage-limits keybinding action", () => {
+    renderIcon();
+
+    expect(screen.queryByTestId("rate-limit-popover")).toBeNull();
+    act(() => {
+      expect(
+        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
+      ).toBe(true);
+    });
+    expect(screen.getByTestId("rate-limit-popover")).toBeTruthy();
+  });
+
   it("renders a clickable icon button with an accessible name, even with no bars", () => {
     renderIcon();
     const button = screen.getByRole("button", { name: "Usage limits" });
@@ -425,7 +459,9 @@ describe("<RateLimitIconButton />", () => {
 
       fireEvent.focus(screen.getByRole("button", { name: "Usage limits" }));
       const tooltip = await screen.findByRole("tooltip");
-      expect(tooltip.textContent).toBe("Usage limits");
+      expect(tooltip.textContent).toBe(
+        `Usage limits (${formatChordForDisplay("mod+shift+u")})`,
+      );
     });
 
     it("names the host in the tooltip label when not viewing the active host", async () => {
@@ -440,7 +476,9 @@ describe("<RateLimitIconButton />", () => {
 
       fireEvent.focus(screen.getByRole("button", { name: "Usage limits" }));
       const tooltip = await screen.findByRole("tooltip");
-      expect(tooltip.textContent).toBe("Usage limits · Other Machine");
+      expect(tooltip.textContent).toBe(
+        `Usage limits · Other Machine (${formatChordForDisplay("mod+shift+u")})`,
+      );
     });
   });
 });

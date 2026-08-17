@@ -66,6 +66,11 @@ type UsageSummaryResponse = ResponseOfMethod<
 
 const mocks = vi.hoisted(() => ({
   openSettings: vi.fn(),
+  captureUsageExportImageBlob: vi.fn(),
+  copyImageBlobToClipboard: vi.fn(),
+  copyImageBlobPromiseToClipboard:
+    vi.fn<(blobPromise: Promise<Blob>) => Promise<void>>(),
+  saveBlobToDisk: vi.fn(),
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -76,9 +81,31 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTreeNode: (id: string) => ({ title: `Chat ${id}` }),
 }));
 
+// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
+// the hook's own capture step is stubbed here so these tests exercise the
+// dialog's wiring (which node it resolves, what it hands off) rather than
+// real rasterisation.
+vi.mock("@/lib/usage-analytics/usage-export-image", () => ({
+  USAGE_EXPORT_REGION_SELECTOR: "[data-usage-export-region]",
+  captureUsageExportImageBlob: mocks.captureUsageExportImageBlob,
+}));
+
+vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
+  copyImageBlobToClipboard: mocks.copyImageBlobToClipboard,
+  copyImageBlobPromiseToClipboard: mocks.copyImageBlobPromiseToClipboard,
+}));
+
+vi.mock("@/lib/files/save-blob-to-disk", () => ({
+  saveBlobToDisk: mocks.saveBlobToDisk,
+}));
+
 afterEach(() => {
   cleanup();
   mocks.openSettings.mockClear();
+  mocks.captureUsageExportImageBlob.mockReset();
+  mocks.copyImageBlobToClipboard.mockReset();
+  mocks.copyImageBlobPromiseToClipboard.mockReset();
+  mocks.saveBlobToDisk.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -318,25 +345,163 @@ describe("<EpicUsageDialog />", () => {
     await waitFor(() => {
       expect(chartSeriesNames()).toEqual(["claude-sonnet-5", "gpt-5.6-sol"]);
     });
+    // The harness split keeps its own harness-keyed scale: with the chart's
+    // key space now models, a single shared scale would drop every split
+    // row to the "Other" fallback token.
+    const dot = screen
+      .getByTestId("usage-harness-split-row-claude")
+      .querySelector("span");
+    expect(dot?.style.backgroundColor).toBe("var(--usage-series-1)");
   });
 
-  it("does not render the group-by toggle when the window has no facts", async () => {
-    renderDialog(() => {
+  it("routes an empty window to the empty state, offering only wider windows", async () => {
+    const user = userEvent.setup();
+    const handler = vi.fn(
+      (_request: UsageSummaryRequest): UsageSummaryResponse => {
+        const base = usageSummaryResponse();
+        return {
+          ...base,
+          summary: {
+            ...base.summary,
+            totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+            buckets: [],
+            chatBuckets: [],
+          },
+        };
+      },
+    );
+    renderDialog(handler);
+
+    await screen.findByTestId("usage-dialog-empty");
+    // The empty routing owns the state entirely: no hero, no breakdown, no
+    // toggle - not a loaded layout full of zero-crumbs.
+    expect(screen.queryByTestId("usage-cost-figure")).toBeNull();
+    expect(screen.queryByTestId("usage-chat-breakdown")).toBeNull();
+    expect(screen.queryByTestId("usage-chart-groupby-harness")).toBeNull();
+    expect(screen.queryByTestId("usage-chart-groupby-model")).toBeNull();
+
+    // The default 7-day empty offers the two WIDER windows, and a chip
+    // re-issues the request at its window.
+    expect(screen.getByTestId("usage-empty-window-30")).toBeTruthy();
+    await user.click(screen.getByTestId("usage-empty-window-90"));
+    await waitFor(() => {
+      expect(handler.mock.calls.at(-1)?.at(0)).toMatchObject({
+        windowDays: 90,
+      });
+    });
+    expect(
+      screen.getByTestId("usage-window-90").getAttribute("data-state"),
+    ).toBe("active");
+
+    // A 90-day empty offers none - a chip that re-requests the current
+    // window would be a broken control.
+    await screen.findByTestId("usage-dialog-empty");
+    expect(screen.queryByTestId("usage-empty-window-30")).toBeNull();
+    expect(screen.queryByTestId("usage-empty-window-90")).toBeNull();
+  });
+
+  it("qualifies an empty local-plane read instead of claiming an account-wide zero", async () => {
+    renderDialog((_request: UsageSummaryRequest): UsageSummaryResponse => {
+      const base = usageSummaryResponse();
+      return {
+        ...base,
+        // A local read speaks for THIS machine only, so its zero is not the
+        // account's zero. The loaded branch carries that qualification on
+        // the cost figure; routing to the empty state must not drop it.
+        servedBy: "local",
+        summary: {
+          ...base.summary,
+          totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+          buckets: [],
+          chatBuckets: [],
+        },
+      };
+    });
+
+    await screen.findByTestId("usage-dialog-empty");
+    expect(
+      screen.getByTestId("usage-served-by-local-note").textContent,
+    ).toContain("This machine's usage only");
+  });
+
+  it("keeps the absent-usage disclaimer with the stat tiles", async () => {
+    renderDialog((_request: UsageSummaryRequest): UsageSummaryResponse => {
       const base = usageSummaryResponse();
       return {
         ...base,
         summary: {
           ...base.summary,
-          totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
-          buckets: [],
+          // Turns that reported nothing add a silent zero to every token sum
+          // in the tiles, so the tiles cannot stand unqualified.
+          usageCompletenessBreakdown: { measured: 1, partial: 0, absent: 2 },
         },
       };
     });
 
-    const costFigure = await screen.findByTestId("usage-cost-figure");
-    expect(costFigure).toBeTruthy();
-    expect(screen.queryByTestId("usage-chart-groupby-harness")).toBeNull();
-    expect(screen.queryByTestId("usage-chart-groupby-model")).toBeNull();
+    const note = await screen.findByTestId("usage-stat-tiles-absent-note");
+    expect(note.textContent).toContain("2 turns");
+    // Paired with the tiles themselves, the way Settings pairs them.
+    expect(
+      within(screen.getByTestId("epic-usage-hero")).getByTestId(
+        "usage-stat-tiles-absent-note",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("renders the layout skeleton inside the constant frame while loading", async () => {
+    renderDialog(usageSummaryResponse);
+
+    // Synchronously after mount the query has not resolved: the body shows
+    // the layout-mirroring skeleton, never a spinner line, while the frame
+    // (window picker, footer) is already in place around it.
+    expect(screen.getByTestId("usage-dialog-skeleton")).toBeTruthy();
+    // The skeleton blocks are `aria-hidden`, so the state carries its name
+    // in an sr-only status instead - visually a skeleton, audibly still
+    // "Loading usage…", which the spinner line it replaced used to say.
+    const status = screen.getByRole("status");
+    expect(status.getAttribute("data-testid")).toBe("usage-dialog-skeleton");
+    expect(screen.getByText("Loading usage…").className).toContain("sr-only");
+    expect(screen.getByTestId("usage-window-7")).toBeTruthy();
+    expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
+
+    // Every block must override the primitive's `bg-muted`: preset themes
+    // define `--muted` identical to `--popover` (the dialog surface), which
+    // made the whole skeleton render invisibly. A foreground-alpha fill is
+    // the surface-independent guarantee.
+    const blocks = status.querySelectorAll('[data-slot="skeleton"]');
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block.className).toContain("bg-foreground/10");
+      expect(block.className).not.toContain("bg-muted");
+    }
+
+    await screen.findByTestId("usage-cost-figure");
+    expect(screen.queryByTestId("usage-dialog-skeleton")).toBeNull();
+  });
+
+  it("keeps the fixed-frame and responsive structure classes on the shell", async () => {
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    // jsdom can't exercise container queries or viewport variants - the
+    // structure and classes ARE the testable contract here; rendering-level
+    // verification is the manual pass.
+    const content = screen.getByTestId("epic-usage-dialog");
+    expect(content.className).toContain("h-[min(88dvh,46rem)]");
+    expect(content.className).toContain("sm:max-w-3xl");
+    expect(content.className).toContain("max-[28rem]:bottom-0");
+    expect(content.className).toContain("max-[28rem]:h-[94dvh]");
+    expect(screen.getByTestId("usage-dialog-body").className).toContain(
+      "@container",
+    );
+    expect(screen.getByTestId("epic-usage-hero").className).toContain(
+      "@min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]",
+    );
+    // This dialog HAS a footer, and the footer is what absorbs the sheet's
+    // home-indicator inset - the body must not double it.
+    expect(screen.getByTestId("usage-dialog-body").className).not.toContain(
+      "safe-area-inset-bottom",
+    );
   });
 
   it("renders a retryable error card, never a silent fallback, when the RPC fails", async () => {
@@ -345,5 +510,163 @@ describe("<EpicUsageDialog />", () => {
     });
     expect(await screen.findByTestId("usage-error-card")).toBeTruthy();
     expect(screen.queryByTestId("usage-cost-figure")).toBeNull();
+    // The frame stays constant around the error fill.
+    expect(screen.getByTestId("usage-window-7")).toBeTruthy();
+    expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
+  });
+
+  it("enables the image-export footer buttons and renders the capture region once loaded", async () => {
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    const copyButton = screen.getByTestId("epic-usage-copy-image");
+    const downloadButton = screen.getByTestId("epic-usage-download-image");
+    expect(copyButton instanceof HTMLButtonElement && copyButton.disabled).toBe(
+      false,
+    );
+    expect(
+      downloadButton instanceof HTMLButtonElement && downloadButton.disabled,
+    ).toBe(false);
+    expect(screen.getByTestId("epic-usage-export-region")).toBeTruthy();
+  });
+
+  it("disables the image-export footer buttons when the window has no facts", async () => {
+    const handler = vi.fn(
+      (_request: UsageSummaryRequest): UsageSummaryResponse => {
+        const base = usageSummaryResponse();
+        return {
+          ...base,
+          summary: {
+            ...base.summary,
+            totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+            buckets: [],
+            chatBuckets: [],
+          },
+        };
+      },
+    );
+    renderDialog(handler);
+
+    await screen.findByTestId("usage-dialog-empty");
+    const copyButton = screen.getByTestId("epic-usage-copy-image");
+    const downloadButton = screen.getByTestId("epic-usage-download-image");
+    expect(copyButton instanceof HTMLButtonElement && copyButton.disabled).toBe(
+      true,
+    );
+    expect(
+      downloadButton instanceof HTMLButtonElement && downloadButton.disabled,
+    ).toBe(true);
+  });
+
+  it("captures the export region and copies it to the clipboard from 'Copy image'", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.copyImageBlobPromiseToClipboard.mockResolvedValue(undefined);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    const exportRegion = screen.getByTestId("epic-usage-export-region");
+
+    await user.click(screen.getByTestId("epic-usage-copy-image"));
+
+    await waitFor(() => {
+      expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
+    });
+    const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
+    await expect(captured).resolves.toBe(blob);
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({
+      region: exportRegion,
+      heading: "Usage",
+      subheading: "Cost and token usage for this task.",
+    });
+    expect(mocks.saveBlobToDisk).not.toHaveBeenCalled();
+  });
+
+  it("hands the pending capture to the clipboard on click, before it resolves", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    let resolveCapture: (value: Blob) => void = () => undefined;
+    mocks.captureUsageExportImageBlob.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+    mocks.copyImageBlobPromiseToClipboard.mockResolvedValue(undefined);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    await user.click(screen.getByTestId("epic-usage-copy-image"));
+
+    // The clipboard call is what has to happen inside the click's user
+    // activation, so it must already have been made while the capture it was
+    // handed is still pending - not after the blob lands.
+    expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
+    const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
+    resolveCapture(blob);
+    await expect(captured).resolves.toBe(blob);
+  });
+
+  it("disables the download button too while a copy export is in flight", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    let resolveCapture: (value: Blob) => void = () => undefined;
+    mocks.captureUsageExportImageBlob.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+    mocks.copyImageBlobPromiseToClipboard.mockImplementation(
+      async (blobPromise) => {
+        await blobPromise;
+      },
+    );
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    await user.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Copy image" }),
+    );
+
+    // A capture is a full-region rasterisation, so the two legs share one
+    // mutation: while the copy runs, DOWNLOAD is disabled too - not just the
+    // button that was pressed.
+    const downloadButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Download image",
+    });
+    await waitFor(() => {
+      expect(downloadButton.disabled).toBe(true);
+    });
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledTimes(1);
+
+    resolveCapture(blob);
+
+    await waitFor(() => {
+      expect(downloadButton.disabled).toBe(false);
+    });
+  });
+
+  it("captures the export region and saves it to disk from 'Download image'", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.saveBlobToDisk.mockResolvedValue("traycer-usage-7d.png");
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    const exportRegion = screen.getByTestId("epic-usage-export-region");
+
+    await user.click(screen.getByTestId("epic-usage-download-image"));
+
+    await waitFor(() => {
+      expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
+        blob,
+        "traycer-usage-7d.png",
+      );
+    });
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({
+      region: exportRegion,
+      heading: "Usage",
+      subheading: "Cost and token usage for this task.",
+    });
+    expect(mocks.copyImageBlobPromiseToClipboard).not.toHaveBeenCalled();
   });
 });

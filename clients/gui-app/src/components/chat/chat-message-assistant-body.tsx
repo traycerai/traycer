@@ -67,8 +67,12 @@ interface AssistantBodyProps {
    * share `createdAt` (e.g. multiple turns following one user-send).
    */
   messageId: string;
-  /** Wall-clock turn start; `completedAt - createdAt` is the elapsed duration. */
-  createdAt: number;
+  /** Wall-clock turn start used only for elapsed-duration calculations. */
+  elapsedStartedAt: number;
+  /** Whether the complete turn contains only autonomous-resume dividers. */
+  turnHasOnlyAutonomousResumeSegments: boolean;
+  /** Whether this terminal row should render its elapsed completion footer. */
+  showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
   pausedDurationMs: number;
   /** Start of an open user-wait interval for this turn, if any. */
@@ -101,7 +105,9 @@ export function AssistantMessageBody({
   backgroundToolBlockIds,
   runState,
   messageId,
-  createdAt,
+  elapsedStartedAt,
+  turnHasOnlyAutonomousResumeSegments,
+  showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
@@ -132,6 +138,18 @@ export function AssistantMessageBody({
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
+  // A completed turn whose only visible segment is the autonomous-resume
+  // divider genuinely woke the agent but produced no reply. Give that case
+  // explicit footer copy so it cannot be mistaken for the notification-only
+  // row that exists when the provider never resumed (that row suppresses its
+  // footer while retaining a terminal `completedAt`).
+  const silentAutonomousResume =
+    stopped === null && turnHasOnlyAutonomousResumeSegments;
+  const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
+  const showElapsedFooter =
+    !stoppedBeforeResponding &&
+    showCompletionFooter &&
+    shouldShowElapsedFooter(runState, completedAt, segments, stopped);
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -148,7 +166,7 @@ export function AssistantMessageBody({
       return (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
@@ -157,17 +175,7 @@ export function AssistantMessageBody({
       );
     }
     if (stopped === null || !stopped.turnHadOutput) {
-      return stopped === null ? null : (
-        <div
-          role="status"
-          aria-label="Stopped before responding"
-          data-testid="assistant-stopped-before-responding"
-          className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
-        >
-          <StopBadge />
-          <span>Stopped before responding</span>
-        </div>
-      );
+      return stopped === null ? null : <StoppedBeforeResponding />;
     }
   }
   return (
@@ -234,23 +242,25 @@ export function AssistantMessageBody({
       {runState !== null ? (
         <AssistantRunIndicator
           runState={runState}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
           messageId={messageId}
           meta={meta}
         />
       ) : null}
-      {shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
+      {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
+      {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
-          createdAt={createdAt}
+          createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           completedAt={completedAt}
           stopped={stopped}
           meta={meta}
           replyText={replyText}
           forkAction={forkAction}
+          silentAutonomousResume={silentAutonomousResume}
         />
       ) : null}
     </div>
@@ -299,6 +309,20 @@ function StopBadge() {
   );
 }
 
+function StoppedBeforeResponding() {
+  return (
+    <div
+      role="status"
+      aria-label="Stopped before responding"
+      data-testid="assistant-stopped-before-responding"
+      className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
+    >
+      <StopBadge />
+      <span>Stopped before responding</span>
+    </div>
+  );
+}
+
 /**
  * Leading glyph for the elapsed footer. A stopped turn always shows the
  * filled stop glyph, never the provider icon - natural footers keep the
@@ -328,6 +352,7 @@ function AssistantElapsedFooter({
   meta,
   replyText,
   forkAction,
+  silentAutonomousResume,
 }: {
   messageId: string;
   createdAt: number;
@@ -337,6 +362,7 @@ function AssistantElapsedFooter({
   meta: AssistantTurnMeta | null;
   replyText: string;
   forkAction: ChatMessageForkAction | null;
+  silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
   // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
@@ -344,6 +370,9 @@ function AssistantElapsedFooter({
   // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
+  const nonStoppedElapsedLabel = silentAutonomousResume
+    ? `Resumed · no response · ${formatWorkedFor(elapsedMs)}`
+    : `${verb} for ${formatWorkedFor(elapsedMs)}`;
   const elapsedContent = (
     <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
@@ -353,7 +382,7 @@ function AssistantElapsedFooter({
           {` · ${formatWorkedFor(elapsedMs)}`}
         </span>
       ) : (
-        <span className="text-ui-sm leading-5">{`${verb} for ${formatWorkedFor(elapsedMs)}`}</span>
+        <span className="text-ui-sm leading-5">{nonStoppedElapsedLabel}</span>
       )}
     </>
   );
@@ -818,6 +847,7 @@ function AssistantSegment({
           inputDetail={segment.inputDetail}
           error={segment.error}
           agentMessageSend={segment.agentMessageSend}
+          managedCommand={segment.managedCommand}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}

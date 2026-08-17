@@ -332,7 +332,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     ).not.toBeNull();
   });
 
-  it("decision #17: deselecting a chat's inner tab unmounts the synthetic body; selecting it again is an INTENTIONAL fresh mount after a fresh publish", () => {
+  it("deselecting a chat's inner tab keeps its body mounted; only real membership loss unmounts it, and the record then stays dormant until a fresh publish", () => {
     useEpicCanvasStore.setState({
       tabsById: {
         "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
@@ -366,48 +366,56 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    act(() => {
-      useEpicCanvasStore.setState((state) => {
-        const current = state.canvasByTabId["tab-1"];
-        if (current === undefined) throw new Error("expected canvas");
-        return {
-          canvasByTabId: {
-            ...state.canvasByTabId,
-            "tab-1": {
-              ...current,
-              root: {
-                ...pane("p1", ["chat-1", "term-1"]),
-                activeTabId: "term-1",
+    function setPaneRoot(
+      tabInstanceIds: ReadonlyArray<string>,
+      activeTabId: string,
+      activationHistory: ReadonlyArray<string>,
+    ): void {
+      act(() => {
+        useEpicCanvasStore.setState((state) => {
+          const current = state.canvasByTabId["tab-1"];
+          if (current === undefined) throw new Error("expected canvas");
+          return {
+            canvasByTabId: {
+              ...state.canvasByTabId,
+              "tab-1": {
+                ...current,
+                root: {
+                  ...pane("p1", tabInstanceIds),
+                  activeTabId,
+                  activationHistory,
+                },
               },
             },
-          },
-        };
+          };
+        });
       });
-    });
+    }
+
+    // Selecting the sibling tab retains chat-1: its record survives, its body
+    // is never unmounted, and it only stops being PRESENTED. This is what
+    // stops the transcript re-converging on the way back.
+    setPaneRoot(["chat-1", "term-1"], "term-1", ["term-1", "chat-1"]);
+    expect(
+      screen.getByTestId("synthetic-tile-surface-body-chat-1"),
+    ).not.toBeNull();
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // ...and coming back is not a remount at all.
+    setPaneRoot(["chat-1", "term-1"], "chat-1", ["chat-1", "term-1"]);
+    expect(renderer.mountCount("chat-1")).toBe(1);
+    expect(renderer.unmountCount("chat-1")).toBe(0);
+
+    // A REAL membership loss (the tab is closed) still unmounts.
+    setPaneRoot(["term-1"], "term-1", ["term-1"]);
     expect(
       screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
     ).toBeNull();
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(1);
 
-    act(() => {
-      useEpicCanvasStore.setState((state) => {
-        const current = state.canvasByTabId["tab-1"];
-        if (current === undefined) throw new Error("expected canvas");
-        return {
-          canvasByTabId: {
-            ...state.canvasByTabId,
-            "tab-1": {
-              ...current,
-              root: {
-                ...pane("p1", ["chat-1", "term-1"]),
-                activeTabId: "chat-1",
-              },
-            },
-          },
-        };
-      });
-    });
+    setPaneRoot(["chat-1", "term-1"], "chat-1", ["chat-1", "term-1"]);
     // Membership re-includes chat-1, but the registry has no unregister API -
     // it already deleted the record on loss (F2). No body without a fresh
     // publish: this is the dormant state, not an automatic remount.
@@ -497,6 +505,43 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     // layers that Electron can otherwise retain after visibility changes.
     expect(record.classList.contains("invisible")).toBe(true);
     expect(record.classList.contains("opacity-0")).toBe(true);
+  });
+
+  it("a retained-but-deselected record is aria-hidden, inert, AND non-painted even though its top level is visible", () => {
+    // Retention keeps a chat's record alive while another tab holds the
+    // pane's foreground. Every record of a pane is positioned on that same
+    // pane rect, so a retained one that kept painting would sit exactly on
+    // top of the selected chat - `topLevelVisible` alone can no longer answer
+    // "is this painting".
+    seedOneChat();
+    render(<StableTileSurfaceHost renderRecordBody={() => null} />);
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: false },
+          canvasActivity: { tabSelected: false, canvasPaneActive: false },
+        }),
+      );
+    });
+    const record = screen.getByTestId("stable-tile-surface-record-chat-1");
+    expect(record.getAttribute("aria-hidden")).toBe("true");
+    expect(record.hasAttribute("inert")).toBe(true);
+    expect(record.classList.contains("invisible")).toBe(true);
+    expect(record.classList.contains("opacity-0")).toBe(true);
+
+    // Re-selecting the tab paints it again - the record follows the freshly
+    // published `tabSelected`, with no remount and no geometry re-measure.
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment("chat-1", {
+          presentation: { topLevelVisible: true, topLevelFocused: false },
+          canvasActivity: { tabSelected: true, canvasPaneActive: false },
+        }),
+      );
+    });
+    expect(record.getAttribute("aria-hidden")).toBe("false");
+    expect(record.hasAttribute("inert")).toBe(false);
+    expect(record.classList.contains("invisible")).toBe(false);
   });
 
   it("pins the pointer-event split, overflow clipping, and no positive record z-index", () => {

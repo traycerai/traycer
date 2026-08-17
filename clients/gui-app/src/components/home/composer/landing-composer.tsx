@@ -62,7 +62,10 @@ import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import {
+  selectGlobalLastRunSettings,
+  useComposerRunSettingsStore,
+} from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
@@ -88,6 +91,8 @@ import {
 } from "@/components/home/data/landing-options";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useHostBinding, useHostClient } from "@/lib/host";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
@@ -184,8 +189,12 @@ export function LandingComposer(props: LandingComposerProps) {
     markLandingEditorMounted();
   }, []);
 
-  const globalLastRunSettings = useComposerRunSettingsStore(
-    (state) => state.globalLastRunSettings,
+  // The landing composer follows the app-wide active host (its picker rebinds
+  // that default), so its remembered last-run settings are the ACTIVE host's
+  // bucket - switching hosts re-seeds the toolbar from the new host's memory.
+  const activeHostId = useReactiveActiveHostId();
+  const globalLastRunSettings = useComposerRunSettingsStore((state) =>
+    selectGlobalLastRunSettings(state, activeHostId),
   );
   const setGlobalRunSettings = useComposerRunSettingsStore(
     (state) => state.setGlobalRunSettings,
@@ -195,12 +204,12 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      setGlobalRunSettings(settings, Date.now());
+      setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
     },
-    [draftId, setDraftSettings, setGlobalRunSettings],
+    [activeHostId, draftId, setDraftSettings, setGlobalRunSettings],
   );
   const settingsSeed = useMemo(
     () =>
@@ -220,12 +229,14 @@ export function LandingComposer(props: LandingComposerProps) {
   // Never authoritative: the landing composer has no reauth gate of its own
   // to defend a dead pin with a banner, so a genuinely-removed profile must
   // be corrected to ambient here rather than silently submitted as the new
-  // chat's initial settings.
+  // chat's initial settings. The catalog reads through the same `hostClient`:
+  // the landing host picker rebinds the app-wide default, so the active
+  // client IS this composer's target host.
   const toolbarStore = useComposerToolbarStore(
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    composerMode === "terminal",
+    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -283,6 +294,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     defaultHostClient,
+    activeHostId,
   );
   const workspaceAvailability = useMemo(
     () =>
@@ -591,7 +603,11 @@ export function LandingComposer(props: LandingComposerProps) {
         .getState()
         .createDraftWithId(
           props.pendingCreateId ?? uuidv4(),
-          useComposerRunSettingsStore.getState().globalLastRunSettings,
+          useComposerRunSettingsStore
+            .getState()
+            .getGlobalRunSettings(
+              getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+            ),
         );
       createdUnboundDraftIdRef.current = createdDraftId;
       // The workspace picker's staging key is keyed by this draft id
@@ -603,15 +619,15 @@ export function LandingComposer(props: LandingComposerProps) {
       // remounts and drops an in-progress edit.
       useWorktreeIntentStagingStore
         .getState()
-        .migrateKey(
-          { surface: "landing", draftId: null },
-          { surface: "landing", draftId: createdDraftId },
+        .migrateKeyForAllHosts(
+          { surface: "landing", hostId: activeHostId, draftId: null },
+          { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
         );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);
     },
-    [props.pendingCreateId, runtime, unboundRuntime],
+    [activeHostId, props.pendingCreateId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(
@@ -716,8 +732,7 @@ export function LandingComposer(props: LandingComposerProps) {
             probeTarget={rateLimitPrompt.probeTarget}
             // Landing has no tab of its own; `null` resolves the usage
             // sidecar/R-key refresh to the app-wide default host, matching
-            // `ComposerToolbar`'s own `runTargetHostId={null}` for this
-            // surface (composer-body.tsx).
+            // the `hostId={null}` this surface hands `ComposerBody` below.
             runTargetHostId={null}
             onSwitchProfile={onSwitchRateLimitedProfile}
             affectedChatCount={0}
@@ -745,6 +760,10 @@ export function LandingComposer(props: LandingComposerProps) {
       hasPastedImageBytes={hasLandingImageBytes}
       ingestPastedComposerImages={ingestPastedComposerImages}
       onEditorReady={reingestPendingImages}
+      // No tab yet: the landing composer creates on the app-wide default host,
+      // which its own host picker rebinds - so `null` (follow the default) IS
+      // the picked host here.
+      hostId={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}

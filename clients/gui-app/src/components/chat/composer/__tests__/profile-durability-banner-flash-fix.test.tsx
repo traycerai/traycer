@@ -73,7 +73,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -89,7 +89,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
     isPending: false,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       models: [
         {
@@ -250,7 +250,11 @@ function ChatComposerLikeHarness(props: {
     props.fallbackSettingsSeed,
     TAB_HOST_CLIENT,
   );
-  const toolbarStore = useComposerToolbarStore(null, seedSource, null, false);
+  const toolbarStore = useComposerToolbarStore(null, seedSource, null, {
+    hostClient: TAB_HOST_CLIENT,
+    hostId: "tab-host",
+    tuiOnly: false,
+  });
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const reauthGate = useProviderReauthGate(
