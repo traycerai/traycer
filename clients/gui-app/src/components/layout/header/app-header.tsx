@@ -5,6 +5,7 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { ProjectProfileSwitcher } from "@/components/layout/header/project-profile-switcher";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
@@ -152,12 +153,18 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         {!navDisabled && showGlobalResourceMonitor ? (
           <ResourceMonitorPopover className={undefined} />
         ) : null}
+        <HeaderProjectProfileSlot enabled={!navDisabled} />
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
       </div>
     </header>
   );
+}
+
+function HeaderProjectProfileSlot(props: { readonly enabled: boolean }) {
+  if (!props.enabled) return null;
+  return <ProjectProfileSwitcher />;
 }
 
 // Hiding the bell when signed-out keeps the notifications-store +

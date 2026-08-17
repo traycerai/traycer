@@ -4,11 +4,12 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
 import {
-  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
-import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   mergeLandingDraftWorkspaceFolders,
@@ -112,15 +113,16 @@ export function useHomeWorkspaceSource(
   const setGlobalPrimaryFolder = useWorkspaceFoldersStore(
     (state) => state.setPrimaryFolder,
   );
-  const globalPrimaryPath = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).primaryPath,
+  const foldersByHost = useWorkspaceFoldersStore((state) => state.byHost);
+  const profilesByHost = useProjectProfilesStore((state) => state.byHost);
+  const effectiveBucket = selectEffectiveWorkspaceFoldersBucket(
+    { byHost: foldersByHost },
+    { byHost: profilesByHost },
+    hostId,
   );
-  const globalFolders = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
-  );
-  const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).folderInfoByPath,
-  );
+  const globalPrimaryPath = effectiveBucket.primaryPath;
+  const globalFolders = effectiveBucket.folders;
+  const globalFolderInfoByPath = effectiveBucket.folderInfoByPath;
   const {
     addDraftResolvedFolders,
     removeDraftFolder,

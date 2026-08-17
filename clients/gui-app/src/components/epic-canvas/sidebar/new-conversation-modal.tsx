@@ -133,10 +133,9 @@ import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import {
-  selectWorkspaceFoldersBucket,
-  useWorkspaceFoldersStore,
-} from "@/stores/workspace/workspace-folders-store";
+import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import {
   anyHostHasStagedWorktreeIntent,
   newConversationModalStagingKey,
@@ -1280,16 +1279,18 @@ function useLatestConversationSettingsSeed(): {
 function useGlobalWorkspaceSnapshot(
   hostId: string | null,
 ): LandingDraftWorkspaceSnapshot {
-  return useWorkspaceFoldersStore(
-    useShallow((state) => {
-      const bucket = selectWorkspaceFoldersBucket(state, hostId);
-      return {
-        folders: bucket.folders,
-        folderInfoByPath: bucket.folderInfoByPath,
-        primaryPath: bucket.primaryPath,
-      };
-    }),
+  const foldersByHost = useWorkspaceFoldersStore((state) => state.byHost);
+  const profilesByHost = useProjectProfilesStore((state) => state.byHost);
+  const bucket = selectEffectiveWorkspaceFoldersBucket(
+    { byHost: foldersByHost },
+    { byHost: profilesByHost },
+    hostId,
   );
+  return {
+    folders: bucket.folders,
+    folderInfoByPath: bucket.folderInfoByPath,
+    primaryPath: bucket.primaryPath,
+  };
 }
 
 /**
