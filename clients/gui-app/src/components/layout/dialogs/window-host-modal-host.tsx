@@ -123,7 +123,11 @@ function NarratingWindowHostModal(props: {
         presentation,
         localLifecycle,
         progress,
-        cause: narration.cause,
+        // The same `settled.failed` the action row reads, deliberately: the body
+        // and the actions must agree about whether this attempt is over. Two
+        // derivations of that is how the modal ended up offering Retry beside a
+        // spinner claiming a start.
+        settledFailure: settled.failed,
       })}
       onRetry={retry.onRetry}
       retryPending={retry.pending}
@@ -266,20 +270,41 @@ function buildLocalBootstrapBody(args: {
   readonly presentation: DefaultHostReadinessPresentation;
   readonly localLifecycle: boolean;
   readonly progress: HostProgressView | null;
-  readonly cause: WindowNarrationCause;
+  /**
+   * Whether the attempt being narrated has settled in failure - the SAME bit the
+   * action row gates Retry and Report issue on, not a second derivation of it.
+   *
+   * This used to be the `cause`, and that was the bug. See below.
+   */
+  readonly settledFailure: boolean;
 }): ReactNode | null {
   if (args.variant.kind !== "offline") return null;
   if (!args.localLifecycle) return null;
-  // Nothing can serve this window, and nothing is starting. The spinner and the
-  // progress heading are gated on the cause, not just placed beside it: this arm
-  // used to render `LocalHostLoadingContent` too, whose heading falls back to
+  // NOTHING IS STARTING, so nothing may claim to be. The spinner and the stage
+  // line are gated on the settled FAILURE rather than placed beside it:
+  // `LocalHostLoadingContent`'s stage line falls back to
   // `HOST_PROGRESS_IDLE_HEADING` - "Starting local Traycer Host…" - exactly when
   // no lane is running, which is precisely this state. A live spinner over a
   // crash report tells a user to wait for a start that is not happening, and
   // they report a hang instead of a crash.
   //
+  // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until a review
+  // caught it. `cause === "no-usable-host"` covers only the arm where nothing can
+  // serve the window at all. A cold start whose install has ALREADY FAILED
+  // (`provisioningError` set, so the action row is offering Retry and Report
+  // issue) still reached the loading body and drew a live spinner claiming a
+  // start. That is the user's original complaint inverted: they objected to
+  // recovery actions on a start with no error, and this was a modal that HAD
+  // errored still insisting it was starting. The reachable route is a registered
+  // local host - so `effectiveHostId` is non-null and the cause stays
+  // `cold-start` - whose bootstrap failed on first launch.
+  //
+  // One rule, two arms: ∅ is settled-by-definition (nothing can serve this
+  // window IS the failure), and cold-start settles when the install reports one.
+  // The ∅ arm is now a case of the rule rather than a special arm beside it.
+  //
   // The log disclosure still renders: it is the one affordance that lets
-  // someone take a stuck startup somewhere else, and it is TRUE on this arm.
+  // someone take a stuck startup somewhere else, and it is TRUE on both.
   // The attempt panel comes first because it is what explains the state; the
   // toggle is a footnote to it.
   //
@@ -287,7 +312,7 @@ function buildLocalBootstrapBody(args: {
   // returned as a fragment hands its children straight to the dialog's own
   // column, where each one carries its own alignment or none. One contract, both
   // arms - otherwise the two bodies drift apart the moment either is touched.
-  if (args.cause === "no-usable-host") {
+  if (args.settledFailure) {
     return (
       <LocalHostBodyShell>
         <LocalBootstrapAttempts />

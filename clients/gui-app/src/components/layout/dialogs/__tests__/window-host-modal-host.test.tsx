@@ -386,6 +386,12 @@ describe("<WindowHostModalHost />", () => {
       ],
     });
 
+    // The markers must be AVAILABLE for the body assertions below to mean
+    // anything - the attempt panel is what replaces the spinner here, and
+    // without markers it renders nothing and "no spinner" would be satisfied by
+    // an empty body.
+    hostStatus.data = BOOTSTRAP_MARKERS;
+
     renderHost(
       {
         ...EMPTY_PRESENTATION,
@@ -395,7 +401,7 @@ describe("<WindowHostModalHost />", () => {
         provisioningError: new Error("bootstrap exited 1"),
       },
       false,
-      undefined,
+      new MockTraycerCli(),
     );
 
     await waitFor(() => {
@@ -410,6 +416,30 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+
+    // THE BODY, which this test used to say nothing about - and that silence was
+    // worse than an omission. The row was enumerated, so it read as covered,
+    // while the arm it covers went on drawing a live spinner and "Starting local
+    // Traycer Host…" beside the Retry and Report issue asserted above. The ∅
+    // test has had this negative assertion all along; the arm that was actually
+    // broken did not.
+    //
+    // Positive first: the attempt panel is what this arm draws INSTEAD of the
+    // spinner, so its presence is what makes the absences below meaningful
+    // rather than vacuous.
+    expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
+    // The copy itself, not just the node: the stage line's fallback is the exact
+    // sentence this arm must not say, and asserting the testid alone would pass
+    // if the same string were reintroduced anywhere else in the card.
+    expect(document.body.textContent).not.toContain(
+      "Starting local Traycer Host…",
+    );
   });
 
   it("bypassed: true renders nothing at all", () => {
