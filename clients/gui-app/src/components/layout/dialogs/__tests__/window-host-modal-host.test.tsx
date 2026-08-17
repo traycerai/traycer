@@ -703,7 +703,27 @@ describe("<WindowHostModalHost />", () => {
    *  2. It cannot distinguish the shipped fix from `self-start` +
    *     `justify-center`, which renders at the same left edge. Its own `PC4`
    *     asserts that blindness as a truth table rather than admitting it in
-   *     prose, and the grep-style class guard is what actually pins it.
+   *     prose, and the grep-style class guard is what actually pins it -
+   *     `src/__tests__/local-bootstrap-alignment-lint.test.ts`, where that exact
+   *     combination is one of the mutation proofs.
+   *
+   * WHY THE ∅ ARM HAS NO RENDERED MEASUREMENT, and what would make it need one.
+   *
+   * Deferred, not forgotten, and the argument is CONDITIONAL - which is the only
+   * reason a deferral is a decision rather than a gap. Both arms now route through
+   * the same `LocalHostBodyShell`, so alignment is shared BY CONSTRUCTION:
+   * measuring the cold-start arm measures the shell, and the ∅ arm uses that
+   * shell. A rendered ∅ measurement would be re-verifying one owner through a
+   * second door, and building it faithfully needs the readiness controller mounted
+   * in a browser fixture - approximating it would measure the fixture.
+   *
+   * ⚠ THE CONSTRUCTION ARGUMENT DIES the moment anyone gives the ∅ arm alignment
+   * of its own - a second root, or centring on one of its children. At that point
+   * the shared-owner reasoning no longer holds and the rendered measurement
+   * becomes required. What the shell does NOT cover either way is a CHILD carrying
+   * its own centring, which is precisely the `text-center` that survived on
+   * `local-host-loading-empty-tail` in the one branch nothing measured; the class
+   * guard covers its recurrence.
    */
   describe("the local-bootstrap body's structure", () => {
     it("gives BOTH local arms one body root, so alignment has an owner", async () => {

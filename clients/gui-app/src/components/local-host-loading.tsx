@@ -330,8 +330,6 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     return (
       <p
         data-testid="local-host-loading-empty-tail"
-        // muted-fill-ok: weak tint delimited by its own border-border/60
-        //
         // `text-left`, decided rather than inherited. This was `text-center`,
         // which made it the last leaf overriding the body's one-alignment
         // contract - and it is the SAME SLOT as the `<pre>` below, which is
@@ -342,6 +340,12 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
         // Not a rare branch, either: on the ∅ arm the host never reported ready,
         // so an empty tail is the EXPECTED reading, not an edge case - and it is
         // the one branch the alignment harness does not enter.
+        //
+        // The waiver stays LAST, adjacent to the class list it excuses: the
+        // muted-fill guard only looks a few lines back, so prose inserted between
+        // the two silently orphans it. That is what happened here - the comment
+        // above was added later and pushed the marker out of range.
+        // muted-fill-ok: weak tint delimited by its own border-border/60
         className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       >
         Waiting for bootstrap output…
