@@ -2,6 +2,7 @@ import { createContext } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
+  type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -120,6 +121,20 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
  */
 export function epicHasUnsyncedEdits(epicId: string): boolean {
   return registry.hasUnsyncedEdits(epicId);
+}
+
+/**
+ * The epics holding work that can NEVER reach a server.
+ *
+ * Distinct from {@link epicHasUnsyncedEdits}, which asks whether there is
+ * unsynced work at all. This asks whether that work is still SAVEABLE, and it
+ * is the only honest basis for destroying it without asking: a dirty live
+ * session drains through its transport, a buffer retained across a host
+ * re-point had `detachTransport()` called on it and no epic `Y.Doc` has local
+ * persistence anywhere, so the transport was its only route out.
+ */
+export function unsyncableWork(): ReadonlyArray<UnsyncedEditsEntry> {
+  return registry.unsyncableWork();
 }
 
 /**

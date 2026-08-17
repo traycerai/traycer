@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import type { UnsyncedEditsEntry } from "@/stores/epics/open-epic/session-registry";
 import {
   buildReportIssueDraftContext,
   type ReportIssueDraftContext,
@@ -10,7 +11,8 @@ export type DesktopDialogKind =
   | "logs"
   | "open-epic-in-new-window"
   | "report-issue"
-  | "install-guidance";
+  | "install-guidance"
+  | "update-unsynced-confirm";
 
 export interface DesktopDialogState {
   readonly activeDialog: DesktopDialogKind | null;
@@ -34,6 +36,14 @@ export interface DesktopDialogState {
    * it). A replacement then toasts this id before the draft below is
    * overwritten, since the confirmation holds the only copy of it.
    */
+  /**
+   * The epics whose work cannot survive an update restart, captured when the
+   * confirmation opens. Held here rather than re-derived by the dialog so the
+   * rows the user is shown are the ones the decision was taken against - a
+   * retention can be reclaimed while the dialog is up, and a body that
+   * re-queried would silently disagree with the gate that raised it.
+   */
+  readonly updateUnsyncedEpics: ReadonlyArray<UnsyncedEditsEntry>;
   readonly lastConfirmedReport: {
     readonly draftId: number;
     readonly reportId: string;
@@ -51,6 +61,9 @@ export interface DesktopDialogState {
     report: { readonly draftId: number; readonly reportId: string } | null,
   ) => void;
   readonly openInstallGuidance: () => void;
+  readonly openUpdateUnsyncedConfirm: (
+    epics: ReadonlyArray<UnsyncedEditsEntry>,
+  ) => void;
   readonly close: () => void;
 }
 
@@ -60,6 +73,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   reportIssueContext: null,
   reportIssueDraftContext: null,
   reportIssueDraftId: 0,
+  updateUnsyncedEpics: [],
   lastConfirmedReport: null,
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
@@ -116,6 +130,9 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   },
   openInstallGuidance: () => {
     set({ activeDialog: "install-guidance" });
+  },
+  openUpdateUnsyncedConfirm: (epics) => {
+    set({ activeDialog: "update-unsynced-confirm", updateUnsyncedEpics: epics });
   },
   close: () => {
     set({

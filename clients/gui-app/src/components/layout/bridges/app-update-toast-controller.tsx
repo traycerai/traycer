@@ -16,6 +16,7 @@ import {
   trackUpdateDownloadStarted,
   trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
+import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import {
   useSurfaceReadiness,
   windowNarratorOwns,
@@ -121,11 +122,17 @@ export function AppUpdateToastController(): null {
         trackUpdateDownloadStarted("direct_ui");
         void bridge.downloadUpdate();
       },
-      // "Restart" installs straight away - the click is the confirmation, and
-      // the host keeps running agents across the app restart.
+      // "Restart" installs straight away UNLESS some epic holds work that can
+      // never sync. The old comment here read "the click is the confirmation,
+      // and the host keeps running agents across the app restart" - both
+      // clauses are still true and neither covers this: the click confirms a
+      // RESTART, not the discarding of editor work the user was never told
+      // about, and "agents keep running" is a promise about agents, not about a
+      // retained `Y.Doc` with no transport for the host to keep anything alive
+      // through.
       onRestart: () => {
         trackUpdateRestartRequested("direct_ui");
-        void bridge.installUpdate();
+        requestAppUpdateInstall(bridge);
       },
       onViewInstructions: () => {
         Analytics.getInstance().track(
