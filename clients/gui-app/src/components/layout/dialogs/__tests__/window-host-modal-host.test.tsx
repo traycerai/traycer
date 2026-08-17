@@ -238,9 +238,7 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("no-usable-host");
-    const openSettings = screen.getByTestId(
-      "window-host-modal-open-settings",
-    );
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
 
     // Nothing is starting, so nothing narrates a start.
@@ -322,9 +320,7 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("cold-start");
-    const openSettings = screen.getByTestId(
-      "window-host-modal-open-settings",
-    );
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
 
     expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
@@ -369,9 +365,7 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("cold-start");
-    const openSettings = screen.getByTestId(
-      "window-host-modal-open-settings",
-    );
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
 
     // Slow promotes Retry (nothing has FAILED, but the wait has outrun the
@@ -410,9 +404,7 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("cold-start");
-    const openSettings = screen.getByTestId(
-      "window-host-modal-open-settings",
-    );
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
 
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
@@ -568,7 +560,11 @@ describe("<WindowHostModalHost />", () => {
       leases: [deadLease(REMOTE_HOST_ID, { reason: "offline" })],
     });
 
-    renderHost({ ...EMPTY_PRESENTATION, targetKind: "remote" }, false, undefined);
+    renderHost(
+      { ...EMPTY_PRESENTATION, targetKind: "remote" },
+      false,
+      undefined,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -650,5 +646,145 @@ describe("<WindowHostModalHost />", () => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+  });
+
+  /**
+   * F8's two STRUCTURAL claims, which is all of it jsdom can answer.
+   *
+   * The finding has a third, geometric half - the toggle centring itself in an
+   * otherwise left-aligned card - and no assertion in this file touches it.
+   * `self-center` is a resolved box position, and jsdom computes no layout at
+   * all, so the only jsdom-visible form of that claim is "the class string does
+   * not contain `self-center`", which pins the fix's SPELLING and would pass
+   * happily on a build that re-centred the control by any other means. It is
+   * measured in a real engine instead, by
+   * `scripts/window-host-modal-alignment-browser.mjs`, and recorded as
+   * browser-verified-only rather than left reading as covered here.
+   */
+  describe("the local-bootstrap body's structure", () => {
+    it("gives BOTH local arms one body root, so alignment has an owner", async () => {
+      // The defect class: both bodies were fragments, so their children became
+      // direct children of the dialog's own column and each one carried its own
+      // alignment or none. Asserted per arm because the two arms are built by
+      // different branches of `buildLocalBootstrapBody` - fixing one and
+      // leaving the other is exactly how they drift.
+      hostStatus.data = BOOTSTRAP_MARKERS;
+      applySnapshot({
+        attached: true,
+        effectiveHostId: LOCAL_HOST_ID,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [
+          lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+        ],
+      });
+      renderHost(
+        { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      expect(
+        screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      ).toBe("cold-start");
+
+      // ONE root, not one per child: two roots would re-create the same defect
+      // with the members regrouped.
+      expect(screen.getAllByTestId("local-host-body")).toHaveLength(1);
+      const coldStartBody = screen.getByTestId("local-host-body");
+      // The root actually CONTAINS the body's members. Without this the
+      // assertion above is satisfied by an empty div rendered beside them.
+      expect(
+        screen
+          .getByTestId("local-host-loading-spinner")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(coldStartBody);
+      expect(
+        screen
+          .getByTestId("local-host-loading-toggle-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(coldStartBody);
+
+      cleanup();
+      useSelectionAuthorityStore.getState().reset();
+
+      // The ∅ arm, whose body is a different branch with different members.
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+      });
+      renderHost(
+        {
+          ...EMPTY_PRESENTATION,
+          targetKind: "local",
+          localBootIntent: true,
+          canManageHost: true,
+        },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      expect(
+        screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      ).toBe("no-usable-host");
+      expect(screen.getAllByTestId("local-host-body")).toHaveLength(1);
+      const emptyArmBody = screen.getByTestId("local-host-body");
+      expect(
+        screen
+          .getByTestId("local-host-bootstrap-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(emptyArmBody);
+      expect(
+        screen
+          .getByTestId("local-host-loading-toggle-details")
+          .closest('[data-testid="local-host-body"]'),
+      ).toBe(emptyArmBody);
+    });
+
+    it("puts the ∅ arm's attempt panel ABOVE the log toggle, not below it", async () => {
+      // Document order, deliberately anchored on the MODAL rather than on the
+      // body root: this claim predates the root, so expressing it this way is
+      // what lets it be controlled against the tree that actually had the
+      // defect. Below the toggle, the panel reads as the toggle's own expanded
+      // content - an open dropdown the user never opened.
+      hostStatus.data = BOOTSTRAP_MARKERS;
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+      });
+      renderHost(
+        {
+          ...EMPTY_PRESENTATION,
+          targetKind: "local",
+          localBootIntent: true,
+          canManageHost: true,
+        },
+        false,
+        new MockTraycerCli(),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      });
+      const panel = screen.getByTestId("local-host-bootstrap-details");
+      const toggle = screen.getByTestId("local-host-loading-toggle-details");
+      // Both present first: an ordering assertion over a missing node is the
+      // vacuity this branch keeps catching.
+      expect(panel).toBeTruthy();
+      expect(toggle).toBeTruthy();
+      expect(
+        panel.compareDocumentPosition(toggle) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeGreaterThan(0);
+    });
   });
 });

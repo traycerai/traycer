@@ -9,6 +9,7 @@ import { BootstrapAttemptDetails } from "@/components/host/bootstrap-attempt-det
 import { summariseBootstrapAttempts } from "@/components/host/bootstrap-attempt-summary";
 import {
   BootstrapLogDisclosure,
+  LocalHostBodyShell,
   LocalHostLoadingContent,
 } from "@/components/local-host-loading";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
@@ -281,14 +282,19 @@ function buildLocalBootstrapBody(args: {
   // someone take a stuck startup somewhere else, and it is TRUE on this arm.
   // The attempt panel comes first because it is what explains the state; the
   // toggle is a footnote to it.
+  //
+  // Wrapped in the same shell as the loading body, not a fragment: a body
+  // returned as a fragment hands its children straight to the dialog's own
+  // column, where each one carries its own alignment or none. One contract, both
+  // arms - otherwise the two bodies drift apart the moment either is touched.
   if (args.cause === "no-usable-host") {
     return (
-      <>
+      <LocalHostBodyShell>
         <LocalBootstrapAttempts />
         <BootstrapLogDisclosure
           onConfigureShell={args.presentation.configureShell}
         />
-      </>
+      </LocalHostBodyShell>
     );
   }
   return (

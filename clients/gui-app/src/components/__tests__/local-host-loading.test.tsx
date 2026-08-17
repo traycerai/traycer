@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   MockRunnerHost,
@@ -159,5 +159,60 @@ describe("<LocalHostLoadingContent />", () => {
     expect(container.textContent).toContain("Setting up…");
     expect(container.textContent).toContain("80%");
     expect(container.textContent).not.toContain("Downloading…");
+  });
+
+  /**
+   * The disclosure toggle NAMES the region it expands, in both states.
+   *
+   * `aria-expanded` alone tells assistive tech that something expanded without
+   * saying what, so the toggle also carries `aria-controls`. What that buys
+   * depends entirely on the id RESOLVING: a dangling `aria-controls` is worse
+   * than none, because it announces a control that operates nothing. The region
+   * therefore stays in the DOM under `hidden` rather than unmounting, and the
+   * closed state is the half of this that can silently rot - which is why it is
+   * asserted first and by the same lookup the browser does.
+   */
+  it("names its region with an aria-controls that resolves both closed and open", () => {
+    mountLoadingContent(
+      new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: new MockTraycerCli(),
+      }),
+      null,
+    );
+
+    const toggle = screen.getByTestId("local-host-loading-toggle-details");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const regionId = toggle.getAttribute("aria-controls");
+    // Non-empty before it is resolved: `getElementById("")` returns null, so a
+    // missing attribute and a blank one would both fail the lookup below for
+    // the wrong reason and read as the same defect.
+    expect(regionId).not.toBeNull();
+    expect(regionId).not.toBe("");
+    // CLOSED. The state where an unmounted region would leave the id dangling.
+    expect(document.getElementById(String(regionId))).not.toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    // The SAME id, still resolving: a region that remounts under a fresh id
+    // each time would satisfy a per-state lookup while breaking the reference
+    // the toggle already published.
+    expect(toggle.getAttribute("aria-controls")).toBe(regionId);
+    const region = document.getElementById(String(regionId));
+    expect(region).not.toBeNull();
+    // And it is the region that actually holds the disclosed content, not an
+    // empty node that happens to carry the id. Anchored on the "Configure
+    // shell…" action rather than the log tail: the tail arrives with the status
+    // query, so asserting through it would make this pass or fail on fetch
+    // timing instead of on the reference under test.
+    expect(
+      region?.contains(screen.getByTestId("local-host-open-shell-settings")),
+    ).toBe(true);
   });
 });

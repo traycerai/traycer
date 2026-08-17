@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   HOST_PROGRESS_IDLE_HEADING,
@@ -54,6 +54,39 @@ export function BootstrapLogDisclosure(
   );
 }
 
+/**
+ * The ONE alignment contract for a local-bootstrap body.
+ *
+ * Both bodies used to be fragments, so their children became direct children of
+ * the dialog's own `flex flex-col gap-4` column and each one carried (or failed
+ * to carry) its own alignment. That is the defect class, not a tidiness point: a
+ * wrapper deleted from the last consumer took the alignment contract with it and
+ * left nothing that owned it, so the toggle's `self-center` became the only
+ * centred element in a left-aligned card - three alignments in one surface.
+ *
+ * Branch-left, decided on rendered full-modal screenshots. Base-centred was
+ * rejected on that evidence because it recreates the same defect with different
+ * members, and `self-start` on the toggle was never rendered and so is not
+ * adopted: alignment belongs to this root, not to each leaf that remembers to
+ * ask for it.
+ *
+ * `gap-4` deliberately matches the dialog column's own gap, so introducing this
+ * root preserves the existing vertical rhythm instead of quietly re-spacing a
+ * surface whose spacing nobody asked to change.
+ */
+export function LocalHostBodyShell(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div
+      data-testid="local-host-body"
+      className="flex w-full flex-col gap-4 text-left"
+    >
+      {props.children}
+    </div>
+  );
+}
+
 export interface LocalHostLoadingContentProps {
   /**
    * The shared host-progress view (F19's one copy table), not a raw lane
@@ -86,7 +119,7 @@ export function LocalHostLoadingContent(
   const progressView = props.progress;
 
   return (
-    <>
+    <LocalHostBodyShell>
       <AgentSpinningDots
         testId="local-host-loading-spinner"
         variant="pulse"
@@ -97,7 +130,7 @@ export function LocalHostLoadingContent(
       </p>
       <ProgressLines view={progressView} />
       <BootstrapLogDisclosure onConfigureShell={props.onConfigureShell} />
-    </>
+    </LocalHostBodyShell>
   );
 }
 
@@ -179,34 +212,50 @@ interface DetailsDisclosureProps {
  */
 function DetailsDisclosure(props: DetailsDisclosureProps) {
   const Icon = props.open ? ChevronUp : ChevronDown;
+  // The toggle names the region it expands. Kept in the DOM with `hidden`
+  // rather than unmounted so the id `aria-controls` points at always resolves -
+  // a dangling `aria-controls` is worse than none, since assistive tech reports
+  // a control that operates nothing. `hidden` is `display: none`, so a closed
+  // region contributes no gap to the column either.
+  const regionId = useId();
   return (
     <div className="flex w-full flex-col items-stretch gap-3">
       <button
         type="button"
         onClick={props.onToggle}
         aria-expanded={props.open}
+        aria-controls={regionId}
         data-testid="local-host-loading-toggle-details"
-        className="inline-flex items-center justify-center gap-1 self-center text-ui-xs text-muted-foreground hover:text-foreground"
+        // No `self-center` and no `justify-center`: alignment is the shell's,
+        // and this control centring itself is what made the card read as three
+        // alignments. Not `self-start` either - that was never rendered.
+        className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground hover:text-foreground"
       >
         <span>{props.open ? "Hide details" : "Show details"}</span>
         <Icon className="size-3" />
       </button>
-      {props.open ? (
-        <>
-          <BootstrapLogTail tail={props.tail} />
-          <div className="flex justify-center">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={props.onConfigureShell}
-              data-testid="local-host-open-shell-settings"
-            >
-              Configure shell…
-            </Button>
-          </div>
-        </>
-      ) : null}
+      <div
+        id={regionId}
+        hidden={!props.open}
+        className="flex w-full flex-col gap-3"
+      >
+        {props.open ? (
+          <>
+            <BootstrapLogTail tail={props.tail} />
+            <div className="flex">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={props.onConfigureShell}
+                data-testid="local-host-open-shell-settings"
+              >
+                Configure shell…
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
