@@ -4,6 +4,7 @@ import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
 function ContextMenu({
   ...props
@@ -21,6 +22,7 @@ function ContextMenuTrigger({
 
 function ContextMenuContent({
   className,
+  collisionPadding,
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
@@ -32,13 +34,21 @@ function ContextMenuContent({
   // Concealed region (see `portal-concealment-context`): un-present with the
   // region, exactly like the pane case above.
   const concealed = usePortalConcealed();
+  // Read above the early returns so hook order does not depend on presentation.
+  // A context menu is pointer-anchored, so its origin can be any pixel the
+  // user can touch - including one right against a reserved edge. The insets
+  // are the DEFAULT collision padding and `max-w-safe-dvw` the default width
+  // cap; both are displaceable by a caller (see
+  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
+        collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-w-safe-dvw min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
@@ -149,13 +159,18 @@ function ContextMenuSubTrigger({
 
 function ContextMenuSubContent({
   className,
+  collisionPadding,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+  // A submenu opens sideways from a row that is itself already near an edge, so
+  // it is the surface most likely to need the clamp its parent content has.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   return (
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
+      collisionPadding={collisionPadding ?? safeAreaInsets}
       className={cn(
-        "z-50 min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+        "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
         className,
       )}
       {...props}

@@ -104,6 +104,45 @@ function centresFixedOnTheViewport(source: string): boolean {
  * it worth asserting: the guarantee is only ever one unmodified `max-w-*`
  * away from being gone, and nothing else would notice.
  */
+/**
+ * The anchored (trigger-positioned) primitives, which Radix places against the
+ * viewport rather than inside `#root`. `tooltip.tsx` is deliberately absent: it
+ * reads the insets inline and predates the shared hook.
+ */
+const ANCHORED_PRIMITIVES = [
+  "components/ui/dropdown-menu.tsx",
+  "components/ui/popover.tsx",
+  "components/ui/select.tsx",
+  "components/ui/context-menu.tsx",
+  "components/ui/hover-card.tsx",
+];
+
+/**
+ * The surfaces allowed to switch Radix's collision handling off outright.
+ *
+ * `avoidCollisions={false}` is the one call-site prop the primitive defaults
+ * cannot rescue: with collisions off, Radix runs neither the inset-aware
+ * `collisionPadding` the menu/popover primitives now default to nor the shift
+ * that would keep the surface inside the viewport, so a wide anchored menu
+ * leaves the screen on a phone with nothing to catch it.
+ *
+ * Every entry here is a sidebar-header menu that opens sideways into the
+ * canvas, and `EpicSurface` drops the desktop sidebar below `md` - so none of
+ * them mounts at a width where the clamp would matter. That is the whole
+ * justification, and it is why the list is closed: a new one is either a
+ * desktop-only surface (extend this list, with the reason) or a phone escape.
+ *
+ * A placement-gated expression is NOT this prop and needs no entry -
+ * `add-node-dropdown.tsx` disables collisions only for its header placement
+ * and keeps them for every other, which is the shape a mixed surface should
+ * take.
+ */
+const AVOID_COLLISIONS_ALLOWLIST = [
+  "components/epic-canvas/sidebar/epic-sidebar.tsx",
+  "components/epic-canvas/sidebar/epic-sidebar-filter-menu.tsx",
+  "components/epic-canvas/git-diff/git-diff-panel-actions.tsx",
+];
+
 const WIDTH_CAPPED_FIXED_FRAMES = [
   "components/ui/dialog.tsx",
   "components/ui/sheet.tsx",
@@ -188,6 +227,52 @@ describe("safe-area token contract", () => {
       offenders,
       "a fixed, centred surface should use top-safe-center-y / left-safe-center-x " +
         "instead of top-1/2 / left-1/2",
+    ).toEqual([]);
+  });
+
+  it("defaults every anchored primitive to inset-aware collision padding and a width cap", () => {
+    // The other half of the contract above: the allowlist is only meaningful
+    // while the primitives actually carry the default a call site opts out of.
+    const uncovered = ANCHORED_PRIMITIVES.filter((suffix) => {
+      const source = stripComments(findSource(suffix));
+      return (
+        !source.includes("useSafeAreaCollisionPadding") ||
+        !source.includes("max-w-safe-dvw")
+      );
+    });
+
+    expect(
+      uncovered,
+      "an anchored primitive collides against the viewport, which includes the " +
+        "strips the app never paints into: default collisionPadding to " +
+        "useSafeAreaCollisionPadding() and cap the portalled content with " +
+        "max-w-safe-dvw (tooltip.tsx reads the insets inline and is exempt)",
+    ).toEqual([]);
+  });
+
+  it("keeps avoidCollisions={false} to the allowlisted desktop-only sidebar menus", () => {
+    const offenders = productionSourceEntries()
+      .filter(([filePath]) => filePath.endsWith(".tsx"))
+      .filter(
+        ([filePath]) =>
+          !AVOID_COLLISIONS_ALLOWLIST.some((allowed) =>
+            filePath.endsWith(allowed),
+          ),
+      )
+      // Comments stripped first, so this file's own prose and a call site's
+      // note about why it does NOT switch collisions off stay writable.
+      .filter(([, source]) =>
+        /avoidCollisions=\{\s*false\s*\}/.test(stripComments(source)),
+      )
+      .map(([filePath]) => filePath);
+
+    expect(
+      offenders,
+      "switching collisions off opts a surface out of the safe-area collision " +
+        "padding and the width cap the menu/popover primitives default to " +
+        "(components/ui/safe-area-collision-padding.ts), so nothing keeps it " +
+        "inside a phone viewport: leave collisions on, or gate the opt-out to " +
+        "the desktop placement that needs it",
     ).toEqual([]);
   });
 
