@@ -729,6 +729,76 @@ describe("armFirstInstallOnSignIn", () => {
     expect(gate.listenerCount()).toBe(0);
   });
 
+  it("stays armed after a RESOLVED non-ok outcome, and retries on the next sign-in edge", async () => {
+    // Deliberately NOT a throw. The throw path was fixed in `2e05de85` and its
+    // test sits directly above; this is the surviving half - `busy`,
+    // `deferred` and `failed` are ordinary resolved values, so they never
+    // reach the catch, and `outcome.kind` was logged without being read.
+    //
+    // `convergeReady` is OVERRIDDEN rather than configured, because
+    // `fakeHostController` hardcodes it to `ok` - its second parameter is
+    // `applyStagedOutcome`, not the converge outcome. Passing a `failed`
+    // there drives the SUCCESS path while looking like a failure fixture, and
+    // an earlier version of this test did exactly that and passed for the
+    // wrong reason.
+    const base = fakeHostController(
+      neverInstalled(false),
+      { kind: "ok", value: { appliedVersion: "1.4.1", runningActivated: true } },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeCalls: boolean[] = [];
+    let outcomeKind: MutationOutcome<ConvergeReadyOk>["kind"] = "failed";
+    const failsConverge: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeCalls.push(force);
+        return Promise.resolve(
+          outcomeKind === "ok"
+            ? {
+                kind: "ok" as const,
+                value: { running: true, version: "1.4.0" },
+              }
+            : {
+                kind: "failed" as const,
+                message: "installer could not write to the prefix",
+              },
+        );
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armFirstInstallOnSignIn(failsConverge, gate);
+
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false]);
+    });
+
+    // Premise, positively: the convergence really ran and really came back
+    // non-ok, and nothing is installed. Without this the assertions below are
+    // satisfied by an arm that never attempted anything.
+    expect(outcomeKind).toBe("failed");
+    expect(await failsConverge.getStatus()).toMatchObject({
+      installedVersion: null,
+    });
+
+    // Fixed: the arm survives, so the sign-in edge it retries from is still
+    // subscribed...
+    expect(gate.listenerCount()).toBe(1);
+
+    // ...and that edge produces a REAL second attempt which, this time
+    // succeeding, settles the arm. Asserting only the listener count would
+    // pass on a build that kept the subscription and never acted on it - the
+    // point is the retry, not the bookkeeping.
+    outcomeKind = "ok";
+    gate.signIn();
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false, false]);
+    });
+    await vi.waitFor(() => {
+      expect(gate.listenerCount()).toBe(0);
+    });
+  });
+
   it("installs once for a signed-in user on a machine that has never had a host", async () => {
     const controller = fakeHostController(
       neverInstalled(false),

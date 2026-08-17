@@ -224,6 +224,23 @@ export function armFirstInstallOnSignIn(
           return;
         }
         const outcome = await hostController.convergeReady(false);
+        if (outcome.kind !== "ok") {
+          // A RESOLVED non-ok is not an install. `busy`, `deferred` and
+          // `failed` are ordinary return values, so they never reach the catch
+          // below - the throw fix left this half open, and `outcome.kind` was
+          // logged without ever being read. Settling here retired the only
+          // automatic first-install actor for the process and disposed the
+          // sign-in edge it would have retried from, while logging "complete"
+          // about a machine that still has no host.
+          //
+          // Left ARMED deliberately, matching the throw arm: the next sign-in
+          // edge attempts again. `inFlight` clears in `finally`, so nothing
+          // blocks that retry.
+          log.warn("[host-controller] first install did not complete", {
+            kind: outcome.kind,
+          });
+          return;
+        }
         settled = true;
         dispose();
         log.info("[host-controller] first install complete", {
