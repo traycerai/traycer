@@ -390,10 +390,23 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
         // so an empty tail is the EXPECTED reading, not an edge case - and it is
         // the one branch the alignment harness does not enter.
         //
+        // ⚠ NOTHING EVALUATES THE WAIVER BELOW, and that is a property of THIS
+        // FILE rather than of the waiver. `muted-fill-on-raised-surface-lint`
+        // walks imports DOWNWARD from a file that spells a raised-surface token;
+        // this component is a dialog body composed by its CALLER and passed in as
+        // a prop, so the edge runs the other way and no hop count reaches it -
+        // measured out of scope at 1, 2 AND 3 hops. Both waivers in this file are
+        // therefore a claim NOBODY CHECKS. They are kept because they are true
+        // (both fills are /30 behind their own border, which the guard's own
+        // `isLoadBearing` would clear anyway), and because a reader who deletes
+        // them will assume the sweep covers this file. It does not. A fill added
+        // here is guarded by the AGENTS.md rule and a human, and by nothing else.
+        //
         // The waiver stays LAST, adjacent to the class list it excuses: the
         // muted-fill guard only looks a few lines back, so prose inserted between
         // the two silently orphans it. That is what happened here - the comment
-        // above was added later and pushed the marker out of range.
+        // above was added later and pushed the marker out of range. Kept in force
+        // for the day this file does come into scope.
         // muted-fill-ok: weak tint delimited by its own border-border/60
         className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       >
@@ -406,6 +419,8 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
     <pre
       ref={ref}
       data-testid="local-host-loading-log-tail"
+      // The second of this file's two unevaluated waivers - see the note on the
+      // empty-tail branch above for why nothing in CI reads either of them.
       // muted-fill-ok: weak tint delimited by its own border-border/60
       className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground"
     >
