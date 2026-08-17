@@ -52,8 +52,13 @@ const WORKSPACE_PATH = "/work/repo";
 const hostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
   current: null,
 };
+/** The APP-WIDE client - deliberately not the panel's, and never recorded. */
+const ambientHostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
+  current: null,
+};
 
 const listFileTreeCalls: Array<{
+  readonly hostId: string | null;
   readonly workspacePath: string | null;
   readonly enabled: boolean;
 }> = [];
@@ -68,13 +73,26 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,
 }));
 
-// Only `useHostClient` is replaced: the real `useWorkspaceSearchPaths`,
-// its query wiring, and the echo guard all run against a mock TRANSPORT, so
-// the tests exercise the actual request shape and stale-reply handling.
+// The real `useWorkspaceSearchPaths`, its query wiring and the echo guard all
+// run against a mock TRANSPORT, so the tests exercise the actual request shape
+// and stale-reply handling.
+//
+// THE TWO CLIENTS ARE DIFFERENT ON PURPOSE. This panel is host-pinned: it
+// resolves its client from the `hostId` it was handed, and every `searchCalls`
+// assertion below only records a request that reached THAT client's transport.
+// The app-wide client is a distinct object with no recorder, so a build that
+// reverts to reading the ambient host does not fail on a wrong value here - it
+// fails as SILENCE, and the suite's existing "asked the host for ranked
+// matches" cases are what catch it.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => hostClientRef.current };
+  return { ...actual, useHostClient: () => ambientHostClientRef.current };
 });
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? hostClientRef.current : ambientHostClientRef.current,
+}));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   useGitListChangedFilesSubscription: () => ({
@@ -99,11 +117,13 @@ const UNARY_TREE_DATA = {
 };
 
 vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
-  useWorkspaceListFileTree: (
-    workspacePath: string | null,
-    enabled: boolean,
-  ) => {
-    listFileTreeCalls.push({ workspacePath, enabled });
+  useWorkspaceListFileTree: (args: {
+    readonly hostId: string | null;
+    readonly workspacePath: string | null;
+    readonly enabled: boolean;
+  }) => {
+    const { hostId, workspacePath, enabled } = args;
+    listFileTreeCalls.push({ hostId, workspacePath, enabled });
     return {
       data: enabled ? UNARY_TREE_DATA : undefined,
       error: null,
@@ -363,6 +383,12 @@ function installSearchHost(script: Partial<SearchScript>): void {
     }),
   );
   hostClientRef.current = spine.createRequester(entry);
+  // A SEPARATE app-wide client on the same spine, addressing a host this
+  // fixture's messenger has no handlers for. Nothing routed here is recorded,
+  // which is what turns "the panel read the ambient host" into a visible
+  // absence rather than an indistinguishable pass.
+  ambientHostClientRef.current =
+    spine.createRequesterForHostId("host-ambient");
 }
 
 function fileResult(relPath: string): WorkspaceSearchPathResult {

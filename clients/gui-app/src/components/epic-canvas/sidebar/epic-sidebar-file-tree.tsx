@@ -79,7 +79,7 @@ import {
   readSearchPathsResponseForSource,
   useWorkspaceSearchPaths,
 } from "@/hooks/workspace/use-workspace-search-paths-query";
-import { useHostClient } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { gitChangedFileToPierreStatusEntry } from "@/lib/git/panel-file-rendering";
 import {
   useStreamMethodSupport,
@@ -207,10 +207,11 @@ function useFileTreeSource(args: {
     localFilterQuery !== null &&
     search.hostSearchUnavailable;
   // eslint-disable-next-line @typescript-eslint/no-deprecated -- the sanctioned legacy call site: the old-host fallback plus the filter's whole-workspace degrade while host search is unavailable
-  const unary = useWorkspaceListFileTree(
-    args.workspacePath,
-    useUnaryFallback || filterViaSnapshot,
-  );
+  const unary = useWorkspaceListFileTree({
+    hostId: args.hostId,
+    workspacePath: args.workspacePath,
+    enabled: useUnaryFallback || filterViaSnapshot,
+  });
 
   const unaryFiles = unary.data?.files;
   const unaryPaths = useMemo(
@@ -376,7 +377,12 @@ function useHostPathSearch(args: {
   readonly query: string;
   readonly enabled: boolean;
 }): HostPathSearch {
-  const hostClient = useHostClient();
+  // The surface's host, not the app's. `args.hostId` already keys
+  // `unsupportedScopeKey` below and already stamps every ref this panel opens,
+  // so taking the CLIENT from anywhere else made the panel search one machine
+  // and label the results with another - and cache the "host cannot search"
+  // verdict under a host that was never asked.
+  const hostClient = useHostClientForHostId(args.hostId);
   const scopeKey = `${args.hostId ?? ""}|${args.workspacePath}`;
   const [unsupportedScopeKey, setUnsupportedScopeKey] = useState<string | null>(
     null,
