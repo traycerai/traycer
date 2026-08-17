@@ -156,6 +156,7 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
           message: "extracting host archive",
         }
       : {
@@ -163,6 +164,7 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
           percent: 42,
           bytes: 104_857_600,
           totalBytes: 250_609_664,
+          workUnits: null,
           message: "downloading host 1.2.3",
         },
   });

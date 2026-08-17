@@ -169,6 +169,7 @@ describe("buildHostProgressView", () => {
         percent: -5,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
         message: null,
       },
     };
@@ -182,6 +183,7 @@ describe("buildHostProgressView", () => {
         percent: 150,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
         message: null,
       },
     };

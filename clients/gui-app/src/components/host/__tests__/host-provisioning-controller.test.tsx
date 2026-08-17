@@ -768,6 +768,7 @@ const EXTRACT_PROGRESS: MutationProgress = {
   percent: 80,
   bytes: null,
   totalBytes: null,
+  workUnits: null,
   message: null,
 };
 
@@ -1175,6 +1176,7 @@ const DOWNLOAD_AT = (percent: number, bytes: number): MutationProgress => ({
   percent,
   bytes,
   totalBytes: 250_609_664,
+  workUnits: null,
   message: "downloading host 1.2.3",
 });
 
@@ -1320,7 +1322,12 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     const { queryClient, management, readLifecycle } = mountWithLane();
 
     const push = (progress: MutationProgress): void => {
-      pushEnsureProgress(queryClient, management, progress, "2026-05-15T00:00:01Z");
+      pushEnsureProgress(
+        queryClient,
+        management,
+        progress,
+        "2026-05-15T00:00:01Z",
+      );
     };
 
     // verify: announce, then hash an 800MB archive, reporting the position the
