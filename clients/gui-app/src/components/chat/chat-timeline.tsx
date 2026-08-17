@@ -435,9 +435,10 @@ function chatTimelineRowSizeHintClassName(
  * Module-scope cache (never `useState`/`useRef`-owned - not a hook value the
  * compiler tracks for immutability at all), keyed by each `ChatTimeline`
  * mount's own `listRef` object - a stable identity for the lifetime of that
- * mounted instance (chat tiles remount wholesale per tab switch, decision
- * #17, so a fresh `listRef` naturally starts a fresh cache entry; multiple
- * simultaneously-mounted tiles never share one). Same shape as
+ * mounted instance (a fresh mount naturally starts a fresh cache entry, and
+ * multiple simultaneously-mounted tiles never share one - which now includes
+ * the retained-but-deselected chats a pane keeps alive, since pane chat
+ * retention reversed decision #17). Same shape as
  * `rendered-messages.ts`'s per-context `WeakMap`s.
  *
  * Review fix (F4, ticket 16 batch review): the earlier `useState`-held `Map`
