@@ -51,6 +51,16 @@ const BOOTSTRAP_TAIL = [
 const wantsEmptyTail =
   new URLSearchParams(location.search).get("tail") === "empty";
 
+/**
+ * `?progress=none` renders the card as it looks the instant a stage TRANSITIONS.
+ *
+ * Since the progress carry-forward was scoped to one stage, `percent` blanks at
+ * download -> extract instead of inheriting 100, so the whole download-progress
+ * block unmounts. This load is what measures whether the card jumps when it goes.
+ */
+const wantsNoProgressNumbers =
+  new URLSearchParams(location.search).get("progress") === "none";
+
 function buildRunnerHost(): MockRunnerHost {
   const traycerCli = new MockTraycerCli();
   traycerCli.hostStatusSnapshot = {
@@ -138,13 +148,23 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
   const progress = buildHostProgressView({
     kind: "ensure",
     startedAt: "2026-01-01T00:00:00.000Z",
-    progress: {
-      stage: "download",
-      percent: 42,
-      bytes: 104_857_600,
-      totalBytes: 250_609_664,
-      message: "downloading host 1.2.3",
-    },
+    progress: wantsNoProgressNumbers
+      ? {
+          // The extract announce, post-scoping: a stage with no measured
+          // position yet.
+          stage: "extract",
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: "extracting host archive",
+        }
+      : {
+          stage: "download",
+          percent: 42,
+          bytes: 104_857_600,
+          totalBytes: 250_609_664,
+          message: "downloading host 1.2.3",
+        },
   });
   return (
     <QueryClientProvider client={queryClient}>

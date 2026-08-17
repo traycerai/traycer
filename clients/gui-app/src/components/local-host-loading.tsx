@@ -188,44 +188,93 @@ function ProgressLines(props: {
           {view.detail}
         </p>
       )}
-      {view.percent === null ? null : (
-        <HostDownloadProgress
-          percent={view.percent}
-          shortLabel={view.shortLabel}
-          transferLabel={view.transferLabel}
-        />
-      )}
+      {/* THE CONTRACT, not a special case: a lane is RUNNING and reports no
+          percentage => indeterminate. Reaching here at all means a lane is
+          running - `useHostProvisioningProgress` returns `null` when none is,
+          which the guard above already handled - so the only question left is
+          whether it has a number.
+
+          Written as the contract rather than as an extract-shaped patch, so it
+          covers `verify`, `swap`, `service-start` and anything added later for
+          free. The block also stopped being "the download's progress" the moment
+          the carry-forward was scoped to one stage; it is the CURRENT stage's. */}
+      <HostProgress
+        percent={view.percent}
+        shortLabel={view.shortLabel}
+        transferLabel={view.transferLabel}
+      />
     </>
   );
 }
 
-interface HostDownloadProgressProps {
-  readonly percent: number;
+interface HostProgressProps {
+  /** `null` for a running stage with no measured position - see the contract above. */
+  readonly percent: number | null;
   readonly shortLabel: string;
   readonly transferLabel: string | null;
 }
 
-function HostDownloadProgress(props: HostDownloadProgressProps) {
+/**
+ * The current stage's progress: determinate when it reports a percentage,
+ * indeterminate when it is merely running.
+ *
+ * WHY IT RENDERS AT ALL WITHOUT A NUMBER. Before this, the block was gated on
+ * `percent !== null`, so at a stage transition the whole thing unmounted and the
+ * card lost 48px - and because the modal is centred with `-translate-y-1/2`, both
+ * of its edges moved 24px and the whole dialog jumped mid-install. Measured, on
+ * the one surface this epic exists to fix. Holding the space is the point.
+ *
+ * ⚠ AND IT MUST NOT HIDE A STALL. It cannot: stall detection is entirely the
+ * staged wait's (`LOCAL_HOST_SLOW_START_THRESHOLD_MS` and
+ * `laneProgressAdvanceKey`), which reads the lane's POSITION and promotes to the
+ * Retry surface on its own clock. A genuinely wedged extract still gets there
+ * while this animates. The two mechanisms compose and neither is load-bearing for
+ * the other - worth knowing before anyone "fixes" this bar to stop after a while.
+ */
+function HostProgress(props: HostProgressProps) {
+  const indeterminate = props.percent === null;
   return (
     <div
       data-testid="local-host-download-progress"
+      data-indeterminate={indeterminate ? "true" : "false"}
       className="flex w-full flex-col gap-2"
     >
       <div className="flex items-center justify-between text-ui-xs text-muted-foreground">
         <span>{props.transferLabel ?? props.shortLabel}</span>
-        <span className="font-medium text-foreground">{props.percent}%</span>
+        {indeterminate ? null : (
+          <span className="font-medium text-foreground">{props.percent}%</span>
+        )}
       </div>
       <div
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={props.percent}
+        // Omitted while indeterminate, which is what the ARIA role means by it -
+        // a `progressbar` with no `aria-valuenow` is announced as busy with an
+        // unknown position, rather than as a specific amount done.
+        aria-valuenow={props.percent ?? undefined}
         className="h-2 w-full overflow-hidden rounded-full bg-foreground/8"
       >
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-          style={{ width: `${props.percent}%` }}
-        />
+        {indeterminate ? (
+          // A SWEEPING SEGMENT, not a pulsing full-width fill: a full bar reads as
+          // finished however it is animated, which is the exact lie the scoped
+          // carry-forward removed. `w-2/5` + a translate keeps it obviously
+          // partial. `animation` inline because the keyframe is app CSS
+          // (`index.css`) and there is no utility for it.
+          <div
+            data-testid="local-host-progress-indeterminate"
+            className="h-full w-2/5 rounded-full bg-primary"
+            style={{
+              animation:
+                "host-progress-indeterminate 1.4s ease-in-out infinite",
+            }}
+          />
+        ) : (
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+            style={{ width: `${String(props.percent)}%` }}
+          />
+        )}
       </div>
     </div>
   );

@@ -161,6 +161,54 @@ describe("<LocalHostLoadingContent />", () => {
     expect(container.textContent).not.toContain("Downloading…");
   });
 
+  it("draws NO bar when no lane is running, and an indeterminate one when a lane reports no percentage", () => {
+    // THE BOUNDARY on the indeterminate contract, and the inverse of the lie it
+    // replaced. The bar means "this stage is running"; with no lane running there
+    // is nothing to claim, and a bar on the idle heading would assert activity
+    // where there is none.
+    //
+    // `progress: null` is exactly that state - `useHostProvisioningProgress`
+    // returns null when no lane is running, and the body falls back to
+    // HOST_PROGRESS_IDLE_HEADING.
+    mountLoadingContent(buildHost(), null);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByTestId("local-host-download-progress")).toBeNull();
+
+    cleanup();
+
+    // A RUNNING lane with no percentage: the bar appears, marked indeterminate,
+    // with no percentage figure beside it. The height it holds is what stops the
+    // card jumping at a stage transition - measured in the browser harness, since
+    // jsdom has no layout engine and cannot see it.
+    mountLoadingContent(
+      buildHost(),
+      buildHostProgressView({
+        kind: "ensure",
+        startedAt: LANE_STARTED_AT,
+        progress: {
+          stage: "extract",
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: "extracting host 1.2.3",
+          workUnits: 120,
+        },
+      }),
+    );
+    const bar = screen.getByTestId("local-host-download-progress");
+    expect(bar.dataset.indeterminate).toBe("true");
+    expect(
+      screen.getByTestId("local-host-progress-indeterminate"),
+    ).toBeTruthy();
+    // No `aria-valuenow` while indeterminate: that is what the role means by it -
+    // busy with an unknown position, rather than a specific amount done.
+    expect(
+      screen.getByRole("progressbar").getAttribute("aria-valuenow"),
+    ).toBeNull();
+    // And no percentage figure, which would be a number nobody measured.
+    expect(bar.textContent).not.toContain("%");
+  });
+
   /**
    * The disclosure toggle NAMES the region it expands, in both states.
    *

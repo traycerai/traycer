@@ -553,6 +553,121 @@ try {
     },
   );
 
+  // THIRD LOAD, reported rather than asserted: what the card does at a stage
+  // TRANSITION, now that `percent` blanks instead of inheriting 100. The whole
+  // download-progress block unmounts, so everything below it moves. Whether that
+  // is acceptable - or whether an indeterminate bar beats none - is a copy-table
+  // decision, so this measures the magnitude and does not rule on it.
+  await client.send("Page.navigate", { url: `${pageUrl}?progress=none` });
+  await waitFor(
+    client,
+    "the no-numbers load to paint",
+    `Boolean(document.querySelector('[data-testid="window-host-modal"]')) &&
+     Boolean(document.querySelector('[data-testid="local-host-loading-toggle-details"]'))`,
+  );
+  await evaluate(client, `new Promise((r) => setTimeout(r, 600))`);
+  const transitionShape = await evaluate(
+    client,
+    `(() => {
+       const rect = (sel) => {
+         const el = document.querySelector(sel);
+         if (el === null) return null;
+         const r = el.getBoundingClientRect();
+         return { top: Number(r.top.toFixed(2)), height: Number(r.height.toFixed(2)) };
+       };
+       const seg = document.querySelector('[data-testid="local-host-progress-indeterminate"]');
+       const bar = document.querySelector('[data-testid="local-host-download-progress"]');
+       return {
+         modal: rect('[data-testid="window-host-modal"]'),
+         progressBlock: rect('[data-testid="local-host-download-progress"]'),
+         toggle: rect('[data-testid="local-host-loading-toggle-details"]'),
+         indeterminate: bar === null ? null : bar.dataset.indeterminate,
+         // The animation must be REAL, read from computed style rather than from
+         // the class list: a static full-width fill is the frozen-100% lie in a
+         // new costume, however it is spelled.
+         segment:
+           seg === null
+             ? null
+             : {
+                 animationName: getComputedStyle(seg).animationName,
+                 animationDuration: getComputedStyle(seg).animationDuration,
+                 iterationCount: getComputedStyle(seg).animationIterationCount,
+                 widthPx: Number(seg.getBoundingClientRect().width.toFixed(2)),
+                 trackWidthPx: Number(bar.querySelector('[role="progressbar"]').getBoundingClientRect().width.toFixed(2)),
+               },
+         // Live proof it MOVES: two samples a few frames apart.
+         sampleOneLeftPx:
+           seg === null ? null : Number(seg.getBoundingClientRect().left.toFixed(2)),
+       };
+     })()`,
+  );
+  await evaluate(client, `new Promise((r) => setTimeout(r, 350))`);
+  const secondSampleLeftPx = await evaluate(
+    client,
+    `(() => {
+       const seg = document.querySelector('[data-testid="local-host-progress-indeterminate"]');
+       return seg === null ? null : Number(seg.getBoundingClientRect().left.toFixed(2));
+     })()`,
+  );
+
+  // A7 - THE STAGE TRANSITION DOES NOT MOVE THE CARD. Asserted as EQUALITY of the
+  // two measured heights, not as "an indeterminate bar renders": the claim is
+  // "does not jump", and only the heights can say that. No unit test can - jsdom
+  // has no layout engine.
+  //
+  // Before the bar held the space, this measured 366 vs 318: a 48px collapse, and
+  // because the modal is centred with `-translate-y-1/2`, BOTH edges moved 24px
+  // and the whole dialog re-centred mid-install.
+  check(
+    "A7_a_stage_transition_does_not_change_the_card_height",
+    closed.modal !== null &&
+      transitionShape.modal !== null &&
+      Math.abs(closed.modal.height - transitionShape.modal.height) <=
+        EDGE_TOLERANCE_PX,
+    {
+      withNumbersPx: closed.modal?.height ?? null,
+      withoutNumbersPx: transitionShape.modal?.height ?? null,
+      deltaPx:
+        closed.modal === null || transitionShape.modal === null
+          ? null
+          : Number(
+              Math.abs(
+                closed.modal.height - transitionShape.modal.height,
+              ).toFixed(2),
+            ),
+    },
+  );
+
+  // A8 - and it ANIMATES, and is obviously partial. A motionless bar, or a
+  // full-width one, would hold the space while reasserting the completed-transfer
+  // lie the scoped carry-forward removed.
+  const seg = transitionShape.segment;
+  check(
+    "A8_the_indeterminate_segment_animates_and_is_partial",
+    transitionShape.indeterminate === "true" &&
+      seg !== null &&
+      seg.animationName === "host-progress-indeterminate" &&
+      seg.iterationCount === "infinite" &&
+      seg.widthPx > 0 &&
+      seg.widthPx < seg.trackWidthPx * 0.6 &&
+      transitionShape.sampleOneLeftPx !== null &&
+      secondSampleLeftPx !== null &&
+      Math.abs(secondSampleLeftPx - transitionShape.sampleOneLeftPx) >
+        EDGE_TOLERANCE_PX,
+    {
+      indeterminateFlag: transitionShape.indeterminate,
+      segment: seg,
+      movedPx:
+        transitionShape.sampleOneLeftPx === null || secondSampleLeftPx === null
+          ? null
+          : Number(
+              Math.abs(
+                secondSampleLeftPx - transitionShape.sampleOneLeftPx,
+              ).toFixed(2),
+            ),
+    },
+  );
+
   // A6 - the empty-tail placeholder obeys the same contract as the `<pre>` it
   // alternates with. It was `text-center`: the last leaf overriding the body's
   // one-alignment root, in the branch nothing measured, and the EXPECTED branch
@@ -587,6 +702,15 @@ try {
         CLOSED: closed,
         OPEN: open,
         OPEN_WITH_EMPTY_TAIL: emptyTailOpen,
+        STAGE_TRANSITION_SHAPE_no_progress_numbers: transitionShape,
+        STAGE_TRANSITION_SHAPE_with_progress_numbers: {
+          modal: {
+            top: closed.modal?.left ?? null,
+            height: closed.modal?.height ?? null,
+          },
+          progressBlock: { height: closed.progressBar?.height ?? null },
+          toggle: { height: closed.toggle?.height ?? null },
+        },
         VERDICT: failed.length === 0 ? "ALL PASS" : "FAILED",
         FAILED: failed.map((c) => c.name),
       },
