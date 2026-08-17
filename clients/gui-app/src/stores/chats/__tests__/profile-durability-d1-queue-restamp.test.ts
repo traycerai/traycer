@@ -130,6 +130,7 @@ function emitSnapshot(harness: Harness): void {
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
     },
   });
 }

@@ -359,7 +359,11 @@ function renderControl(layout: "inline" | "stacked") {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          stagingKey={{
+            surface: "landing",
+            hostId: "host-home",
+            draftId: null,
+          }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -389,7 +393,7 @@ function DelayedBranchValidationHarness() {
     <>
       <ActiveHostWorkspaceControls
         disabled={false}
-        stagingKey={{ surface: "landing", draftId: null }}
+        stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
         seedIntentOverride={null}
@@ -476,11 +480,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -500,11 +500,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -741,18 +737,23 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [GIT_SUMMARY.workspacePath],
-      folderInfoByPath: {
-        [GIT_SUMMARY.workspacePath]: {
-          path: GIT_SUMMARY.workspacePath,
-          name: "app",
-          repoIdentifier: GIT_SUMMARY.repoIdentifier,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [GIT_SUMMARY.workspacePath],
+          folderInfoByPath: {
+            [GIT_SUMMARY.workspacePath]: {
+              path: GIT_SUMMARY.workspacePath,
+              name: "app",
+              repoIdentifier: GIT_SUMMARY.repoIdentifier,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: GIT_SUMMARY.workspacePath,
         },
       },
-      primaryPath: GIT_SUMMARY.workspacePath,
     });
     useWorktreeIntentMemoryStore.getState().setFolderIntent(
+      "host-home",
       {
         kind: "worktree",
         scripts: null,
@@ -788,7 +789,11 @@ describe("landing workspace summary empty state", () => {
       }),
     );
     expect(
-      readStagedWorktreeIntent({ surface: "landing", draftId: null }),
+      readStagedWorktreeIntent({
+        surface: "landing",
+        hostId: "host-home",
+        draftId: null,
+      }),
     ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Create task" }));
@@ -898,20 +903,28 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [folderAPath],
-      folderInfoByPath: {
-        [folderAPath]: {
-          path: folderAPath,
-          name: "app",
-          repoIdentifier: GIT_REPO_IDENTIFIER,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [folderAPath],
+          folderInfoByPath: {
+            [folderAPath]: {
+              path: folderAPath,
+              name: "app",
+              repoIdentifier: GIT_REPO_IDENTIFIER,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: folderAPath,
         },
       },
-      primaryPath: folderAPath,
     });
 
     const queryClient = renderControl("stacked");
-    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: "host-home",
+      draftId: null,
+    };
 
     await waitFor(() => {
       const staged = readStagedWorktreeIntent(stagingKey);
@@ -967,22 +980,26 @@ describe("landing workspace summary empty state", () => {
         isLoading: false,
       };
       useWorkspaceFoldersStore.setState({
-        folders: [folderAPath, folderBPath],
-        folderInfoByPath: {
-          [folderAPath]: {
-            path: folderAPath,
-            name: "app",
-            repoIdentifier: GIT_REPO_IDENTIFIER,
-            hostId: null,
-          },
-          [folderBPath]: {
-            path: folderBPath,
-            name: "lib",
-            repoIdentifier: folderBRepo,
-            hostId: null,
+        byHost: {
+          "host-home": {
+            folders: [folderAPath, folderBPath],
+            folderInfoByPath: {
+              [folderAPath]: {
+                path: folderAPath,
+                name: "app",
+                repoIdentifier: GIT_REPO_IDENTIFIER,
+                hostId: "host-home",
+              },
+              [folderBPath]: {
+                path: folderBPath,
+                name: "lib",
+                repoIdentifier: folderBRepo,
+                hostId: "host-home",
+              },
+            },
+            primaryPath: folderAPath,
           },
         },
-        primaryPath: folderAPath,
       });
     });
 

@@ -43,6 +43,8 @@ describe("notification indicator state", () => {
 
     expect(state).toEqual({
       unreadFailure: true,
+      unreadNonTerminalFailure: false,
+      unreadTerminalFailure: true,
       pendingFork: true,
       pendingApproval: true,
       pendingInterview: false,
@@ -73,6 +75,8 @@ describe("notification indicator state", () => {
     );
 
     expect(state.unreadFailure).toBe(true);
+    expect(state.unreadNonTerminalFailure).toBe(false);
+    expect(state.unreadTerminalFailure).toBe(true);
   });
 
   it("keeps a host-bound tab free of another host's local failure", () => {
@@ -415,6 +419,8 @@ describe("cloud notification indicator derivation", () => {
       pendingInterview: false,
       unreadDone: false,
       unreadFailure: false,
+      unreadNonTerminalFailure: false,
+      unreadTerminalFailure: false,
     });
   });
 

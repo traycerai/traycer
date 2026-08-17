@@ -1,4 +1,4 @@
-import "../../../../__tests__/test-browser-apis";
+import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -19,14 +19,14 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * Dragging a row out of a chat's Shells menu onto the canvas, driven as a
- * real pointer gesture through the real `RootDndProvider`.
+ * Dragging a shell's transcript door - the start card's and every restart
+ * card's "Open in tab" button - out onto the canvas, driven as a real pointer
+ * gesture through the real `RootDndProvider`.
  *
- * dnd-kit reads a drag's payload LIVE off the draggable that started it, so
- * the whole gesture hangs on the source row staying mounted: closing the
- * popover the moment the drag began emptied `active.data.current`, and every
- * collision and the drop itself then saw no source at all - a drag-out that
- * animated an overlay and did nothing.
+ * The door became a drag source on the SAME payload the Background-panel row
+ * already drops (see `chat-background-panel-drag-out`), so this proves that
+ * same contract for a second surface - and its one real difference: a deleted shell's door is
+ * not a button at all, so it must not register as a drag source either.
  */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
@@ -35,19 +35,10 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSchemaVersion: () => null,
 }));
 
-vi.mock(
-  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
-  () => ({
-    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
-    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
-    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
-    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
-    useManagedCommandStopAllIsPending: () => false,
-  }),
-);
-
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -58,7 +49,6 @@ import {
   installManagedCommandChatSession,
   type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
-import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
@@ -68,11 +58,14 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useTabsStore } from "@/stores/tabs/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { ToolSegment } from "../tool-segment";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
 const CHAT_ID = "chat-1";
 const HOST_ID = "host-1";
+const COMMAND_ID = "cmd-1";
+const COMMAND_LINE = "tail -f deploy.log";
 
 /** A tile already on the canvas, so the drop has a real pane to land in. */
 const SEED_TILE: EpicNodeRef = {
@@ -84,9 +77,12 @@ const SEED_TILE: EpicNodeRef = {
 };
 
 const MONITOR: ManagedCommand = {
-  id: "cmd-1",
+  id: COMMAND_ID,
   monitoring: true,
   description: "deploy watcher",
+  command: COMMAND_LINE,
+  cwd: "/work/repo",
+  cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,
   createdAtMs: 10,
@@ -103,7 +99,6 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 let epicHandle: OpenEpicStoreHandle;
-
 let chatSession: ManagedCommandChatSessionStub;
 
 /**
@@ -123,28 +118,104 @@ function stubPaneGeometry(): void {
   );
 }
 
-function Harness(props: { readonly paneId: string }): ReactNode {
+/** The start card: a correlated `traycer_run_shell` call. */
+function startCard(): ReactNode {
   return (
-    <EpicSessionContext.Provider value={epicHandle}>
-      <TabHostProvider hostId={HOST_ID}>
-        <TooltipProvider>
-          <RootDndProvider>
-            <div data-testid="drag-harness" />
-            <ManagedCommandChatMenu
-              epicId={EPIC_ID}
-              chatId={CHAT_ID}
-              hostId={HOST_ID}
-              viewTabId={TAB_ID}
-            />
-            <PaneDropZone
-              paneId={props.paneId}
-              viewTabId={TAB_ID}
-              tabCount={1}
-            />
-          </RootDndProvider>
-        </TooltipProvider>
-      </TabHostProvider>
-    </EpicSessionContext.Provider>
+    <ToolSegment
+      id="tool-1"
+      toolName="mcp__traycer_a2a__traycer_run_shell"
+      inputSummary={COMMAND_LINE}
+      inputDetail={{ kind: "command", command: COMMAND_LINE }}
+      error={null}
+      agentMessageSend={null}
+      managedCommand={{
+        event: "started",
+        commandId: COMMAND_ID,
+        description: "deploy watcher",
+        monitoring: true,
+        cwd: "/work/repo",
+      }}
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      progress={null}
+      backgroundOutput={null}
+      backgroundTask={false}
+      startedAt={10}
+      durationMs={null}
+      imageResults={[]}
+      variant="card"
+      headerFindUnitId={null}
+    />
+  );
+}
+
+/** The restart card: both cards share the same door component. */
+function restartCard(): ReactNode {
+  return (
+    <ToolSegment
+      id="tool-2"
+      toolName="mcp__traycer_a2a__traycer_restart_shell"
+      inputSummary={null}
+      inputDetail={null}
+      error={null}
+      agentMessageSend={null}
+      managedCommand={{
+        event: "restarted",
+        commandId: COMMAND_ID,
+        description: "deploy watcher",
+        monitoring: true,
+        effectiveCommand: COMMAND_LINE,
+        effectiveCwd: "/work/repo",
+        commandChanged: false,
+        cwdChanged: false,
+        outcome: { state: "running", pid: 4410, startedAtMs: 10 },
+      }}
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      progress={null}
+      backgroundOutput={null}
+      backgroundTask={false}
+      startedAt={10}
+      durationMs={null}
+      imageResults={[]}
+      variant="card"
+      headerFindUnitId={null}
+    />
+  );
+}
+
+function Harness(props: {
+  readonly paneId: string;
+  /** `false` renders the card outside any `EpicViewTabContext`, the way a
+   *  transcript rendered off-canvas would. */
+  readonly withViewTab: boolean;
+  readonly card: ReactNode;
+}): ReactNode {
+  const canvas = (
+    <RootDndProvider>
+      <div data-testid="drag-harness" />
+      {props.card}
+      <PaneDropZone paneId={props.paneId} viewTabId={TAB_ID} tabCount={1} />
+    </RootDndProvider>
+  );
+  return (
+    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+      <EpicSessionContext.Provider value={epicHandle}>
+        <TabHostProvider hostId={HOST_ID}>
+          <TooltipProvider>
+            {props.withViewTab ? (
+              <EpicViewTabContext.Provider value={TAB_ID}>
+                {canvas}
+              </EpicViewTabContext.Provider>
+            ) : (
+              canvas
+            )}
+          </TooltipProvider>
+        </TabHostProvider>
+      </EpicSessionContext.Provider>
+    </ChatTranscriptProvider>
   );
 }
 
@@ -157,9 +228,18 @@ function seedCanvasPane(): string {
   return paneId;
 }
 
-async function renderHarness(paneId: string): Promise<void> {
+async function renderHarness(
+  paneId: string,
+  options: { readonly withViewTab: boolean; readonly card: ReactNode },
+): Promise<void> {
   const rootRoute = createRootRoute({
-    component: () => <Harness paneId={paneId} />,
+    component: () => (
+      <Harness
+        paneId={paneId}
+        withViewTab={options.withViewTab}
+        card={options.card}
+      />
+    ),
   });
   const epicTabRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -183,9 +263,9 @@ async function renderHarness(paneId: string): Promise<void> {
 }
 
 /** pointerdown, then a move past the 5px activation distance. */
-function startRowDrag(row: HTMLElement): void {
+function startDrag(node: HTMLElement): void {
   act(() => {
-    fireEvent.pointerDown(row, {
+    fireEvent.pointerDown(node, {
       pointerId: 1,
       isPrimary: true,
       button: 0,
@@ -194,7 +274,7 @@ function startRowDrag(row: HTMLElement): void {
     });
   });
   act(() => {
-    fireEvent.pointerMove(row, { pointerId: 1, clientX: 40, clientY: 10 });
+    fireEvent.pointerMove(node, { pointerId: 1, clientX: 40, clientY: 10 });
   });
 }
 
@@ -229,8 +309,8 @@ function dropOnPane(): void {
   });
 }
 
-function dragRowOntoPane(row: HTMLElement): void {
-  startRowDrag(row);
+function dragOntoPane(node: HTMLElement): void {
+  startDrag(node);
   moveIntoPane();
   dropOnPane();
 }
@@ -268,61 +348,73 @@ afterEach(async () => {
   useEpicDndStore.getState().dragEnded();
 });
 
-describe("dragging a Shells-menu row onto the canvas", () => {
-  it("carries the row's payload all the way to the drop and lands its window", async () => {
+describe("dragging a shell's transcript door onto the canvas", () => {
+  it("is a drag source on the menu/Background rows' own payload, and lands the shell's window", async () => {
     const paneId = seedCanvasPane();
-    await renderHarness(paneId);
+    await renderHarness(paneId, { withViewTab: true, card: startCard() });
     act(() => {
       chatSession.setCommands([MONITOR]);
     });
-    fireEvent.click(screen.getByTestId("managed-command-chat-menu-trigger"));
 
-    dragRowOntoPane(screen.getByTestId("managed-command-menu-row-cmd-1"));
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("data-draggable")).toBe("true");
 
-    // The command's output window is on the canvas. Closing the popover at
-    // drag start unmounted the draggable, and dnd-kit then handed the drop an
-    // empty source - so nothing was ever placed.
-    expect(findOpenArtifactInTab(TAB_ID, "cmd-1")).not.toBeNull();
+    dragOntoPane(door);
+
+    expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).not.toBeNull();
   });
 
-  it("keeps the source row mounted for the whole gesture, then closes", async () => {
+  it("still opens the window on a plain click, not just a drag (restart card)", async () => {
     const paneId = seedCanvasPane();
-    await renderHarness(paneId);
+    await renderHarness(paneId, { withViewTab: true, card: restartCard() });
     act(() => {
       chatSession.setCommands([MONITOR]);
     });
-    fireEvent.click(screen.getByTestId("managed-command-chat-menu-trigger"));
-    startRowDrag(screen.getByTestId("managed-command-menu-row-cmd-1"));
-    moveIntoPane();
 
-    // Mid-gesture: still there, just out of the way.
-    expect(
-      screen.queryByTestId("managed-command-menu-row-cmd-1"),
-    ).not.toBeNull();
+    // dnd-kit's activation distance is what keeps these two gestures apart -
+    // the door the card has always been has to survive becoming a drag handle.
+    fireEvent.click(
+      screen.getByTestId(`managed-command-restart-door-${COMMAND_ID}`),
+    );
 
-    dropOnPane();
-
-    // The menu is a passing thing; once the gesture is over it gets out of the
-    // way for good.
-    expect(screen.queryByTestId("managed-command-menu-row-cmd-1")).toBeNull();
+    expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).not.toBeNull();
   });
 
-  it("moves an already-open window rather than opening a second one", async () => {
+  it("is not a drag source once the shell is deleted, and dragging it opens nothing", async () => {
     const paneId = seedCanvasPane();
-    await renderHarness(paneId);
+    await renderHarness(paneId, { withViewTab: true, card: startCard() });
+    act(() => {
+      // Only the owning stream saying OPEN makes the absence below
+      // authoritative - see managed-command-start-segment.test.tsx.
+      chatSession.setConnectionStatus("open");
+      chatSession.setCommands([]);
+    });
+
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("aria-disabled")).toBe("true");
+    // The deleted-shell door is a plain span with no dnd-kit wiring at all -
+    // not merely a button with dragging turned off.
+    expect(door.hasAttribute("data-draggable")).toBe(false);
+
+    dragOntoPane(door);
+
+    expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).toBeNull();
+  });
+
+  it("renders a non-draggable door outside a canvas view, but a click still opens the window", async () => {
+    const paneId = seedCanvasPane();
+    await renderHarness(paneId, { withViewTab: false, card: startCard() });
     act(() => {
       chatSession.setCommands([MONITOR]);
     });
-    fireEvent.click(screen.getByTestId("managed-command-chat-menu-trigger"));
-    fireEvent.click(screen.getByTestId("managed-command-menu-row-cmd-1"));
-    const opened = findOpenArtifactInTab(TAB_ID, "cmd-1");
-    expect(opened).not.toBeNull();
 
-    dragRowOntoPane(screen.getByTestId("managed-command-menu-row-cmd-1"));
+    // No `EpicViewTabContext` in scope - there is no view to scope a drag's
+    // dnd id or its drop to, so the source has nothing to drag onto.
+    const door = screen.getByTestId(`managed-command-start-door-${COMMAND_ID}`);
+    expect(door.getAttribute("data-draggable")).toBe("false");
 
-    // One window per command: the tile ref's content id IS the command id, so
-    // a second drop resolves to a move of the same instance.
-    const afterDrop = findOpenArtifactInTab(TAB_ID, "cmd-1");
-    expect(afterDrop?.instanceId).toBe(opened?.instanceId);
+    fireEvent.click(door);
+
+    expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).not.toBeNull();
   });
 });

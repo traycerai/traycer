@@ -30,6 +30,7 @@ import type {
   PlanStep,
   ProviderNoticeDetail,
   ProviderNoticeTone,
+  ToolCallManagedCommand,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -128,6 +129,11 @@ export interface ToolSegment {
   taskTodoItems: ReadonlyArray<ParsedTaskTodo> | null;
   error: string | null;
   agentMessageSend: AgentMessageSend | null;
+  // The shell a `traycer_run_shell` call created, stamped on the block at
+  // completion. Null for every other tool call; also null on a run_shell block
+  // written before the host carried this, which the start card reads as "no
+  // live status to show" rather than as a deleted shell.
+  managedCommand: ToolCallManagedCommand | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;

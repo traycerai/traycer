@@ -10,7 +10,10 @@ import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-w
 import { useHostBinding } from "@/lib/host";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import type { McpScopeTarget } from "./provider-mcp-scope-picker";
 
 function resolveLockedScope(
@@ -91,8 +94,14 @@ export function useProviderNativeScope(
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
   const hostId = client?.getActiveHostId() ?? activeHostId;
-  const folders = useWorkspaceFoldersStore((s) => s.folders);
-  const folderInfoByPath = useWorkspaceFoldersStore((s) => s.folderInfoByPath);
+  // The Settings-bound host's own folder bucket - another host's paths can
+  // never become a Project workspaceRoot for this host (B6).
+  const folders = useWorkspaceFoldersStore(
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folders,
+  );
+  const folderInfoByPath = useWorkspaceFoldersStore(
+    (s) => selectWorkspaceFoldersBucket(s, hostId).folderInfoByPath,
+  );
   const folderSource = useMemo(
     () => ({ folders, folderInfoByPath }),
     [folders, folderInfoByPath],
@@ -104,7 +113,7 @@ export function useProviderNativeScope(
 
   // Resolve against the HostRuntimeContext-bound host so paths from another
   // machine never become Project workspaceRoot for this host (B6).
-  const resolved = useResolvedWorkspaceFolders(folderSource, client);
+  const resolved = useResolvedWorkspaceFolders(folderSource, client, hostId);
   const workspaces = useMemo(
     () =>
       resolved.folders
@@ -209,9 +218,10 @@ export function useProviderNativeScope(
     const result = await pickAndPrepareFolders();
     if (result === null) return null;
     addResolvedFolders(
+      // `result.hostId` is the dispatch-time identity the action captured
+      // and re-validated across every await - never re-read the client here.
+      result.hostId,
       result.folders.map((folder) =>
-        // `result.hostId` is the dispatch-time identity the action captured
-        // and re-validated across every await - never re-read the client here.
         preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
       ),
     );

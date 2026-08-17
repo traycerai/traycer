@@ -19,12 +19,20 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import type { HostRpcRegistry } from "@/lib/host";
+// Draft-SEED keying only (see `ensureSubmissionDraft`): the effective host's
+// settings seed a brand-new draft; the create path re-keys on the placement
+// host. A pinned landing composer's seed defaults may come from the effective
+// host - a nuance, not a placement leak.
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
@@ -373,6 +381,34 @@ export function useLandingComposerActions(
       // composer's re-validated placement host (see the input's `hostId`), so
       // there is no "no active device" arm left here - a missing/unusable
       // placement was already refused inline before this ran.
+      // The workspace context and the target host arrive as two SEPARATE
+      // fields of this input, and on the session-cold image path an IndexedDB
+      // await separates their capture from this run. Nothing structural forces
+      // a future caller to derive both from one placement, so fail closed if
+      // they name different machines: creating on B with A's paths binds the
+      // epic to a machine the user never composed against. The draft, staged
+      // intent and placement survive, so a resubmit lands cleanly. A context
+      // with no host of its own captured nothing host-specific.
+      if (
+        workspaceContext.hostId !== null &&
+        workspaceContext.hostId !== activeHostId
+      ) {
+        reportableErrorToast(
+          "Couldn't create epic.",
+          {
+            description:
+              "The active device changed while this was being prepared. Try again.",
+          },
+          {
+            title: "Could not create Epic",
+            message: "Active device changed mid-submission.",
+            code: null,
+            source: "Epic creation",
+          },
+        );
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
       const userId = profile?.userId ?? null;
       const initialMessage =
         userId !== null
@@ -388,18 +424,16 @@ export function useLandingComposerActions(
 
       // The host request remains a one-shot mutation. Local handoff state is
       // prepared before it, but the draft/layout is deliberately untouched
-      // until this exact runtime's create reports success.
+      // until this exact runtime's create reports success. Last-run memory is
+      // keyed by the host the chat is created on (`activeHostId`, resolved
+      // and null-guarded above).
       useComposerRunSettingsStore
         .getState()
-        .setGlobalRunSettings(settings, now);
+        .setGlobalRunSettings(activeHostId, settings, now);
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(epicId, settings, now);
-      rememberLandingWorktreeIntent(
-        epicId,
-        workspaceContext.worktreeIntent,
-        now,
-      );
+        .setEpicRunSettings(epicId, activeHostId, settings, now);
+      rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
         userId,
@@ -681,11 +715,7 @@ export function useLandingComposerActions(
       } = launch;
       const epicId = uuidv4();
       const now = Date.now();
-      rememberLandingWorktreeIntent(
-        epicId,
-        workspaceContext.worktreeIntent,
-        now,
-      );
+      rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       // Stored untitled; the title is generated from the first terminal prompt,
       // and render surfaces fall back via `epicDisplayTitle` meanwhile. (The
       // tui-agent tile is named separately in `use-create-tui-agent.ts`.)
@@ -855,7 +885,13 @@ function ensureSubmissionDraft(
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore
     .getState()
-    .createDraft(useComposerRunSettingsStore.getState().globalLastRunSettings);
+    .createDraft(
+      useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(
+          getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+        ),
+    );
   useLandingDraftStore
     .getState()
     .setDraftContent(createdDraftId, content, null);
@@ -968,6 +1004,11 @@ interface LandingWorkspaceContext {
   readonly worktreeIntentSuspended: boolean;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly draftId: string | null;
+  // The DISPATCH-TIME host this context was read for - the same one its folder
+  // bucket and cached default intent came from. Carried rather than re-read at
+  // the write, so a host switch landing mid-dispatch cannot file this launch's
+  // remembered worktree intent under the host that just became active.
+  readonly hostId: string | null;
 }
 
 function readLandingWorkspaceContext(
@@ -981,14 +1022,14 @@ function readLandingWorkspaceContext(
       ? null
       : (draftState.drafts.find((draft) => draft.id === draftId) ?? null);
   const exactDraftId = activeDraft?.id ?? null;
-  const stagedWorktreeIntent = readStagedWorktreeIntent({
+  const landingStagingKey: WorktreeStagingKey = {
     surface: "landing",
+    hostId,
     draftId: exactDraftId,
-  });
-  const worktreeIntentSuspended = stagedWorktreeIntentIsSuspended({
-    surface: "landing",
-    draftId: exactDraftId,
-  });
+  };
+  const stagedWorktreeIntent = readStagedWorktreeIntent(landingStagingKey);
+  const worktreeIntentSuspended =
+    stagedWorktreeIntentIsSuspended(landingStagingKey);
   if (activeDraft !== null) {
     return {
       ...canonicalLaunchWorkspace(
@@ -1003,13 +1044,19 @@ function readLandingWorkspaceContext(
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntentSuspended,
       draftId: exactDraftId,
+      hostId,
     };
   }
-  const globalState = useWorkspaceFoldersStore.getState();
+  // The launch host's own folder bucket - the same `hostId` the cached
+  // default-intent read below is keyed by.
+  const globalBucket = selectWorkspaceFoldersBucket(
+    useWorkspaceFoldersStore.getState(),
+    hostId,
+  );
   const globalWorkspace = {
-    folders: globalState.folders,
-    folderInfoByPath: globalState.folderInfoByPath,
-    primaryPath: globalState.primaryPath,
+    folders: globalBucket.folders,
+    folderInfoByPath: globalBucket.folderInfoByPath,
+    primaryPath: globalBucket.primaryPath,
   };
   return {
     ...canonicalLaunchWorkspace(
@@ -1017,9 +1064,10 @@ function readLandingWorkspaceContext(
       stagedWorktreeIntent,
       readCachedDefaultWorktreeIntent(queryClient, hostId, globalWorkspace),
     ),
-    workspaceFolderInfoByPath: globalState.folderInfoByPath,
+    workspaceFolderInfoByPath: globalBucket.folderInfoByPath,
     worktreeIntentSuspended,
     draftId: null,
+    hostId,
   };
 }
 
@@ -1139,28 +1187,38 @@ function branchForCachedSummary(
 }
 
 function rememberLandingWorktreeIntent(
+  workspaceContext: LandingWorkspaceContext,
   epicId: string,
-  worktreeIntent: WorktreeIntent | null,
   now: number,
 ): void {
   // Restores the exact branches next time the epic opens. The per-folder default
   // memory is persisted eagerly on each selection, so send only writes the
-  // per-epic tier.
+  // per-epic tier. Keyed by the context's dispatch-time host - the intent names
+  // paths and branches that only exist on that machine.
+  const { worktreeIntent } = workspaceContext;
   if (worktreeIntent === null) return;
   useWorktreeIntentMemoryStore
     .getState()
-    .setEpicIntent(epicId, worktreeIntent, now);
+    .setEpicIntent(epicId, workspaceContext.hostId, worktreeIntent, now);
 }
 
 function clearConsumedLandingWorktreeIntent(
   workspaceContext: LandingWorkspaceContext,
 ): void {
-  if (workspaceContext.worktreeIntent === null) return;
   const stagingKey: WorktreeStagingKey = {
     surface: "landing",
+    hostId: workspaceContext.hostId,
     draftId: workspaceContext.draftId,
   };
-  useWorktreeIntentStagingStore.getState().clear(stagingKey);
+  // Every host's copy, and unconditionally: the landing picker rebinds the
+  // app-wide host in place, so a pick staged on another host belongs to this
+  // same consumed session. Gating on the SUBMITTING host having an intent
+  // would skip the whole consume when the user staged on host A and then
+  // submitted from a folderless host B - leaving A's slot to seed the next
+  // landing session (null draft) or linger against the staging cap (minted
+  // draft). This only runs once a create has actually succeeded, so there is
+  // no retry left that needs the staged intent.
+  useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
 }
 
 // Distinct image hashes referenced by the (hash-only) editor content. Base64

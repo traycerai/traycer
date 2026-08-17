@@ -121,8 +121,8 @@ export interface EpicCanvasGitDiffTileDragData {
 }
 
 /**
- * A row in a chat's Shells menu, dragged out to give that shell's output
- * window a place on the canvas. The tile ref is minted at the source (like a
+ * A shell's Background-panel row or transcript-card door, dragged out to give
+ * that shell's output window a place on the canvas. The tile ref is minted at the source (like a
  * terminal row), and one-window-per-command survives it: the ref's content id
  * IS the command id, so the drop resolves to a MOVE of the existing window
  * whenever one is already open.

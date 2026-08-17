@@ -15,6 +15,7 @@
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "bun x prettier --write .",
     "test": "bun scripts/run-tests.ts",
+    "test:diff-edit-browser": "bun scripts/diff-edit-browser-regression.mjs",
     "test:react-compiler": "vitest run --config vitest.react-compiler.config.ts src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
     "test:watch": "vitest --config vitest.config.ts"
   },

@@ -305,9 +305,13 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   const launchHostClient = useHostClientForHostId(
     hostScope.kind === "fixed" ? hostScope.hostId : composerPin.selection,
   );
+  // Per-host memory keys on the same resolved launch host - under the
+  // surface-pin model there is no separate "reactive active" to follow.
+  const memoryHostId = launchHostId;
   // No seed here - nothing to validate.
   const toolbarStore = useComposerToolbarStore(null, { kind: "none" }, null, {
     hostClient: launchHostClient,
+    hostId: memoryHostId,
     tuiOnly: true,
   });
   const selection = useStore(toolbarStore, (state) => state.selection);
@@ -339,8 +343,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   // `undefined`, falling back to the shared epic-scoped launcher slot.
   const overrideStagingKey = props.terminalAgentStagingKey;
   const stagingKey = useMemo(
-    () => overrideStagingKey ?? pendingTerminalAgentStagingKey(epicId),
-    [overrideStagingKey, epicId],
+    () =>
+      overrideStagingKey ??
+      pendingTerminalAgentStagingKey(memoryHostId, epicId),
+    [overrideStagingKey, memoryHostId, epicId],
   );
   const launchDisabled = terminalAgentLaunchDisabled({
     modelSlug: selection.modelSlug,
@@ -355,6 +361,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       stagingKey,
       seedIntent: workspaceSeed?.intent ?? null,
       fallbackWorkspace: workspaceSeed?.workspace ?? null,
+      hostId: memoryHostId,
     });
     onAddTerminalAgent({
       harnessId: selectedHarnessId,
@@ -372,6 +379,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     argsDraft,
     argsTouched,
     launchDisabled,
+    memoryHostId,
     onAddTerminalAgent,
     reasoning,
     selection.modelSlug,

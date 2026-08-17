@@ -116,7 +116,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         </DialogHeader>
 
         <div className="min-w-0 space-y-3 px-6 pb-2">
-          <div className="max-h-[min(45vh,22rem)] min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 bg-muted/20">
+          <div className="max-h-[min(45vh,22rem)] min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 bg-foreground/3">
             {entries.map((entry) => (
               <RestoreFileRow
                 key={`${entry.filePath}:${entry.operation}:${entry.beforeHash ?? ""}`}
@@ -157,7 +157,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
           // 16px past the bottom edge and get clipped by
           // `overflow-hidden`. Result: buttons hug the bottom edge with
           // no breathing room.
-          className="mx-0 mb-0 gap-2 rounded-b-xl border-t border-border/40 bg-muted/10 px-6 py-4"
+          className="mx-0 mb-0 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4"
         >
           <Button
             type="button"

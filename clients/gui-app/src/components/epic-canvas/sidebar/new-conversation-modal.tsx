@@ -128,8 +128,15 @@ import {
 } from "@/lib/canvas/conversation-tile-placement";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectEpicRunSettingsEntry,
+  selectGlobalLastRunSettings,
+  useComposerRunSettingsStore,
+} from "@/stores/composer/composer-run-settings-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   newConversationModalStagingKey,
   readStagedWorktreeIntent,
@@ -487,13 +494,18 @@ export function NewConversationModalBody(props: {
   const hostClient = composerPlacement.target.client;
   const submitTarget = composerPlacement.submitTarget;
   const composerIsPinned = composerPlacement.pin.isPinned;
-  const latestWorkspaceSeed = useModalWorkspaceSeed(
+  const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
     parentId,
+    hostId,
     resolvedHostId,
     hostClient,
+  });
+  const seed = useNewConversationModalSeed(
+    epicId,
+    resolvedHostId,
+    latestWorkspaceSeed,
   );
-  const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
   // every keystroke (see `handleDocumentChange`); subscribing to the whole
   // patch here would re-render the entire modal body per character. Live
@@ -531,8 +543,8 @@ export function NewConversationModalBody(props: {
         ?.selection ?? null,
   );
   const stagingKey = useMemo(
-    () => newConversationModalStagingKey(epicId, parentId),
-    [epicId, parentId],
+    () => newConversationModalStagingKey(resolvedHostId, epicId, parentId),
+    [epicId, resolvedHostId, parentId],
   );
   const stagingKeyId = worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -549,8 +561,10 @@ export function NewConversationModalBody(props: {
     (state) => state.setComposerMode,
   );
   const clearDraft = useNewConversationModalStore((state) => state.clearDraft);
+  // The modal's host can change under an open session, so a SUBMIT consumes
+  // every host's copy of the slot - not just the one selected at submit.
   const clearStagedIntent = useWorktreeIntentStagingStore(
-    (state) => state.clear,
+    (state) => state.clearForAllHosts,
   );
   const rememberEpicIntent = useWorktreeIntentMemoryStore(
     (state) => state.setEpicIntent,
@@ -581,7 +595,11 @@ export function NewConversationModalBody(props: {
     null,
     fallbackSeedSource(draftSettings, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, tuiOnly: draftComposerMode === "terminal" },
+    {
+      hostClient,
+      hostId: resolvedHostId,
+      tuiOnly: draftComposerMode === "terminal",
+    },
   );
   const harnessId = useStore(
     toolbarStore,
@@ -600,7 +618,11 @@ export function NewConversationModalBody(props: {
     () => mentionRootsFromWorktreeIntent(draftWorkspace.folders, mentionIntent),
     [draftWorkspace.folders, mentionIntent],
   );
-  const mentionRoots = useWorkspaceMentionRoots(rawMentionRoots, false);
+  const mentionRoots = useWorkspaceMentionRoots(
+    rawMentionRoots,
+    false,
+    resolvedHostId,
+  );
   const chatComposerActive = draftComposerMode === "chat";
   useComposerPickerItems({
     pickerStore,
@@ -625,6 +647,7 @@ export function NewConversationModalBody(props: {
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     hostClient,
+    resolvedHostId,
   );
   const workspaceAvailability = useMemo(
     () =>
@@ -789,6 +812,10 @@ export function NewConversationModalBody(props: {
       setHostNotice({ kind: "refused", message: placementVerdict.message });
       return;
     }
+    // No render-vs-live drift check needed here (main's #1231 added one for
+    // the reactive-active-host shape): the staged key and this create both
+    // derive from the SAME captured submitTarget, and the verdict REFUSES
+    // rather than migrates when its frozen client no longer addresses it.
     const activeHostId = placementVerdict.hostId;
     const content = buildSubmittedChatJSONContent(
       editor.getJSON(),
@@ -800,9 +827,10 @@ export function NewConversationModalBody(props: {
     const now = Date.now();
     // Remember these settings as the epic's (and global) last-run so the next
     // new-chat carries them forward, mirroring the chat-tile composer's
-    // on-send write.
-    setGlobalRunSettings(settings, now);
-    setEpicRunSettings(epicId, settings, now);
+    // on-send write. Keyed by the host the chat is actually created on
+    // (`activeHostId`: the pinned host, else the active one resolved above).
+    setGlobalRunSettings(activeHostId, settings, now);
+    setEpicRunSettings(epicId, activeHostId, settings, now);
     const profile = useAuthStore.getState().profile;
     const userId = profile?.userId ?? null;
     const worktreeIntent = worktreeIntentForSubmit();
@@ -811,7 +839,7 @@ export function NewConversationModalBody(props: {
       worktreeIntent,
     );
     if (worktreeIntent !== null) {
-      rememberEpicIntent(epicId, worktreeIntent, now);
+      rememberEpicIntent(epicId, activeHostId, worktreeIntent, now);
     }
     useInitialChatHandoffStore.getState().register({
       hostId: activeHostId,
@@ -908,13 +936,16 @@ export function NewConversationModalBody(props: {
         setHostNotice({ kind: "refused", message: placementVerdict.message });
         return;
       }
+      // The staged key and this create both derive from the same captured
+      // submitTarget (see `handleSubmit`), so no render-vs-live drift check.
+      const activeHostId = placementVerdict.hostId;
       const worktreeIntent = worktreeIntentForSubmit();
       const workspaceMode = deriveWorkspaceMode(
         draftWorkspaceFolderCount,
         worktreeIntent,
       );
       if (worktreeIntent !== null) {
-        rememberEpicIntent(epicId, worktreeIntent, Date.now());
+        rememberEpicIntent(epicId, activeHostId, worktreeIntent, Date.now());
       }
       cleanupAfterSubmit();
       void terminalAgentCreate
@@ -1038,12 +1069,21 @@ export function NewConversationModalBody(props: {
  * adjust via the controls. For a top-level chat it uses the latest-conversation
  * seed.
  */
-function useModalWorkspaceSeed(
-  epicId: string,
-  parentId: string | null,
-  hostId: string | null,
-  hostClient: HostClient<HostRpcRegistry> | null,
-): LatestConversationWorkspaceSeed | null {
+function useModalWorkspaceSeed(args: {
+  readonly epicId: string;
+  readonly parentId: string | null;
+  // The REQUEST's host: `null` means "follow the app-wide active host". The
+  // latest-conversation seed reads it directly, because an unpinned modal
+  // deliberately skips that seed entirely.
+  readonly hostId: string | null;
+  // `hostId` resolved against the active host - the host `hostClient` actually
+  // speaks to. The parent's pending intent is staged under its CONCRETE host,
+  // so reading that slot with the nullable request field would land in the
+  // unresolved-host bucket and silently seed the child from the older binding.
+  readonly resolvedHostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+}): LatestConversationWorkspaceSeed | null {
+  const { epicId, parentId, hostId, resolvedHostId, hostClient } = args;
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
   // binding read entirely when adding a child. A pinned request reads the seed
@@ -1059,6 +1099,7 @@ function useModalWorkspaceSeed(
   const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
   const parentInheritance = useOwnerWorkspaceInheritanceSeed({
     client: hostClient,
+    hostId: resolvedHostId,
     epicId,
     ownerId: parentId ?? "",
     ownerKind: parentOwnerKind,
@@ -1088,19 +1129,20 @@ function useModalWorkspaceSeed(
 
 function useNewConversationModalSeed(
   epicId: string,
+  hostId: string | null,
   latestWorkspaceSeed: LatestConversationWorkspaceSeed | null,
 ): NewConversationModalSeed {
   const latestSettingsSeed = useLatestConversationSettingsSeed();
-  const globalWorkspace = useGlobalWorkspaceSnapshot();
-  // Carry forward the last settings used on this epic (the chat-tile composer
-  // writes `setEpicRunSettings` on send), then the cross-epic last-run, then
-  // the projected latest-conversation settings as a final fallback.
+  const globalWorkspace = useGlobalWorkspaceSnapshot(hostId);
+  // Carry forward the last settings used on this epic ON THIS HOST (the
+  // chat-tile composer writes `setEpicRunSettings` on send), then the same
+  // host's cross-epic last-run, then the projected latest-conversation
+  // settings as a final fallback.
   const runSettingsSeed = useComposerRunSettingsStore(
     useShallow((state) => ({
-      epicRunSettings: Object.hasOwn(state.epicRunSettingsByEpicId, epicId)
-        ? state.epicRunSettingsByEpicId[epicId].settings
-        : null,
-      globalLastRunSettings: state.globalLastRunSettings,
+      epicRunSettings:
+        selectEpicRunSettingsEntry(state, epicId, hostId)?.settings ?? null,
+      globalLastRunSettings: selectGlobalLastRunSettings(state, hostId),
     })),
   );
   return useMemo(
@@ -1172,13 +1214,18 @@ function useLatestConversationSettingsSeed(): {
   }, [defaults, fallbackComposerMode, projection]);
 }
 
-function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
+function useGlobalWorkspaceSnapshot(
+  hostId: string | null,
+): LandingDraftWorkspaceSnapshot {
   return useWorkspaceFoldersStore(
-    useShallow((state) => ({
-      folders: state.folders,
-      folderInfoByPath: state.folderInfoByPath,
-      primaryPath: state.primaryPath,
-    })),
+    useShallow((state) => {
+      const bucket = selectWorkspaceFoldersBucket(state, hostId);
+      return {
+        folders: bucket.folders,
+        folderInfoByPath: bucket.folderInfoByPath,
+        primaryPath: bucket.primaryPath,
+      };
+    }),
   );
 }
 

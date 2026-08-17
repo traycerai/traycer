@@ -85,6 +85,7 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}

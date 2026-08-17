@@ -24,17 +24,71 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 export type HostPickIntent = "view" | "bind" | "pin";
 
 /**
+ * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
+ * the one word the row shows for it ("needs update").
+ *
+ * `connectable` / `planRestricted` are facts about the host that every picker
+ * shares. This is the other kind: a reason THIS picker cannot use THIS host,
+ * which no other picker would state — the fork dialog's target must speak
+ * `epic.createChat` at the minor that carries the cross-host owner hint, and a
+ * host below it is perfectly fine everywhere else in the app.
+ *
+ * It travels as a map rather than a predicate so the picker chain stays
+ * referentially stable and a surface with nothing to say passes
+ * {@link NO_HOST_OPTION_REFUSALS} instead of a fresh closure per render.
+ */
+export const NO_HOST_OPTION_REFUSALS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * What a surface is saying about one row, as ONE value.
+ *
+ * A union rather than two independent fields because the combination
+ * "unreachable because of the surface" AND "here is what is wrong with this
+ * host" is not a state that should be expressible. It rendered as a globally
+ * inert row still carrying "needs update", which invites a retry on another
+ * machine that cannot possibly help — the per-host word contradicting the
+ * class-level reason sitting next to it.
+ *
+ * Inert LEADS: when the surface has put every row but one out of reach, the
+ * surface owns the explanation and the rows stay silent.
+ */
+export type HostRowSurfaceState =
+  | { readonly kind: "available" }
+  /** This host's own problem, in one word, on this row. */
+  | { readonly kind: "refused"; readonly word: string }
+  /** The surface's problem. No word here — the surface says it once. */
+  | { readonly kind: "inert" };
+
+export function hostRowSurfaceState(input: {
+  readonly surfaceRefusal: string | null;
+  readonly surfaceInert: boolean;
+}): HostRowSurfaceState {
+  if (input.surfaceInert) return { kind: "inert" };
+  if (input.surfaceRefusal !== null) {
+    return { kind: "refused", word: input.surfaceRefusal };
+  }
+  return { kind: "available" };
+}
+
+export const AVAILABLE_HOST_ROW_SURFACE_STATE: HostRowSurfaceState = {
+  kind: "available",
+};
+
+/**
  * Whether choosing this row is a legal answer for that intent.
  *
  * Every container asks THIS, rather than re-deriving "can I click it" from
  * `connectable` beside its own copy of the reason word. A second gate written
  * as a hand-rolled subset of this one is how a row ends up inert with no
- * explanation, or explained but still clickable.
+ * explanation, or explained but still clickable — which is exactly why the
+ * surface state is an argument here and not a second `&&` at each container.
  */
 export function isHostOptionSelectable(
   host: HostScopeOption,
   intent: HostPickIntent,
+  surfaceState: HostRowSurfaceState,
 ): boolean {
+  if (surfaceState.kind !== "available") return false;
   return intent === "view" || host.connectable;
 }
 
@@ -66,6 +120,13 @@ export function isHostOptionSelectable(
  * sense a user can act on — it is mid-setup, and it will be dialable shortly.
  * It is also a mutation-lane fact rather than a status one, which is why it
  * sits outside the table instead of inside it.
+ *
+ * Order of precedence, most-owning first: an INERT row says nothing at all
+ * (the surface owns the explanation); `settingUp` and the lease-derived
+ * status word lead next, because a host that is mid-setup or has no route
+ * cannot also be meaningfully described by a surface refusal; and the
+ * surface refusal speaks last, for a host that IS fine and still cannot be
+ * used here.
  */
 const STATUS_WORD: Record<HostHealthState, string | null> = {
   // Nothing to add: the dot carries it, and a word here would restate the
@@ -92,9 +153,20 @@ const STATUS_WORD: Record<HostHealthState, string | null> = {
   "not-installed": "not installed",
 };
 
-export function hostOptionStatusWord(host: HostScopeOption): string | null {
+export function hostOptionStatusWord(
+  host: HostScopeOption,
+  surfaceState: HostRowSurfaceState,
+): string | null {
+  // The SURFACE state is consulted FIRST, not after status. When the surface
+  // has put the row out of reach it owns the whole explanation, and a status
+  // word alongside it contradicts that reason - "offline" or "requires
+  // upgrade" on a row the class already ruled out reads as a problem with
+  // THAT machine, and invites trying another one when no other one can help.
+  if (surfaceState.kind === "inert") return null;
   if (host.settingUp) return "setting up";
-  return STATUS_WORD[host.health.state];
+  const statusWord = STATUS_WORD[host.health.state];
+  if (statusWord !== null) return statusWord;
+  return surfaceState.kind === "refused" ? surfaceState.word : null;
 }
 
 /**

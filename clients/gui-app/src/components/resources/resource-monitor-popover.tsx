@@ -1,12 +1,17 @@
 import {
   use,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import type { MouseEvent, PointerEvent } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent,
+  PointerEvent,
+} from "react";
 import {
   useNavigate,
   useRouterState,
@@ -66,7 +71,7 @@ import { ManagedCommandStopButton } from "@/components/managed-commands/managed-
 import { useManagedCommandStop } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import {
   MANAGED_COMMAND_NOUN,
-  managedCommandNoun,
+  managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
@@ -84,6 +89,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import {
   EMPTY_GLOBAL_RESOURCE_PROJECTION,
   useGlobalResourceProjection,
@@ -140,6 +148,7 @@ import type {
   EpicNodeRef,
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
@@ -323,9 +332,57 @@ const NO_EXPANDED_PROCESSES: ReadonlySet<string> = new Set();
  * to cross a component boundary as a prop, which nothing else here needs.
  */
 const RESOURCE_MONITOR_PANEL_ATTRIBUTE = "data-resource-monitor-panel";
+const RESOURCE_SEARCH_ATTRIBUTE = "data-resource-search";
+const RESOURCE_NAVIGATION_KEY_ATTRIBUTE = "data-resource-navigation-key";
+const RESOURCE_ACTION_KEY_ATTRIBUTE = "data-resource-action-key";
+const RESOURCE_CONFIRMATION_ATTRIBUTE = "data-resource-confirmation";
 
 // For process rows that can never expand (e.g. the host's single root process).
 function noProcessToggle(): void {}
+
+function resourceNavigationButtons(
+  panel: HTMLDivElement,
+): ReadonlyArray<HTMLButtonElement> {
+  return Array.from(
+    panel.querySelectorAll<HTMLButtonElement>(
+      `button[${RESOURCE_NAVIGATION_KEY_ATTRIBUTE}]:not(:disabled)`,
+    ),
+  );
+}
+
+function moveResourceNavigationFocus(
+  panel: HTMLDivElement,
+  current: HTMLElement,
+  direction: 1 | -1,
+): boolean {
+  const rows = resourceNavigationButtons(panel);
+  if (rows.length === 0) return false;
+  const currentIndex = rows.findIndex((row) => row === current);
+  let nextIndex: number;
+  if (currentIndex >= 0) {
+    nextIndex = (currentIndex + direction + rows.length) % rows.length;
+  } else {
+    nextIndex = direction > 0 ? 0 : rows.length - 1;
+  }
+  rows[nextIndex]?.focus();
+  return true;
+}
+
+function armResourceRowAction(
+  panel: HTMLDivElement,
+  navigationKey: string,
+): boolean {
+  const actionContainer = Array.from(
+    panel.querySelectorAll<HTMLElement>(`[${RESOURCE_ACTION_KEY_ATTRIBUTE}]`),
+  ).find(
+    (element) =>
+      element.getAttribute(RESOURCE_ACTION_KEY_ATTRIBUTE) === navigationKey,
+  );
+  const button = actionContainer?.querySelector<HTMLButtonElement>("button");
+  if (button === undefined || button === null || button.disabled) return false;
+  button.click();
+  return true;
+}
 
 /**
  * Header trigger for the resource monitor, scoped to the host its own picker
@@ -383,10 +440,25 @@ function ScopedResourceMonitorPopover(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const chord = useBindingForAction("app.resources.open");
+  useEffect(
+    () =>
+      registerDynamicActionHandler("app.resources.open", () => {
+        setOpen(true);
+      }),
+    [],
+  );
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
   const scope = props.scope;
+  const tooltipLabel = watchesNamedHost(scope, props.hasExplicitPick)
+    ? `Resources · ${scope.hostLabel}`
+    : "Resources";
+  const tooltip =
+    chord === null
+      ? tooltipLabel
+      : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
 
   return (
     <>
@@ -400,11 +472,7 @@ function ScopedResourceMonitorPopover(props: {
           // The host belongs in the label only when it is NOT the obvious one.
           // Naming the active host on every hover would train people to ignore
           // the one case the words exist for.
-          label={
-            watchesNamedHost(scope, props.hasExplicitPick)
-              ? `Resources · ${scope.hostLabel}`
-              : "Resources"
-          }
+          label={tooltip}
           side="top"
           sideOffset={6}
           align={undefined}
@@ -675,6 +743,19 @@ function ResourceMonitorContent(props: {
       // focus). Only a genuine outside pointer click or Escape should dismiss
       // it; those go through onPointerDownOutside / onEscapeKeyDown, not here.
       onFocusOutside={(event) => event.preventDefault()}
+      // Radix owns a document-level Escape listener, so the inline row
+      // confirmation cannot protect the containing popover through React event
+      // propagation alone. Keep the popover mounted while that confirmation
+      // consumes Escape and restores focus to its row.
+      onEscapeKeyDown={(event) => {
+        const activeElement = document.activeElement;
+        if (
+          activeElement instanceof Element &&
+          activeElement.closest(`[${RESOURCE_CONFIRMATION_ATTRIBUTE}]`) !== null
+        ) {
+          event.preventDefault();
+        }
+      }}
       onInteractOutside={(event) => {
         const target = event.target;
         // The host switcher's own list is a nested Radix popover, so it portals
@@ -792,6 +873,8 @@ function ResourceMonitorHostPickerRow(props: {
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Managing hosts - adding, renaming, updating, removing - is Settings'
         // job, with its own dialogs and failure states; this popover watches
         // processes. So the list ends in one link to where that work already
@@ -1331,6 +1414,49 @@ function ResourceMonitorPanel(props: {
     event.stopPropagation();
   };
 
+  const handlePanelKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (!(event.target instanceof HTMLElement)) return;
+    const target = event.target;
+    const isSearch = target.hasAttribute(RESOURCE_SEARCH_ATTRIBUTE);
+    const navigationKey = target.getAttribute(
+      RESOURCE_NAVIGATION_KEY_ATTRIBUTE,
+    );
+    if (isSearch || navigationKey !== null) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (
+          moveResourceNavigationFocus(
+            panelRef.current ?? event.currentTarget,
+            target,
+            event.key === "ArrowDown" ? 1 : -1,
+          )
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+    }
+    if (navigationKey !== null && event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      target.click();
+      return;
+    }
+    if (
+      navigationKey !== null &&
+      (event.key === "Delete" || event.key === "Backspace") &&
+      armResourceRowAction(
+        panelRef.current ?? event.currentTarget,
+        navigationKey,
+      )
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+
   return (
     <div
       ref={panelRef}
@@ -1338,6 +1464,7 @@ function ResourceMonitorPanel(props: {
       className="min-w-0"
       onPointerDownCapture={dismissSortMenuFromPanelClick}
       onClickCapture={swallowDismissedSortMenuClick}
+      onKeyDownCapture={handlePanelKeyDown}
     >
       <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
         <div className="flex items-center justify-between gap-3">
@@ -1413,7 +1540,7 @@ function ResourceMonitorPanel(props: {
                     <button
                       ref={sortTriggerRef}
                       type="button"
-                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
                       aria-label="Sort resource rows"
                     >
                       <ArrowDownNarrowWide className="size-3.5" />
@@ -1470,7 +1597,7 @@ function ResourceMonitorPanel(props: {
               />
             </div>
             <div
-              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
+              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-foreground/6"
               role="progressbar"
               aria-label="Tracked RAM share"
               aria-valuenow={Math.round(memorySharePercent)}
@@ -1643,6 +1770,7 @@ function ResourceSearchInput(props: {
       </InputGroupAddon>
       <InputGroupInput
         ref={inputRef}
+        {...{ [RESOURCE_SEARCH_ATTRIBUTE]: "" }}
         type="search"
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
@@ -1748,7 +1876,7 @@ function DesktopAppProcessGroupRow(props: {
   readonly usage: DesktopAppProcessGroupUsage;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-3.5 py-1 pl-7 text-muted-foreground transition-colors hover:bg-muted/40">
+    <div className="flex items-center justify-between gap-3 px-3.5 py-1 pl-7 text-muted-foreground transition-colors hover:bg-foreground/5">
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="min-w-0 truncate text-ui-xs">{props.label}</span>
       </div>
@@ -2114,18 +2242,48 @@ interface ResourceRowActionApi {
 }
 
 /**
- * Per-row kill affordance: hidden until the row is hovered/focused, then a
- * two-step INLINE confirm (no modal) - the trash icon arms, swapping to a
- * "Kill / cancel" pair. Escaping hover disarms it. Mirrors the chat-nav
- * `StopAffordance` reveal + the sidebar destructive-ghost styling.
+ * Per-row destructive affordance: hidden until the row is hovered/focused,
+ * then a two-step INLINE confirm (no modal). The keyboard path deliberately
+ * lands on Confirm after Delete/Backspace arms it, making Enter the second,
+ * distinct confirmation key; Escape dismisses and restores row focus.
  */
-function KillRowButton(props: {
-  readonly target: KillTarget;
+function ConfirmableRowAction(props: {
+  readonly target: RowActionTarget;
   readonly label: string;
-  readonly onKill: (target: KillTarget) => void;
-  readonly isKilling: boolean;
+  readonly onRun: (target: RowActionTarget) => void;
+  readonly isPending: boolean;
 }) {
   const [armed, setArmed] = useState(false);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const verb = props.target.kind === "kill" ? "kill" : "stop";
+  const arm = (): void => {
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setArmed(true);
+  };
+  const disarm = (): void => {
+    setArmed(false);
+    window.requestAnimationFrame(() => returnFocusRef.current?.focus());
+  };
+  useLayoutEffect(() => {
+    if (armed) confirmRef.current?.focus();
+  }, [armed]);
+  const confirm = (): void => {
+    props.onRun(props.target);
+    setArmed(false);
+  };
+  const cancelFromKeyboard = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ): void => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    disarm();
+  };
+
   if (armed) {
     // Armed confirm floats over the row's right edge as a small panel (the
     // row wrapper is `relative`), instead of squeezing beside the metrics -
@@ -2133,22 +2291,39 @@ function KillRowButton(props: {
     return (
       <>
         <span className={ROW_ACTION_SLOT} />
-        <span className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 bg-popover px-1 shadow-sm">
+        <span
+          {...{ [RESOURCE_CONFIRMATION_ATTRIBUTE]: "" }}
+          className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 bg-popover px-1 shadow-sm"
+        >
           <Button
+            ref={confirmRef}
             type="button"
             variant="ghost"
             size="xs"
             className="h-5 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={props.isKilling}
-            aria-label={`Confirm kill ${props.label}`}
+            disabled={props.isPending}
+            aria-label={`Confirm ${verb} ${props.label}`}
+            aria-keyshortcuts="Enter"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                cancelFromKeyboard(event);
+                return;
+              }
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              event.stopPropagation();
+              confirm();
+            }}
             onClick={(event) => {
               event.stopPropagation();
-              props.onKill(props.target);
-              setArmed(false);
+              confirm();
             }}
           >
             Confirm
-            {props.isKilling ? (
+            <span aria-hidden className="ml-1 text-muted-foreground">
+              ↵
+            </span>
+            {props.isPending ? (
               <AgentSpinningDots
                 className="ml-1"
                 testId={undefined}
@@ -2162,37 +2337,56 @@ function KillRowButton(props: {
             size="xs"
             className="h-5 px-1.5 text-muted-foreground hover:text-foreground"
             aria-label={`Keep ${props.label} running`}
+            aria-keyshortcuts="Escape"
+            onKeyDown={cancelFromKeyboard}
             onClick={(event) => {
               event.stopPropagation();
-              setArmed(false);
+              disarm();
             }}
           >
             Cancel
+            <span aria-hidden className="ml-1">
+              Esc
+            </span>
           </Button>
         </span>
       </>
     );
   }
-  // Text label, not an icon: a bin reads as "delete this agent's state" and a
-  // stop glyph reads as "stop the turn", but this only terminates the process
-  // tree. The word carries the meaning unambiguously.
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      className={cn(
-        "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
-        ROW_HOVER_REVEAL,
+    <span {...{ [RESOURCE_ACTION_KEY_ATTRIBUTE]: props.target.key }}>
+      {props.target.kind === "stop" ? (
+        <ManagedCommandStopButton
+          commandId={props.target.commandId}
+          ariaLabel={`Stop ${props.label}`}
+          isPending={props.isPending}
+          className={ROW_HOVER_REVEAL}
+          onStop={arm}
+        />
+      ) : (
+        <>
+          {/* Text label, not an icon: a bin reads as "delete this agent's
+              state" and a stop glyph reads as "stop the turn", but this only
+              terminates the process tree. The word carries the meaning. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className={cn(
+              "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
+              ROW_HOVER_REVEAL,
+            )}
+            aria-label={`Kill ${props.label}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              arm();
+            }}
+          >
+            Kill
+          </Button>
+        </>
       )}
-      aria-label={`Kill ${props.label}`}
-      onClick={(event) => {
-        event.stopPropagation();
-        setArmed(true);
-      }}
-    >
-      Kill
-    </Button>
+    </span>
   );
 }
 
@@ -2269,26 +2463,13 @@ function OwnerRowActionCell(props: {
   if (actions === null || target === null || actions.selectionMode) {
     return <span className={ROW_ACTION_SLOT} />;
   }
-  if (target.kind === "stop") {
-    return (
-      <span className={ROW_ACTION_SLOT}>
-        <ManagedCommandStopButton
-          commandId={target.commandId}
-          ariaLabel={`Stop ${props.label}`}
-          isPending={actions.isPending}
-          className={ROW_HOVER_REVEAL}
-          onStop={() => actions.runOne(target)}
-        />
-      </span>
-    );
-  }
   return (
     <span className={ROW_ACTION_SLOT}>
-      <KillRowButton
+      <ConfirmableRowAction
         target={target}
         label={props.label}
-        onKill={actions.runOne}
-        isKilling={actions.isPending}
+        onRun={actions.runOne}
+        isPending={actions.isPending}
       />
     </span>
   );
@@ -2455,6 +2636,14 @@ function OwnerProviderIcon(props: {
  * created (rendered as sub-rows of the same shape, above), then its own OS
  * process tree. A shell has no shells of its own, so the recursion is two deep.
  */
+function resourceNavigationKey(
+  canOpen: boolean,
+  selecting: boolean,
+  rowKey: string,
+): string | undefined {
+  return canOpen && !selecting ? rowKey : undefined;
+}
+
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly depth: number;
@@ -2508,8 +2697,8 @@ function OwnerTreeRow(props: {
     <div>
       <div
         className={cn(
-          "group relative flex items-center pr-3.5 transition-colors hover:bg-muted/50",
-          selected && "bg-muted/40",
+          "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
+          selected && "bg-foreground/5",
           visibleExpanded && "sticky z-10 bg-popover",
         )}
         style={{
@@ -2530,6 +2719,13 @@ function OwnerTreeRow(props: {
           type="button"
           onClick={rowClick}
           disabled={!selecting && !props.row.canOpen}
+          {...{
+            [RESOURCE_NAVIGATION_KEY_ATTRIBUTE]: resourceNavigationKey(
+              props.row.canOpen,
+              selecting,
+              rowKey,
+            ),
+          }}
           className={cn(
             "flex min-w-0 flex-1 items-center justify-between gap-3 py-1.5 pl-1 text-left transition-colors",
             props.row.canOpen
@@ -2550,7 +2746,6 @@ function OwnerTreeRow(props: {
                   props.row.snapshot.harnessId,
                   owner.kind,
                   props.row.snapshot.activeProcessName,
-                  props.row.snapshot.managedCommand,
                 )}
               </span>
             </div>
@@ -2708,11 +2903,11 @@ function ProcessRowKillCell(props: {
     return <span className={ROW_ACTION_SLOT} />;
   }
   return (
-    <KillRowButton
+    <ConfirmableRowAction
       target={target}
       label={props.label}
-      onKill={actions.runOne}
-      isKilling={actions.isPending}
+      onRun={actions.runOne}
+      isPending={actions.isPending}
     />
   );
 }
@@ -2791,7 +2986,7 @@ function ProcessTreeRow(props: {
   const rowKey = processRowKey(process);
   const selected = selecting && actions.isSelected(rowKey);
   const rowClassName =
-    "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-muted/40";
+    "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-foreground/5";
   const rowStyle = {
     paddingLeft: `calc(1.25rem + ${props.ownerDepth + depth} * 1rem)`,
   };
@@ -2844,7 +3039,7 @@ function ProcessTreeRow(props: {
         }
         className={cn(
           rowClassName,
-          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          "outline-none focus-visible:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         )}
         style={rowStyle}
       >
@@ -2867,7 +3062,7 @@ function ProcessTreeRow(props: {
         onClick={() => props.onToggleExpand(processRowKey(process))}
         className={cn(
           rowClassName,
-          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default",
+          "outline-none focus-visible:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default",
         )}
         style={rowStyle}
       >
@@ -2880,7 +3075,7 @@ function ProcessTreeRow(props: {
       <div
         className={cn(
           "group relative flex items-center pr-3.5",
-          selected && "bg-muted/40",
+          selected && "bg-foreground/5",
           expanded && "sticky z-10 bg-popover",
         )}
         style={expanded ? { top: props.stickyTop } : undefined}
@@ -3318,12 +3513,11 @@ function ownerMetadataSearchTerms(
   const snapshot = row.snapshot;
   return [
     label,
-    ownerKindLabel(snapshot.owner.kind, snapshot.managedCommand),
+    ownerKindLabel(snapshot.owner.kind),
     harnessProviderSubtitle(
       snapshot.harnessId,
       snapshot.owner.kind,
       snapshot.activeProcessName,
-      snapshot.managedCommand,
     ),
     snapshot.owner.ownerId,
     snapshot.owner.hostId,
@@ -3948,7 +4142,9 @@ function openResourceOwner(args: {
       tabId: closedTile.tabId,
       name: undefined,
       focus: focusForOwner(snapshot),
-      preparation: { kind: "open-tile", node: closedTile.node },
+      // A preserved tile the human already chose to keep once: reopening it is
+      // a return to their own tab, not a glance at a new one.
+      preparation: { kind: "open-tile", node: closedTile.node, preview: false },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
       activeEpicId: args.activeEpicId,
@@ -3973,6 +4169,10 @@ function openResourceOwner(args: {
           commandId: snapshot.owner.ownerId,
           hostId: snapshot.owner.hostId,
         }),
+        // Same glance every other shell door is (see
+        // `useOpenManagedCommandOutput`): jumping from a resource row to the
+        // log is a look, and the strip should not keep it unasked.
+        preview: true,
       },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
@@ -4007,6 +4207,7 @@ function openResourceOwner(args: {
         name: record.name,
         hostId: record.hostId,
       },
+      preview: false,
     },
     navigate: args.navigate,
     navigateNested: args.navigateNested,
@@ -4073,7 +4274,9 @@ function prepareResourceTarget(
 ): NestedFocusTarget | null {
   const canvas = useEpicCanvasStore.getState();
   if (preparation.kind === "open-tile") {
-    return canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+    return preparation.preview
+      ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
+      : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
   }
   return canvas.prepareSetActiveTileTabFocusTarget(
     tabId,
@@ -4171,10 +4374,7 @@ function isResourceSortOption(value: string): value is ResourceSortOption {
   );
 }
 
-function ownerKindLabel(
-  kind: ResourceOwnerKindWireV14,
-  managedCommand: ManagedCommandOwnerWire | null,
-): string {
+function ownerKindLabel(kind: ResourceOwnerKindWireV14): string {
   // Several owner kinds render side by side here, so a raw Terminal has to stay
   // distinguishable from an Agent using the Terminal interface - qualification
   // is warranted. It uses the interface axis rather than coining "Chat agent" /
@@ -4185,10 +4385,8 @@ function ownerKindLabel(
   if (kind === "managed-command") {
     // The KIND, not this shell's name: it sits in a column of classes
     // ("Terminal", "Agent (Chat)"), and a monitor is a shell. The row title
-    // beside it is where the monitor flag speaks. "Managed command" is the
-    // fallback for a host that sent the owner without naming it, which
-    // nothing does today.
-    return managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN;
+    // beside it is where the monitor flag speaks.
+    return MANAGED_COMMAND_NOUN;
   }
   return "Agent (Chat)";
 }
@@ -4198,17 +4396,17 @@ function ownerKindLabel(
  * has - it is not a canvas node, so none of the tile/record fallbacks the
  * other owner kinds walk apply to it.
  *
- * Named by the monitor flag, exactly as the Shells list names the same shell:
- * the owner frame carries `monitoring` precisely so one process tree is not
- * labelled two different ways.
+ * Straight through `managedCommandTitle`, exactly as the Shells list names the
+ * same shell: the owner frame carries `monitoring` precisely so one process
+ * tree is not labelled two different ways. An owner the host sent without
+ * naming (nothing does today) falls back to the umbrella noun rather than to a
+ * third one - "Managed command" is the term the UI does not use.
  */
 function managedCommandLabel(
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
-  if (managedCommand === null) return "Managed command";
-  const noun = managedCommandNoun(managedCommand.monitoring);
-  const description = managedCommand.description;
-  return description === "" ? noun : `${noun} · ${description}`;
+  if (managedCommand === null) return MANAGED_COMMAND_NOUN;
+  return managedCommandTitle(managedCommand);
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits
@@ -4219,21 +4417,15 @@ function harnessProviderSubtitle(
   harnessId: string | null,
   kind: ResourceOwnerKindWireV14,
   activeProcessName: string | null,
-  managedCommand: ManagedCommandOwnerWire | null,
 ): string {
   // A managed command already names itself in the row title, so its subtitle
   // spends the width on what is actually running instead of repeating it.
   if (kind === "managed-command") {
-    return (
-      activeProcessName ??
-      (managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN)
-    );
+    return activeProcessName ?? MANAGED_COMMAND_NOUN;
   }
   const providerId = harnessId === null ? null : normalizeProviderId(harnessId);
   const base =
-    providerId === null
-      ? ownerKindLabel(kind, managedCommand)
-      : agentProviderLabel(providerId);
+    providerId === null ? ownerKindLabel(kind) : agentProviderLabel(providerId);
   return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
 }
 
@@ -4281,7 +4473,7 @@ function ownerLabel(
   if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (ref !== null) return ref.name;
   if (record !== null) return record.name;
-  return ownerKindLabel(snapshot.owner.kind, snapshot.managedCommand);
+  return ownerKindLabel(snapshot.owner.kind);
 }
 
 function canOpenOwner(

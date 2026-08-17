@@ -1201,7 +1201,7 @@ function LegacyCapturedContextRow({
   readonly context: string;
 }): ReactNode {
   return (
-    <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+    <div className="rounded-md border border-border bg-foreground/3 px-3 py-2 text-ui-xs text-muted-foreground">
       <span className="font-medium text-foreground">
         Captured automatically:{" "}
       </span>
@@ -1497,7 +1497,7 @@ function EvidenceStrip({
   }
 
   return (
-    <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-muted/20 px-3 py-2.5 text-ui-xs">
+    <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
       <div className="flex items-center justify-between">
         <span className="font-medium text-emerald-600 dark:text-emerald-400">
           ✓ Captured
@@ -1749,7 +1749,7 @@ function AttachmentThumbnail({
   readonly onRemove: () => void;
 }): ReactNode {
   return (
-    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-muted">
+    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
       <img
         src={image.previewUrl}
         alt={image.fileName}
@@ -1961,7 +1961,7 @@ function FrozenLogTailView(props: {
     return <p className="text-ui-xs text-muted-foreground">Tail is empty.</p>;
   }
   return (
-    <pre className="max-h-32 overflow-auto rounded-md border border-border/60 bg-muted/30 p-1.5 font-mono text-code-xs text-muted-foreground">
+    <pre className="max-h-32 overflow-auto rounded-md border border-border/60 bg-foreground/3 p-1.5 font-mono text-code-xs text-muted-foreground">
       {data.lines.join("\n")}
     </pre>
   );
@@ -2005,7 +2005,7 @@ function ConfirmationScreen({
 // submit) - never the green "Sent privately" confirmation.
 function GithubDraftOpenedScreen(): ReactNode {
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-muted/20 px-3 py-3 text-ui-sm">
+    <div className="grid gap-2 rounded-md border border-border bg-foreground/3 px-3 py-3 text-ui-sm">
       <p className="font-medium text-foreground">
         GitHub draft opened - finish posting in your browser.
       </p>
@@ -2078,7 +2078,7 @@ function PublishPreviewScreen({
             disabled={disabled}
           />
         </Field>
-        <div className="grid gap-2 rounded-md border border-border bg-muted/20 px-3 py-2.5 text-ui-xs">
+        <div className="grid gap-2 rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
           {previewFieldRows(draft).map((row) => (
             <div key={row.label} className="grid gap-1">
               <span className="font-medium text-muted-foreground">

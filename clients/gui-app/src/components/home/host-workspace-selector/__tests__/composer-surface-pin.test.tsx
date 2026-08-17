@@ -184,7 +184,7 @@ function renderComposerPicker(
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          stagingKey={{ surface: "landing", hostId: null, draftId: null }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}

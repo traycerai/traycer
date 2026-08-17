@@ -87,8 +87,12 @@ vi.mock("@/stores/home/landing-draft-store", () => {
 
 vi.mock("@/stores/composer/composer-run-settings-store", () => {
   const state = {
-    globalLastRunSettings: null,
+    globalLastRunSettingsByHostId: {},
+    legacyGlobalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
+    // The imperative draft-mint path (`ensureSubmissionDraft`) seeds from
+    // this; null preserves the suite's "no remembered last-run" premise.
+    getGlobalRunSettings: () => null,
   };
   const useComposerRunSettingsStore = Object.assign(
     (selector: (value: typeof state) => unknown) => selector(state),
@@ -96,6 +100,7 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
   );
   return {
     useComposerRunSettingsStore,
+    selectGlobalLastRunSettings: () => null,
   };
 });
 

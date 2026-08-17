@@ -177,6 +177,14 @@ export const hostSelectionReadAllowlist = [
   "src/components/migration/**/*.{ts,tsx}",
   "src/stores/settings/**/*.{ts,tsx}",
 
+  // Cross-host fork (#1227): the dialog's cloud-owner read deliberately
+  // shares the sidebar's cloud-chat query cache, which is keyed by the
+  // app-wide client - a tab-client read would fork the cache entry per host
+  // to answer the same cloud fact. Host-scoped RPCs in this dialog still
+  // ride the tab client and per-row requesters. A single file, not the
+  // chat/ directory: the exemption is the read, not the surface.
+  "src/components/chat/chat-fork-dialog.tsx",
+
   // Tests mock / arrange these hooks; the production surface is what D12 polices.
   "**/__tests__/**/*.{ts,tsx}",
   "**/*.{test,spec}.{ts,tsx}",

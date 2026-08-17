@@ -37,9 +37,70 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutate: dialogMocks.createMutate,
     isPending: false,
   }),
+  // #1227 creates on the SELECTED host's client. Full UseMutationResult
+  // surface: a partial stub fails every case at once on a member the test
+  // never mentions (see chat-tile.test.tsx's identical note).
+  useEpicCreateChatForHostClient: () => ({
+    mutate: dialogMocks.createMutate,
+    isPending: false,
+    reset: () => undefined,
+    error: null,
+    variables: null,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    isIdle: true,
+    status: "idle",
+    mutateAsync: () => Promise.reject(new Error("unused")),
+    failureCount: 0,
+    failureReason: null,
+    isPaused: false,
+    submittedAt: 0,
+    context: null,
+  }),
 }));
 
 const TAB_HOST_ID = "tab-host-id";
+
+// The cloud-owner read walks the epic store; `null` = owner unknown, the
+// neutral arm, which the scope-routing claims never touch.
+vi.mock("@/hooks/chats/use-clone-source-owner", () => ({
+  useCloneSourceOwnerUserId: () => null,
+}));
+
+// #1227's picker rows come from the directory list; one row - the tab host -
+// is all the scope-routing claims need.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: TAB_HOST_ID,
+        label: "Tab host",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:1/rpc",
+        version: "0.0.0-test",
+        transportDialability: "dialable",
+      },
+    ],
+    isLoading: false,
+    isError: false,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
+// #1227's dialog resolves the picked target's own requester and reads the
+// cloud-owner row through the app-wide client; neither seam matters to the
+// scope-routing claims this suite makes.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => null,
+  };
+});
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => TAB_HOST_CLIENT,
@@ -187,15 +248,17 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
       />,
     );
 
-    expect(dialogMocks.capturedHostScope).toEqual({
-      kind: "fixed",
+    // #1227 made the scope dialog-local (`selected`): the picker owns its
+    // target and the DEFAULT is the tab's own host. The protected property is
+    // unchanged - the dialog never hands the picker the app-wide scope.
+    expect(dialogMocks.capturedHostScope).toMatchObject({
+      kind: "selected",
       hostId: TAB_HOST_ID,
-      hostClient: TAB_HOST_CLIENT,
     });
     // The regressed shape - `{ kind: "active" }` - is what let the picker
     // call `selectById` and rebind the app-wide active host. Guard against a
     // partial revert as much as against the original bug.
-    expect(dialogMocks.capturedHostScope).not.toEqual({ kind: "active" });
+    expect(dialogMocks.capturedHostScope?.kind).not.toBe("active");
   });
 
   it("keeps the picker pinned to the tab host across an open/close/reopen cycle", () => {
@@ -208,7 +271,7 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
         onOpenChange={() => undefined}
       />,
     );
-    expect(dialogMocks.capturedHostScope?.kind).toBe("fixed");
+    expect(dialogMocks.capturedHostScope?.kind).toBe("selected");
 
     view.rerender(
       <ChatForkDialog
@@ -229,10 +292,9 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
       />,
     );
 
-    expect(dialogMocks.capturedHostScope).toEqual({
-      kind: "fixed",
+    expect(dialogMocks.capturedHostScope).toMatchObject({
+      kind: "selected",
       hostId: TAB_HOST_ID,
-      hostClient: TAB_HOST_CLIENT,
     });
   });
 });

@@ -139,7 +139,7 @@ export function McpScopePicker(props: {
           aria-label={`${locationLabel}: ${triggerTitle}`}
           className={cn(
             "flex h-7 w-[min(100%,22rem)] min-w-0 items-center gap-2 rounded-sm border border-border bg-background px-2.5 text-left text-ui-sm transition-colors",
-            "hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+            "hover:bg-foreground/8 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
             "dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
           )}
         >

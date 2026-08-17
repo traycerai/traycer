@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
+  CHAT_PUBLICATION_WAIT_POLL_LANE,
   GIT_DIRTY_SUBMODULE_POLL_LANE,
   GIT_INITIAL_ERROR_POLL_LANE,
   GIT_STALE_ERROR_POLL_LANE,
@@ -125,6 +126,33 @@ describe("host method poll policy table", () => {
         applyToExisting: true,
       }),
     ).toBe("fifo");
+  });
+
+  // fifo here is not the usual "it is a write, so serialize it". The
+  // coordinator keys queues by [hostId, userId, method, params], so two
+  // Delivers naming different subsets are already distinct jobs and `latest`
+  // would leave them alone - but the common press names no subset at all, and
+  // two of THOSE are byte-identical params on one queue. Under `latest` the
+  // second would coalesce into the first and vanish, while releasing a hold
+  // advances a DURABLE delivery cursor: the human is left looking at a list
+  // that may or may not still be held, with no way to tell which.
+  it("keeps deliverHeld on fifo, including the whole-chat press that names no ids", () => {
+    expect(HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].mode).toBe(
+      "fifo",
+    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("managedCommand.deliverHeld", {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        commandIds: null,
+      }),
+    ).toBe("fifo");
+    // A mutation, and the held set a poll would watch for arrives unprompted
+    // on `chat.subscribe` - so polling it would be a second, slower source of
+    // truth for something already pushed.
+    const neverPolled: null =
+      HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].poll;
+    expect(neverPolled).toBeNull();
   });
 
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
@@ -654,5 +682,77 @@ describe("host method poll policy table", () => {
     expect(policy.staleDataErrorLane).toBe(
       NOTIFICATION_INDICATOR_ERROR_POLL_LANE,
     );
+  });
+});
+
+// The defect that mattered: without reading `definitive` first, a
+// permanently halted publication reports `published: false` - byte for byte
+// what a chat mid-first-sweep reports - so the client re-asks every 30s
+// forever while telling the user to wait. See chat-publication-definitive.ts
+// and epic.chatPublicationState's own doc for the wire contract this
+// classifier depends on.
+describe("epic.chatPublicationState poll lane terminates on `definitive`", () => {
+  const policy = HOST_METHOD_POLL_TABLE["epic.chatPublicationState"].poll;
+
+  it("polls while unpublished or the boundary is uncovered, with definitive: null", () => {
+    expect(
+      policy.classify({
+        published: false,
+        boundaryCovered: null,
+        definitive: null,
+      }),
+    ).toBe(CHAT_PUBLICATION_WAIT_POLL_LANE);
+    expect(
+      policy.classify({
+        published: true,
+        boundaryCovered: false,
+        definitive: null,
+      }),
+    ).toBe(CHAT_PUBLICATION_WAIT_POLL_LANE);
+  });
+
+  it("stops polling once `definitive` names a reason, for every reason including one this build does not recognise", () => {
+    // Same base fixture (published: false) that would otherwise poll forever
+    // - only `definitive` varies across the four cases, isolating it as the
+    // cause of the lane dropping rather than some other field.
+    for (const definitive of [
+      "chat-deleted",
+      "lineage-superseded",
+      "backup-halted",
+      "a-reason-this-build-does-not-know",
+    ]) {
+      expect(
+        policy.classify({
+          published: false,
+          boundaryCovered: null,
+          definitive,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("does NOT stop polling when `definitive` is merely absent - a pre-field host", () => {
+    // A host built before `definitive` negotiates the same method version,
+    // so its response takes the un-parsed same-version path and the field
+    // genuinely arrives missing at runtime. Reading that absence as
+    // terminal would mark every older host permanently halted - the same
+    // hang inverted. This is the same fixture as the polling case above
+    // with the key omitted entirely rather than set to null.
+    expect(policy.classify({ published: false, boundaryCovered: null })).toBe(
+      CHAT_PUBLICATION_WAIT_POLL_LANE,
+    );
+    expect(policy.classify({ published: true, boundaryCovered: false })).toBe(
+      CHAT_PUBLICATION_WAIT_POLL_LANE,
+    );
+  });
+
+  it("stays terminal for an already-covered boundary regardless of a null definitive", () => {
+    expect(
+      policy.classify({
+        published: true,
+        boundaryCovered: true,
+        definitive: null,
+      }),
+    ).toBe(false);
   });
 });

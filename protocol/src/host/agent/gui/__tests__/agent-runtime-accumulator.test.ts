@@ -10,7 +10,10 @@ import {
   toolCallErroredEventSchema,
   toolCallStartedEventSchema,
 } from "../agent-runtime";
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ContentBlock,
+  ToolCallManagedCommandRestarted,
+} from "@traycer/protocol/persistence/epic/schemas";
 
 function makeBlocks(): ContentBlock[] {
   return [];
@@ -344,6 +347,55 @@ describe("accumulateEvent", () => {
     expect(blocks[0].timestamp).toBe(2);
     expect((blocks[0] as ToolCallBlock).startedAt).toBe(1);
     expect((blocks[0] as ToolCallBlock).endedAt).toBe(2);
+  });
+
+  it("tool_call.completed stamps a managedCommand payload onto the block, and a later re-completion without it keeps the identity", () => {
+    // The shell id is minted once, inside the call, and only comes back on
+    // the successful RESULT - so completion is the only place this can land.
+    // A re-completion (e.g. a retried terminal event) that omits the field
+    // must not erase what the first one established, exactly like
+    // `agentMessageSend` beside it.
+    const restarted: ToolCallManagedCommandRestarted = {
+      event: "restarted",
+      commandId: "cmd-1",
+      description: "deploy watcher",
+      monitoring: true,
+      effectiveCommand: "tail -f deploy.log --since 1h",
+      effectiveCwd: "/work/repo",
+      commandChanged: true,
+      cwdChanged: false,
+      outcome: { state: "running", pid: 4410, startedAtMs: 10 },
+    };
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+      managedCommand: restarted,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).managedCommand).toEqual(restarted);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 3,
+      toolName: "traycer_restart_shell",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).managedCommand).toEqual(restarted);
   });
 
   it("tool_call events preserve detached background task timing", () => {

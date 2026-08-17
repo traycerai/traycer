@@ -39,7 +39,7 @@ const DIRTY_CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
 };
 
-const STAGING_KEY = newConversationModalStagingKey("epic-1", null);
+const STAGING_KEY = newConversationModalStagingKey("host-a", "epic-1", null);
 const STAGING_KEY_ID = worktreeStagingKeyString(STAGING_KEY);
 
 /** A per-machine choice: exactly the state G4 must not carry across hosts. */

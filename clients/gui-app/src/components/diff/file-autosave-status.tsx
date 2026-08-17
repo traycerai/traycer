@@ -360,6 +360,7 @@ function statusPillClassName(
       "h-5 rounded px-1.5 text-ui-xs font-normal text-muted-foreground",
     appearance === "pill" &&
       tone === "neutral" &&
+      // muted-fill-ok: pill renders only in canvas tiles (workspace-file / git-diff); --canvas never equals --muted
       "border-border/70 bg-muted/45 text-muted-foreground",
     appearance === "pill" &&
       tone === "active" &&
@@ -373,6 +374,7 @@ function statusPillClassName(
     appearance === "quiet" && tone === "warning" && "text-warning",
     appearance === "quiet" && tone === "danger" && "text-destructive",
     interactive &&
+      // muted-fill-ok: same canvas-only pill as above; --canvas never equals --muted
       "cursor-pointer outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50",
   );
 }

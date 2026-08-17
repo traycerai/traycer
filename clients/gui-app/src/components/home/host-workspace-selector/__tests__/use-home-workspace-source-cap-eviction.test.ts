@@ -1,7 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useHomeWorkspaceSource } from "../use-home-workspace-source";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+
+// `landing-draft-store.ts`'s `createDraft` snapshots the global workspace
+// bucket through this imperative call (real, unmocked returns `null` -
+// unbound). The second test below pre-seeds the global bucket under
+// TEST_HOST_ID and expects a freshly-created draft to inherit it, so this
+// must resolve to the SAME host id `useHomeWorkspaceSource` is given below.
+vi.mock("@/lib/host/runtime", () => ({
+  getHostBindingSnapshot: () => ({
+    hostClient: { getActiveHostId: () => "host-a" },
+  }),
+}));
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   useWorktreeIntentStagingStore,
@@ -10,7 +24,12 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
-const STAGING_KEY: WorktreeStagingKey = { surface: "landing", draftId: null };
+const TEST_HOST_ID = "host-a";
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "landing",
+  hostId: TEST_HOST_ID,
+  draftId: null,
+};
 const SCRIPTS = {
   setup: {
     default: "bun install",
@@ -26,12 +45,15 @@ const SCRIPTS = {
   },
 };
 
+// Stamped with the host the hook targets: the store files a folder only in
+// the bucket of the host it was actually prepared on, so an unstamped fixture
+// would be silently dropped and never reach the cap at all.
 function numberedFolder(index: number): WorkspaceFolderInfo {
   return {
     path: `/tmp/cap-workspace-${index}`,
     name: `cap-workspace-${index}`,
     repoIdentifier: null,
-    hostId: null,
+    hostId: TEST_HOST_ID,
   };
 }
 
@@ -55,21 +77,13 @@ function stagedWorktreeEntry(
 }
 
 beforeEach(() => {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
 afterEach(() => {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-    primaryPath: null,
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
@@ -77,7 +91,7 @@ afterEach(() => {
 describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the evicted secondary", () => {
   it("unstages the staged intent entry of a folder evicted by the 50-folder cap", () => {
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(STAGING_KEY, null),
+      useHomeWorkspaceSource(STAGING_KEY, null, TEST_HOST_ID),
     );
 
     // Fill to the cap with 50 folders (0..49). Folder 0 implicitly resolves
@@ -97,14 +111,20 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
         );
       }
     });
-    const beforeFolders = useWorkspaceFoldersStore.getState().folders;
+    const beforeFolders = selectWorkspaceFoldersBucket(
+      useWorkspaceFoldersStore.getState(),
+      TEST_HOST_ID,
+    ).folders;
 
     // Add folder 50 - pushes past the cap and evicts the oldest secondary.
     act(() => {
       result.current.addResolvedFolders([numberedFolder(50)]);
     });
 
-    const afterFolders = useWorkspaceFoldersStore.getState().folders;
+    const afterFolders = selectWorkspaceFoldersBucket(
+      useWorkspaceFoldersStore.getState(),
+      TEST_HOST_ID,
+    ).folders;
     const evictedPath = beforeFolders.find(
       (path) => !afterFolders.includes(path),
     );
@@ -131,7 +151,9 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
     const initialFolders = Array.from({ length: 50 }, (_, index) =>
       numberedFolder(index),
     );
-    useWorkspaceFoldersStore.getState().addResolvedFolders(initialFolders);
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders(TEST_HOST_ID, initialFolders);
     const draftId = useLandingDraftStore.getState().createDraft(null);
 
     // Keep both representations at the supported 50-folder cap while making
@@ -150,10 +172,11 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
 
     const stagingKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: TEST_HOST_ID,
       draftId,
     };
     const { result } = renderHook(() =>
-      useHomeWorkspaceSource(stagingKey, null),
+      useHomeWorkspaceSource(stagingKey, null, TEST_HOST_ID),
     );
     const survivingEntry = stagedWorktreeEntry(numberedFolder(1).path, SCRIPTS);
     act(() => {
@@ -167,7 +190,10 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
       result.current.addResolvedFolders([numberedFolder(50)]);
     });
 
-    const globalFolders = useWorkspaceFoldersStore.getState().folders;
+    const globalFolders = selectWorkspaceFoldersBucket(
+      useWorkspaceFoldersStore.getState(),
+      TEST_HOST_ID,
+    ).folders;
     const draftWorkspace = useLandingDraftStore
       .getState()
       .drafts.find((draft) => draft.id === draftId)?.workspace;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionKindLabel,
   hostOptionStatusWord,
   isHostOptionSelectable,
@@ -57,7 +58,9 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     ["stopped", "stopped"],
     ["not-installed", "not installed"],
   ] as const)("says %s → %s", (state, word) => {
-    expect(hostOptionStatusWord(option({ state }))).toBe(word);
+    expect(
+      hostOptionStatusWord(option({ state }), AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe(word);
   });
 
   /**
@@ -77,7 +80,9 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     // row is the layered-narration class this epic deletes.
     ["viewer-offline"],
   ] as const)("stays silent for %s", (state) => {
-    expect(hostOptionStatusWord(option({ state }))).toBeNull();
+    expect(
+      hostOptionStatusWord(option({ state }), AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBeNull();
   });
 
   /**
@@ -87,10 +92,16 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
    */
   it("lets setting up outrank every health state", () => {
     expect(
-      hostOptionStatusWord(option({ state: "offline", settingUp: true })),
+      hostOptionStatusWord(
+        option({ state: "offline", settingUp: true }),
+        AVAILABLE_HOST_ROW_SURFACE_STATE,
+      ),
     ).toBe("setting up");
     expect(
-      hostOptionStatusWord(option({ state: "online", settingUp: true })),
+      hostOptionStatusWord(
+        option({ state: "online", settingUp: true }),
+        AVAILABLE_HOST_ROW_SURFACE_STATE,
+      ),
     ).toBe("setting up");
   });
 
@@ -106,13 +117,23 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   it("no longer contradicts its own health line on an undialable reported-reachable host", () => {
     const host = option({ state: "reported-reachable", connectable: false });
 
-    expect(hostOptionStatusWord(host)).toBeNull();
-    expect(hostOptionStatusWord(host)).not.toBe("unreachable");
+    expect(
+      hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBeNull();
+    expect(
+      hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).not.toBe("unreachable");
     // The refusal is carried by legality, not by a word.
-    expect(isHostOptionSelectable(host, "bind")).toBe(false);
-    expect(isHostOptionSelectable(host, "pin")).toBe(false);
+    expect(
+      isHostOptionSelectable(host, "bind", AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe(false);
+    expect(
+      isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe(false);
     // ...and viewing it is still legal: that is how you get back to it.
-    expect(isHostOptionSelectable(host, "view")).toBe(true);
+    expect(
+      isHostOptionSelectable(host, "view", AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe(true);
   });
 
   /**
@@ -122,10 +143,16 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   it("keeps the word fixed to health while the route varies underneath it", () => {
     for (const connectable of [true, false]) {
       expect(
-        hostOptionStatusWord(option({ state: "offline", connectable })),
+        hostOptionStatusWord(
+          option({ state: "offline", connectable }),
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
       ).toBe("offline");
       expect(
-        hostOptionStatusWord(option({ state: "online", connectable })),
+        hostOptionStatusWord(
+          option({ state: "online", connectable }),
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
       ).toBeNull();
     }
   });
@@ -139,7 +166,10 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   it("names the upgrade for local-only regardless of the client-side plan flag", () => {
     for (const planRestricted of [true, false]) {
       expect(
-        hostOptionStatusWord(option({ state: "local-only", planRestricted })),
+        hostOptionStatusWord(
+          option({ state: "local-only", planRestricted }),
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
       ).toBe("requires upgrade");
     }
   });

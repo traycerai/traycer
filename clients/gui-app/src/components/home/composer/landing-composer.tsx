@@ -60,7 +60,10 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import {
+  selectGlobalLastRunSettings,
+  useComposerRunSettingsStore,
+} from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
@@ -199,8 +202,15 @@ export function LandingComposer(props: LandingComposerProps) {
     markLandingEditorMounted();
   }, []);
 
-  const globalLastRunSettings = useComposerRunSettingsStore(
-    (state) => state.globalLastRunSettings,
+  // The landing composer follows the app-wide active host (its picker rebinds
+  // that default), so its remembered last-run settings are the ACTIVE host's
+  // bucket - switching hosts re-seeds the toolbar from the new host's memory.
+  // Keyed on the composer's RESOLVED host (pin ?? effective): under the
+  // surface-pin model the settings memory follows what this draft will
+  // actually create on, not an app-wide "active" the picker no longer moves.
+  const activeHostId = resolvedHostId;
+  const globalLastRunSettings = useComposerRunSettingsStore((state) =>
+    selectGlobalLastRunSettings(state, activeHostId),
   );
   const setGlobalRunSettings = useComposerRunSettingsStore(
     (state) => state.setGlobalRunSettings,
@@ -210,12 +220,12 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      setGlobalRunSettings(settings, Date.now());
+      setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
     },
-    [draftId, setDraftSettings, setGlobalRunSettings],
+    [activeHostId, draftId, setDraftSettings, setGlobalRunSettings],
   );
   const settingsSeed = useMemo(
     () =>
@@ -242,7 +252,7 @@ export function LandingComposer(props: LandingComposerProps) {
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, tuiOnly: composerMode === "terminal" },
+    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -304,6 +314,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     hostClient,
+    resolvedHostId,
   );
   const workspaceAvailability = useMemo(
     () =>
@@ -604,10 +615,10 @@ export function LandingComposer(props: LandingComposerProps) {
       if (composerIsPinned) return;
       useWorktreeIntentStagingStore
         .getState()
-        .clear({ surface: "landing", draftId });
+        .clear({ surface: "landing", hostId: activeHostId, draftId });
       setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
     });
-  }, [composerIsPinned, draftId]);
+  }, [activeHostId, composerIsPinned, draftId]);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -637,12 +648,15 @@ export function LandingComposer(props: LandingComposerProps) {
       // new draft's id so activeDraftId's null -> id flip lines up with the
       // key the parent already mounted under (no editor remount). Falls back
       // to a fresh id when the caller has not pre-minted one.
-      const createdDraftId = useLandingDraftStore
-        .getState()
-        .createDraftWithId(
-          props.pendingCreateId ?? uuidv4(),
-          useComposerRunSettingsStore.getState().globalLastRunSettings,
-        );
+      const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
+        props.pendingCreateId ?? uuidv4(),
+        useComposerRunSettingsStore
+          .getState()
+          // The composer's own resolved placement host - not the app
+          // binding: the seed should describe the machine this draft
+          // will create on.
+          .getGlobalRunSettings(activeHostId),
+      );
       createdUnboundDraftIdRef.current = createdDraftId;
       // The workspace picker's staging key is keyed by this draft id
       // (`{surface:"landing", draftId}`), so minting it here flips that key
@@ -653,15 +667,15 @@ export function LandingComposer(props: LandingComposerProps) {
       // remounts and drops an in-progress edit.
       useWorktreeIntentStagingStore
         .getState()
-        .migrateKey(
-          { surface: "landing", draftId: null },
-          { surface: "landing", draftId: createdDraftId },
+        .migrateKeyForAllHosts(
+          { surface: "landing", hostId: activeHostId, draftId: null },
+          { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
         );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);
     },
-    [props.pendingCreateId, runtime, unboundRuntime],
+    [activeHostId, props.pendingCreateId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(

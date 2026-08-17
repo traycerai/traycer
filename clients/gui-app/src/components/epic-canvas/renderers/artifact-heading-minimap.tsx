@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ARTIFACT_HEADING_MIN_ITEMS,
+  resolveArtifactHeadingTickWidth,
   type ArtifactHeadingOutlineEntry,
 } from "./artifact-heading-items";
 import { useArtifactHeadingMetrics } from "./use-artifact-heading-metrics";
@@ -226,8 +227,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
             <span
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute left-0 -translate-y-1/2 rounded-full transition-[background-color,height,opacity] duration-150",
-                entry.level === 1 ? "w-6" : "w-3",
+                "pointer-events-none absolute left-0 -translate-y-1/2 rounded-full transition-[background-color,height,opacity,width] duration-150",
                 index === activeIndex
                   ? "h-[3px] bg-foreground/90"
                   : "h-0.5 bg-muted-foreground/35",
@@ -245,6 +245,10 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
                   index,
                   outline.length,
                   ARTIFACT_HEADING_END_HIT_PADDING,
+                ),
+                width: resolveArtifactHeadingTickWidth(
+                  hitStripWidth,
+                  entry.level,
                 ),
               }}
             />

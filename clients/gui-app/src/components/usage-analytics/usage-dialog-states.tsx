@@ -119,7 +119,10 @@ export function UsageDialogEmpty(props: UsageDialogEmptyProps): ReactNode {
       className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-4 py-6 text-center"
       data-testid="usage-dialog-empty"
     >
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      {/* `bg-foreground/10`, not `bg-muted`, for the SKELETON_ON_POPOVER
+          reason: preset themes collapse `--muted` into `--popover`, which
+          would leave the icon floating without its ring. */}
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-muted-foreground">
         <LineChart className="size-5" aria-hidden />
       </div>
       <div className="space-y-1">

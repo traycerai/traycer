@@ -23,6 +23,7 @@ import {
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -118,6 +119,8 @@ function SettingsSidebarHostPicker(props: {
         selected={scope.host}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         // Settings is where the add-host dialog lives, so here the list ends in
         // the verb itself rather than in a link to this very page.
         action={{

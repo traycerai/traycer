@@ -484,6 +484,8 @@ function createDirtyEpicHandle(
     markChatRecordListAuthoritative: () => undefined,
     applyChatRecordDelta: () => undefined,
     republishChatRecordsForCurrentUser: () => undefined,
+    beginPendingChatCreation: () => undefined,
+    clearPendingChatCreation: () => undefined,
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,

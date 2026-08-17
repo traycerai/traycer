@@ -367,6 +367,7 @@ export function SetupCardSegment(props: {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
       </div>
       {expanded ? (
+        // muted-fill-ok: card variant renders only in a canvas chat tile (inline variant is the Popover arm)
         <div className="mx-auto w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 p-3">
           {workspaceDetail}
         </div>

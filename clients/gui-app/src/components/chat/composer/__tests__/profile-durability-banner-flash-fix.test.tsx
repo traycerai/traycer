@@ -253,6 +253,7 @@ function ChatComposerLikeHarness(props: {
   );
   const toolbarStore = useComposerToolbarStore(null, seedSource, null, {
     hostClient: TAB_HOST_CLIENT,
+    hostId: "tab-host",
     tuiOnly: false,
   });
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);

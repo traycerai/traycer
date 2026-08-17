@@ -404,6 +404,7 @@ function renderPickerWithFixture(
     },
     onSettingsChange: null,
     tuiOnly: false,
+    hostId: "host-a",
   });
   render(
     <fixture.Wrapper>

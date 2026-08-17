@@ -215,8 +215,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     draft: "",
   }));
   const stagingKey = useMemo(
-    () => pendingForkTerminalAgentStagingKey(epicId),
-    [epicId],
+    () => pendingForkTerminalAgentStagingKey(hostId, epicId),
+    [hostId, epicId],
   );
   const settingsSeed = useMemo(() => {
     if (target === null) return null;
@@ -239,7 +239,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     null,
     fallbackSeedSource(settingsSeed, hostClient),
     null,
-    { hostClient, tuiOnly: true },
+    { hostClient, hostId, tuiOnly: true },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
@@ -521,12 +521,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       stagingKey,
       seedIntent: target.workspaceSeed.intent,
       fallbackWorkspace: target.workspaceSeed.workspace,
+      hostId,
     });
     const worktreeIntent = launchWorkspace.worktreeIntent;
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
-        .setEpicIntent(epicId, worktreeIntent, Date.now());
+        .setEpicIntent(epicId, hostId, worktreeIntent, Date.now());
     }
     setStatus(
       worktreeIntent !== null && worktreeIntent.entries.length > 0
@@ -610,6 +611,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     canSubmit,
     createAgent,
     epicId,
+    hostId,
     onOpenChange,
     sourceHarnessProfiles,
     sourceProfileId,
@@ -770,7 +772,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
             <section
               aria-label="Run location"
-              className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3"
+              className="min-w-0 rounded-lg border border-border/60 bg-foreground/3 p-3"
             >
               <ActiveHostWorkspaceControls
                 disabled={false}

@@ -123,12 +123,14 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
     globalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
   };
+  const selectGlobalLastRunSettings = () => null;
   const useComposerRunSettingsStore = Object.assign(
     (selector: (value: typeof state) => unknown) => selector(state),
     { getState: () => state },
   );
   return {
     useComposerRunSettingsStore,
+    selectGlobalLastRunSettings,
   };
 });
 

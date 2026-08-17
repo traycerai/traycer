@@ -75,7 +75,11 @@ import {
   worktreeIntentSchema,
   worktreeIntentSchemaV10,
 } from "@traycer/protocol/host/worktree-schemas";
-import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  heldManagedCommandUpdateSchema,
+  managedCommandSchema,
+  managedCommandSchemaPreImage,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -645,6 +649,22 @@ export const chatSnapshotSchema = z.object({
   // and `[]` is the truth rather than a fallback; and the UI is presence-based,
   // rendering "old host" and "none yet" identically either way.
   managedCommands: z.array(managedCommandSchema).default([]),
+  // The subset of this chat's shells whose last output a committed Stop fence
+  // is holding back (`chat.subscribe@1.7`). A SUBSET, not a parallel set: every
+  // entry has a `managedCommands` row under the same id, and this only marks
+  // which of them are waiting on an explicit Deliver.
+  //
+  // It rides the snapshot rather than being derived client-side because a hold
+  // is DURABLE - it outlives the host process that installed it, so the client
+  // cannot reconstruct it from anything it watched happen, and a shell whose
+  // FINAL batch was captured never produces the later output that would
+  // otherwise reveal one.
+  //
+  // `default([])` for the same reason `managedCommands` is defaulted rather
+  // than optional, and the capability sentinel is given up just as deliberately:
+  // a host too old to send this cannot install holds either, so `[]` is the
+  // truth and not a fallback.
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
   // Whether the host considers a turn genuinely active or activating right
   // now - exactly its own `isTurnInProgress()` (backs `stop`'s
   // `NO_ACTIVE_TURN` rejection). Narrower than `runStatus !== "idle"`, which
@@ -710,13 +730,46 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
  * Never sent to a peer that negotiated ≤1.5: it has no variant for this kind,
  * and the whole surface arrives together or not at all.
  */
-const chatSubscribeManagedCommandsChangedServerFrameSchema = z.object({
-  kind: z.literal("managedCommandsChanged"),
+// Parameterised over the command schema for the same reason `blockDelta` is
+// parameterised over its event schema: this frame is shared by the frozen `1.6`
+// bundle and the live one, and the command shape differs between them.
+function managedCommandsChangedServerFrameSchema<
+  CommandSchema extends z.ZodType,
+>(commandSchema: CommandSchema) {
+  return z.object({
+    kind: z.literal("managedCommandsChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    // Defaulted for the same reason as the snapshot's field: a consumer reads
+    // one array shape on both channels and never null-checks either.
+    managedCommands: z.array(commandSchema).default([]),
+  });
+}
+
+const chatSubscribeManagedCommandsChangedServerFrameSchema =
+  managedCommandsChangedServerFrameSchema(managedCommandSchema);
+
+/**
+ * The chat's HELD updates changed (`chat.subscribe@1.7`). Same "upsert the
+ * world" shape as `managedCommandsChanged`, and its own frame for the same
+ * reason that one is: its trigger is neither a turn nor a command lifecycle
+ * transition. A hold appears when a Stop commits and disappears when the
+ * command's next line crosses the hold boundary or a Deliver releases it -
+ * none of which move the command's own status, so a held change would ride
+ * `managedCommandsChanged` only by re-broadcasting an unchanged command set.
+ *
+ * Sent only to a peer that negotiated ≥1.7. A `1.6` peer has no variant for
+ * this kind and would fail its strict decode of the frame, so the host drops
+ * it there rather than degrading the surface halfway - exactly how
+ * `managedCommandsChanged` is withheld from ≤1.5.
+ */
+const chatSubscribeHeldUpdatesChangedServerFrameSchema = z.object({
+  kind: z.literal("heldUpdatesChanged"),
   ...textFrameFields,
   ...chatReferenceFields,
-  // Defaulted for the same reason as the snapshot's field: a consumer reads one
-  // array shape on both channels and never null-checks either.
-  managedCommands: z.array(managedCommandSchema).default([]),
+  // Defaulted for the same reason the sibling frames' arrays are: one array
+  // shape on both channels, and no consumer null-checks either.
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
 });
 
 // `blockDelta`'s `event` schema is the one shared-frame shape that changes
@@ -940,6 +993,7 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchema,
   chatSubscribeTurnStateChangedServerFrameSchema,
   chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
   ...chatSubscribeSharedServerFrameSchemas,
 ]);
 export type ChatSubscribeServerFrame = z.infer<
@@ -1925,7 +1979,10 @@ const chatSnapshotSchemaV16 = z.object({
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   backgroundItems: z.array(backgroundItemSchema).optional(),
-  managedCommands: z.array(managedCommandSchema).default([]),
+  // Pinned to the pre-image: `1.6` is the released line the Shells surface
+  // arrived on, and the details widening (`command`/`cwd`/`cadence`) landed
+  // after it. Same reason `chat` above is pinned to `chatSchemaPreImage`.
+  managedCommands: z.array(managedCommandSchemaPreImage).default([]),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1939,7 +1996,7 @@ const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV16,
   chatSubscribeTurnStateChangedServerFrameSchema,
-  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  managedCommandsChangedServerFrameSchema(managedCommandSchemaPreImage),
   ...chatSubscribeCommonServerFrameSchemasPreTurnTail,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
@@ -1952,7 +2009,7 @@ export const chatSubscribeV16 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
-// ─── Live `chat.subscribe@1.7` contract (image generation + rendering) ─────
+// ─── Live `chat.subscribe@1.7` contract (image generation + held updates) ──
 //
 // `1.7` is where the live schemas gain image support: `imageResults` on the
 // `tool_call` content block and `tool_call.completed` runtime event, the
@@ -1960,6 +2017,22 @@ export const chatSubscribeV16 = defineStreamRpcContract({
 // (`assistantMessageSchema.imageResolutions`), the typed
 // `image_resolution.updated` runtime event for initial resolution and
 // mid-turn watcher changes. The client frame is unchanged.
+//
+// It is ALSO where the Stop fence's held updates joined the chat stream: the
+// snapshot's `heldUpdates` and the `heldUpdatesChanged` frame, the pair that
+// gives `managedCommand.deliverHeld` something to act on. Two capabilities on
+// one minor because `1.7` has not shipped - the highest minor any released
+// `host-v*`/`cli-v*`/`desktop-v*` baseline carries is `1.5`, so no peer in the
+// field has ever negotiated `1.6` or `1.7` and neither line's meaning is fixed
+// yet. This is the same freedom `1.6` took for the details widening
+// (`command`/`cwd`/`cadence`), which is why that landed with no compat
+// exception either.
+//
+// The frozen `1.6` bundle above is untouched by both, and deliberately so even
+// though it is equally unshipped: its snapshot and frame union are hand-written
+// literals bound to `managedCommandSchemaPreImage`, so a live addition cannot
+// leak onto them. Once `1.7` ships, a third capability costs a real `1.8` and
+// the pre-image ritual that goes with it.
 export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,

@@ -847,6 +847,7 @@ function AssistantSegment({
           inputDetail={segment.inputDetail}
           error={segment.error}
           agentMessageSend={segment.agentMessageSend}
+          managedCommand={segment.managedCommand}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}

@@ -74,7 +74,11 @@ import {
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import {
+  selectRememberedEpicIntent,
+  selectWorktreeIntentMemoryBucket,
+  useWorktreeIntentMemoryStore,
+} from "@/stores/worktree/worktree-intent-memory-store";
 import {
   useHomeWorkspaceSource,
   type HomeWorkspaceSource,
@@ -111,7 +115,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import type { HostWorkspaceControlsHostScope } from "./host-workspace-controls-scope";
+import {
+  hostWorkspaceControlsScopeHostId,
+  hostWorkspaceControlsScopeRefusals,
+  type HostWorkspaceControlsHostScope,
+} from "./host-workspace-controls-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { CloneOnHostSwitchDialog } from "./clone-on-host-switch-dialog";
@@ -290,9 +298,18 @@ interface HomeSurfaceProps {
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
+  // Must be the SAME host `ActiveHostWorkspaceControls` resolves for an
+  // "active" scope below - the staged slot and the folder rows it stages into
+  // have to agree on which machine they describe. That resolution is the
+  // composer surface pin (pin ?? effective), so read the same primitive.
+  const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
-    () => ({ surface: "landing", draftId: props.draftId }),
-    [props.draftId],
+    () => ({
+      surface: "landing",
+      hostId: landingHostId,
+      draftId: props.draftId,
+    }),
+    [landingHostId, props.draftId],
   );
   return (
     <ActiveHostWorkspaceControls
@@ -357,16 +374,13 @@ export function ActiveHostWorkspaceControls(
   const directoryEntries = directoryList.data ?? [];
   // The composer is PLACEMENT, and placement is a per-surface pin (redesign
   // P1.2, selection model §2/§54) - not the app-wide selection, which is
-  // Settings ▸ Activate's alone now. So this arm resolves `pin ?? effective`
-  // and the picker below writes the pin; nothing here moves the window.
-  //
-  // The FIXED arm (fork dialogs, tab-context composers) reads none of it and
-  // writes nothing at all - §55: "nothing about them may write anything".
+  // Settings ▸ Activate's alone now. A scope that NAMES a host (`fixed`, or
+  // #1227's dialog-local `selected`) wins outright; the follow arm resolves
+  // the composer's own pin - `pin ?? effective` - and the picker below writes
+  // the pin. Nothing here moves the window.
   const composerPin = useComposerSurfaceHostPin();
-  const activeHostId =
-    props.hostScope.kind === "fixed"
-      ? props.hostScope.hostId
-      : composerPin.resolvedHostId;
+  const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
+  const activeHostId = scopeHostId ?? composerPin.resolvedHostId;
   const activeEntry =
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
   // "Local" is the neutral pre-directory default, and it is only honest while
@@ -374,9 +388,7 @@ export function ActiveHostWorkspaceControls(
   // carry is a real unavailable state (D6), not a slow first paint.
   const hostLabel =
     activeEntry?.label ??
-    (props.hostScope.kind === "fixed" || composerPin.isPinned
-      ? "Unavailable"
-      : "Local");
+    (scopeHostId === null && !composerPin.isPinned ? "Local" : "Unavailable");
   // `pin.selection`, NOT `pin.resolvedHostId`: a FOLLOWING surface must keep
   // using the app-wide bound client (which the authority bridge holds on the
   // effective host) rather than a transient requester, so nothing about the
@@ -385,9 +397,9 @@ export function ActiveHostWorkspaceControls(
   // window happens to be bound to.
   const pinResolvedHostClient = useHostClientForHostId(composerPin.selection);
   const activeHostClient =
-    props.hostScope.kind === "fixed"
-      ? props.hostScope.hostClient
-      : pinResolvedHostClient;
+    props.hostScope.kind === "active"
+      ? pinResolvedHostClient
+      : props.hostScope.hostClient;
   // The picker's rows come from the merged host list, not from the directory
   // this component reads for the chip label: a host the account owns but this
   // client cannot dial belongs in the list (named, with its reason, inert),
@@ -407,6 +419,10 @@ export function ActiveHostWorkspaceControls(
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
+    // The scope-correct host: the FIXED host when pinned, else the app-wide
+    // active one - the same resolution every other host-derived read in this
+    // component uses, so the folder bucket can never disagree with them.
+    activeHostId,
   );
   const workspaceSource = useMemo<HomeWorkspaceSource>(
     () =>
@@ -430,13 +446,28 @@ export function ActiveHostWorkspaceControls(
   const resolved = useResolvedWorkspaceFolders(
     workspaceSource.source,
     activeHostClient,
+    activeHostId,
   );
-  // Writes THIS surface's pin and nothing else. Before P1.2 this called
-  // `binding.directory.selectById(hostId)` - moving the whole app to place one
-  // chat, which is the defect the surface-pin model exists to end.
+  const refusalByHostId = hostWorkspaceControlsScopeRefusals(props.hostScope);
+  // A surface-level blocker: every row but the named one goes inert, and none
+  // of them says why, because the reason is not about them. The surface owns
+  // that sentence.
+  const unselectableExceptHostId =
+    props.hostScope.kind === "selected"
+      ? props.hostScope.unselectableExceptHostId
+      : null;
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
+    // A `selected` scope owns the choice itself - routing a dialog-local
+    // target through any app/window-wide seam is the bug this scope removes.
+    if (props.hostScope.kind === "selected") {
+      props.hostScope.onSelect(hostId);
+      return;
+    }
+    // Writes THIS surface's pin and nothing else. Before P1.2 this called
+    // `binding.directory.selectById(hostId)` - moving the whole app to place
+    // one chat, which is the defect the surface-pin model exists to end.
     composerPin.setSelection(hostId);
   };
 
@@ -451,10 +482,14 @@ export function ActiveHostWorkspaceControls(
           hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
+          refusalByHostId={refusalByHostId}
+          inertExceptHostId={unselectableExceptHostId}
           // A FIXED scope cannot change hosts — `handleSelectHost` returns
           // early there. Saying so on the row instead of swallowing the click
           // is the same rule the section already applies to a busy submission:
-          // a row that accepts a click and does nothing reads as broken.
+          // a row that accepts a click and does nothing reads as broken. A
+          // SELECTED scope is the opposite case: the rows are live, they just
+          // write to the caller's state instead of the directory.
           disabled={disabled || props.hostScope.kind === "fixed"}
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}
@@ -559,11 +594,29 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  const setFolderIntent = useWorktreeIntentMemoryStore(
+  // Remembered defaults are host-local, so every read and write here is bound
+  // to the surface's target host. Both maps are stable references (the bucket
+  // is the stored object, or the shared empty one), so subscribing to them
+  // does not churn renders.
+  const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
+  const rowsHostId = props.activeHostId;
+  const setFolderIntent = useCallback(
+    (intent: WorktreeFolderIntent, updatedAt: number): void => {
+      rememberFolderIntent(rowsHostId, intent, updatedAt);
+    },
+    [rememberFolderIntent, rowsHostId],
+  );
   const folderIntentByPath = useWorktreeIntentMemoryStore(
-    (state) => state.folderIntentByPath,
+    useCallback(
+      (state) =>
+        selectWorktreeIntentMemoryBucket(state, rowsHostId).folderIntentByPath,
+      [rowsHostId],
+    ),
+  );
+  const legacyFolderIntentByPath = useWorktreeIntentMemoryStore(
+    (state) => state.legacyFolderIntentByPath,
   );
   // The single resolved primary every row / the collapsed chip / the launch
   // boundary agrees on - re-derived from the CURRENT resolved folder set so a
@@ -743,17 +796,27 @@ function HomeWorkspaceRows(props: {
   // until a write, so this does not churn renders.
   const epicIntent = useWorktreeIntentMemoryStore(
     useCallback(
-      (state) => (seedEpicId === null ? null : state.getEpicIntent(seedEpicId)),
-      [seedEpicId],
+      (state) =>
+        seedEpicId === null
+          ? null
+          : selectRememberedEpicIntent(state, rowsHostId, seedEpicId),
+      [rowsHostId, seedEpicId],
     ),
   );
 
   const rememberedFor = useCallback(
-    (workspacePath: string): WorktreeFolderIntent | null =>
-      Object.hasOwn(folderIntentByPath, workspacePath)
-        ? folderIntentByPath[workspacePath].intent
-        : null,
-    [folderIntentByPath],
+    (workspacePath: string): WorktreeFolderIntent | null => {
+      // The host's own bucket first, then the frozen pre-host-scoping
+      // fallback - the same per-key precedence `selectRememberedFolderIntent`
+      // applies (inlined here so both maps stay reactive subscriptions).
+      if (Object.hasOwn(folderIntentByPath, workspacePath)) {
+        return folderIntentByPath[workspacePath].intent;
+      }
+      return Object.hasOwn(legacyFolderIntentByPath, workspacePath)
+        ? legacyFolderIntentByPath[workspacePath].intent
+        : null;
+    },
+    [folderIntentByPath, legacyFolderIntentByPath],
   );
   // The per-epic entry for a folder, if any. Outranks per-folder memory in both
   // the branch-validation fetch list and the seed, so a remembered epic pick is
@@ -1880,11 +1943,26 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // is exactly the check that used to be satisfied by rebinding the window.
   const cloneTargetClient = useHostClientForHostId(pendingCloneHostId);
   const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
-  const setFolderIntent = useWorktreeIntentMemoryStore(
+  // In-epic surfaces address their bound owner host (`props.activeHostId` is
+  // `surface.hostId` there), which is also the host whose remembered defaults
+  // this picker may read and write.
+  const ownerHostId = props.activeHostId;
+  const rememberFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
-  const getFolderIntent = useWorktreeIntentMemoryStore(
+  const setFolderIntent = useCallback(
+    (intent: WorktreeFolderIntent, updatedAt: number): void => {
+      rememberFolderIntent(ownerHostId, intent, updatedAt);
+    },
+    [ownerHostId, rememberFolderIntent],
+  );
+  const readFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.getFolderIntent,
+  );
+  const getFolderIntent = useCallback(
+    (workspacePath: string): WorktreeFolderIntent | null =>
+      readFolderIntent(ownerHostId, workspacePath),
+    [ownerHostId, readFolderIntent],
   );
 
   // Mid-chat "Create new worktree" / existing-branch checkout stages the
@@ -1903,11 +1981,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "owner",
+      hostId: ownerHostId,
       epicId: surface.epicId,
       ownerKind,
       ownerId: surface.ownerId,
     }),
-    [surface.epicId, ownerKind, surface.ownerId],
+    [ownerHostId, surface.epicId, ownerKind, surface.ownerId],
   );
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],

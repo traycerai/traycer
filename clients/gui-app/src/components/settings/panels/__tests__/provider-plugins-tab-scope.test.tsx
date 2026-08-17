@@ -223,13 +223,18 @@ function plugin(over: Partial<ProviderPlugin>): ProviderPlugin {
 
 function seedWorkspace(): void {
   useWorkspaceFoldersStore.setState({
-    folders: ["/Users/dev/app"],
-    folderInfoByPath: {
-      "/Users/dev/app": {
-        path: "/Users/dev/app",
-        name: "app",
-        repoIdentifier: null,
-        hostId: "host-1",
+    byHost: {
+      "host-1": {
+        folders: ["/Users/dev/app"],
+        folderInfoByPath: {
+          "/Users/dev/app": {
+            path: "/Users/dev/app",
+            name: "app",
+            repoIdentifier: null,
+            hostId: "host-1",
+          },
+        },
+        primaryPath: null,
       },
     },
   });
@@ -373,8 +378,13 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
     // Zero host workspaces + project selected (via locked project-only caps)
     // is the empty state; multi-scope with no selection falls back carefully.
     useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
+      byHost: {
+        "host-1": {
+          folders: [],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
     });
     nativeScopeResolvedWorkspaceMocks.folders = [];
     useProvidersWorkspaceSelectionStore.setState({

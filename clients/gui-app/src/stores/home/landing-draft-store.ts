@@ -10,7 +10,11 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -776,13 +780,17 @@ function normalizeChatRunSettings(
 }
 
 function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  const globalState = useWorkspaceFoldersStore.getState();
+  // A new draft is created on the landing surface, which follows the
+  // app-wide active host - snapshot THAT host's folder bucket, not another
+  // machine's paths.
+  const bucket = selectWorkspaceFoldersBucket(
+    useWorkspaceFoldersStore.getState(),
+    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+  );
   return normalizeLandingDraftWorkspace({
-    folders: [...globalState.folders],
-    folderInfoByPath: copyWorkspaceFolderInfoByPath(
-      globalState.folderInfoByPath,
-    ),
-    primaryPath: globalState.primaryPath,
+    folders: [...bucket.folders],
+    folderInfoByPath: copyWorkspaceFolderInfoByPath(bucket.folderInfoByPath),
+    primaryPath: bucket.primaryPath,
   });
 }
 

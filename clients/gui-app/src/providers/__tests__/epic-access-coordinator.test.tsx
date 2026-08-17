@@ -52,6 +52,9 @@ const TEST_SETTINGS: ChatRunSettings = {
   agentMode: "regular",
   profileId: null,
 };
+// Arbitrary fixed host: these tests exercise clearEpicRunSettings's ACROSS-
+// HOST clearing, not host scoping itself, so any single consistent id works.
+const TEST_HOST_ID = "host-1";
 
 const fakeFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => {},
@@ -214,7 +217,7 @@ describe("EpicAccessCoordinator", () => {
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-1", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-1", TEST_HOST_ID, TEST_SETTINGS, 1);
 
     const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
     await waitFor(() =>
@@ -232,7 +235,9 @@ describe("EpicAccessCoordinator", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
     );
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-1"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-1", TEST_HOST_ID),
     ).toBeNull();
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(toastInfo).toHaveBeenCalledWith(
@@ -246,7 +251,7 @@ describe("EpicAccessCoordinator", () => {
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-1", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-1", TEST_HOST_ID, TEST_SETTINGS, 1);
 
     const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
     await waitFor(() =>
@@ -259,7 +264,9 @@ describe("EpicAccessCoordinator", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
     );
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-1"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-1", TEST_HOST_ID),
     ).toEqual(TEST_SETTINGS);
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(toastInfo).toHaveBeenCalledWith(
@@ -311,7 +318,7 @@ describe("EpicAccessCoordinator", () => {
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-1", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-1", TEST_HOST_ID, TEST_SETTINGS, 1);
 
     const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
     await waitFor(() =>
@@ -332,7 +339,9 @@ describe("EpicAccessCoordinator", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
     );
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-1"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-1", TEST_HOST_ID),
     ).toEqual(TEST_SETTINGS);
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(toastInfo).toHaveBeenCalledWith(
@@ -374,7 +383,7 @@ describe("EpicAccessCoordinator", () => {
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-1", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-1", TEST_HOST_ID, TEST_SETTINGS, 1);
 
     const { queryClient, router } = renderCoordinatorAt("/epics/epic-1/tab-1");
     const queryKey = cloudEpicTasksQueryKey(
@@ -416,7 +425,9 @@ describe("EpicAccessCoordinator", () => {
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-1"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-1", TEST_HOST_ID),
     ).toBeNull();
     const response = queryClient.getQueryData<ListTasksResponse>(queryKey);
     expect(response?.tasks.map((task) => task.epic?.light?.id)).toEqual([
@@ -512,13 +523,13 @@ describe("EpicAccessCoordinator", () => {
     );
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-open", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-open", TEST_HOST_ID, TEST_SETTINGS, 1);
     // "epic-ghost" was deleted but never had a resident tab in this window -
     // it must not silently keep its stale run settings just because it
     // never reaches `announceEpicLoss`'s per-resident-epic loop.
     useComposerRunSettingsStore
       .getState()
-      .setEpicRunSettings("epic-ghost", TEST_SETTINGS, 1);
+      .setEpicRunSettings("epic-ghost", TEST_HOST_ID, TEST_SETTINGS, 1);
 
     const { router } = renderCoordinatorAt("/");
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
@@ -534,10 +545,14 @@ describe("EpicAccessCoordinator", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
     );
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-open"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-open", TEST_HOST_ID),
     ).toBeNull();
     expect(
-      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-ghost"),
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-ghost", TEST_HOST_ID),
     ).toBeNull();
   });
 });

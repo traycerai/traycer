@@ -46,7 +46,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
 import type { TimerHandle } from "./timer-handle";
-import { recordNegotiatedHostMethods } from "./negotiated-manifest-registry";
+import { recordNegotiatedHostManifest } from "./negotiated-manifest-registry";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
 
 /**
@@ -365,10 +365,7 @@ export class WsRpcClient<
       // BEFORE the compatibility check: an incompatible pairing still tells us
       // truthfully which methods the host has, and the gate wants that fact
       // even when this particular call is about to fail.
-      recordNegotiatedHostMethods(
-        selected.hostId,
-        Object.keys(mergedHostManifest),
-      );
+      recordNegotiatedHostManifest(selected.hostId, mergedHostManifest);
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
 

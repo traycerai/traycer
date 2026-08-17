@@ -311,7 +311,7 @@ export function HostOverviewUpdateProgress(props: {
       className={
         failed
           ? "flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-5 py-3 text-ui-sm text-destructive"
-          : "flex items-center gap-2 border-b border-border/40 bg-muted/20 px-5 py-3 text-ui-sm text-muted-foreground"
+          : "flex items-center gap-2 border-b border-border/40 bg-foreground/3 px-5 py-3 text-ui-sm text-muted-foreground"
       }
       data-testid="host-overview-update-progress"
       data-state={props.state}

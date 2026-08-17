@@ -60,7 +60,10 @@ import {
   reopenStreamingSubagentBlocks,
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   BackgroundItem,
   ChatAccess,
@@ -392,6 +395,19 @@ export interface ChatSessionState {
    * host" and "none yet" identically.
    */
   readonly managedCommands: ReadonlyArray<ManagedCommand>;
+  /**
+   * The subset of {@link managedCommands} whose last output a committed Stop
+   * fence is holding back. Carried whole by every snapshot and every
+   * `heldUpdatesChanged` frame, so keeping it current is one assignment.
+   *
+   * Its own field rather than a flag on the command row because a hold is not a
+   * property of the command: it belongs to the Stop that captured it, appears
+   * and clears without the command's own status moving, and outlives the host
+   * process that installed it. Always an array, for the same reason
+   * {@link managedCommands} is - a host too old to send it cannot install holds
+   * either, so `[]` is the truth and not a fallback.
+   */
+  readonly heldUpdates: ReadonlyArray<HeldManagedCommandUpdate>;
   /**
    * In-flight per-item background stops, keyed by `taskId` → the
    * `clientActionId` of the stop frame that was sent. An entry exists from the
@@ -975,6 +991,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (sweep.sweptActionIds.size > 0) {
           const stagingKey: WorktreeStagingKey = {
             surface: "owner",
+            hostId: options.hostId,
             epicId: options.epicId,
             ownerKind: "chat",
             ownerId: options.chatId,
@@ -1073,6 +1090,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
             backgroundItems: frame.snapshot.backgroundItems,
             managedCommands: frame.snapshot.managedCommands,
+            heldUpdates: frame.snapshot.heldUpdates,
             // Drop per-item stops whose task has left the running-only list
             // (its terminal landed) and clear the stop-all flag once nothing
             // is left running, so settled rows never stay disabled. A stop
@@ -1164,6 +1182,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         // stale row - the next frame replaces everything either way.
         set({ managedCommands: frame.managedCommands });
       },
+      onHeldUpdatesChanged: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Whole set, same as the command list above: a hold clearing is the
+        // ABSENCE of a row, so a delta shape would need a removal frame the
+        // host has no reason to send.
+        set({ heldUpdates: frame.heldUpdates });
+      },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -1175,6 +1202,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (rejectedPending !== null) {
           restoreStagedWorktreeIntentForPending(rejectedPending, {
             surface: "owner",
+            hostId: options.hostId,
             epicId: options.epicId,
             ownerKind: "chat",
             ownerId: options.chatId,
@@ -1699,6 +1727,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onManagedCommandsChanged(frame);
       },
+      onHeldUpdatesChanged: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onHeldUpdatesChanged(frame);
+      },
       onActionAck: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onActionAck(frame);
@@ -1839,6 +1871,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       accumulatedFileChanges: [],
       backgroundItems: undefined,
       managedCommands: [],
+      heldUpdates: [],
       pendingBackgroundStops: {},
       pendingBackgroundStopAll: null,
       restore: null,
@@ -1906,6 +1939,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // the landing page bundling its intent with `epic.create`.
         const stagedKey: WorktreeStagingKey = {
           surface: "owner",
+          hostId: options.hostId,
           epicId: options.epicId,
           ownerKind: "chat",
           ownerId: options.chatId,
@@ -2009,7 +2043,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (worktreeIntent !== null) {
           useWorktreeIntentMemoryStore
             .getState()
-            .setEpicIntent(options.epicId, worktreeIntent, Date.now());
+            .setEpicIntent(
+              options.epicId,
+              options.hostId,
+              worktreeIntent,
+              Date.now(),
+            );
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };
@@ -2103,6 +2142,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         const messageId = uuidv4();
         const stagedKey: WorktreeStagingKey = {
           surface: "owner",
+          hostId: options.hostId,
           epicId: options.epicId,
           ownerKind: "chat",
           ownerId: options.chatId,
@@ -2166,7 +2206,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (worktreeIntent !== null) {
           useWorktreeIntentMemoryStore
             .getState()
-            .setEpicIntent(options.epicId, worktreeIntent, Date.now());
+            .setEpicIntent(
+              options.epicId,
+              options.hostId,
+              worktreeIntent,
+              Date.now(),
+            );
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };

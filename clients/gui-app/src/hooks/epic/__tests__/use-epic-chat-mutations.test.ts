@@ -36,6 +36,8 @@ const {
   archiveChatMutateAsync,
   epicSessionHostClient,
   forceReleaseChatSession,
+  beginPendingChatCreation,
+  clearPendingChatCreation,
 } = vi.hoisted(() => ({
   archiveChatMutateAsync: vi.fn(),
   epicSessionHostClient: {
@@ -45,6 +47,17 @@ const {
     getActiveHostId: () => "host-test",
   },
   forceReleaseChatSession: vi.fn(),
+  beginPendingChatCreation: vi.fn(),
+  clearPendingChatCreation: vi.fn(),
+}));
+// The pending-creation registry is the open-epic store's seam
+// (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
+// terms in that store's tests. Mocked at its facade leaf here so these tests
+// pin the WIRING - that the create hooks call it with the right facts on
+// success/error - without dragging in a live open-epic session.
+vi.mock("@/lib/chats/pending-chat-creations", () => ({
+  beginPendingChatCreation,
+  clearPendingChatCreation,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ request: vi.fn() }),
@@ -94,6 +107,7 @@ import {
   useEpicArchiveChat,
   useEpicArchiveChats,
   useEpicCreateChat,
+  useEpicCreateChatForHostClient,
   useEpicRenameChat,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
@@ -101,6 +115,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type {
+  CreateChatResponse,
   SetChatArchivedRequest,
   SetChatArchivedResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -263,11 +278,132 @@ describe("useEpicCreateChat", () => {
         boundary: "assistantMessage",
         sourceChatId: "chat-source",
         assistantMessageId: "assistant-1",
+        sourceOwnerUserId: null,
         interviewBlockId: null,
         carriedInterviews: null,
       },
     });
     expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
+  });
+
+  it("retains the created chat, keyed on the request's facts, on success", () => {
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+    };
+
+    opts.onSuccess(
+      { chatId: "host-chat" },
+      { ...nonForkVariables, parentId: "parent-1", title: "Draft title" },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+
+    // The id comes from the RESPONSE (client-minted, echoed back); the host,
+    // parent and title come from the REQUEST, not from `ctx` or wherever the
+    // active host happens to be by the time this runs.
+    expect(beginPendingChatCreation).toHaveBeenCalledWith("e", {
+      chatId: "host-chat",
+      hostId: "host-test",
+      parentChatId: "parent-1",
+      title: "Draft title",
+      // From `ctx`, not from the live profile: the owner is captured in
+      // `onMutate` so a profile switch mid-flight cannot refile the row. Asserted
+      // concretely because an omitted key here would match an `undefined` the
+      // hook never forwarded, and the assertion would hold with the wiring gone.
+      ownerUserId: "user-at-submit",
+    });
+  });
+
+  it("releases the pending creation on error", () => {
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+
+    opts.onError(makeError("RPC_ERROR"), nonForkVariables);
+
+    expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
+  });
+
+  it("releases the pending creation even for a recoverable fork failure that suppresses the toast", () => {
+    // The registry's failure arm has to run for EVERY error, including the
+    // ones this hook deliberately does not toast - a surface that seeded a
+    // row before the answer (a long create) has exactly one way to take it
+    // back down, and a suppressed toast must not also suppress that.
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+
+    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
+      ...nonForkVariables,
+      forkSource: {
+        boundary: "latest",
+        sourceChatId: "chat-source",
+        sourceOwnerUserId: null,
+      },
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
+  });
+});
+
+describe("useEpicCreateChatForHostClient", () => {
+  it("retains the created chat on success", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+    };
+
+    opts.onSuccess(
+      { chatId: "host-chat" },
+      {
+        hostId: "host-test",
+        epicId: "e2",
+        chatId: "c2",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+
+    expect(beginPendingChatCreation).toHaveBeenCalledWith("e2", {
+      chatId: "host-chat",
+      hostId: "host-test",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-at-submit",
+    });
+  });
+
+  it("releases the pending creation on error", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+
+    opts.onError(makeError("RPC_ERROR"), {
+      hostId: "host-test",
+      epicId: "e2",
+      chatId: "c2",
+      parentId: null,
+      title: "",
+    });
+
+    expect(clearPendingChatCreation).toHaveBeenCalledWith("e2", "c2");
   });
 });
 

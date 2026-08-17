@@ -136,6 +136,9 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     rows: [],
     isPending: false,
     isError: false,
+    checkedAt: null,
+    canRefresh: true,
+    refresh: () => Promise.resolve(),
   }),
 }));
 
