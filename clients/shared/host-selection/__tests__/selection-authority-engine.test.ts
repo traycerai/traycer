@@ -2267,6 +2267,268 @@ describe("SelectionAuthorityEngineImpl - A5: tombstone seen-ids are pruned on fl
   });
 });
 
+// ------------------------------------------------------- :803 owed pins
+// `pruneEvidenceOutsideFleet` clears a deregistered host's evidence, but an
+// in-flight compat probe / restart notification / dial report landing
+// afterwards recreates it through `hostEvidence`. The next snapshot does not
+// repair this - if the same durable host id re-registers, the prune finds it
+// a member and deletes nothing, so it inherits its pre-removal state.
+// `dropsAsOutsideFleet` closes the gap; session evidence is deliberately
+// exempt (invariant 5), and it composes with `pruneEvidenceOutsideFleet`
+// rather than narrowing C4's live-session suppression inside `ingestDial`.
+
+describe("SelectionAuthorityEngineImpl - dropsAsOutsideFleet gates late evidence for a removed host (:803 fix)", () => {
+  it("R2a-control: prune genuinely clears a verdict when no late report arrives", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("X", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("X", null, INCOMPAT_DETAIL),
+    );
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("dead");
+
+    // X leaves the fleet: the prune clears its evidence outright.
+    fleet.publish(0, "L", [fleetHost("L", "local")]);
+    expect(findLease(engine.snapshot().leases, "X")).toBeUndefined();
+
+    // X rejoins with NO late report in between. This is the positive control
+    // the harm arms below lean on: it proves the prune really cleared, so a
+    // `dead` verdict below is attributable to the late report and nothing
+    // else.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+
+  it("R2a: a late compat verdict survives deregistration and is inherited on re-registration", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("X", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    fleet.publish(0, "L", [fleetHost("L", "local")]);
+    expect(findLease(engine.snapshot().leases, "X")).toBeUndefined();
+
+    // The probe that was in flight when X was deregistered lands now. Without
+    // the gate, `hostEvidence` recreates the entry the prune just deleted.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("X", null, INCOMPAT_DETAIL),
+    );
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+
+  it("R2b: a late restart-intent re-anchors an episode on a re-registered host", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("X", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("X", "tomb-1", null, 0),
+    );
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe(
+      "restarting-expected",
+    );
+
+    fleet.publish(0, "L", [fleetHost("L", "local")]);
+    // Replay of the SAME tombstone: ordinarily an ignored duplicate
+    // (mechanism 7), but without the gate the prune erased the memory of
+    // having seen it, so the replay anchors a fresh episode.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("X", "tomb-1", null, 0),
+    );
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+
+  it("R2c: late dial refusals rebuild a death streak on a host outside the fleet", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("X", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    fleet.publish(0, "L", [fleetHost("L", "local")]);
+    killHostWithRefusals(engine, "A", incarnation, "X");
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - hasFleetAnswer distinguishes an answered [] from no answer yet (:803 fix)", () => {
+  it("R2d: evidence arriving BEFORE the registry's first answer is kept", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: { identityGeneration: 0, localHostId: null, hosts: [] },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    expect(engine.snapshot().leases).toHaveLength(0);
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("X", null, INCOMPAT_DETAIL),
+    );
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    const lease = findLease(engine.snapshot().leases, "X");
+    expect(lease?.status).toBe("dead");
+    expect(lease?.dead?.reason).toBe("incompatible");
+
+    authority.dispose();
+  });
+
+  it("a cold start whose first answer is an empty fleet drops a late verdict", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: { identityGeneration: 0, localHostId: null, hosts: [] },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // The registry ANSWERS, and the answer is "this account has no hosts".
+    // Nothing about the fleet's CONTENT changed here - only that it is now
+    // KNOWN, which is the discriminator R2d's empty seed cannot draw: a
+    // PUBLISHED snapshot is always an answer, even an empty one.
+    fleet.publish(0, null, []);
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("X", null, INCOMPAT_DETAIL),
+    );
+
+    fleet.publish(0, null, [fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+
+  it("construction seeded with a non-empty fleet counts as answered; an empty seed does not", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // The seed already names a host, so - unlike R2d's empty seed - this
+    // counts as answered from CONSTRUCTION: a late report for a host outside
+    // it is dropped immediately, with no publish needed to arm the gate.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("X", null, INCOMPAT_DETAIL),
+    );
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("X", "remote")]);
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    authority.dispose();
+  });
+
+  it("an identity transition resets the answer flag: a fresh window accepts evidence again", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("X", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, identity, fleet } = authority;
+
+    // PREMISE: account A's seed already names X, so A has answered - X is a
+    // member and derives an ordinary lease.
+    expect(findLease(engine.snapshot().leases, "X")?.status).toBe("connecting");
+
+    // Switch accounts. B's fleet has not arrived, so B has answered nothing -
+    // the transition must put the flag back rather than carry A's forward.
+    identity.set("acct-2");
+    expect(engine.snapshot().leases).toHaveLength(0);
+
+    const incarnation = attachReporter(engine, "A");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      compatIncompatible("Y", null, INCOMPAT_DETAIL),
+    );
+
+    // B's first answer names Y: the verdict ingested during B's unknown
+    // window must have been kept, which is only visible once it is credited
+    // into a real lease on the far side.
+    fleet.publish(1, null, [fleetHost("Y", "remote")]);
+    const lease = findLease(engine.snapshot().leases, "Y");
+    expect(lease?.status).toBe("dead");
+    expect(lease?.dead?.reason).toBe("incompatible");
+
+    authority.dispose();
+  });
+});
+
 // ------------------------------------------------------- P1.2 owed pins
 // (host-lifecycle redesign, ticket P1.2 test brief - each pins a real engine
 // behavior that had no test that would catch a regression).

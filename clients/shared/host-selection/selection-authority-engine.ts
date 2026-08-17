@@ -625,6 +625,30 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
 
   private fleet: HostFleetSnapshot = emptyFleet(UNSET_IDENTITY_GENERATION);
   private appliedFleetRevision = Number.NEGATIVE_INFINITY;
+  /**
+   * Whether the fleet port has given a genuine MEMBERSHIP ANSWER for the
+   * current identity - the distinction `hosts.length === 0` cannot draw.
+   *
+   * A PUBLISHED SNAPSHOT IS ALWAYS AN ANSWER, EVEN AN EMPTY ONE; A SEED OR
+   * ADOPTED FLEET IS AN ANSWER ONLY IF IT ALREADY NAMES HOSTS. That is the
+   * whole semantics, stated here because it lives as three separate
+   * assignments and will not survive as three.
+   *
+   * An empty fleet means two incompatible things: "the registry answered, and
+   * this account has no hosts" (how a single-host account deregisters) and
+   * "the registry has not answered yet" (the seed, and the window after an
+   * identity transition). {@link clearPreferredOutsideFleet} resolves that
+   * ambiguity toward UNKNOWN because destroying a preference on a
+   * non-answer is unrecoverable; `pruneEvidenceOutsideFleet` resolves it
+   * toward EMPTY because an answered `[]` is exactly when a deregistered
+   * host's evidence must go. Both are right for their own concern - so the
+   * ambiguity has to be resolved with a real signal rather than by picking a
+   * side, which is what this flag is.
+   *
+   * Scoped to the identity, not the process: a new account has answered
+   * nothing, so `runIdentityTransition` puts it back.
+   */
+  private hasFleetAnswer = false;
   private identityKey: string | null = null;
   private identityGeneration = UNSET_IDENTITY_GENERATION;
 
@@ -741,10 +765,15 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
 
     this.portSubscriptions.push(
       options.fleet.onChanged((snapshot) => {
-        this.applyFleetSnapshot(snapshot);
+        this.applyFleetSnapshot(snapshot, "published");
       }),
     );
-    this.applyFleetSnapshot(options.fleet.snapshot());
+    // THE SEED READ IS NOT AN ANSWER unless it already names hosts. It is
+    // whatever the port happens to be holding at construction, which for a
+    // registry that has not answered yet is an empty placeholder
+    // indistinguishable from a real "this account has no hosts". A PUBLISHED
+    // snapshot is an event and therefore always an answer, empty or not.
+    this.applyFleetSnapshot(options.fleet.snapshot(), "seed");
 
     this.portSubscriptions.push(
       options.localOutage.onChanged((inExpectedOutage) => {
@@ -1197,6 +1226,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
   ): void {
     const hostId = report.hostId;
+    if (this.dropsAsOutsideFleet(hostId, report.kind)) return;
     const key = attemptKey(attachment.incarnationId, report.attemptId);
     if (attachment.seenAttemptIds.has(key)) return;
     attachment.seenAttemptIds.add(key);
@@ -1252,6 +1282,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     attachment: AttachmentRecord,
     report: Extract<SelectionEvidenceReport, { kind: "compat" }>,
   ): void {
+    if (this.dropsAsOutsideFleet(report.hostId, report.kind)) return;
     const rank =
       report.probedOnSessionId === null
         ? null
@@ -1332,6 +1363,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   private ingestRestartIntent(
     report: Extract<SelectionEvidenceReport, { kind: "restart-intent" }>,
   ): void {
+    if (this.dropsAsOutsideFleet(report.hostId, report.kind)) return;
     // FIRST receipt anchors ONE fixed episode; every duplicate - another
     // window observing the same tombstone, a liveness-plane replay - is
     // ignored outright and can never extend it (mechanism 7).
@@ -1348,7 +1380,19 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
 
   // ------------------------------------------------------------------ ports
 
-  private applyFleetSnapshot(snapshot: HostFleetSnapshot): void {
+  private applyFleetSnapshot(
+    snapshot: HostFleetSnapshot,
+    /**
+     * REQUIRED, AND DELIBERATELY NOT DEFAULTED. The constructor seeds THROUGH
+     * this method - `appliedFleetRevision` starts at `NEGATIVE_INFINITY`, so a
+     * revision-0 seed really is applied - which means a `hasFleetAnswer` set
+     * unconditionally here would mark the port's empty PLACEHOLDER as a
+     * membership answer and start dropping evidence during the one window that
+     * must accept it. Making every caller say which it is stops the next one
+     * from inheriting a meaning it never chose.
+     */
+    source: "seed" | "published",
+  ): void {
     if (snapshot.identityGeneration !== this.identityGeneration) {
       // Revision orders observations; the generation establishes MEMBERSHIP.
       // A late account-A fetch completing after account B became current is
@@ -1365,6 +1409,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (snapshot.revision <= this.appliedFleetRevision) return;
     this.appliedFleetRevision = snapshot.revision;
     this.fleet = snapshot;
+    if (source === "published" || snapshot.hosts.length > 0) {
+      this.hasFleetAnswer = true;
+    }
     this.pruneEvidenceOutsideFleet();
     this.commit(
       this.clearPreferredOutsideFleet() ? "deregister-clear" : "fleet-shift",
@@ -1399,7 +1446,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     return true;
   }
 
-  /** Compat verdicts and tombstone ids are cleared on fleet removal. */
+  /**
+   * Compat verdicts and tombstone ids are cleared on fleet removal.
+   *
+   * NO EMPTY-FLEET GUARD, DELIBERATELY - the asymmetry with
+   * {@link clearPreferredOutsideFleet} four lines below is the considered
+   * answer rather than an oversight, and it has been filed as a defect once
+   * already. Both react to "a host is not in the fleet" and they resolve that
+   * phrase's ambiguity toward OPPOSITE readings, each correct for its own
+   * concern: destroying a preference on a non-answer is unrecoverable, so that
+   * one reads empty as UNKNOWN; an answered `[]` is precisely when a
+   * deregistered host's evidence must go, so this one reads it as EMPTY.
+   * {@link dropsAsOutsideFleet} is where the two are reconciled, by asking
+   * whether the port has ANSWERED at all rather than whether the fleet is
+   * empty.
+   */
   private pruneEvidenceOutsideFleet(): void {
     const present = new Set(this.fleet.hosts.map((entry) => entry.hostId));
     for (const hostId of Array.from(this.evidence.keys())) {
@@ -1408,6 +1469,60 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     for (const hostId of Array.from(this.seenTombstoneIds.keys())) {
       if (!present.has(hostId)) this.seenTombstoneIds.delete(hostId);
     }
+  }
+
+  /**
+   * THE OTHER HALF OF {@link pruneEvidenceOutsideFleet}, and it is not
+   * optional: the prune alone cannot hold, because the clear is a moment and
+   * the probes it clears after are still in flight.
+   *
+   * A compatibility probe or a restart notification issued while a host was a
+   * member lands after it is deregistered. Ingestion writes through
+   * `hostEvidence`, which CREATES the entry the prune just deleted, so the
+   * removal is silently undone. The next snapshot does not repair it - that is
+   * the part that looks safe and is not: if the same durable host id is
+   * registered again, the prune runs, finds it a member, and deletes nothing.
+   * The host inherits its pre-removal state with no evidence whatsoever from
+   * the new registration. For a `compatible`/`incompatible` verdict that is
+   * permanent rather than transient: `evidence.compat` is written in exactly
+   * one place and reset nowhere, so an inherited `incompatible` derives `dead`
+   * forever. A restart episode inherits the same way, and worse in one detail
+   * - the prune took `seenTombstoneIds` with it, so a REPLAY of the very
+   * tombstone already seen reads as a first receipt and anchors a fresh
+   * episode (mechanism 7's duplicate rule cannot fire on a memory that was
+   * erased).
+   *
+   * GATED ON {@link hasFleetAnswer}, NOT ON `hosts.length === 0`, and the
+   * difference is a hole rather than a nicety. Membership is UNKNOWN before
+   * the port answers, and dropping then would discard real evidence during
+   * startup permanently - ingestion has no second chance, unlike the prune,
+   * which re-runs on every snapshot. But an ANSWERED `[]` is knowledge, and it
+   * is how a single-host account deregisters: keying on emptiness would let
+   * exactly that account walk a late verdict back in through this gate, which
+   * is the very defect the gate exists to close.
+   *
+   * SESSION EVIDENCE IS DELIBERATELY EXEMPT (invariant 5): a live session
+   * outranks every other evidence class, and `onHostProvedAlive` only ever
+   * CLEARS state, so the inheritance it could cause runs in the permissive
+   * direction that a live session already justifies.
+   *
+   * NOT C4, and must not be read as narrowing it. C4's guard is the
+   * live-session suppression INSIDE `ingestDial`, which decides whether a
+   * refusal is counted for a host the engine still has. This gate sits earlier
+   * and asks a different question - is this host in the fleet at all - and
+   * because it only ever drops more, it cannot narrow a suppression.
+   */
+  private dropsAsOutsideFleet(
+    hostId: string,
+    kind: SelectionEvidenceReport["kind"],
+  ): boolean {
+    if (!this.hasFleetAnswer) return false;
+    if (this.fleet.hosts.some((entry) => entry.hostId === hostId)) return false;
+    this.options.log.debug(
+      "[selection-authority] evidence outside the fleet dropped",
+      { hostId, kind },
+    );
+    return true;
   }
 
   private applyIdentity(identity: {
@@ -1465,6 +1580,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       available.identityGeneration === this.identityGeneration
         ? available
         : emptyFleet(this.identityGeneration);
+    // THE ANSWER DOES NOT SURVIVE THE ACCOUNT. What the port told us about A's
+    // hosts says nothing about B's, so B starts having answered nothing and
+    // the adopted fleet is read on the same rule as the construction seed: it
+    // is an answer only if it already names hosts. Dropping this reset does
+    // not fail loudly - it makes the first post-transition window DISCARD
+    // evidence it should accept, which looks exactly like a quiet host.
+    this.hasFleetAnswer = this.fleet.hosts.length > 0;
     // The matching snapshot, when it arrives, must still be applicable: the
     // adapter's revision is process-lifetime monotonic, so leaving the
     // high-water where it is only rejects observations we already applied.
