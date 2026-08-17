@@ -182,27 +182,43 @@ describe("cloud notification indicator derivation", () => {
     resolvedAt: number | null,
     readAt: number | null,
   ): HostNotificationsCloudFeedRow {
+    return promptAt({
+      entryId,
+      kind,
+      resolvedAt,
+      readAt,
+      chatId: "chat-1",
+    });
+  }
+
+  function promptAt(input: {
+    readonly entryId: string;
+    readonly kind: "approval.requested" | "interview.requested";
+    readonly resolvedAt: number | null;
+    readonly readAt: number | null;
+    readonly chatId: string | null;
+  }): HostNotificationsCloudFeedRow {
     const shared = {
       epicId: "epic-1",
-      chatId: "chat-1",
+      chatId: input.chatId,
       chatTitle: "Chat",
       taskTitle: "Epic",
     };
-    return wrap(entryId, {
-      id: entryId,
+    return wrap(input.entryId, {
+      id: input.entryId,
       updatedAt: 1,
-      readAt,
-      kind,
+      readAt: input.readAt,
+      kind: input.kind,
       sourceRef: null,
       severity: "needs_action",
       outcome: null,
-      resolvedAt,
+      resolvedAt: input.resolvedAt,
       epicId: "epic-1",
-      chatId: "chat-1",
+      chatId: input.chatId,
       payload:
-        kind === "approval.requested"
-          ? { kind: "approval", ...shared, approvalId: entryId }
-          : { kind: "interview", ...shared, interviewBlockId: entryId },
+        input.kind === "approval.requested"
+          ? { kind: "approval", ...shared, approvalId: input.entryId }
+          : { kind: "interview", ...shared, interviewBlockId: input.entryId },
     });
   }
 
@@ -455,7 +471,7 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("rolls a retained unread chat completion into its epic without a chat projection", () => {
+  it("does not roll a chat-scoped completion into an epic queried without that chat", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
@@ -470,7 +486,7 @@ describe("cloud notification indicator derivation", () => {
       [],
     );
 
-    expect(result.epics["epic-1"].unreadDone).toBe(true);
+    expect(result.epics["epic-1"]).toBeUndefined();
     expect(result.chats).toEqual({});
   });
 
@@ -485,14 +501,14 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"].unreadDone).toBe(true);
   });
 
-  it("rolls a retained unread prompt into its epic without a chat projection", () => {
+  it("does not roll a chat-scoped prompt into an epic queried without that chat", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null, null)]),
       ["epic-1"],
       [],
     );
 
-    expect(result.epics["epic-1"].pendingApproval).toBe(true);
+    expect(result.epics["epic-1"]).toBeUndefined();
     expect(result.chats).toEqual({});
   });
 
@@ -534,7 +550,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result).toEqual({ epics: {}, chats: {} });
   });
 
-  it("lights an approval only while it is unresolved and unread", () => {
+  it("lights an approval while it is unresolved, including after it is read", () => {
     const unresolved = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null, null)]),
       [],
@@ -553,7 +569,54 @@ describe("cloud notification indicator derivation", () => {
 
     expect(unresolved.chats["chat-1"].pendingApproval).toBe(true);
     expect(resolvedButUnread.chats["chat-1"]).toBeUndefined();
-    expect(unresolvedButRead.chats["chat-1"]).toBeUndefined();
+    expect(unresolvedButRead.chats["chat-1"].pendingApproval).toBe(true);
+  });
+
+  it("lights a read-but-unresolved interview and clears it once resolved", () => {
+    const unresolvedButRead = selectCloudNotificationIndicators(
+      rowsById([prompt("interview", "interview.requested", null, 10)]),
+      [],
+      ["chat-1"],
+    );
+    const resolved = selectCloudNotificationIndicators(
+      rowsById([prompt("interview", "interview.requested", 11, 10)]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(unresolvedButRead.chats["chat-1"].pendingInterview).toBe(true);
+    expect(resolved.chats["chat-1"]).toBeUndefined();
+  });
+
+  it("ignores a chat-scoped prompt on the epic arm unless that chat was queried", () => {
+    const chatScoped = prompt("approval", "approval.requested", null, null);
+    const ignored = selectCloudNotificationIndicators(
+      rowsById([chatScoped]),
+      ["epic-1"],
+      ["chat-other"],
+    );
+    const counted = selectCloudNotificationIndicators(
+      rowsById([chatScoped]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+    const epicLevel = selectCloudNotificationIndicators(
+      rowsById([
+        promptAt({
+          entryId: "epic-approval",
+          kind: "approval.requested",
+          resolvedAt: null,
+          readAt: null,
+          chatId: null,
+        }),
+      ]),
+      ["epic-1"],
+      [],
+    );
+
+    expect(ignored.epics["epic-1"]).toBeUndefined();
+    expect(counted.epics["epic-1"].pendingApproval).toBe(true);
+    expect(epicLevel.epics["epic-1"].pendingApproval).toBe(true);
   });
 
   it("pends an interview independently of the approval arm", () => {

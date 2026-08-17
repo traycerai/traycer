@@ -465,7 +465,7 @@ describe("cloud-derived notification indicators", () => {
     });
   });
 
-  it("rolls an unread foreign-host chat entry into its epic without a chat projection", async () => {
+  it("does not roll a chat-scoped prompt into an epic queried without that chat", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot(
       [
@@ -486,15 +486,13 @@ describe("cloud-derived notification indicators", () => {
     });
 
     await waitFor(() => {
-      expect(indicatorText("epic")).toBe("pendingApproval");
+      expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
     });
-    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+    expect(indicatorText("epic")).toBe("none");
   });
 
-  it("clears a task approval glyph when the notification is marked read", async () => {
+  it("keeps a task approval glyph lit after the notification is marked read", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
-    // Keep the request pending so the assertion can only pass through the
-    // optimistic read marker used by the notification row itself.
     harness.cloudMarkRead.mode = "never-settles";
     applyCloudSnapshot(
       [
@@ -510,7 +508,7 @@ describe("cloud-derived notification indicators", () => {
 
     renderSurface(harness, {
       epicIds: [EPIC_ID],
-      chatIds: [],
+      chatIds: [CHAT_ID],
       children: (
         <>
           <IndicatorProbe entity={{ epicId: EPIC_ID }} testId="epic" />
@@ -527,8 +525,8 @@ describe("cloud-derived notification indicators", () => {
 
     await waitFor(() => {
       expect(indicatorText("row-read")).toBe("read");
-      expect(indicatorText("epic")).toBe("none");
     });
+    expect(indicatorText("epic")).toBe("pendingApproval");
     expect(harness.cloudMarkRead.calls).toEqual(["entry-approval"]);
   });
 
