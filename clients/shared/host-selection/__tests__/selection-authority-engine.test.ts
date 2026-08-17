@@ -3452,6 +3452,221 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
   });
 });
 
+describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", () => {
+  /**
+   * B1's corpse path. The measured half was "48 s, zero updates"; the
+   * *unboundedness* was PLAUSIBLE - derived from the absent producer, never
+   * observed to a bound. This observes it.
+   *
+   * A host that stops answering loses its session, and then nothing dials it
+   * again, because nothing is trying to use a host the app already believes
+   * it is connected to. `refusalStreak` therefore never advances, the death
+   * predicate never fires, and the lease falls through to `connecting` -
+   * which is usable. No failover, no empty state, no error.
+   */
+  it("a host whose session dies with no further dial evidence still leaves `connecting`", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+      seedPreferred: "P",
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // The machine stops answering: the socket drops. Nothing dials it again.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+    const held = findLease(engine.snapshot().leases, "P");
+    if (held === undefined) throw new Error("expected a lease for P");
+    expect(held.status).toBe("connecting");
+    expect(isUsableForSelection(held)).toBe(true);
+
+    clock.advance(30 * 60_000);
+
+    const after = findLease(engine.snapshot().leases, "P");
+    if (after === undefined) throw new Error("expected a lease for P");
+    expect(isUsableForSelection(after)).toBe(false);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    authority.dispose();
+  });
+
+  /**
+   * The false-death guard, and the reason the ceiling is scoped to the
+   * effective host at all.
+   *
+   * An idle host nobody is talking to produces no evidence EITHER, so a
+   * ceiling armed on every session loss would call it dead from silence -
+   * manufacturing the false-Offline verdict C4 exists to prevent, from a
+   * second direction. `connecting` ("no evidence yet", neither usable-by-proof
+   * nor dead) is the honest answer for a host the app is not pointed at.
+   */
+  it("does not call a host the app is NOT pointed at dead just because its session ended", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // L is effective (no preference seeded); P is a bystander the user once
+    // had open and has since navigated away from.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+
+    clock.advance(30 * 60_000);
+
+    const after = findLease(engine.snapshot().leases, "P");
+    if (after === undefined) throw new Error("expected a lease for P");
+    expect(after.status).toBe("connecting");
+    expect(after.dead).toBeNull();
+
+    authority.dispose();
+  });
+
+  /**
+   * The arm-time half of that guard, which the bystander case above does NOT
+   * prove: removing the effectiveness check at ARM time leaves this suite
+   * green, because the derive-time check still catches the bystander.
+   *
+   * What it does not catch is a STALE ceiling. Arm on every session loss and
+   * a host that lost its session long ago carries an already-expired deadline
+   * into the moment it is selected - so it would be declared dead on arrival,
+   * before anything had the chance to dial it even once. Both checks are
+   * load-bearing, for different cases, and the mutation that survives the
+   * other test reddens here.
+   */
+  it("does not kill a host on arrival because its session ended long before it was selected", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+
+    // Long past the ceiling, with P still a bystander.
+    clock.advance(30 * 60_000);
+
+    // The user now picks P in Settings. It has not been dialed yet, so the
+    // only honest verdict is `connecting` - nothing has asked it anything.
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    const onArrival = findLease(engine.snapshot().leases, "P");
+    if (onArrival === undefined) throw new Error("expected a lease for P");
+    expect(onArrival.status).toBe("connecting");
+    expect(isUsableForSelection(onArrival)).toBe(true);
+
+    authority.dispose();
+  });
+
+  /**
+   * The derive-time half, which neither arm above proves: with the arm-time
+   * check in place, a ceiling can still be armed and then OUTLIVE the app's
+   * interest in that host, when something moves the selection off it before
+   * the ceiling lapses.
+   *
+   * Once the app is no longer pointed at it, the ceiling stops being a
+   * statement anyone needs and "dead" goes back to being a claim about a host
+   * nothing has asked anything - which is the bystander objection again,
+   * reached from the other direction.
+   */
+  it("stops applying the ceiling once the app has moved off that host", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+      seedPreferred: "P",
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    // Armed: the app IS pointed at P when its last session ends.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+
+    // The user moves to L before the ceiling lapses.
+    expect(await engine.activate("A", incarnation, "L")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    clock.advance(30 * 60_000);
+
+    const after = findLease(engine.snapshot().leases, "P");
+    if (after === undefined) throw new Error("expected a lease for P");
+    expect(after.status).toBe("connecting");
+    expect(after.dead).toBeNull();
+
+    authority.dispose();
+  });
+});
+
 describe("SelectionAuthorityEngineImpl - an in-flight ensure is bounded (B2)", () => {
   /**
    * B2 was filed PLAUSIBLE - derived end to end, never executed. This is the

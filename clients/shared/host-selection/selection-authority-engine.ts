@@ -221,6 +221,30 @@ export const LOCAL_ENSURE_IN_FLIGHT_CEILING_MS =
   LOCAL_EXPECTED_OUTAGE_CEILING_MS;
 
 /**
+ * How long the host the app is ACTUALLY POINTED AT may sit with no session
+ * and no new evidence before the authority calls it dead on its own (B1/C6).
+ *
+ * B1's corpse path: a host stops answering, its session drops, and then
+ * nothing dials it again - because nothing is trying to reach a host the app
+ * already believes it is connected to. `refusalStreak` needs a producer, and
+ * on that path there is none, so the death predicate never fires and the
+ * lease falls through to `connecting`, which is usable. Measured: no failover
+ * after 30 minutes.
+ *
+ * This is the authority-owned exit C6 requires, and it is deliberately NOT a
+ * narrowing of the `ingestDial` suppression guard, which C4 established as
+ * load-bearing (three suppressed refusals on a HEALTHY host, exactly the
+ * death threshold). Nothing here touches that guard.
+ *
+ * 90s: the measured symptom was 48s of zero updates, an ordinary reconnect is
+ * seconds, and a DELIBERATE restart never reaches this arm at all - the
+ * expected-outage arm outranks it and holds the lease for its own episode.
+ * Long enough that only a genuine corpse reaches it, short enough that the
+ * user is not staring at a healthy-looking dead app.
+ */
+export const EFFECTIVE_HOST_POST_SESSION_CEILING_MS = 90_000;
+
+/**
  * The engine's own clock and timer source (mechanism 7: "authority deadlines
  * come from its own ceilings, never renderer or host clocks"). A composition
  * input, not wire surface - tests inject a fake.
@@ -407,6 +431,16 @@ interface HostEvidence {
   compat: CompatRecord | null;
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
+  /**
+   * When this host's last live session ended WHILE IT WAS THE EFFECTIVE HOST,
+   * or null (B1/C6). Only armed for the host the app is actually pointed at:
+   * an idle host nobody is talking to produces no evidence either, and
+   * `connecting` - "no evidence yet", neither usable-by-proof nor dead - is
+   * the honest answer there. Calling it dead from silence would manufacture
+   * exactly the false-Offline verdict C4 exists to prevent, from a second
+   * direction.
+   */
+  effectiveSessionLostAt: number | null;
 }
 
 function emptyHostEvidence(): HostEvidence {
@@ -415,6 +449,7 @@ function emptyHostEvidence(): HostEvidence {
     lastCountedRefusalDetail: null,
     compat: null,
     restartEpisodeEndsAt: null,
+    effectiveSessionLostAt: null,
   };
 }
 
@@ -1091,6 +1126,35 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   }
 
   /**
+   * Arms B1's corpse ceiling when the host the app is POINTED AT just lost its
+   * last session (C6).
+   *
+   * Two conditions, both load-bearing, and both about not manufacturing a
+   * death from silence:
+   *
+   * - **Effective only.** An idle host nobody is talking to also produces no
+   *   evidence, and `connecting` - "no evidence yet" - is the honest answer
+   *   there. B1's harm is specifically *"the app looks healthy while pointed
+   *   at a machine that is not answering"*, which only the effective host can
+   *   do. Arming everywhere would invent the false-Offline verdict C4 exists
+   *   to prevent, from a second direction.
+   * - **No session left anywhere.** Sessions are per-attachment; another
+   *   window may still hold one, and that is firsthand proof of life
+   *   (invariant 5) which outranks this entirely.
+   *
+   * Never extended once armed: the ceiling measures time since the app last
+   * had a session with this host, and re-arming on a second loss would let a
+   * host that flaps between brief sessions outrun it for ever.
+   */
+  private armPostSessionCeilingIfPointedAt(hostId: string): void {
+    if (this.selection.effectiveHostId !== hostId) return;
+    if (this.hasLiveSession(hostId)) return;
+    const evidence = this.hostEvidence(hostId);
+    if (evidence.effectiveSessionLostAt !== null) return;
+    evidence.effectiveSessionLostAt = this.options.clock.now();
+  }
+
+  /**
    * Firsthand proof of life (a dial success, or a session appearing) clears
    * the host's death streak and closes any restart episode: the outage the
    * episode was holding for is over.
@@ -1115,6 +1179,12 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     evidence.refusalStreak = 0;
     evidence.lastCountedRefusalDetail = null;
     evidence.restartEpisodeEndsAt = null;
+    // Proof of life is proof of life: it retires the corpse deadline for the
+    // same reason it clears the streak. This is the ONLY producer that needs
+    // to know about the deadline, because every kind of proof already funnels
+    // through here - a dial success, a session appearing, an announcement,
+    // and a successful ensure.
+    evidence.effectiveSessionLostAt = null;
     if (hostId !== this.fleet.localHostId) return;
     // Bumped BEFORE the clear so an ensure still in flight can tell that its
     // own failure - whenever it lands - post-dates this moment.
@@ -1158,7 +1228,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     report: Extract<SelectionEvidenceReport, { kind: "session" }>,
   ): void {
     if (report.transition === "lost") {
-      if (attachment.sessions.delete(report.sessionId)) return;
+      if (attachment.sessions.delete(report.sessionId)) {
+        this.armPostSessionCeilingIfPointedAt(report.hostId);
+        return;
+      }
       // `lost` before `established` (reordered delivery): tombstone the id so
       // the late `established` cannot resurrect a session that is already
       // gone. Both are dropped; the session never counts as live.
@@ -1968,6 +2041,22 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     if (
       evidence !== null &&
+      evidence.effectiveSessionLostAt !== null &&
+      now >=
+        evidence.effectiveSessionLostAt +
+          EFFECTIVE_HOST_POST_SESSION_CEILING_MS &&
+      this.selection.effectiveHostId === hostId
+    ) {
+      // B1/C6. Below the expected-outage and live-session arms by position, so
+      // a deliberate restart still holds the lease and any session anywhere
+      // still wins. Effectiveness is re-checked HERE and not only at arm time:
+      // if the app moved off this host for some other reason, the deadline
+      // stops being a statement anyone needs, and a stale one must not be able
+      // to kill a host the moment it is selected again.
+      return { hostId, status: "dead", dead: { reason: "offline" } };
+    }
+    if (
+      evidence !== null &&
       evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK
     ) {
       return {
@@ -2080,6 +2169,15 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // cooldown above, and the arm whose absence was B2.
     const ensureCeiling = this.localEnsureExpiresAt;
     if (ensureCeiling !== null) consider(ensureCeiling);
+    // B1/C6's corpse ceiling. Without this arm nothing wakes the engine after
+    // the session drops - which is the whole defect: the path has no producer,
+    // so there is no incoming report to derive from either.
+    for (const entry of this.fleet.hosts) {
+      const lostAt = this.evidence.get(entry.hostId)?.effectiveSessionLostAt;
+      if (lostAt !== undefined && lostAt !== null) {
+        consider(lostAt + EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
+      }
+    }
     return earliest;
   }
 
