@@ -67,6 +67,10 @@ export interface UseHistoryQueryResult {
   isFetching: boolean;
   error: Error | null;
   hostId: string | null;
+  /** True while a project profile filters the visible list. */
+  projectFilterActive: boolean;
+  /** Loaded rows BEFORE the project filter (search filters still applied). */
+  preProjectFilterCount: number;
   refetch: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
@@ -281,6 +285,8 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    projectFilterActive: activeProfile !== null,
+    preProjectFilterCount: allItems.length,
     refetch,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are

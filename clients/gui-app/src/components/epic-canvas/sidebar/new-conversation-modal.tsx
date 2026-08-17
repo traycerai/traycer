@@ -126,16 +126,14 @@ import {
   ACTIVE_TILE_PLACEMENT,
   type ConversationTilePlacement,
 } from "@/lib/canvas/conversation-tile-placement";
-import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   selectEpicRunSettingsEntry,
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
-import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { resolveNewConversationWorkspaceSeed } from "@/lib/workspace/new-conversation-workspace-seed";
+import type { ResolvedWorkspaceFolder } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
   anyHostHasStagedWorktreeIntent,
   newConversationModalStagingKey,
@@ -1122,6 +1120,14 @@ export function NewConversationModalBody(props: {
 }
 
 /**
+ * Shared empty fallback for the epic's stored folder read - the selector must
+ * not mint a fresh array per call when the epic has no snapshot meta yet
+ * (RENDER_PERF_INVARIANTS).
+ */
+const EMPTY_RESOLVED_WORKSPACE_FOLDERS: readonly ResolvedWorkspaceFolder[] =
+  Object.freeze([]);
+
+/**
  * Workspace seed that drives the modal's workspace controls + submit intent.
  * For a child (per-row `+`, `parentId !== null`) it inherits the PARENT's
  * binding so the child lands in the parent's worktree. The parent may be a chat
@@ -1195,7 +1201,18 @@ function useNewConversationModalSeed(
   latestWorkspaceSeed: LatestConversationWorkspaceSeed | null,
 ): NewConversationModalSeed {
   const latestSettingsSeed = useLatestConversationSettingsSeed();
-  const globalWorkspace = useGlobalWorkspaceSnapshot(hostId);
+  // The epic's own stored workspace folders (resolved to on-disk checkouts by
+  // the serving host at subscribe time) - the in-epic fallback when no
+  // conversation on this epic carries a binding. Deliberately NOT the
+  // active-project overlay: a conversation created inside an existing epic
+  // must not be re-homed into whatever project the header switcher has
+  // selected. Reference-stable across snapshots that leave the array
+  // unchanged, so the `??` empty fallback is the only allocation risk -
+  // pinned to a module constant.
+  const epicWorkspaceFolders = useEpicStore(
+    (state) =>
+      state.snapshotMeta?.workspaceFolders ?? EMPTY_RESOLVED_WORKSPACE_FOLDERS,
+  );
   // Carry forward the last settings used on this epic ON THIS HOST (the
   // chat-tile composer writes `setEpicRunSettings` on send), then the same
   // host's cross-epic last-run, then the projected latest-conversation
@@ -1215,9 +1232,19 @@ function useNewConversationModalSeed(
         runSettingsSeed.globalLastRunSettings ??
         latestSettingsSeed.settings,
       composerMode: latestSettingsSeed.composerMode,
-      workspace: latestWorkspaceSeed?.workspace ?? globalWorkspace,
+      workspace: resolveNewConversationWorkspaceSeed({
+        latestWorkspace: latestWorkspaceSeed?.workspace ?? null,
+        epicWorkspaceFolders,
+        hostId,
+      }),
     }),
-    [globalWorkspace, latestSettingsSeed, latestWorkspaceSeed, runSettingsSeed],
+    [
+      epicWorkspaceFolders,
+      hostId,
+      latestSettingsSeed,
+      latestWorkspaceSeed,
+      runSettingsSeed,
+    ],
   );
 }
 
@@ -1274,23 +1301,6 @@ function useLatestConversationSettingsSeed(): {
       composerMode: "terminal",
     };
   }, [defaults, fallbackComposerMode, projection]);
-}
-
-function useGlobalWorkspaceSnapshot(
-  hostId: string | null,
-): LandingDraftWorkspaceSnapshot {
-  const foldersByHost = useWorkspaceFoldersStore((state) => state.byHost);
-  const profilesByHost = useProjectProfilesStore((state) => state.byHost);
-  const bucket = selectEffectiveWorkspaceFoldersBucket(
-    { byHost: foldersByHost },
-    { byHost: profilesByHost },
-    hostId,
-  );
-  return {
-    folders: bucket.folders,
-    folderInfoByPath: bucket.folderInfoByPath,
-    primaryPath: bucket.primaryPath,
-  };
 }
 
 /**

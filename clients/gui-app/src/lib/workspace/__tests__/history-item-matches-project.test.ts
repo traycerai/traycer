@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterHistoryItemsForProject,
   historyItemMatchesProject,
+  historyListEmptyState,
 } from "../history-item-matches-project";
 import type { ProjectProfile } from "@/stores/workspace/project-profiles-store";
 
@@ -166,5 +167,81 @@ describe("filterHistoryItemsForProject", () => {
   it("keeps the full list when no profile is active", () => {
     const items = [item("a", [], [])];
     expect(filterHistoryItemsForProject(items, null)).toBe(items);
+  });
+});
+
+describe("historyListEmptyState", () => {
+  it("returns null while rows are visible", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 2,
+        preProjectFilterCount: 5,
+        hasActiveFilters: false,
+        projectFilterActive: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("points at All projects when the active project hides every chat", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 5,
+        hasActiveFilters: false,
+        projectFilterActive: true,
+      }),
+    ).toBe("hidden-by-active-project");
+  });
+
+  it("points at All projects when search matches exist only outside the project", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 3,
+        hasActiveFilters: true,
+        projectFilterActive: true,
+      }),
+    ).toBe("hidden-by-active-project");
+  });
+
+  it("keeps the plain empty copy when the project truly has no chats anywhere", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 0,
+        hasActiveFilters: false,
+        projectFilterActive: true,
+      }),
+    ).toBe("no-tasks");
+  });
+
+  it("keeps the plain empty copy when no project is active", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 0,
+        hasActiveFilters: false,
+        projectFilterActive: false,
+      }),
+    ).toBe("no-tasks");
+  });
+
+  it("keeps the filter empty copy when nothing matches the search", () => {
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 0,
+        hasActiveFilters: true,
+        projectFilterActive: true,
+      }),
+    ).toBe("no-filter-matches");
+    expect(
+      historyListEmptyState({
+        visibleCount: 0,
+        preProjectFilterCount: 0,
+        hasActiveFilters: true,
+        projectFilterActive: false,
+      }),
+    ).toBe("no-filter-matches");
   });
 });

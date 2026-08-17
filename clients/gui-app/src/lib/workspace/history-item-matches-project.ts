@@ -51,6 +51,31 @@ export function filterHistoryItemsForProject<
   return items.filter((item) => historyItemMatchesProject(item, profile));
 }
 
+export type HistoryListEmptyState =
+  | "no-tasks"
+  | "no-filter-matches"
+  | "hidden-by-active-project";
+
+/**
+ * Which empty copy the history list shows. When a project profile hides every
+ * row while chats still exist outside it, the list must say so - the plain
+ * "No tasks yet" copy reads as if the chats were deleted. `preProjectFilterCount`
+ * is the list size BEFORE the project filter (search filters still applied),
+ * so a search that matches only outside the project also gets the project copy.
+ */
+export function historyListEmptyState(input: {
+  readonly visibleCount: number;
+  readonly preProjectFilterCount: number;
+  readonly hasActiveFilters: boolean;
+  readonly projectFilterActive: boolean;
+}): HistoryListEmptyState | null {
+  if (input.visibleCount > 0) return null;
+  if (input.projectFilterActive && input.preProjectFilterCount > 0) {
+    return "hidden-by-active-project";
+  }
+  return input.hasActiveFilters ? "no-filter-matches" : "no-tasks";
+}
+
 function isDocumentedTraycerWorktreeOfFolder(
   worktreePath: string,
   folder: string,

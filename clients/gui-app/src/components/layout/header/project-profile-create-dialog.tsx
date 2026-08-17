@@ -25,6 +25,7 @@ import {
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -60,6 +61,12 @@ export function ProjectProfileCreateDialog(props: {
   const [color, setColor] = useState<ProjectProfileColor>("orange");
   const [seed, setSeed] = useState<ProjectProfileSeed>("folder");
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  // A folder picked via the native/remote picker that is NOT in the host
+  // catalog yet. Dialog-local only: it reaches the catalog on Create (the
+  // profile seed reads the catalog), never on pick - Cancel must leave the
+  // host library untouched.
+  const [pendingFolder, setPendingFolder] =
+    useState<WorkspaceFolderInfo | null>(null);
   const catalog = useWorkspaceFoldersStore((state) =>
     selectWorkspaceFoldersBucket(state, hostId),
   );
@@ -71,6 +78,7 @@ export function ProjectProfileCreateDialog(props: {
     setColor("orange");
     setSeed("folder");
     setPickedFolder(null);
+    setPendingFolder(null);
   };
 
   const submit = () => {
@@ -85,7 +93,27 @@ export function ProjectProfileCreateDialog(props: {
     ) {
       return;
     }
-    const folders = folderSeedForNewProfile(catalog, seed, selectedFolder);
+    // The picked folder joins the catalog only now, on confirm, so
+    // `folderSeedForNewProfile` can resolve it below. An "Empty" project
+    // deliberately skips the write - the user asked for no folders.
+    if (
+      pendingFolder !== null &&
+      seed !== "empty" &&
+      !catalog.folders.includes(pendingFolder.path)
+    ) {
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(hostId, [pendingFolder]);
+    }
+    const confirmedCatalog = selectWorkspaceFoldersBucket(
+      useWorkspaceFoldersStore.getState(),
+      hostId,
+    );
+    const folders = folderSeedForNewProfile(
+      confirmedCatalog,
+      seed,
+      selectedFolder,
+    );
     const id = useProjectProfilesStore.getState().createProfile(hostId, {
       name: trimmed,
       color,
@@ -103,25 +131,31 @@ export function ProjectProfileCreateDialog(props: {
     const result = await pickAndPrepareFolders();
     if (result === null || result.folders.length === 0) return;
     const first = result.folders[0];
-    useWorkspaceFoldersStore.getState().addResolvedFolders(
-      result.hostId,
-      result.folders.map((folder) =>
-        preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
-      ),
-    );
     if (hostId !== null && result.hostId !== hostId) return;
     setSeed("folder");
     setPickedFolder(first.workspacePath);
+    setPendingFolder(
+      preparedWorkspaceFolderToWorkspaceFolderInfo(first, result.hostId),
+    );
+  };
+
+  const pendingPath =
+    pendingFolder !== null && !catalog.folders.includes(pendingFolder.path)
+      ? pendingFolder.path
+      : null;
+  const folderRows =
+    pendingPath === null
+      ? catalog.folders
+      : [pendingPath, ...catalog.folders];
+
+  // Every close path (Cancel, overlay, Escape) discards the dialog-local pick.
+  const handleOpenChange = (next: boolean) => {
+    if (!next) reset();
+    onOpenChange(next);
   };
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) reset();
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="max-w-[min(92vw,28rem)]"
         data-testid="project-profile-create-dialog"
@@ -173,13 +207,13 @@ export function ProjectProfileCreateDialog(props: {
             <legend className="text-ui-sm font-medium">
               This project's folder
             </legend>
-            {catalog.folders.length === 0 ? (
+            {folderRows.length === 0 ? (
               <p className="text-ui-xs text-muted-foreground">
                 Choose the folder this project should open.
               </p>
             ) : (
               <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-                {catalog.folders.map((folderPath) => (
+                {folderRows.map((folderPath) => (
                   <button
                     key={folderPath}
                     type="button"
@@ -254,7 +288,7 @@ export function ProjectProfileCreateDialog(props: {
           <Button
             type="button"
             variant="outline"
-            onClick={() => onOpenChange(false)}
+            onClick={() => handleOpenChange(false)}
           >
             Cancel
           </Button>

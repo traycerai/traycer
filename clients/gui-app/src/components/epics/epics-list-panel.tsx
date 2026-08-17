@@ -98,6 +98,7 @@ import {
   type HistoryFacets,
   type HistoryFetchResult,
 } from "@/hooks/home/use-history-query";
+import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
@@ -278,6 +279,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    projectFilterActive,
+    preProjectFilterCount,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -616,6 +619,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             hasActiveFilters={hasActiveFilters}
             chatHostFilterUnsupported={chatHostFilterUnsupported}
+            projectFilterActive={projectFilterActive}
+            preProjectFilterCount={preProjectFilterCount}
             items={items}
             onRetry={handleRetry}
             selectionMode={selectionMode}
@@ -1055,6 +1060,8 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        projectFilterActive={props.projectFilterActive}
+        preProjectFilterCount={props.preProjectFilterCount}
         items={props.items}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
@@ -1087,6 +1094,8 @@ interface EpicsListBodyProps {
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
+  readonly projectFilterActive: boolean;
+  readonly preProjectFilterCount: number;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -1121,6 +1130,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetching,
     hasActiveFilters,
     chatHostFilterUnsupported,
+    projectFilterActive,
+    preProjectFilterCount,
     items,
     onRetry,
     selectionMode,
@@ -1155,11 +1166,37 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
+  const emptyState = historyListEmptyState({
+    visibleCount: items.length,
+    preProjectFilterCount,
+    hasActiveFilters,
+    projectFilterActive,
+  });
   if (items.length === 0 && !hasActiveFilters) {
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
     return <EpicsListEmpty />;
   }
   if (items.length === 0 && hasActiveFilters && isFetching) {
     return <EpicsListFilteringLoading />;
+  }
+  if (items.length === 0) {
+    // Active filters, no in-flight refetch: the list is genuinely empty for
+    // this filter set.
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+        data-testid="epics-list-filtered-empty"
+      >
+        <p className="font-medium text-foreground">
+          No tasks match these filters.
+        </p>
+      </div>
+    );
   }
   return (
     <>
@@ -1200,6 +1237,23 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         onLoadMore={onLoadMore}
       />
     </>
+  );
+}
+
+/**
+ * A project profile hid every visible row while chats still exist outside
+ * the project. Say where they went - "No tasks yet" here reads as data loss.
+ */
+function EpicsListProjectHiddenEmpty() {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-project-empty"
+    >
+      <p className="font-medium text-foreground">
+        Older chats are under All projects.
+      </p>
+    </div>
   );
 }
 
