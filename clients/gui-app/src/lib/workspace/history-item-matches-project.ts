@@ -2,26 +2,47 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { ProjectProfile } from "@/stores/workspace/project-profiles-store";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 
+const TRAYCER_WORKTREES_MARKER = "/.traycer/worktrees/";
+
 /**
- * An existing chat belongs to a project when it was claimed, or when one of
- * its worktrees is that project's folder (or a Traycer worktree of it).
- * Fan-out chats still match the project they actually touched.
+ * An existing chat belongs to a project when it was claimed, when one of
+ * its originating workspace paths is that project's folder, or when a
+ * leftover Traycer worktree was created from that folder's repo slug.
  */
 export function historyItemMatchesProject(
-  item: Pick<HistoryItem, "epicId" | "worktreePaths">,
+  item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
   profile: ProjectProfile,
 ): boolean {
   if (profile.epicIds.includes(item.epicId)) return true;
   if (profile.folderPaths.length === 0) return false;
+  const folders = profile.folderPaths.map(normalizePathSeparators);
+  if (
+    item.linkedWorkspaces.some((workspace) =>
+      folders.some((folder) =>
+        pathIsInsideFolder(
+          normalizePathSeparators(workspace.workspacePath),
+          folder,
+        ),
+      ),
+    )
+  ) {
+    return true;
+  }
+  // When the cloud row already named its folders, do not also guess from
+  // worktree basenames — two checkouts named Titanos would collide.
+  if (item.linkedWorkspaces.length > 0) return false;
   return item.worktreePaths.some((worktreePath) =>
-    profile.folderPaths.some((folder) =>
-      worktreeTouchesProjectFolder(worktreePath, folder),
+    folders.some((folder) =>
+      isDocumentedTraycerWorktreeOfFolder(
+        normalizePathSeparators(worktreePath),
+        folder,
+      ),
     ),
   );
 }
 
 export function filterHistoryItemsForProject<
-  T extends Pick<HistoryItem, "epicId" | "worktreePaths">,
+  T extends Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
 >(
   items: ReadonlyArray<T>,
   profile: ProjectProfile | null,
@@ -30,23 +51,27 @@ export function filterHistoryItemsForProject<
   return items.filter((item) => historyItemMatchesProject(item, profile));
 }
 
-function worktreeTouchesProjectFolder(
+function isDocumentedTraycerWorktreeOfFolder(
   worktreePath: string,
   folder: string,
 ): boolean {
   if (pathIsInsideFolder(worktreePath, folder)) return true;
-  const name = workspaceFolderName(folder).toLowerCase();
-  if (name.length === 0) return false;
+  const slug = workspaceFolderName(folder).toLowerCase();
+  if (slug.length === 0) return false;
   const haystack = worktreePath.toLowerCase();
-  return (
-    haystack.includes(`__${name}/`) ||
-    haystack.includes(`/${name}/`) ||
-    haystack.endsWith(`/${name}`)
-  );
+  const markerAt = haystack.indexOf(TRAYCER_WORKTREES_MARKER);
+  if (markerAt < 0) return false;
+  const repoSeg = haystack
+    .slice(markerAt + TRAYCER_WORKTREES_MARKER.length)
+    .split("/")[0];
+  return repoSeg.endsWith(`__${slug}`);
 }
 
 function pathIsInsideFolder(path: string, folder: string): boolean {
   if (path === folder) return true;
-  const prefix = folder.endsWith("/") ? folder : `${folder}/`;
-  return path.startsWith(prefix);
+  return path.startsWith(`${folder}/`);
+}
+
+function normalizePathSeparators(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
