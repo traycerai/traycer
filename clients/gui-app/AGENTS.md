@@ -146,9 +146,23 @@ pack retry, catalog refresh — and every surface that dispatches into the
 focused composer (the palette's Pick provider/model, via
 `FocusedComposerEntry.hostClient`) resolves through that host's client
 (`…ForClient` hooks / `runTargetHostId` → `useHostClientForHostId`). The
-default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
-`useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
-a palette with no focused composer) — never inside a composer surface.
+default-host wrappers (`useProvidersList()`, `useGuiHarness*Query()`) are for
+app-wide surfaces only (prefetcher, Settings, a palette with no focused
+composer) — never inside a composer surface. (`useDefaultHostClient()` was the
+third of these and is gone: once `HostRuntimeBinding` carried its own `hostId`
+it resolved exactly what `useHostClient()` resolves.)
+
+**"Default host" means the SURFACE's host**, which inside Settings is the
+SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
+names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
+`useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
+that host. Seven surfaces re-provide; `useScopedHostBinding` lists them and the
+two governed exceptions. Resolve a binding through
+`lib/host/binding-host-client.ts` and never inline
+`hostClient.createRequesterForHostId(...)` beside a separately-read host id:
+that pairing is a defect with its own history, and those resolvers are pure
+functions taking the binding as an ARGUMENT precisely so a consumer's own
+`useHostBinding()` — including a test's — is what they see.
 
 Persisted "last used" and pending state is per-host too:
 `composer-run-settings-store`, `composer-harness-memory-store`,
