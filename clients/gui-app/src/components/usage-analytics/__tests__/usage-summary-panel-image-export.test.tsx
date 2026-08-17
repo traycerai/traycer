@@ -157,19 +157,30 @@ function usageSummaryResponse(): UsageSummaryResponse {
 function renderPanel(
   handler: (request: UsageSummaryRequest) => UsageSummaryResponse,
 ): void {
-  const client = new HostClient<HostRpcRegistry>({
+  // A client no longer binds an active host of its own: the host row lives in
+  // `host-connection-registry` and a consumer addresses one host through a
+  // REQUESTER, which is a routing view over this spine rather than a second
+  // client. Matches `usage-summary-panel-host-scope.test.tsx`.
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
+    // Load-bearing, not boilerplate: a requester resolves its entry through
+    // this at property-access time, and `captureAuthority` refuses a routed
+    // entry that no longer matches the live directory. Omit it and every
+    // request is silently never issued - the panel renders but no figure ever
+    // arrives.
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: { "host.usage.summary": handler },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
