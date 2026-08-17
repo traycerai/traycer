@@ -1,9 +1,17 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Copy, Download } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  useUsageImageExport,
+  type UsageImageExportMutation,
+} from "@/hooks/usage-analytics/use-usage-image-export";
+import { USAGE_EXPORT_REGION_SELECTOR } from "@/lib/usage-analytics/usage-export-image";
 import {
   buildUsageSummaryRequest,
   useUsageSummaryForClient,
@@ -31,6 +39,7 @@ import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value"
 import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
 import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
 import { UsageMetricToggle } from "@/components/usage-analytics/usage-metric-toggle";
+import { USAGE_METRIC_LABELS } from "@/lib/usage-analytics/usage-metric-labels";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import { UsageBreakdownTable } from "@/components/usage-analytics/usage-breakdown-table";
 import { UsageDayBreakdownTable } from "@/components/usage-analytics/usage-day-breakdown-table";
@@ -225,9 +234,39 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       }),
     [props.hostNames, discoveredHostIds, responseHostIds, hostId],
   );
-
+  // The capture region is found by data attribute under this panel's own
+  // root at click time, not held as a threaded RefObject - the React
+  // Compiler's ref rules reject a ref object travelling through props,
+  // and an event-time DOM query needs no render-time ref reads. Scoped to
+  // this root so a second usage surface can never be captured by mistake.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // The capture region spans the headline THROUGH the activity calendar, so
+  // "the primary read resolved" is not enough to export: while the activity
+  // lane is still loading it renders nothing at all, and a capture taken then
+  // yields a PNG with the Activity section silently missing rather than one
+  // that looks unfinished. Both lanes must be at rest first - a displayed
+  // error card inside the image is honest, an absent section is not.
+  const exportReady =
+    query.data !== undefined &&
+    usageActivityLaneSettled(activityQuery, activityFallbackQuery);
+  const { mutation, copyImage, downloadImage } = useUsageImageExport({
+    getExportNode: () =>
+      panelRef.current?.querySelector<HTMLElement>(
+        USAGE_EXPORT_REGION_SELECTOR,
+      ) ?? null,
+    fileName: `traycer-usage-${String(windowDays)}d.png`,
+    heading: "Usage",
+    // The metric belongs in the subheading because its toggle sits OUTSIDE
+    // the capture region: the chart and the activity calendar both obey it,
+    // so a tokens-mode capture is a page of magnitudes with nothing naming
+    // what they measure - a reader would take them for dollars. The date
+    // range alone describes only half the scope of what the image shows.
+    subheading: `${dateRangeLabel} · ${USAGE_METRIC_LABELS[metric]}`,
+    errorSource: "Usage settings",
+    analyticsSource: "settings",
+  });
   return (
-    <div className="flex w-full max-w-4xl flex-col gap-5">
+    <div ref={panelRef} className="flex w-full max-w-4xl flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <UsageWindowPicker
@@ -248,7 +287,15 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
             {dateRangeLabel}
           </span>
         </div>
-        <UsageMetricToggle metric={metric} onChange={setMetric} />
+        <div className="flex items-center gap-1.5">
+          <UsageMetricToggle metric={metric} onChange={setMetric} />
+          <UsageExportImageActions
+            exportReady={exportReady}
+            mutation={mutation}
+            onCopyImage={copyImage}
+            onDownloadImage={downloadImage}
+          />
+        </div>
       </div>
       <UsageSummaryPanelBody
         query={query}
@@ -266,6 +313,81 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         }
       />
     </div>
+  );
+}
+
+/**
+ * The header's Copy image / Download image pair. One export runs at a time,
+ * so BOTH buttons go disabled while either is pending; only the button that
+ * started it shows the spinner, which is what the mutation's variables
+ * discriminate. Extracted from the panel so the pending derivations live
+ * beside the buttons they gate.
+ */
+function UsageExportImageActions(props: {
+  readonly exportReady: boolean;
+  readonly mutation: UsageImageExportMutation;
+  readonly onCopyImage: () => void;
+  readonly onDownloadImage: () => void;
+}): ReactNode {
+  const { exportReady, mutation } = props;
+  const isExporting = mutation.isPending;
+  const isCopying = isExporting && mutation.variables.action === "copy";
+  const isDownloading = isExporting && mutation.variables.action === "download";
+  return (
+    <>
+      <TooltipWrapper
+        label="Copy image"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Copy usage image"
+          data-testid="usage-copy-image"
+          disabled={!exportReady || isExporting}
+          onClick={props.onCopyImage}
+        >
+          {isCopying ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <Copy aria-hidden className="size-3.5" />
+          )}
+        </Button>
+      </TooltipWrapper>
+      <TooltipWrapper
+        label="Download image"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label="Download usage image"
+          data-testid="usage-download-image"
+          disabled={!exportReady || isExporting}
+          onClick={props.onDownloadImage}
+        >
+          {isDownloading ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <Download aria-hidden className="size-3.5" />
+          )}
+        </Button>
+      </TooltipWrapper>
+    </>
   );
 }
 
@@ -432,62 +554,74 @@ function UsageSummaryPanelBody(props: {
     // nothing and the split rendered colorless. `UsageDailyChart` keeps its
     // own copy of the class for the epic dialog, where it stands alone.
     <div className="usage-chart-root flex flex-col gap-5">
-      <div className="flex flex-col gap-3">
-        <UsageCostFigure
-          totals={summary.totals}
-          coverage={coverage}
-          servedBy={servedBy}
-          hostScopeName={hostScopeName}
-          size="default"
-        />
-        <UsageHarnessSplit rows={harnessRows} scale={scale} showTokens />
-      </div>
-      {/* Only worth a section once there is more than one host to compare:
+      {/* The image-export capture region: headline through the activity
+          calendar, deliberately not the breakdown tables below - "what did
+          this cost" shares fine, an unbounded table doesn't. The by-host
+          section inside carries the export-exclude marker: which machines
+          ran the work is workspace-internal detail a shared screenshot
+          shouldn't leak. */}
+      <div
+        className="flex flex-col gap-5"
+        data-usage-export-region=""
+        data-testid="usage-export-region"
+      >
+        <div className="flex flex-col gap-3">
+          <UsageCostFigure
+            totals={summary.totals}
+            coverage={coverage}
+            servedBy={servedBy}
+            hostScopeName={hostScopeName}
+            size="default"
+          />
+          <UsageHarnessSplit rows={harnessRows} scale={scale} showTokens />
+        </div>
+        {/* Only worth a section once there is more than one host to compare:
           a single-row "By host" list under an All-hosts filter says nothing
           the filter did not already say, and on the local plane there can
           never be a second row at all. */}
-      {hostRows.length > 1 ? (
+        {hostRows.length > 1 ? (
+          <div className="flex flex-col gap-2" data-usage-export-exclude="">
+            <h3 className="text-ui-sm font-medium text-foreground">By host</h3>
+            <UsageHostSplit rows={hostRows} />
+          </div>
+        ) : null}
+        <div className="flex flex-col gap-1.5">
+          <UsageStatTiles tiles={statTiles} variant="full" />
+          {absentNote === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground/80"
+              data-testid="usage-stat-tiles-absent-note"
+            >
+              {absentNote}
+            </p>
+          )}
+        </div>
         <div className="flex flex-col gap-2">
-          <h3 className="text-ui-sm font-medium text-foreground">By host</h3>
-          <UsageHostSplit rows={hostRows} />
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-1.5">
-        <UsageStatTiles tiles={statTiles} variant="full" />
-        {absentNote === null ? null : (
-          <p
-            className="text-ui-xs text-muted-foreground/80"
-            data-testid="usage-stat-tiles-absent-note"
-          >
-            {absentNote}
-          </p>
-        )}
-      </div>
-      <div className="flex flex-col gap-2">
-        <div className="flex justify-end">
-          <UsageChartGroupByToggle
-            groupBy={chartGroupBy}
-            onChange={onChartGroupByChange}
-            triggerClassName={undefined}
-          />
-        </div>
-        {/* `key` per the prop's contract: the legend's hidden-series state
+          <div className="flex justify-end">
+            <UsageChartGroupByToggle
+              groupBy={chartGroupBy}
+              onChange={onChartGroupByChange}
+              triggerClassName={undefined}
+            />
+          </div>
+          {/* `key` per the prop's contract: the legend's hidden-series state
             is keyed by the current grouping's series keys, so a grouping
             switch remounts rather than letting stale harness keys filter
             (or fail to filter) model bands. */}
-        <UsageDailyChart
-          key={chartGroupBy}
-          columns={columns}
-          scale={chartScale}
+          <UsageDailyChart
+            key={chartGroupBy}
+            columns={columns}
+            scale={chartScale}
+            metric={metric}
+            groupBy={chartGroupBy}
+          />
+        </div>
+        <UsageActivitySection
+          query={activityQuery}
+          fallbackQuery={activityFallbackQuery}
           metric={metric}
-          groupBy={chartGroupBy}
         />
       </div>
-      <UsageActivitySection
-        query={activityQuery}
-        fallbackQuery={activityFallbackQuery}
-        metric={metric}
-      />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
@@ -549,19 +683,13 @@ function UsageActivitySection(props: {
       </div>
     );
   }
-  // The year read failed for a reason the fallback does not exist for, or
-  // the fallback itself failed too - either way the section owes the
-  // reader an explanation and a way back, never a silent gap.
-  const windowTooWide = isWindowTooWideError(query.error);
-  if (
-    query.error !== null &&
-    (!windowTooWide || fallbackQuery.error !== null)
-  ) {
+  const displayedError = usageActivityDisplayedError(query, fallbackQuery);
+  if (displayedError !== null) {
     return (
       <div className="flex flex-col gap-2" data-testid="usage-activity-section">
         <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
         <UsageErrorCard
-          error={query.error}
+          error={displayedError}
           onRetry={() => {
             void query.refetch();
             void fallbackQuery.refetch();
@@ -571,4 +699,49 @@ function UsageActivitySection(props: {
     );
   }
   return null;
+}
+
+/**
+ * The error the activity section puts on screen, or `null` when it has none
+ * to show yet.
+ *
+ * The year read failed for a reason the fallback does not exist for, or the
+ * fallback itself failed too - either way the section owes the reader an
+ * explanation and a way back, never a silent gap. A classified
+ * too-wide-window rejection with the fallback still in flight is NOT that
+ * state: the narrower read is the answer to it, so the section waits.
+ *
+ * Once that narrower read has failed too, the FALLBACK's error is the one
+ * shown. The too-wide rejection is by then a resolved fact about the host's
+ * age, not a problem the reader can act on - it says the year window was
+ * refused, while what actually broke is whatever stopped the quarter.
+ */
+function usageActivityDisplayedError(
+  query: UsageSummaryQueryResult,
+  fallbackQuery: UsageSummaryQueryResult,
+): HostRpcError | null {
+  const error = query.error;
+  if (error === null) return null;
+  if (isWindowTooWideError(error)) return fallbackQuery.error;
+  return error;
+}
+
+/**
+ * Whether the activity lane has reached a state it actually RENDERS - the
+ * calendar from either read, or the error card above. Anything else is the
+ * section's loading branch, which draws nothing.
+ *
+ * Shared with the export gate rather than restated there: a second notion of
+ * "settled" would drift from the branching in {@link UsageActivitySection},
+ * and the failure that drift produces is invisible - an image that captured
+ * the gap where the calendar was about to appear.
+ */
+function usageActivityLaneSettled(
+  query: UsageSummaryQueryResult,
+  fallbackQuery: UsageSummaryQueryResult,
+): boolean {
+  return (
+    (query.data ?? fallbackQuery.data) !== undefined ||
+    usageActivityDisplayedError(query, fallbackQuery) !== null
+  );
 }

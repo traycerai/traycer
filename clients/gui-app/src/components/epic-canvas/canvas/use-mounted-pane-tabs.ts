@@ -2,7 +2,7 @@
  * Per-pane keep-alive policy for canvas tab bodies (paseo
  * `use-mounted-tab-set` port + traycer terminal pinning):
  *
- *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab) ∪ {active chat tab}
+ *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab) ∪ retained chats
  *
  * - The LRU tracks the most recently ACTIVE non-terminal, non-chat tabs, so
  *   switching back to a recently used editor/spec is a visibility toggle
@@ -15,19 +15,43 @@
  *   they be evicted by - the LRU. A PTY's scrollback cannot be rebuilt from
  *   props, so eviction would destroy state (the pre-LRU policy mounted all
  *   terminals for exactly this reason).
- * - Chat tabs are the opposite: they never participate in `display:none`
- *   keep-alive at all, and are excluded from the LRU entirely. Each is
- *   mounted only while it is the active tab (a real unmount/remount on every
- *   switch, not a visibility toggle) - decision log #17 of the chat scroller
- *   refactor. A concealed LegendList instance's scroll-restoration
- *   and row-identity bookkeeping is not worth defending across the LRU
- *   eviction path; chat tiles instead rebuild their reading position from a
- *   module-scope, per-tab cache on remount.
+ * - Chat tabs have their OWN retention, kept separate from the LRU and
+ *   derived from the pane's store-resident `activationHistory` rather than
+ *   from any recency this hook tracks itself. See
+ *   `stores/epics/canvas/retained-pane-chats.ts` for why that shared input
+ *   is mandatory: `tile-surface-membership.ts` decides which hosted chat
+ *   RECORDS exist from the same policy, and a record whose slot stopped
+ *   rendering freezes at its last published environment and paints over the
+ *   pane's real selection. This supersedes decision log #17 ("a chat mounts
+ *   only while it is the active tab"), whose remount is what made an inner
+ *   tab switch visibly re-converge the transcript; a retained chat now takes
+ *   the same hide/show path a backgrounded top-level tab already took, and
+ *   `ChatMessages` replays its saved anchor once against a list it never
+ *   stopped measuring. The per-tab `chat-tab-state-cache` still backs a real
+ *   remount (eviction past the cap, close, reopen).
+ * - Retained chats conceal via `visibility` rather than `display:none`, for
+ *   the same reason terminals do: a collapsed box reflows the concealed body
+ *   at zero width and republishes bogus item sizes, which is precisely the
+ *   churn this retention exists to remove.
  * - While the surrounding keep-alive pane is HIDDEN (background header tab,
  *   `usePaneVisible() === false`), the LRU collapses to the active tab only:
  *   background panes pay for at most one non-terminal body (+ terminals).
  *   The committed LRU is truncated with it, so on re-focus the set rebuilds
- *   from the tabs the user actually revisits.
+ *   from the tabs the user actually revisits. Chat retention deliberately
+ *   does NOT collapse with it - and that is a TRADEOFF, not a constraint.
+ *   `tile-surface-membership.ts` could observe pane visibility: its
+ *   `computeRetainedTopLevelRefKeys` already derives `activeRefKeys` from the
+ *   same `flattenStripItemRefs(activeItem)` that `TopLevelTabHost` turns into
+ *   the `usePaneVisible()` value. Collapsing is refused because it would undo
+ *   the fix for the first inner switch after returning to a background tab -
+ *   the retained chat would have been dropped while hidden, so the reader
+ *   would watch it re-converge exactly once per background trip. The price is
+ *   real and unmeasured in the live app: ~4 hidden top-level surfaces each
+ *   hold 2 mounted chats per pane instead of 1, and a mounted chat leases a
+ *   session that sits OUTSIDE `DEFAULT_MAX_WARM_CHAT_SESSIONS` and never
+ *   idle-expires - so a 5-tab x 3-pane workspace moves from ~15 to ~30
+ *   unreclaimable `chat.subscribe` sockets, none of them visible. Revisit
+ *   this if that socket count bites before the churn does.
  *
  * Recency is recorded with React's "adjust state during render" pattern (a
  * guarded `setState` while rendering, same idiom as `EpicTabHost`'s pane
@@ -38,7 +62,12 @@
  * a ref during render violates the React Compiler's `react-hooks/refs`.)
  */
 import { useMemo, useState } from "react";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
+import {
+  isRetainablePaneChat,
+  RETAINED_PANE_CHAT_CAP,
+  retainedPaneChatInstanceIds,
+} from "@/stores/epics/canvas/retained-pane-chats";
 
 /** Max recently-active non-terminal, non-chat tab bodies kept mounted per pane. */
 export const MOUNTED_PANE_TAB_LRU_CAP = 3;
@@ -53,17 +82,28 @@ export function isPersistentTerminalSurface(tab: EpicCanvasTileRef): boolean {
 }
 
 /**
- * Chat tabs skip keep-alive entirely: they mount only while active, and
- * fully unmount (not `display:none`) the instant another tab is selected.
- * See the module doc comment above for why.
+ * Chat tabs are retained by their own `activationHistory`-driven policy
+ * instead of the LRU, and - like terminals - conceal via `visibility` so the
+ * concealed body keeps its box. See the module doc comment above.
  */
-export function remountsOnTabSwitch(tab: EpicCanvasTileRef): boolean {
-  return tab.type === "chat";
+export function isRetainedChatSurface(tab: EpicCanvasTileRef): boolean {
+  return isRetainablePaneChat(tab);
+}
+
+/**
+ * Whether a concealed layer for `tab` must keep its layout box rather than
+ * collapse out of flow. True for terminals (xterm needs its dimensions) and
+ * for retained chats (a zero-width reflow republishes bogus item sizes).
+ */
+export function concealsWithoutCollapsing(tab: EpicCanvasTileRef): boolean {
+  return isPersistentTerminalSurface(tab) || isRetainedChatSurface(tab);
 }
 
 export interface UseMountedPaneTabsInput {
   /** Resolved active tab instance id (after fallback), null for empty pane. */
   readonly activeTabId: string | null;
+  /** The pane itself, for its store-resident `activationHistory`. */
+  readonly pane: TilePane;
   /** The pane's resolved tab refs, in strip order. */
   readonly tabs: ReadonlyArray<EpicCanvasTileRef>;
   /** From `usePaneVisible()`: false while the keep-alive pane is hidden. */
@@ -111,29 +151,47 @@ function lruEquals(
 export function useMountedPaneTabs(
   input: UseMountedPaneTabsInput,
 ): ReadonlySet<string> {
-  const { activeTabId, tabs, paneVisible } = input;
+  const { activeTabId, pane, tabs, paneVisible } = input;
 
-  // Terminals are pinned; chat tabs are excluded outright (picked up below
-  // only while active); everything else competes for LRU slots.
-  const { pinnedIds, availableLruIds, remountOnlyIds } = useMemo(() => {
+  // Terminals are pinned; chats are retained by their own policy below;
+  // everything else competes for LRU slots.
+  const { pinnedIds, availableLruIds, tileByInstanceId } = useMemo(() => {
     const pinned = new Set<string>();
     const available = new Set<string>();
-    const remountOnly = new Set<string>();
+    const byInstanceId = new Map<string, EpicCanvasTileRef>();
     for (const tab of tabs) {
+      byInstanceId.set(tab.instanceId, tab);
       if (isPersistentTerminalSurface(tab)) {
         pinned.add(tab.instanceId);
-      } else if (remountsOnTabSwitch(tab)) {
-        remountOnly.add(tab.instanceId);
-      } else {
+      } else if (!isRetainedChatSurface(tab)) {
         available.add(tab.instanceId);
       }
     }
     return {
       pinnedIds: pinned,
       availableLruIds: available,
-      remountOnlyIds: remountOnly,
+      tileByInstanceId: byInstanceId,
     };
   }, [tabs]);
+
+  // The SAME window `tile-surface-membership.ts` picks, from the same
+  // kind-only predicate. Membership then drops the ineligible ones (a
+  // remote-deleted chat, a published-copy takeover) from THIS set, so it is a
+  // genuine subset and every member is guaranteed a slot here. Keeping a
+  // layer mounted for a chat membership rejected costs one concealed
+  // placeholder; the reverse - a member with no slot - strands a hosted body
+  // on a disconnected anchor (cold review F1).
+  const retainedChatIds = useMemo(
+    () =>
+      new Set(
+        retainedPaneChatInstanceIds({
+          pane,
+          cap: RETAINED_PANE_CHAT_CAP,
+          tileFor: (instanceId) => tileByInstanceId.get(instanceId),
+        }),
+      ),
+    [pane, tileByInstanceId],
+  );
 
   const [committedLru, setCommittedLru] =
     useState<ReadonlyArray<string>>(EMPTY_LRU);
@@ -158,9 +216,7 @@ export function useMountedPaneTabs(
   return useMemo(() => {
     const mounted = new Set<string>(committedLru);
     for (const id of pinnedIds) mounted.add(id);
-    if (activeTabId !== null && remountOnlyIds.has(activeTabId)) {
-      mounted.add(activeTabId);
-    }
+    for (const id of retainedChatIds) mounted.add(id);
     return mounted;
-  }, [committedLru, pinnedIds, activeTabId, remountOnlyIds]);
+  }, [committedLru, pinnedIds, retainedChatIds]);
 }

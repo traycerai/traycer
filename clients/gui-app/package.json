@@ -79,6 +79,7 @@
     "fflate": "catalog:",
     "fuse.js": "catalog:",
     "hast-util-sanitize": "catalog:",
+    "html-to-image": "catalog:",
     "idb-keyval": "^6.3.0",
     "lowlight": "catalog:",
     "lucide-react": "catalog:",

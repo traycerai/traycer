@@ -578,14 +578,14 @@ function selectedRefusalWord(hostId: string): string | undefined {
 
 function advertiseSourcePublication(): void {
   recordNegotiatedHostManifest(TAB_HOST_ID, {
-    "epic.createChat": { major: 1, minor: 2 },
+    "epic.createChat": { major: 1, minor: 1 },
     "epic.chatPublicationState": { major: 1, minor: 0 },
   });
 }
 
 function advertiseSourceWithoutPublication(): void {
   recordNegotiatedHostManifest(TAB_HOST_ID, {
-    "epic.createChat": { major: 1, minor: 2 },
+    "epic.createChat": { major: 1, minor: 1 },
   });
 }
 
@@ -649,10 +649,10 @@ describe("ChatForkDialog cross-host routing", () => {
       directoryEntry(ABSENT_HOST_ID, "Absent host"),
     ];
     recordNegotiatedHostManifest(OTHER_HOST_ID, {
-      "epic.createChat": { major: 1, minor: 2 },
+      "epic.createChat": { major: 1, minor: 1 },
     });
     recordNegotiatedHostManifest(OLD_HOST_ID, {
-      "epic.createChat": { major: 1, minor: 1 },
+      "epic.createChat": { major: 1, minor: 0 },
     });
     recordNegotiatedHostManifest(ABSENT_HOST_ID, {
       "epic.listChats": { major: 1, minor: 0 },
@@ -711,7 +711,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(request.hostId).toBe(UNKNOWN_HOST_ID);
   });
 
-  it("a 1.1 host and a negotiated-absent host are disabled with needs update", () => {
+  it("a 1.0 host and a negotiated-absent host are disabled with needs update", () => {
     renderDialog(forkTarget({}), ignoreOpenChange);
     fillTitle();
 
@@ -913,7 +913,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(forkButton().disabled).toBe(true);
   });
 
-  it("a 1.1 refusal flips to selectable after the host is recorded at 1.2, with no interaction", () => {
+  it("a 1.0 refusal flips to selectable after the host is recorded at 1.1, with no interaction", () => {
     renderDialog(forkTarget({}), ignoreOpenChange);
     fillTitle();
 
@@ -928,7 +928,7 @@ describe("ChatForkDialog cross-host routing", () => {
     // directly to see the probe at all, which was the defect stated as a
     // workaround.
     expect(dialogMocks.capabilityProbeHostIds.has(OLD_HOST_ID)).toBe(true);
-    // The 1.2 host is not re-asked about - only the ones with something to
+    // The 1.1 host is not re-asked about - only the ones with something to
     // learn - so this is a bounded refresh rather than a read per row.
     expect(dialogMocks.capabilityProbeHostIds.has(OTHER_HOST_ID)).toBe(false);
 
@@ -945,7 +945,7 @@ describe("ChatForkDialog cross-host routing", () => {
     dialogMocks.capabilityProbeHostIds.clear();
     act(() => {
       recordNegotiatedHostManifest(OLD_HOST_ID, {
-        "epic.createChat": { major: 1, minor: 2 },
+        "epic.createChat": { major: 1, minor: 1 },
       });
     });
 
@@ -1293,7 +1293,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const scope = dialogMocks.lastWorkspace?.hostScope;
     expect(scope?.kind === "selected" ? scope.hostId : null).toBe(TAB_HOST_ID);
 
-    // F2: a 1.1 / negotiated-absent row is still in the directory. Inert
+    // F2: a 1.0 / negotiated-absent row is still in the directory. Inert
     // leads, so those rows must not also carry "needs update".
     const oldRow = screen.getByTestId(`fork-host-${OLD_HOST_ID}`);
     const absentRow = screen.getByTestId(`fork-host-${ABSENT_HOST_ID}`);

@@ -49,11 +49,7 @@ import {
   prSubscribeDetailV10,
   prGetLocalDiffV10,
   prGetLocalDiffSummaryV10,
-  prGetLocalDiffSummaryV11,
-  prGetLocalDiffSummaryUpgradeV10ToV11,
   prGetLocalFileDiffV10,
-  prGetLocalFileDiffV11,
-  prGetLocalFileDiffUpgradeV10ToV11,
 } from "@traycer/protocol/host/pr-contracts";
 import { splitConnectionManifest } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -1572,11 +1568,14 @@ describe("pr split RPC contracts", () => {
     expect(summaryContract.requestSchema).toBe(
       prGetLocalDiffSummaryRequestSchema,
     );
+    // The single minor binds the SIDECAR-BEARING schemas: `pathBytes` /
+    // `previousPathBytes` never had a peer that predated them, so they ride
+    // 1.0 rather than a 1.1.
     expect(summaryContract.responseSchema).toBe(
-      prGetLocalDiffSummaryResponseSchema,
+      prGetLocalDiffSummaryResponseV11Schema,
     );
     expect(fileDiffContract.requestSchema).toBe(
-      prGetLocalFileDiffRequestSchema,
+      prGetLocalFileDiffRequestV11Schema,
     );
     expect(fileDiffContract.responseSchema).toBe(
       prGetLocalFileDiffResponseSchema,
@@ -1585,6 +1584,15 @@ describe("pr split RPC contracts", () => {
     expect(fileDiffContract.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(summaryContract.method).toBe("pr.getLocalDiffSummary");
     expect(fileDiffContract.method).toBe("pr.getLocalFileDiff");
+
+    // That 1.0 is the ONLY minor: the collapse left no 1.1 above it, and
+    // nothing below it to upgrade from.
+    expect(summary[1].latestMinor).toBe(0);
+    expect(fileDiff[1].latestMinor).toBe(0);
+    expect(Object.keys(summary[1].versions)).toEqual(["0"]);
+    expect(Object.keys(fileDiff[1].versions)).toEqual(["0"]);
+    expect(summary[1].versions[0].upgradeFromPreviousVersion).toBeNull();
+    expect(fileDiff[1].versions[0].upgradeFromPreviousVersion).toBeNull();
   });
 
   it("keeps both additive methods optional and unsupported on older hosts", () => {
@@ -1604,133 +1612,12 @@ describe("pr split RPC contracts", () => {
     expect(split.manifest["pr.getLocalFileDiff"]).toBeUndefined();
     expect(split.optionalManifest["pr.getLocalDiffSummary"]).toEqual({
       major: 1,
-      minor: 1,
+      minor: 0,
     });
     expect(split.optionalManifest["pr.getLocalFileDiff"]).toEqual({
       major: 1,
-      minor: 1,
+      minor: 0,
     });
-  });
-});
-
-describe("pr split RPC v1.1 byte-path registry entries", () => {
-  it("registers the v1.1 contracts as latestMinor with the exact exported instances", () => {
-    const summary = hostRpcRegistry["pr.getLocalDiffSummary"];
-    const fileDiff = hostRpcRegistry["pr.getLocalFileDiff"];
-
-    expect(summary[1].latestMinor).toBe(1);
-    expect(fileDiff[1].latestMinor).toBe(1);
-
-    const summaryV11 = summary[1].versions[1];
-    const fileDiffV11 = fileDiff[1].versions[1];
-
-    expect(summaryV11.contract).toBe(prGetLocalDiffSummaryV11);
-    expect(fileDiffV11.contract).toBe(prGetLocalFileDiffV11);
-    expect(summaryV11.upgradeFromPreviousVersion).toBe(
-      prGetLocalDiffSummaryUpgradeV10ToV11,
-    );
-    expect(fileDiffV11.upgradeFromPreviousVersion).toBe(
-      prGetLocalFileDiffUpgradeV10ToV11,
-    );
-    expect(summaryV11.contract.schemaVersion).toEqual({ major: 1, minor: 1 });
-    expect(fileDiffV11.contract.schemaVersion).toEqual({
-      major: 1,
-      minor: 1,
-    });
-  });
-});
-
-describe("prGetLocalDiffSummaryUpgradeV10ToV11", () => {
-  it("upgradeRequest is identity - the request shape is unchanged at 1.1", () => {
-    const request = prGetLocalDiffSummaryRequestSchema.parse(
-      LOCAL_DIFF_SUMMARY_REQUEST_FIXTURE,
-    );
-    expect(prGetLocalDiffSummaryUpgradeV10ToV11.upgradeRequest(request)).toBe(
-      request,
-    );
-  });
-
-  it("fills null byte-path sidecars on every file of a v1.0 summary response, leaving everything else identical", () => {
-    const v10 = prGetLocalDiffSummaryResponseSchema.parse({
-      kind: "summary",
-      runningDir: "/tmp/worktrees/widgets",
-      resolvedBaseRef: "origin/development",
-      baseOid: "b".repeat(40),
-      mergeBaseOid: "c".repeat(40),
-      localHeadOid: "a".repeat(40),
-      isStale: false,
-      files: [
-        {
-          path: LOCAL_DIFF_FILE_FIXTURE.path,
-          previousPath: LOCAL_DIFF_FILE_FIXTURE.previousPath,
-          status: LOCAL_DIFF_FILE_FIXTURE.status,
-          insertions: LOCAL_DIFF_FILE_FIXTURE.insertions,
-          deletions: LOCAL_DIFF_FILE_FIXTURE.deletions,
-          isBinary: LOCAL_DIFF_FILE_FIXTURE.isBinary,
-        },
-      ],
-    });
-    if (v10.kind !== "summary") throw new Error("expected a summary fixture");
-
-    const upgraded = prGetLocalDiffSummaryUpgradeV10ToV11.upgradeResponse(v10);
-
-    expect(upgraded.kind).toBe("summary");
-    if (upgraded.kind !== "summary") return;
-    expect(upgraded.files).toEqual([
-      { ...v10.files[0], pathBytes: null, previousPathBytes: null },
-    ]);
-    expect(() =>
-      prGetLocalDiffSummaryResponseV11Schema.parse(upgraded),
-    ).not.toThrow();
-  });
-
-  it("passes an unavailable v1.0 response through unchanged", () => {
-    for (const reason of [
-      "no-local-checkout",
-      "repo-mismatch",
-      "ref-unavailable",
-      "no-merge-base",
-      "git-unavailable",
-    ] as const) {
-      const unavailable = prGetLocalDiffSummaryResponseSchema.parse({
-        kind: "unavailable",
-        reason,
-      });
-      const upgraded =
-        prGetLocalDiffSummaryUpgradeV10ToV11.upgradeResponse(unavailable);
-      expect(upgraded).toEqual(unavailable);
-    }
-  });
-});
-
-describe("prGetLocalFileDiffUpgradeV10ToV11", () => {
-  it("fills null byte-path sidecars on a v1.0 request", () => {
-    const request = prGetLocalFileDiffRequestSchema.parse(
-      LOCAL_FILE_DIFF_REQUEST_FIXTURE,
-    );
-    const upgraded =
-      prGetLocalFileDiffUpgradeV10ToV11.upgradeRequest(request);
-    expect(upgraded).toEqual({
-      ...request,
-      pathBytes: null,
-      previousPathBytes: null,
-    });
-    expect(() =>
-      prGetLocalFileDiffRequestV11Schema.parse(upgraded),
-    ).not.toThrow();
-  });
-
-  it("upgradeResponse is identity - the response shape is unchanged at 1.1", () => {
-    const response = prGetLocalFileDiffResponseSchema.parse({
-      kind: "diff",
-      patch: "",
-      isBinary: false,
-      isTruncated: false,
-      truncatedAfterBytes: null,
-    });
-    expect(prGetLocalFileDiffUpgradeV10ToV11.upgradeResponse(response)).toBe(
-      response,
-    );
   });
 });
 

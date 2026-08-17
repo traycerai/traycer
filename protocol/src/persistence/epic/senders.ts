@@ -472,12 +472,12 @@ export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 
 // ── Wire-freeze variant (pre-turnTailUuid) ──────────────────────────────────
 // Hand-frozen copy of the claude anchor from before `turnTailUuid` existed.
-// Bound (via `userMessageSchemaPreTurnTail`) to the released
-// `chat.subscribe@1.6` serverFrames, whose surface is frozen EXACTLY by
-// `chat-subscribe-v16-surface-compat.test.ts` - the tolerance-based
-// compat-exception that covers 1.0-1.5 does not apply to that exact freeze.
+// Bound (via `userMessageSchemaPreTurnTail` -> `messageSchemaPreImage`) to the
+// released `chat.subscribe@1.4`/`@1.5` snapshot trees, so those lines can never
+// observe the field. It also backed a `1.6` freeze until the release collapsed
+// that unreleased minor with `1.7`; `1.6` binds the live schemas now.
 // Field-for-field hand copy, NOT `.omit()`, so a future anchor field cannot
-// silently leak onto the frozen line.
+// silently leak onto the frozen lines.
 export const claudeChatSessionAnchorSchemaPreTurnTail = z.object({
   harnessId: z.literal("claude"),
   hostId: z.string(),

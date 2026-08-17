@@ -233,7 +233,7 @@ export class ChatStreamClient {
       // LIVE-LINE ONLY: the deep schemas' compatibility defaults
       // (`imageResolutions: []`, `serviceTier: null`, ...) are what
       // up-convert a down-negotiated host's pre-image messages; the
-      // structural check skips them, so a 1.6 snapshot taken shallow would
+      // structural check skips them, so a 1.5 snapshot taken shallow would
       // hand the GUI assistant messages missing fields it types as present
       // (`imageResolutions.map` throws). Down-negotiated hosts predate
       // full-chat-on-subscribe, so their snapshots are the small ones the

@@ -51,7 +51,7 @@ const CLEAR_PIN_PENDING_KEY = "__auto__";
 /**
  * Public props for the per-pack version manager. The CLI candidates table
  * ticket mounts this panel and supplies the wire fields from `providers.list`
- * v8.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
+ * v7.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
  * already threaded through this tree (`scope.hostId`). Do not ambiently
  * re-read the globally active host — the settings surface can display one
  * host while another is active.
@@ -100,7 +100,7 @@ type BannerNotice = {
  *
  * Renders the wireframe surface: header (name, sharing, footprint, auto-
  * download toggle), update-available banner, and one action row per version.
- * Mutations go through the four v8.0 pack RPCs.
+ * Mutations go through the four v7.0 pack RPCs.
  *
  * Capability-gated (non-floor optional RPCs): see
  * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS}.

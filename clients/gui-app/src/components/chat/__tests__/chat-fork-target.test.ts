@@ -21,11 +21,11 @@ import {
 import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 
 describe("chatForkTargetSupport", () => {
-  it("treats 1.2 and a later same-major minor as supported", () => {
-    expect(chatForkTargetSupport({ major: 1, minor: 2 })).toEqual({
+  it("treats 1.1 and a later same-major minor as supported", () => {
+    expect(chatForkTargetSupport({ major: 1, minor: 1 })).toEqual({
       kind: "supported",
     });
-    expect(chatForkTargetSupport({ major: 1, minor: 3 })).toEqual({
+    expect(chatForkTargetSupport({ major: 1, minor: 2 })).toEqual({
       kind: "supported",
     });
   });
@@ -38,13 +38,10 @@ describe("chatForkTargetSupport", () => {
     });
   });
 
-  it("refuses a same-major build below 1.2 as needs-update", () => {
-    expect(chatForkTargetSupport({ major: 1, minor: 1 })).toEqual({
-      kind: "refused",
-      word: CHAT_FORK_NEEDS_UPDATE_WORD,
-      detail:
-        "This host's build can't receive a fork from another machine. Update it and try again.",
-    });
+  // `1.0` is the ONLY same-major minor below the gate: the owner hint arrived on
+  // an unreleased `1.2` that the release collapsed into `1.1`, so the boundary
+  // this asserts is 1.0-refused / 1.1-supported, one minor lower than it was.
+  it("refuses a same-major build below 1.1 as needs-update", () => {
     expect(chatForkTargetSupport({ major: 1, minor: 0 })).toEqual({
       kind: "refused",
       word: CHAT_FORK_NEEDS_UPDATE_WORD,
@@ -76,12 +73,15 @@ describe("chatForkTargetSupport", () => {
 });
 
 describe("chatForkHostRefusals", () => {
+  // `source-host` and `old-host` deliberately sit on the SAME refused minor:
+  // the source exemption is keyed on host identity, not on version, and
+  // pairing them here is what proves that rather than assuming it.
   const versionByHostId = new Map<string, NegotiatedMethodVersion>([
     ["source-host", { major: 1, minor: 0 }],
-    ["old-host", { major: 1, minor: 1 }],
+    ["old-host", { major: 1, minor: 0 }],
     ["absent-host", false],
     ["unknown-host", null],
-    ["ready-host", { major: 1, minor: 2 }],
+    ["ready-host", { major: 1, minor: 1 }],
     ["ahead-host", { major: 2, minor: 0 }],
   ]);
 
@@ -107,8 +107,8 @@ describe("chatForkHostRefusals", () => {
   });
 });
 
-const SUPPORTED: NegotiatedMethodVersion = { major: 1, minor: 2 };
-const REFUSED: NegotiatedMethodVersion = { major: 1, minor: 1 };
+const SUPPORTED: NegotiatedMethodVersion = { major: 1, minor: 1 };
+const REFUSED: NegotiatedMethodVersion = { major: 1, minor: 0 };
 const UNKNOWN: NegotiatedMethodVersion = null;
 
 const COVERED: ChatForkPublicationState = { kind: "covered" };
@@ -131,7 +131,7 @@ const SYNCING_VERDICT: ChatForkTargetVerdict = {
 function refusedVerdict(): ChatForkTargetVerdict {
   const support = chatForkTargetSupport(REFUSED);
   if (support.kind !== "refused") {
-    throw new Error("fixture: 1.1 must be a host refusal");
+    throw new Error("fixture: 1.0 must be a host refusal");
   }
   return {
     kind: "hostRefused",
@@ -247,7 +247,7 @@ describe("chatForkTargetVerdict", () => {
   });
 
   it("same-host short-circuits to allowed even when both gates would refuse", () => {
-    // Ablation: unpublished + a 1.1 build would be chatUnpublished cross-host.
+    // Ablation: unpublished + a 1.0 build would be chatUnpublished cross-host.
     // If this is allowed, only the isCrossHost short-circuit can be why.
     expect(
       chatForkTargetVerdict({

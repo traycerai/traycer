@@ -28,15 +28,15 @@ import {
   listGuiHarnessesResponseSchemaV60,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
+  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListRequestSchemaV70,
+  providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV70,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -75,24 +75,35 @@ const FIXTURES = {
   "providers.list@6.0": dump(providersListResponseSchemaV60),
   // Pinned BEFORE the line ships - the only row here that is. Every row above
   // it was added after a released tag caught a field already riding it, so each
-  // one only ever locked in drift that had already happened. v7.0 is the head
-  // line, and the next major's fields are already designed, so this row is the
-  // one that gets to prevent the leak instead of recording it.
+  // one only ever locked in drift that had already happened. v7.0 is the HEAD
+  // line, so this row is the one that gets to prevent the leak instead of
+  // recording it, and it is what mechanizes "freeze line N before N ships".
   //
-  // This dump is DEEP: it walks `providerProfileSchema`,
-  // `providerNativeCapabilitiesSchema`, `nativeListResultSchema` and every
-  // other sub-schema the frozen v7.0 shape still references live. That is what
-  // makes those live references safe - growth inside one of them fails this
-  // snapshot rather than quietly changing what v7.0 serializes. When it fails,
-  // hand-freeze the sub-schema that grew; do not regenerate to green.
-  "providers.list@7.0": dump(providersListResponseSchemaV70),
+  // It dumps the LIVE schema deliberately. v7.0 points there because it is the
+  // head (v8.0 opened above it for the version-manager fields while both were
+  // unreleased; the release collapsed the two back into one), so the live shape
+  // IS what a v7.0 peer will decode. The dump is DEEP - it walks
+  // `providerProfileSchema`, `providerNativeCapabilitiesSchema`,
+  // `nativeListResultSchema` and every other sub-schema this line reaches - so
+  // growth ANYWHERE beneath it fails this snapshot rather than quietly changing
+  // what v7.0 serializes. When it fails, do not regenerate to green: hand-freeze
+  // this line and open v8.0 against live.
+  //
+  // The freeze is a v7.0 one and takes `V70` names - v7.0 is the line that
+  // stops being head - NOT `V80`, which belongs to the new head still pointing
+  // at the canonical schemas. Those `V70` names are currently held by the
+  // pre-image this line had before the version-manager fields arrived, so it
+  // has to be renamed out of the way first; `providersListRequestSchemaBeforeV70`
+  // below is the naming precedent for that. `host/registry.ts` (above
+  // `providersListV70`) states this procedure in full - keep the two in step.
+  "providers.list@7.0": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
   // the only thing that could see it. Two rows cover every line: v1.0..v6.0 all
   // share `providersListRequestSchemaBeforeV70`, and v7.0 has its own.
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
-  "providers.list@7.0 request": dump(providersListRequestSchemaV70),
+  "providers.list@7.0 request": dump(providersListRequestSchema),
 };
 
 const HEADER =

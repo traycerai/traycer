@@ -18,12 +18,13 @@ import {
   TEST_HOST_ID,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import {
-  collectCanvasWideSelectedChatMembership,
+  collectCanvasWideRetainedChatMembership,
   getTileSurfaceMembership,
   resetTileSurfaceMembershipForTesting,
   subscribeTileSurfaceMembership,
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
+import { RETAINED_PANE_CHAT_CAP } from "@/stores/epics/canvas/retained-pane-chats";
 import {
   getTileSurfaceEnvironment,
   publishTileSurfaceEnvironment,
@@ -91,11 +92,11 @@ function resetAll(): void {
   resetTileSurfaceEnvironmentRegistryForTesting();
 }
 
-describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
+describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
   afterEach(() => resetChatRemoteDeletionRegistryForTesting());
 
   it("includes a chat tile that is its pane's active tab", () => {
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvasWithChat("chat-inst", "p1"),
     });
     expect(membership.get("chat-inst")).toBe("tab-1");
@@ -109,13 +110,16 @@ describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
       tilesByInstanceId: { "term-inst": term },
       sizesByGroupId: {},
     };
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvas,
     });
     expect(membership.size).toBe(0);
   });
 
-  it("excludes a chat tile that is a background (non-active) tab in its pane", () => {
+  it("excludes a background chat the pane has never activated", () => {
+    // Retention is driven by `activationHistory`, so a tab that has only ever
+    // sat in the strip (a restored canvas, a background open) earns no slot
+    // until it is actually visited.
     const canvas: EpicCanvasState = {
       root: {
         ...pane("p1", ["chat-front", "chat-back"]),
@@ -128,11 +132,113 @@ describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
       },
       sizesByGroupId: {},
     };
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvas,
     });
     expect(membership.has("chat-front")).toBe(true);
     expect(membership.has("chat-back")).toBe(false);
+  });
+
+  it("retains a deselected chat the pane recently had active", () => {
+    // The churn fix: `chat-back` was the front tab a moment ago, so its
+    // surface stays a member and returning to it is a visibility toggle
+    // rather than an unmount plus a re-converging scroll restore.
+    const canvas: EpicCanvasState = {
+      root: {
+        ...pane("p1", ["chat-front", "chat-back"]),
+        activeTabId: "chat-front",
+        activationHistory: ["chat-front", "chat-back"],
+      },
+      activePaneId: "p1",
+      tilesByInstanceId: {
+        "chat-front": chatRef("chat-front"),
+        "chat-back": chatRef("chat-back"),
+      },
+      sizesByGroupId: {},
+    };
+    const membership = collectCanvasWideRetainedChatMembership({
+      "tab-1": canvas,
+    });
+    expect(membership.get("chat-front")).toBe("tab-1");
+    expect(membership.get("chat-back")).toBe("tab-1");
+  });
+
+  it("retains a chat sitting under a non-chat active tab", () => {
+    // The filmed case: an artifact tab covers the chat in the same pane. The
+    // chat is not selected and must still be a member.
+    const canvas: EpicCanvasState = {
+      root: {
+        ...pane("p1", ["term-front", "chat-under"]),
+        activeTabId: "term-front",
+        activationHistory: ["term-front", "chat-under"],
+      },
+      activePaneId: "p1",
+      tilesByInstanceId: {
+        "term-front": terminalRef("term-front"),
+        "chat-under": chatRef("chat-under"),
+      },
+      sizesByGroupId: {},
+    };
+    const membership = collectCanvasWideRetainedChatMembership({
+      "tab-1": canvas,
+    });
+    expect(membership.get("chat-under")).toBe("tab-1");
+    expect(membership.has("term-front")).toBe(false);
+  });
+
+  it("cold review F1: an ineligible chat must not shift the window, stranding a member with no slot", () => {
+    // The window is capped and selection skips-and-keeps-filling, so applying
+    // eligibility DURING selection would make membership and the pane's
+    // rendered set two SHIFTED windows rather than a subset and a superset.
+    // Here `chat-a` is active but ineligible (a published-copy takeover
+    // reports it through the deletion registry). The pane renders the
+    // kind-only window [chat-a, chat-b]; membership must therefore be a
+    // SUBSET of that - never [chat-b, chat-c], which would leave `chat-c` a
+    // member whose slot nothing renders, its hosted body stranded mounted on
+    // a disconnected anchor holding a session lease.
+    reportChatRemoteDeletionState("chat-a", true);
+    const instanceIds = ["chat-a", "chat-b", "chat-c"];
+    const canvas: EpicCanvasState = {
+      root: {
+        ...pane("p1", instanceIds),
+        activeTabId: "chat-a",
+        activationHistory: ["chat-a", "chat-b", "chat-c"],
+      },
+      activePaneId: "p1",
+      tilesByInstanceId: Object.fromEntries(
+        instanceIds.map((id) => [id, chatRef(id)]),
+      ),
+      sizesByGroupId: {},
+    };
+    const membership = collectCanvasWideRetainedChatMembership({
+      "tab-1": canvas,
+    });
+    expect(membership.has("chat-a")).toBe(false);
+    expect(membership.has("chat-b")).toBe(true);
+    expect(membership.has("chat-c")).toBe(false);
+  });
+
+  it("caps retention per pane, dropping the least recently active chat", () => {
+    const instanceIds = ["chat-a", "chat-b", "chat-c"];
+    const canvas: EpicCanvasState = {
+      root: {
+        ...pane("p1", instanceIds),
+        activeTabId: "chat-a",
+        activationHistory: ["chat-a", "chat-b", "chat-c"],
+      },
+      activePaneId: "p1",
+      tilesByInstanceId: Object.fromEntries(
+        instanceIds.map((id) => [id, chatRef(id)]),
+      ),
+      sizesByGroupId: {},
+    };
+    const membership = collectCanvasWideRetainedChatMembership({
+      "tab-1": canvas,
+    });
+    expect(membership.size).toBe(RETAINED_PANE_CHAT_CAP);
+    expect(membership.has("chat-a")).toBe(true);
+    expect(membership.has("chat-b")).toBe(true);
+    expect(membership.has("chat-c")).toBe(false);
   });
 
   it("falls back to the first tab (resolveActivePaneTab wiring) when activeTabId is stale", () => {
@@ -142,14 +248,14 @@ describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
       tilesByInstanceId: { "chat-a": chatRef("chat-a") },
       sizesByGroupId: {},
     };
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvas,
     });
     expect(membership.get("chat-a")).toBe("tab-1");
   });
 
   it("walks every pane across every open top-level tab", () => {
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvasWithChat("chat-1", "p1"),
       "tab-2": canvasWithChat("chat-2", "p1"),
     });
@@ -159,14 +265,14 @@ describe("collectCanvasWideSelectedChatMembership (layer 1, pure)", () => {
 
   it("design-review F2: excludes a chat that is remote-deleted even though it is the active tab", () => {
     reportChatRemoteDeletionState("chat-deleted", true);
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": canvasWithChat("chat-deleted", "p1"),
     });
     expect(membership.size).toBe(0);
   });
 
   it("ignores a tab with a null (empty-shell) canvas root", () => {
-    const membership = collectCanvasWideSelectedChatMembership({
+    const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": {
         root: null,
         activePaneId: null,
@@ -271,7 +377,7 @@ describe("tile surface membership - live store integration", () => {
     expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
   });
 
-  it("decision #17: switching a pane's active tab away from a chat removes it; switching back re-adds it", () => {
+  it("keeps a chat's record across a pane tab switch, and drops it once retention evicts it", () => {
     useEpicCanvasStore.setState({
       tabsById: {
         "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Epic 1" },
@@ -296,33 +402,61 @@ describe("tile surface membership - live store integration", () => {
     });
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
-    function canvasWithActiveTab(activeTabId: string): EpicCanvasState {
+    function canvasWithActiveTab(
+      activeTabId: string,
+      activationHistory: ReadonlyArray<string>,
+    ): EpicCanvasState {
       return {
-        root: { ...pane("p1", ["chat-1", "term-1"]), activeTabId },
+        root: {
+          ...pane("p1", ["chat-1", "term-1", "chat-2", "chat-3"]),
+          activeTabId,
+          activationHistory,
+        },
         activePaneId: "p1",
         tilesByInstanceId: {
           "chat-1": chatRef("chat-1"),
           "term-1": terminalRef("term-1"),
+          "chat-2": chatRef("chat-2"),
+          "chat-3": chatRef("chat-3"),
         },
         sizesByGroupId: {},
       };
     }
 
+    // Selecting a sibling tab no longer removes the chat's record - that
+    // unmount is what made the return trip re-converge the transcript.
     useEpicCanvasStore.setState((state) => ({
       canvasByTabId: {
         ...state.canvasByTabId,
-        "tab-1": canvasWithActiveTab("term-1"),
+        "tab-1": canvasWithActiveTab("term-1", ["term-1", "chat-1"]),
       },
     }));
-    expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     useEpicCanvasStore.setState((state) => ({
       canvasByTabId: {
         ...state.canvasByTabId,
-        "tab-1": canvasWithActiveTab("chat-1"),
+        "tab-1": canvasWithActiveTab("chat-1", ["chat-1", "term-1"]),
       },
     }));
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+
+    // Retention is bounded: two further chats push chat-1 past the pane cap,
+    // and only then does its record go.
+    useEpicCanvasStore.setState((state) => ({
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        "tab-1": canvasWithActiveTab("chat-3", [
+          "chat-3",
+          "chat-2",
+          "chat-1",
+          "term-1",
+        ]),
+      },
+    }));
+    expect(getTileSurfaceMembership().has("chat-3")).toBe(true);
+    expect(getTileSurfaceMembership().has("chat-2")).toBe(true);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
   });
 
   it("evicts the least-recently-active top-level tab's chat once the retained cap is exceeded", () => {
@@ -716,7 +850,7 @@ describe("tile surface membership - live store integration", () => {
       { kind: "epic", id: "tab-b" },
     );
 
-    const layer1 = collectCanvasWideSelectedChatMembership(
+    const layer1 = collectCanvasWideRetainedChatMembership(
       useEpicCanvasStore.getState().canvasByTabId,
     );
     expect(layer1.get("chat-a")).toBe("tab-a");
