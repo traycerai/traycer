@@ -301,10 +301,11 @@ const RUN_SETTINGS: JsonObject = {
 export const DEFAULT_PUBLISH: PublishOptions = {
   cohorts: [FIRST_COHORT, SECOND_COHORT],
   payloadMinor: CHAT_SYNC_SCHEMA_VERSION.minor,
-  // The floor the 1.1 writer REQUIRES: a null here no longer parses through
-  // the registered writer schema, exactly so an incorrectly-built publication
-  // cannot slip past a 1.0 reader's same-major gate.
-  minReaderVersion: { major: 1, minor: 1 },
+  // What a correct publisher stamps: the floor is reserved for a change an
+  // older reader cannot safely INTERPRET, and the 1.1 reshape is additive and
+  // read-safe. A non-null floor is the deliberate exception - the refusal case
+  // below states one explicitly.
+  minReaderVersion: null,
   parentHeadSha256: null,
   withFutureFields: false,
   lifecycleState: "active",

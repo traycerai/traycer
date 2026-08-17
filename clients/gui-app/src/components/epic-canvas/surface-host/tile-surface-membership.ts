@@ -5,10 +5,27 @@
  * Three layers, matching the design (`ticket-21-stable-tile-surface-identity`,
  * "Host membership and lifecycle"):
  *
- * 1. Canvas-wide selected identity - the chat tile each pane, across every
- *    open top-level tab's canvas, currently shows as its active tab. Uses the
- *    same `resolveActivePaneTab` fallback the renderer uses, so a chat
- *    `TabGroupView` paints is never omitted from membership.
+ * 1. Canvas-wide RETAINED identity - the chat tiles each pane, across every
+ *    open top-level tab's canvas, keeps alive: the one it currently shows,
+ *    plus the recently-active ones its `activationHistory` still names, up to
+ *    `RETAINED_PANE_CHAT_CAP`. Uses the same `resolveActivePaneTab` fallback
+ *    the renderer uses, so a chat `TabGroupView` paints is never omitted from
+ *    membership.
+ *
+ *    This layer used to admit the SELECTED chat only, which made an inner
+ *    pane tab switch a real unmount (decision #17) and left the reader
+ *    watching the transcript re-converge on the way back. Retention is
+ *    derived through the shared `retainedPaneChatInstanceIds` policy, and -
+ *    critically - the WINDOW is picked on tile kind alone, with eligibility
+ *    applied to its RESULT below. Injecting eligibility into the selection
+ *    would not narrow this set relative to `use-mounted-pane-tabs.ts`'s; it
+ *    would SHIFT it, because the window is capped and rejection keeps filling
+ *    (cold review F1). A member the pane therefore never slots does not
+ *    mispaint - a selected chat is seeded first on both sides, so the
+ *    shifted-in id can never carry a stale `tabSelected: true` - it strands:
+ *    its record keeps a non-null environment and the sticky `canMountBody`
+ *    latch, so the hosted body stays mounted forever on a disconnected
+ *    anchor, invisible and holding an unreclaimable chat session lease.
  * 2. Top-level retained-surface/MRU eligibility - a chat's owning top-level
  *    tab must also be one of the retained top-level surfaces. This reuses
  *    `TopLevelTabHost`'s actual recency/cap algorithm, extracted into
@@ -44,10 +61,11 @@
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
-  collectPanes,
-  resolveActivePaneTab,
-} from "@/stores/epics/canvas/tile-tree";
+  RETAINED_PANE_CHAT_CAP,
+  retainedPaneChatInstanceIds,
+} from "@/stores/epics/canvas/retained-pane-chats";
 import { useTabsStore } from "@/stores/tabs/store";
 import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
@@ -66,31 +84,39 @@ import {
 export type SurfaceMembershipListener = () => void;
 
 /**
- * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane
- * currently shows as its active tab, across the complete `canvasByTabId`
+ * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane keeps
+ * alive - shown or recently-active - across the complete `canvasByTabId`
  * snapshot, mapped to the top-level tab id that owns it.
  */
-export function collectCanvasWideSelectedChatMembership(
+export function collectCanvasWideRetainedChatMembership(
   canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
 ): ReadonlyMap<string, string> {
   const instanceIdToTabId = new Map<string, string>();
   for (const [tabId, canvas] of Object.entries(canvasByTabId)) {
     if (canvas === undefined) continue;
     for (const pane of collectPanes(canvas.root)) {
-      const activeInstanceId = resolveActivePaneTab(
-        pane.activeTabId,
-        pane.tabInstanceIds,
-      );
-      if (activeInstanceId === null) continue;
-      const tile = canvas.tilesByInstanceId[activeInstanceId];
-      if (
-        tile !== undefined &&
-        isHostedSurfaceEligible({
-          node: tile,
-          isRemoteDeleted: isChatRemoteDeleted(activeInstanceId),
-        })
-      ) {
-        instanceIdToTabId.set(activeInstanceId, tabId);
+      // The WINDOW is picked on tile kind alone, identically to
+      // `use-mounted-pane-tabs.ts`. Eligibility is applied to the result,
+      // AFTER the cap - injecting it into the selection would shift this
+      // window relative to the render side's and strand a member with no slot
+      // (cold review F1; see `retained-pane-chats.ts`).
+      const retained = retainedPaneChatInstanceIds({
+        pane,
+        cap: RETAINED_PANE_CHAT_CAP,
+        tileFor: (instanceId) => canvas.tilesByInstanceId[instanceId],
+      });
+      for (const instanceId of retained) {
+        const tile = canvas.tilesByInstanceId[instanceId];
+        if (tile === undefined) continue;
+        if (
+          !isHostedSurfaceEligible({
+            node: tile,
+            isRemoteDeleted: isChatRemoteDeleted(instanceId),
+          })
+        ) {
+          continue;
+        }
+        instanceIdToTabId.set(instanceId, tabId);
       }
     }
   }
@@ -160,7 +186,7 @@ function recomputeMembership(): void {
   if (tabCommandCoordinator.getLedger().suppressionDepth > 0) return;
 
   const retainedRefKeys = new Set(computeRetainedTopLevelRefKeys());
-  const instanceIdToTabId = collectCanvasWideSelectedChatMembership(
+  const instanceIdToTabId = collectCanvasWideRetainedChatMembership(
     useEpicCanvasStore.getState().canvasByTabId,
   );
   const nextMembership = new Set<string>();

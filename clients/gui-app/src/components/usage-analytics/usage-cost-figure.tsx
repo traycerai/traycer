@@ -9,6 +9,7 @@ import {
   type UsageServedBy,
   type UsageSummaryTotals,
 } from "@/lib/usage-analytics/cost-format";
+import { USAGE_EXPORT_REDACT_ATTRIBUTE } from "@/lib/usage-analytics/usage-export-image";
 
 export interface UsageCostFigureProps {
   readonly totals: UsageSummaryTotals;
@@ -47,6 +48,15 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
   const tooltip =
     totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
   const scopeNote = servedByScopeNote(servedBy, hostScopeName);
+  // Only the host-filter branch of the note embeds a workspace-internal
+  // name, and a shared image must not carry it. The local-plane note names
+  // no host AND wins over the filter, so this mirrors `servedByScopeNote`'s
+  // branch order rather than testing `hostScopeName` alone - otherwise the
+  // export would rewrite a note that never leaked anything.
+  const redactedScopeNote =
+    servedBy !== "local" && hostScopeName !== null
+      ? "Selected host only — your other hosts aren't included."
+      : null;
   const amountClassName = cn(
     "font-semibold text-foreground",
     size === "compact" && "text-ui-sm tabular-nums",
@@ -95,6 +105,9 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
         <p
           className="text-ui-xs text-muted-foreground/80"
           data-testid="usage-served-by-local-note"
+          {...(redactedScopeNote === null
+            ? {}
+            : { [USAGE_EXPORT_REDACT_ATTRIBUTE]: redactedScopeNote })}
         >
           {scopeNote}
         </p>
