@@ -35,9 +35,19 @@ export function folderSeedForNewProfile(
   const chosen =
     projectFolderPath !== null && catalog.folders.includes(projectFolderPath)
       ? projectFolderPath
-      : resolvePrimaryPath(catalog.folders, catalog.primaryPath);
+      : null;
   if (chosen === null) {
     return { folderPaths: [], primaryPath: null };
   }
   return { folderPaths: [chosen], primaryPath: chosen };
+}
+
+export function canConfirmNewProject(input: {
+  readonly name: string;
+  readonly seed: ProjectProfileSeed;
+  readonly pickedFolder: string | null;
+}): boolean {
+  if (input.name.trim().length === 0) return false;
+  if (input.seed === "folder" && input.pickedFolder === null) return false;
+  return true;
 }

@@ -131,11 +131,13 @@ export function ProjectProfileSwitcher() {
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <ProjectProfileCreateDialog
-        hostId={hostId}
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-      />
+      {createOpen ? (
+        <ProjectProfileCreateDialog
+          hostId={hostId}
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+        />
+      ) : null}
     </>
   );
 }

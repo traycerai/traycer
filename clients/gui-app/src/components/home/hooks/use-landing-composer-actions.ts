@@ -30,6 +30,7 @@ import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { readEffectiveWorkspaceSnapshot } from "@/lib/workspace/effective-workspace-folders";
+import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
@@ -466,6 +467,7 @@ export function useLandingComposerActions(
       // Mark before the one-shot create request so the existence reconciler
       // cannot prune the result while `epic.listTasks` still lags it.
       markEpicCreatedThisSession(epicId);
+      claimEpicOnActiveProfile(activeHostId, epicId);
 
       void createLandingEpic({
         epicId,
@@ -729,6 +731,7 @@ export function useLandingComposerActions(
       // synchronous marker is what keeps the existence reconciler from
       // force-closing the tab before `epic.listTasks` reflects the new epic.
       markEpicCreatedThisSession(epicId);
+      claimEpicOnActiveProfile(workspaceContext.hostId, epicId);
       const replaced =
         workspaceContext.draftId === null
           ? null

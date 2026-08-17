@@ -11,9 +11,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { folderSeedForNewProfile } from "@/lib/workspace/project-profile-seed";
-import type { ProjectProfileSeed } from "@/lib/workspace/project-profile-seed";
-import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
+import {
+  canConfirmNewProject,
+  folderSeedForNewProfile,
+  type ProjectProfileSeed,
+} from "@/lib/workspace/project-profile-seed";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import {
   PROJECT_PROFILE_COLORS,
@@ -61,11 +63,7 @@ export function ProjectProfileCreateDialog(props: {
   const catalog = useWorkspaceFoldersStore((state) =>
     selectWorkspaceFoldersBucket(state, hostId),
   );
-  const catalogPrimary = resolvePrimaryPath(
-    catalog.folders,
-    catalog.primaryPath,
-  );
-  const selectedFolder = pickedFolder ?? catalogPrimary;
+  const selectedFolder = pickedFolder;
   const { pickAndPrepareFolders, isPreparing } = useWorkspaceFolderActions();
 
   const reset = () => {
@@ -78,7 +76,15 @@ export function ProjectProfileCreateDialog(props: {
   const submit = () => {
     if (hostId === null) return;
     const trimmed = name.trim();
-    if (trimmed.length === 0) return;
+    if (
+      !canConfirmNewProject({
+        name: trimmed,
+        seed,
+        pickedFolder,
+      })
+    ) {
+      return;
+    }
     const folders = folderSeedForNewProfile(catalog, seed, selectedFolder);
     const id = useProjectProfilesStore.getState().createProfile(hostId, {
       name: trimmed,
@@ -255,7 +261,14 @@ export function ProjectProfileCreateDialog(props: {
           <Button
             type="button"
             data-testid="project-profile-create-confirm"
-            disabled={hostId === null || name.trim().length === 0}
+            disabled={
+              hostId === null ||
+              !canConfirmNewProject({
+                name,
+                seed,
+                pickedFolder,
+              })
+            }
             onClick={submit}
           >
             Create project

@@ -38,6 +38,10 @@ describe("historyItemMatchesProject", () => {
     ).toBe(true);
   });
 
+  it("does not match an unclaimed local-mode chat with no worktrees", () => {
+    expect(historyItemMatchesProject(item("local", []), PROFILE)).toBe(false);
+  });
+
   it("does not match a chat that never touched the project folder", () => {
     expect(
       historyItemMatchesProject(
