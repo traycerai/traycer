@@ -946,6 +946,24 @@ describe("eslint config: test-files block deliberately exempts selectById (chara
       configRuleValueMentions(rules?.["no-restricted-syntax"], "tabActivate"),
     ).toBe(true);
   });
+
+  // Two families that were in the exemption list only as collateral from
+  // rebuilding the array by hand, not as decisions. Measured across all 1392
+  // test files with the bans restored: ZERO violations either way. Closed, and
+  // pinned here so the closure cannot quietly come undone the way the original
+  // drop did - which nothing noticed because nothing asserted it.
+  it.each([
+    { family: "jsxKey", needle: "nullish-coalescing fallbacks" },
+    { family: "epicTabRoute", needle: "epicTabRoute" },
+  ])(
+    "carries the $family ban, closed after measuring zero violations",
+    async ({ needle }) => {
+      const rules = await calculatedRulesFor(TEST_FILE);
+      expect(
+        configRuleValueMentions(rules?.["no-restricted-syntax"], needle),
+      ).toBe(true);
+    },
+  );
 });
 
 /**

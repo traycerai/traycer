@@ -573,12 +573,31 @@ export default tseslint.config(
     // production, so a raw `tabActivate` call can never lint clean in a test.
     files: ["src/**/__tests__/**/*.{ts,tsx}", "**/__tests__/**/*.{ts,tsx}"],
     rules: {
+      // Each remaining exemption is here for a stated reason, and two that were
+      // here only by accident are gone. `jsxKey` and `epicTabRoute` were
+      // measured across all 1392 test files with the bans restored: ZERO
+      // violations either way, so they were never a decision - just collateral
+      // from rebuilding this array by hand.
+      //
+      // `selectById` / `selectionAuthority`: DELIBERATE and load-bearing. The
+      // selectors are property-name matches with no call-site distinction, so
+      // `expect(mocks.selectById).not.toHaveBeenCalled()` - which PROVES the
+      // invariant - is indistinguishable from a violation. Restoring them would
+      // redden the assertions that enforce the rule. See the characterization
+      // test in `nested-focus-boundary-lint.test.ts`, which pins this and pairs
+      // it against `tabActivate` presence so a wiped block cannot pass as
+      // correct.
+      //
+      // `nativeTitleTooltip` / `forwardRef`: NOT a decision, pending
+      // adjudication. Restoring them surfaces 19 occurrences across 14 files
+      // (12 forwardRef, 7 title), each of which needs a per-file call: a test
+      // may legitimately name `forwardRef` because it is testing forwardRef
+      // behaviour. Closed one family at a time so each closure's reddened
+      // anchors record exactly what widened and when.
       "no-restricted-syntax": syntaxRestrictions({
         exempt: [
-          "jsxKey",
           "nativeTitleTooltip",
           "forwardRef",
-          "epicTabRoute",
           "selectById",
           "selectionAuthority",
         ],
