@@ -13,6 +13,12 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
+import {
+  HostReadinessControllerContext,
+  type DefaultHostReadinessPresentation,
+  type HostReadinessController,
+  type SurfaceReadiness,
+} from "@/components/layout/host-readiness-controller-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -241,6 +247,75 @@ function downloadingSnapshot(
     ...availableSnapshot(sequence),
     status: "downloading",
     downloadProgress,
+  };
+}
+
+const READY_READINESS: SurfaceReadiness = { kind: "ready" };
+const LOADING_HOST_READINESS: SurfaceReadiness = { kind: "loading-host" };
+
+const READINESS_STUB_PRESENTATION: DefaultHostReadinessPresentation = {
+  targetKind: "unknown",
+  localBootIntent: false,
+  localHostState: "unknown",
+  stage: "loading",
+  progress: null,
+  lastProgress: null,
+  provisioningError: null,
+  provisioning: false,
+  removed: false,
+  hostBusy: false,
+  canManageHost: false,
+  retryProvisioning: () => undefined,
+  forceProvisioning: () => undefined,
+  reinstall: () => undefined,
+  configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openSettings: () => undefined,
+  compatibility: {
+    status: "compatible",
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
+  },
+};
+
+function readinessController(
+  readiness: SurfaceReadiness,
+): HostReadinessController {
+  return {
+    readinessFor: () => readiness,
+    defaultHostPresentation: READINESS_STUB_PRESENTATION,
+  };
+}
+
+interface ReadinessHarness {
+  readonly rerenderReadiness: (next: SurfaceReadiness) => void;
+}
+
+function renderWithReadiness(
+  ui: ReactElement,
+  appUpdates: DesktopAppUpdatesBridge,
+  readiness: SurfaceReadiness,
+): ReadinessHarness {
+  const host = makeHost(appUpdates);
+  function tree(forReadiness: SurfaceReadiness): ReactElement {
+    return (
+      <RunnerHostProvider runnerHost={host}>
+        <TooltipProvider>
+          <HostReadinessControllerContext.Provider
+            value={readinessController(forReadiness)}
+          >
+            {ui}
+          </HostReadinessControllerContext.Provider>
+        </TooltipProvider>
+      </RunnerHostProvider>
+    );
+  }
+  const view = render(tree(readiness));
+  return {
+    rerenderReadiness: (next) => {
+      view.rerender(tree(next));
+    },
   };
 }
 
@@ -914,5 +989,130 @@ describe("desktop app update UI", () => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the update toast while the window narrator owns the frame", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      READY_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    // Positive baseline first: the harness can show a toast at all when the
+    // narrator does not own the frame, so the assertion below isn't passing
+    // on a broken harness.
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+
+    toastMock.mockClear();
+    harness.rerenderReadiness(LOADING_HOST_READINESS);
+
+    act(() => {
+      bridge.emit(availableSnapshot(2));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("re-emits the deferred update once the narrator releases the frame, with no new snapshot or sequence bump", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      LOADING_HOST_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+
+    // Release: readiness flips to `ready` with no new snapshot arriving and
+    // no sequence bump - the effect's `narrated` dependency is the only thing
+    // that changes.
+    harness.rerenderReadiness(READY_READINESS);
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    expect(options?.id).toBe("traycer-app-update");
+
+    // The whole point of re-emitting rather than unfreezing in place is that
+    // the user gets an affordance at a moment they can act on it - the toast
+    // carries `cancel: null` everywhere in this controller, so Sonner's own
+    // close button does not exist on it, and the only way to clear it is the
+    // control this element renders itself. If the re-emitted payload didn't
+    // carry a working one, the premise behind choosing "re-emit" over
+    // "unfreeze" would be false even though the toast reappeared.
+    if (message === undefined) {
+      throw new Error("Expected the re-emitted toast to carry content");
+    }
+    render(<>{message}</>);
+    const laterButton = screen.getByRole("button", { name: "Later" });
+    fireEvent.click(laterButton);
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
+  });
+
+  it("shows the toast exactly as before when the narrator never owns the frame", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      READY_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+    const [, options] = toastMock.mock.lastCall ?? [];
+    expect(options?.id).toBe("traycer-app-update");
+  });
+
+  it("does not double-emit after a deferred update has already been re-emitted on release", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    const harness = renderWithReadiness(
+      <AppUpdateToastController />,
+      bridge,
+      LOADING_HOST_READINESS,
+    );
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+
+    harness.rerenderReadiness(READY_READINESS);
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledTimes(1);
+    });
+
+    toastMock.mockClear();
+    // An unrelated re-render at the same readiness must not re-fire it.
+    harness.rerenderReadiness(READY_READINESS);
+    // Neither should the same snapshot arriving again.
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    expect(toastMock).not.toHaveBeenCalled();
   });
 });
