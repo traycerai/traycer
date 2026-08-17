@@ -385,6 +385,7 @@ function fakeRemoteSession(): FakeRemoteSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    subscribeReadinessLost: () => () => undefined,
     // These provider tests never exercise fatal verdicts.
     terminalFatal: () => null,
     close: () => {

@@ -59,6 +59,7 @@ function fakeSession(): FakeSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    subscribeReadinessLost: () => () => undefined,
     // These cache tests never exercise fatal verdicts; the cache view only
     // forwards this accessor.
     terminalFatal: () => null,

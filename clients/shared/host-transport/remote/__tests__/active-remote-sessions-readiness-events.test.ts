@@ -5,6 +5,7 @@ import { REMOTE_SESSION_LINGER_MS } from "../config";
 import type { IRemoteSession } from "../remote-session";
 import {
   acquireRemoteSession,
+  hasReadyRemoteSession,
   resetRemoteSessionReadinessListenersForTest,
   subscribeRemoteSessionReadiness,
   type RemoteSessionIdentity,
@@ -27,6 +28,12 @@ interface FakeSession extends IRemoteSession<
   closedUnderneath: boolean;
   /** Simulates the session reaching its ready boundary (clean open or recovery). */
   fireAvailabilityRecovered(): void;
+  /**
+   * Simulates the DOWN edge - a relay `host_detached` or a drop into
+   * `reconnecting`. Flips `ready` false as the real session does, so a test
+   * asserting the published snapshot sees what a subscriber would.
+   */
+  fireReadinessLost(): void;
   /** Simulates a session-level fatal closing the session IN PLACE. */
   fireClosedUnderneath(): void;
 }
@@ -34,6 +41,7 @@ interface FakeSession extends IRemoteSession<
 function fakeSession(): FakeSession {
   let closeCalls = 0;
   const recoveredListeners = new Set<() => void>();
+  const readinessLostListeners = new Set<() => void>();
   const closedListeners = new Set<() => void>();
   const session: FakeSession = {
     get closeCalls() {
@@ -64,12 +72,22 @@ function fakeSession(): FakeSession {
         recoveredListeners.delete(listener);
       };
     },
+    subscribeReadinessLost: (listener) => {
+      readinessLostListeners.add(listener);
+      return () => {
+        readinessLostListeners.delete(listener);
+      };
+    },
     terminalFatal: () => null,
     close: () => {
       closeCalls += 1;
     },
     fireAvailabilityRecovered: () => {
       for (const listener of [...recoveredListeners]) listener();
+    },
+    fireReadinessLost: () => {
+      session.ready = false;
+      for (const listener of [...readinessLostListeners]) listener();
     },
     fireClosedUnderneath: () => {
       session.closedUnderneath = true;
@@ -115,6 +133,40 @@ describe("subscribeRemoteSessionReadiness — which transitions notify", () => {
     await Promise.resolve();
 
     expect(listener).toHaveBeenCalledTimes(1);
+    view.close();
+  });
+
+  it("fires when a READY session loses readiness without closing (the down edge)", async () => {
+    // The transition the poll-to-event migration dropped. `host_detached` and
+    // a drop into `reconnecting` both flip `isReady()` false while the session
+    // stays alive, so neither of the other two edges fires - `onClosed` is for
+    // a session that DIED, and `subscribeAvailabilityRecovered` is the way up.
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const listener = vi.fn();
+    subscribeRemoteSessionReadiness(listener);
+
+    const view = acquireRemoteSession(identity, () => session);
+    // Premise, positively: the host really is ready and really is being
+    // reported as such. Without this the assertion below is satisfied by a
+    // host that was never ready, which is the state a broken wiring produces.
+    session.ready = true;
+    session.fireAvailabilityRecovered();
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+
+    listener.mockClear();
+    session.fireReadinessLost();
+    await Promise.resolve();
+
+    // The notification, and the value it makes readable. Asserting only the
+    // second would pass on the unfixed tree: `hasReadyRemoteSession` reads
+    // `isReady()` live, so it was ALREADY correct - what was missing is that
+    // nobody was told to re-read it.
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
+    expect(session.isClosed()).toBe(false);
     view.close();
   });
 

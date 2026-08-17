@@ -314,6 +314,23 @@ export interface IRemoteSession<
    * emission is at most one host-scope invalidation per session build.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
+  /**
+   * The DOWN edge: this session was ready and no longer is.
+   *
+   * The counterpart to `subscribeAvailabilityRecovered`, and it exists because
+   * `hasReadyRemoteSession` used to be read by two 1-second polls. A poll has
+   * no direction - it answered "did this stop being ready" by simply asking
+   * again. Replacing it with change events kept only the transitions someone
+   * enumerated, and both of those point UP (`subscribeAvailabilityRecovered`,
+   * `onClosed`), so a relay `host_detached` or a drop into `reconnecting` left
+   * every subscriber holding a stale `true` for the whole outage - and if the
+   * reconnect succeeded they never observed the loss at all.
+   *
+   * Fires on the transition only, never on a re-assertion of the same state,
+   * and never for a terminal close (`onClosed` owns that edge - a session that
+   * died is not a session that became unready).
+   */
+  subscribeReadinessLost(listener: () => void): () => void;
   close(): void;
 }
 
@@ -420,6 +437,19 @@ export class RemoteSession<
   private readonly terminalStreamIds = new Set<number>();
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
+  private readonly readinessLostListeners = new Set<() => void>();
+  /**
+   * Last readiness this session PUBLISHED, not last readiness it had.
+   *
+   * The edge detector for {@link subscribeReadinessLost}. Kept as a latch
+   * rather than deriving the edge at each call site because readiness is a
+   * conjunction of four terms (phase, generation, connection, host attach) and
+   * enumerating every mutation that can flip it is precisely the mistake this
+   * event exists to correct. Comparing against `isReady()` makes the emitter
+   * self-correcting: a transition through a path nobody listed is still
+   * reported the next time any site syncs.
+   */
+  private lastPublishedReadiness = false;
   /**
    * Callers parked inside `sendUnary` waiting for this session to become
    * usable. Settled from exactly three places, which together are every exit
@@ -960,6 +990,17 @@ export class RemoteSession<
     this.availabilityRecoveredListeners.add(listener);
     return () => {
       this.availabilityRecoveredListeners.delete(listener);
+    };
+  }
+
+  /** See {@link IRemoteSession.subscribeReadinessLost}. */
+  subscribeReadinessLost(listener: () => void): () => void {
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.readinessLostListeners.add(listener);
+    return () => {
+      this.readinessLostListeners.delete(listener);
     };
   }
 
@@ -1797,6 +1838,27 @@ export class RemoteSession<
 
   // ---- Host blip / peer death / drop ------------------------------------- //
 
+  /**
+   * A relay `host_detached`: the host leg went away, the client leg did not.
+   *
+   * THIS DELIBERATELY DOES NOT TEAR DOWN, and that is not an oversight - it
+   * has been filed as a bug (Codex P1, "Retract remote sessions when the host
+   * leg detaches") on the premise that a still-live session keeps suppressing
+   * refusal accumulation until the 15-minute standing timer. That premise is
+   * false in this code:
+   *
+   *  - `isReady()` includes `connection.hostAttached` (see its definition), and
+   *    the line below clears it. `hasReadyRemoteSession` reads `isReady()`, so
+   *    a detached host STOPS COUNTING IMMEDIATELY. The value was never wrong;
+   *    what was missing was anyone being told, which is why
+   *    `syncReadinessLatch()` is called at the end of this method.
+   *  - `host_detached` is TRANSIENT. `onHostAttached` gates on
+   *    `!connection.hostAttached` precisely to restore through it. Tearing the
+   *    connection down here would destroy the reattach path this design is
+   *    built around, and turn a recoverable blip into a full redial.
+   *
+   * So: clear the flag, pause, tell the subscribers. Do not close the socket.
+   */
   private onHostDetached(generation: number): void {
     if (!this.isCurrent(generation)) {
       return;
@@ -1808,6 +1870,9 @@ export class RemoteSession<
     connection.hostAttached = false;
     connection.scheduler.pause();
     this.markStreamsReconnecting();
+    // `isReady()` includes `hostAttached`, so it is already false here - this
+    // is what tells anyone.
+    this.syncReadinessLatch();
   }
 
   private onHostAttached(generation: number): void {
@@ -1884,6 +1949,7 @@ export class RemoteSession<
       return;
     }
     this.dropConnection(cause);
+    this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
@@ -2645,6 +2711,7 @@ export class RemoteSession<
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
     this.availabilityRecoveredListeners.clear();
+    this.readinessLostListeners.clear();
     for (const listener of listeners) {
       try {
         listener();
@@ -2654,7 +2721,40 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Reconciles the published-readiness latch with reality and emits the DOWN
+   * edge if one just happened. Safe to call from any state mutation; calling
+   * it too often costs a boolean compare, calling it too rarely is the bug.
+   */
+  private syncReadinessLatch(): void {
+    const ready = this.isReady();
+    if (ready === this.lastPublishedReadiness) {
+      return;
+    }
+    this.lastPublishedReadiness = ready;
+    if (ready) {
+      // The UP edge belongs to `subscribeAvailabilityRecovered`, which fires
+      // at the ready boundary with more precise timing than this latch has.
+      // Recording it here only keeps the next DOWN edge detectable.
+      return;
+    }
+    // Guarded per listener, same reason as the recovered emitter: this runs
+    // inside inbound frame dispatch and a throwing consumer must not break
+    // message processing or the other listeners.
+    for (const listener of Array.from(this.readinessLostListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] readiness-lost listener threw", error);
+      }
+    }
+  }
+
   private emitAvailabilityRecovered(): void {
+    // Keep the loss latch in step on the way up, or the next DOWN edge is
+    // invisible: an un-synced latch still reads `false` and the transition
+    // compares equal.
+    this.syncReadinessLatch();
     // Guarded per listener: the emission happens inside inbound frame
     // dispatch, so a throwing consumer must not break the session's message
     // processing or the other listeners (parity with `WsStreamClient`).
