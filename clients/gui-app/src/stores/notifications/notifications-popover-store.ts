@@ -42,9 +42,7 @@ const NOTIFICATIONS_FILTER_PERSIST_KEY = persistKey(
 // tested without a cast (`ReadonlySet` is covariant in its element reads).
 const CATEGORY_NAMES: ReadonlySet<string> = ALL_NOTIFICATION_CATEGORIES;
 
-function isNotificationCategory(
-  value: unknown,
-): value is NotificationCategory {
+function isNotificationCategory(value: unknown): value is NotificationCategory {
   return typeof value === "string" && CATEGORY_NAMES.has(value);
 }
 

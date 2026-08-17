@@ -73,7 +73,10 @@ describe("notifications popover store filter persistence", () => {
   it("falls back to defaults on a malformed persisted record", async () => {
     window.localStorage.setItem(
       PERSIST_KEY,
-      JSON.stringify({ state: { unreadOnly: "yes", categories: 7 }, version: 1 }),
+      JSON.stringify({
+        state: { unreadOnly: "yes", categories: 7 },
+        version: 1,
+      }),
     );
 
     await useNotificationsPopoverStore.persist.rehydrate();

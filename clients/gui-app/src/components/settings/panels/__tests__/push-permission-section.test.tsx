@@ -111,7 +111,9 @@ function renderSectionWith(
   );
 }
 
-function renderSection(pushPermission: IPushPermissionHost | null): RenderResult {
+function renderSection(
+  pushPermission: IPushPermissionHost | null,
+): RenderResult {
   return renderSectionWith(
     pushPermission,
     new QueryClient({
