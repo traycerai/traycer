@@ -428,7 +428,18 @@ function emptyDetailProjection(
   // framing, which reads as a fetch/account failure. A grok snapshot whose
   // period merely rolled (window present but expired) still falls through to
   // `expired` below, the correct stale framing.
-  if (rateLimits.provider === "grok" && rateLimits.period === null) {
+  //
+  // Cursor is the same case for the same reason: its `cycle` is synthesized
+  // only when the payload reports a plan limit, and proto3 JSON omits
+  // zero-valued fields, so a reachable account can legitimately arrive with
+  // `cycle: null`. Without this arm that account renders as unavailable
+  // (`missing_windows`) purely because Cursor reported no allowance to meter.
+  // A cursor snapshot whose cycle merely rolled still falls through to
+  // `expired`, exactly as grok's does.
+  if (
+    (rateLimits.provider === "grok" && rateLimits.period === null) ||
+    (rateLimits.provider === "cursor" && rateLimits.cycle === null)
+  ) {
     return {
       kind: "not_checked",
       severity: "unknown",
