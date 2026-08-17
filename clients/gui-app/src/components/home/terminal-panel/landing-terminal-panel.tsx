@@ -509,7 +509,7 @@ export function LandingTerminalPanel(): ReactNode {
   // additionally re-targets that cwd: reuse a terminal already running there,
   // otherwise spawn a fresh one, and focus it either way. The settled
   // generation's context is authoritative - not React state.
-  const handleReconciliationSettled = useCallback(
+  const runReconciliationSettlement = useCallback(
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
       if (!landingTerminalLayoutFor(state, targetLandingPageId).panelOpen) {
@@ -607,6 +607,42 @@ export function LandingTerminalPanel(): ReactNode {
       targetLandingPageId,
     ],
   );
+
+  // Settlement is the panel's other outward-facing act, and it must gate on
+  // surface activity for the same reason the chords do. Before the panel
+  // outlived its page's activation, a tab switch UNMOUNTED it and aborted the
+  // in-flight pass; now the pass survives, so an `open -> switch away ->
+  // settle` sequence would auto-spawn a terminal into a `display:none` pane
+  // (which cannot be measured, so it lands at the 80x24 fallback grid) and pull
+  // the keyboard out of whatever the user switched to.
+  //
+  // Held rather than dropped: the reconciliation key does not change on the way
+  // back, so a discarded settlement would never be recomputed and a panel
+  // opened just before the switch would sit empty forever. The newest
+  // settlement wins - an older one is superseded, which is what the generation
+  // and host-identity guards inside the body already check for.
+  const surfaceActive = useLandingTerminalSurfaceActive();
+  const deferredSettlementRef = useRef<{
+    readonly generation: number;
+    readonly context: LandingTerminalHostContext;
+  } | null>(null);
+  const handleReconciliationSettled = useCallback(
+    (generation: number, context: LandingTerminalHostContext) => {
+      if (!surfaceActive) {
+        deferredSettlementRef.current = { generation, context };
+        return;
+      }
+      runReconciliationSettlement(generation, context);
+    },
+    [runReconciliationSettlement, surfaceActive],
+  );
+  useEffect(() => {
+    if (!surfaceActive) return;
+    const deferred = deferredSettlementRef.current;
+    if (deferred === null) return;
+    deferredSettlementRef.current = null;
+    runReconciliationSettlement(deferred.generation, deferred.context);
+  }, [runReconciliationSettlement, surfaceActive]);
 
   useLandingTerminalReconciliation({
     landingPageId: targetLandingPageId,

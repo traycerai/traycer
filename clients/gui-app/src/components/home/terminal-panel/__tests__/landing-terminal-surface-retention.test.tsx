@@ -9,6 +9,7 @@ import {
   resolveHostedLandingDraftId,
   selectLandingTerminalSurfaceActive,
 } from "../landing-terminal-surface-binding";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { useTabsStore } from "@/stores/tabs/store";
 import type {
   SplitSideName,
@@ -33,9 +34,22 @@ vi.mock(
     ),
   }),
 );
-vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
-  LandingTerminalPanel: () => <div data-testid="landing-terminal-panel-body" />,
-}));
+// The stub reports the pane context it is rendered under: the panel is portaled
+// out of its React parent, so "which pane state does it actually read" is a real
+// question about the host, not about the panel's internals.
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", async () => {
+  const { usePaneFocused, usePaneVisible } =
+    await import("@/components/epic-tabs/pane-visibility-context");
+  return {
+    LandingTerminalPanel: () => (
+      <div
+        data-testid="landing-terminal-panel-body"
+        data-pane-focused={usePaneFocused() ? "true" : "false"}
+        data-pane-visible={usePaneVisible() ? "true" : "false"}
+      />
+    ),
+  };
+});
 
 function anchorsFor(
   ...draftIds: ReadonlyArray<string>
@@ -189,6 +203,67 @@ describe("<LandingTerminalHost /> retention", () => {
     });
 
     expect(screen.queryByTestId("landing-terminal-panel-body")).toBeNull();
+  });
+});
+
+describe("<LandingTerminalHost /> pane projection", () => {
+  function panelBody(): HTMLElement {
+    return screen.getByTestId("landing-terminal-panel-body");
+  }
+
+  it("gives the panel the hosting pane's activity, not the app-global default", () => {
+    seedLayout([DRAFT_TAB, EPIC_TAB], EPIC_TAB.id);
+    // The anchor lives inside its pane's boundary; the host does not. Without
+    // the projection the portaled panel reads the permissive context defaults
+    // (visible/focused), so xterm never sees the hidden->visible edge that is
+    // its ONLY repair after a `display:none` cycle, and the panel's focus grabs
+    // and pane-local portals stay eligible behind the epic tab.
+    render(
+      <>
+        <SurfacePresentationBoundary visible={false} focused={false}>
+          <LandingTerminalPaneAnchor draftId="draft-a" />
+        </SurfacePresentationBoundary>
+        <LandingTerminalHost />
+      </>,
+    );
+
+    expect(panelBody().dataset.paneVisible).toBe("false");
+    expect(panelBody().dataset.paneFocused).toBe("false");
+  });
+
+  it("tracks the hosting pane back to visible without remounting the panel", () => {
+    seedLayout([DRAFT_TAB, EPIC_TAB], EPIC_TAB.id);
+    const view = render(
+      <>
+        <SurfacePresentationBoundary visible={false} focused={false}>
+          <LandingTerminalPaneAnchor draftId="draft-a" />
+        </SurfacePresentationBoundary>
+        <LandingTerminalHost />
+      </>,
+    );
+    const body = panelBody();
+    // Anchoring the START of the edge is what makes the rest of this test mean
+    // anything: the permissive defaults are visible/focused, so asserting only
+    // the post-switch state would pass just as well with no projection at all.
+    expect(body.dataset.paneVisible).toBe("false");
+
+    act(() => {
+      seedLayout([DRAFT_TAB, EPIC_TAB], DRAFT_TAB.id);
+      view.rerender(
+        <>
+          <SurfacePresentationBoundary visible focused>
+            <LandingTerminalPaneAnchor draftId="draft-a" />
+          </SurfacePresentationBoundary>
+          <LandingTerminalHost />
+        </>,
+      );
+    });
+
+    // Both halves matter: the edge has to ARRIVE (or nothing repaints), and it
+    // has to arrive at the same node (or the terminals were rebuilt anyway).
+    expect(panelBody().dataset.paneVisible).toBe("true");
+    expect(panelBody().dataset.paneFocused).toBe("true");
+    expect(panelBody()).toBe(body);
   });
 });
 
