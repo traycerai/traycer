@@ -75,10 +75,38 @@ const MUTED_FILL =
  * which is why {@link ALLOW_MARKER} annotations are parsed below rather than
  * trusted. Prefer attribute position (inside the opening tag), which is a
  * real comment in every context; `{@literal {}/* … *}` also works in children.
+ *
+ * ⚠ `[A-Za-z]` RATHER THAN `\S`, and this was a live defect rather than a
+ * tightening. With `\S`, a bare JSX-comment waiver is HONOURED: the comment's own
+ * closing `*` is a non-space character following the colon, so the mechanism built
+ * to force a reason accepted one with none - in the comment form JSX uses most,
+ * and across all 46 waivers in the tree. Found by the sibling
+ * `local-bootstrap-alignment-lint` guard, whose own reasonless-waiver arm caught
+ * the identical hole in its copy of this marker.
  */
-const ALLOW_MARKER = /muted-fill-ok:\s*\S/;
+const ALLOW_MARKER = /muted-fill-ok:\s*[A-Za-z]/;
 
-/** How many lines above a fill an annotation may sit and still cover it. */
+/**
+ * How many lines above a fill an annotation may sit and still cover it.
+ *
+ * ⚠ PROSE INSERTED BETWEEN A MARKER AND ITS CLASS LIST ORPHANS IT. That has
+ * happened once for real: a commit added a paragraph explaining an unrelated
+ * change above a waived fill, pushing the marker past this window.
+ *
+ * MEASURED, so nobody has to guess what catches it. Pushing a marker out of range
+ * by five lines of prose:
+ *
+ *   in a file the sweep COVERS      -> BOTH tests redden. The fill reads as
+ *     (paints a raised surface)        unannotated, and the marker as excusing
+ *                                      nothing.
+ *   in a file it does NOT cover     -> the stale-marker test alone reddens, which
+ *                                      is still loud, and is what caught the real
+ *                                      one.
+ *
+ * So the invariant is guarded in both directions and the failure is never silent.
+ * Keep the marker LAST, adjacent to the class list it excuses, and put any
+ * explanation above it rather than between.
+ */
 const MARKER_LOOKBEHIND = 4;
 
 function collectTsxFiles(dir: string): readonly string[] {
@@ -272,6 +300,31 @@ describe("muted fills on raised surfaces", () => {
    * handing Radix's Slot a second child. Five shipped that way before this
    * check existed.
    */
+  it("a waiver with no reason excuses nothing", () => {
+    // The marker's whole purpose is to force a REASON onto the line it excuses, so
+    // a bare one must not count. Asserted against the pattern directly: this
+    // file's detectors take file paths, and threading a string through them would
+    // be a refactor in service of one assertion.
+    //
+    // Both bare forms that `\S` accepted - the JSX comment's closing `*`, and a
+    // line comment with nothing after the colon:
+    expect(ALLOW_MARKER.test("{/* muted-fill-ok: */}")).toBe(false);
+    expect(ALLOW_MARKER.test("{/* muted-fill-ok:*/}")).toBe(false);
+    expect(ALLOW_MARKER.test("// muted-fill-ok:")).toBe(false);
+
+    // ...and a real reason still passes, in both comment forms. Without this half,
+    // the assertions above would be satisfied by a pattern matching nothing at
+    // all - which would silently un-waive all 46 existing annotations.
+    expect(
+      ALLOW_MARKER.test("// muted-fill-ok: weak tint delimited by its border"),
+    ).toBe(true);
+    expect(
+      ALLOW_MARKER.test(
+        "{/* muted-fill-ok: sits on bg-canvas, which cannot collapse */}",
+      ),
+    ).toBe(true);
+  });
+
   it("no annotation parses as JSX text instead of a comment", () => {
     const rendered = collectTsxFiles(SRC_DIR).flatMap((file) => {
       const source = readFileSync(file, "utf8");
