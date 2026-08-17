@@ -14,7 +14,6 @@ export {
   epicCanvasKey,
   githubMentionFiltersKey,
   lastLocalHostIdKey,
-  lastSelectedHostKey,
   interviewDraftKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,

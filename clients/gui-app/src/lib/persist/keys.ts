@@ -60,11 +60,6 @@ export const surfaceHostSelectionKey = (email: string | null): string =>
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
 
-// App-level host picker memory. This is intentionally unscoped: creation
-// surfaces share one "last selected host" value across the GUI app.
-export const lastSelectedHostKey = (): string =>
-  persistKey("last-selected-host");
-
 // The composer's PR/Issue mention filters, sticky per (task, section).
 // Identity-scoped like the run settings above, NOT like the host picker: a
 // stored repository selection names a GitHub host, owner and repo - private
@@ -325,8 +320,6 @@ export const PERSIST_STORES = [
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
-  // App-level creation-surface host picker memory (host-directory-service.ts).
-  { camelName: "lastSelectedHost", leaf: "last-selected-host", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
