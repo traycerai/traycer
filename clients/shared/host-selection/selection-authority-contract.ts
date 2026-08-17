@@ -503,6 +503,44 @@ export type HostLeaseSnapshot =
     };
 
 /**
+ * VALUE equality over the complete {@link HostLeaseSnapshot} shape - exhaustive
+ * by construction: `hostId` and `status` are compared directly, and `dead` is
+ * walked to the bottom of its union, including
+ * {@link SelectionIncompatibility}'s three fields. No field escapes it, so
+ * "equal here" and "the same verdict" are the same statement.
+ *
+ * ⚠ IT HAS TWO READERS AND THEY MUST NOT DIVERGE - which is why it lives here,
+ * beside the type, rather than in either of them:
+ *
+ *  - the engine's EMISSION gate (`leasesEqual` → `stage`) decides whether a
+ *    derived fleet is published at all;
+ *  - `useHostLease`'s SELECTION gate decides whether a published lease
+ *    re-renders the consumer that named that host.
+ *
+ * A second, coarser copy on the reading side is a silent dropped update: the
+ * authority emits a real verdict change and the surface never re-renders. A
+ * finer one is only churn. Neither is discoverable from the site that has it,
+ * because each is locally self-consistent - so the divergence is prevented by
+ * there being one function, not by two comparators agreeing.
+ */
+export function leaseEquals(
+  a: HostLeaseSnapshot,
+  b: HostLeaseSnapshot,
+): boolean {
+  if (a.hostId !== b.hostId || a.status !== b.status) return false;
+  if (a.dead === null || b.dead === null) return a.dead === b.dead;
+  if (a.dead.reason !== b.dead.reason) return false;
+  if (a.dead.reason !== "incompatible" || b.dead.reason !== "incompatible") {
+    return true;
+  }
+  return (
+    a.dead.detail.code === b.dead.detail.code &&
+    a.dead.detail.hostVersion === b.dead.detail.hostVersion &&
+    a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion
+  );
+}
+
+/**
  * Raw-boundary parser for lease snapshots. Unknown `status` → `connecting`
  * (non-committal: neither usable nor dead); unknown dead `reason` →
  * `offline` (retryable - the safe direction); malformed → null (drop the

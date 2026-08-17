@@ -42,6 +42,7 @@
  */
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
+  leaseEquals,
   type ActivateResult,
   type AuthorityIdentitySource,
   type HostFleetSnapshot,
@@ -482,20 +483,6 @@ function selectionEquals(a: SelectionState, b: SelectionState): boolean {
     a.preferredHostId === b.preferredHostId &&
     a.targetHostId === b.targetHostId &&
     a.effectiveHostId === b.effectiveHostId
-  );
-}
-
-function leaseEquals(a: HostLeaseSnapshot, b: HostLeaseSnapshot): boolean {
-  if (a.hostId !== b.hostId || a.status !== b.status) return false;
-  if (a.dead === null || b.dead === null) return a.dead === b.dead;
-  if (a.dead.reason !== b.dead.reason) return false;
-  if (a.dead.reason !== "incompatible" || b.dead.reason !== "incompatible") {
-    return true;
-  }
-  return (
-    a.dead.detail.code === b.dead.detail.code &&
-    a.dead.detail.hostVersion === b.dead.detail.hostVersion &&
-    a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion
   );
 }
 
