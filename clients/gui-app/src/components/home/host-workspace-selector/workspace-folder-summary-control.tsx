@@ -138,6 +138,7 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly addFolderPending: boolean;
   readonly addFolderDisabled: boolean;
   readonly addFolderDisabledReason: string | null;
+  readonly addFolderLabel?: string;
   readonly onAddFolder: AddFolderHandler;
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
@@ -266,6 +267,11 @@ export function WorkspaceFolderSummaryControl(props: {
         pending={props.addFolderPending}
         disabled={props.addFolderDisabled}
         disabledReason={props.addFolderDisabledReason}
+        label={
+          props.addFolderLabel === undefined
+            ? "Add folder"
+            : props.addFolderLabel
+        }
       />
     );
   }
@@ -359,6 +365,11 @@ export function WorkspaceFolderSummaryControl(props: {
             addFolderPending={props.addFolderPending}
             addFolderDisabled={props.addFolderDisabled}
             addFolderDisabledReason={props.addFolderDisabledReason}
+            addFolderLabel={
+              props.addFolderLabel === undefined
+                ? "Add folder"
+                : props.addFolderLabel
+            }
             onAddFolder={props.onAddFolder}
             onUpdate={props.onUpdate === null ? null : handleUpdate}
             updateEnabled={props.updateEnabled}
