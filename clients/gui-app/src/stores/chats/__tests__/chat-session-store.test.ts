@@ -4077,6 +4077,71 @@ describe("createChatSessionStore", () => {
     ).toBeNull();
   });
 
+  it("latches the first turn id observed when the escalation was confirmed before the turn had one", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const gatedCommand = gatedCommandItem();
+    // The request-to-turn activation window: the host reports a turn in
+    // progress before the turn record (and its id) exists.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [gatedCommand],
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+    });
+
+    const sent = harness.handle.store.getState().stopBackgroundSession();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: null,
+    });
+
+    // The original turn materializes with its id - the slot latches it.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toEqual({
+      clientActionId: sent,
+      awaitingTurnEnd: true,
+      turnId: "turn-1",
+    });
+
+    // A queued turn replaces it - the latched id makes it read as different,
+    // so the escalation releases instead of firing at turn-2's end.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: { ...runningActiveTurn(), turnId: "turn-2" },
+      turnInProgress: true,
+      backgroundItems: [gatedCommand],
+    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundSessionStop,
+    ).toBeNull();
+    expect(harness.sent).toHaveLength(1);
+  });
+
   it("does not apply an ownerless detached background tool terminal to the active turn", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();

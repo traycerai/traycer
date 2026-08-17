@@ -937,9 +937,17 @@ export function createChatSessionStoreWithNotificationDependencies(
     get: ChatSessionGetState,
   ): void => {
     const state = get();
-    const pending = state.pendingBackgroundSessionStop;
+    let pending = state.pendingBackgroundSessionStop;
     if (pending === null || !pending.awaitingTurnEnd) return;
     const activeTurnId = state.activeTurn?.turnId ?? null;
+    if (pending.turnId === null && activeTurnId !== null) {
+      // Confirmed during the request-to-turn activation window, before the
+      // turn had an id. Latch the first id observed so a LATER turn still
+      // reads as different and cancels the escalation.
+      pending = { ...pending, turnId: activeTurnId };
+      const latched = pending;
+      set(() => ({ pendingBackgroundSessionStop: latched }));
+    }
     if (
       pending.turnId !== null &&
       activeTurnId !== null &&

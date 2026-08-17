@@ -1377,10 +1377,17 @@ export type ChatSubscribeClientFrame = z.infer<
 
 // `1.4` and `1.5` are released lines. Keep their client frames on the
 // pre-collision intent shape while the live `1.6` line uses the current one.
-const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion("kind", [
-  ...chatSubscribeClientFrameSchemaBeforeV14Options,
-  activeProfileUpdateClientFrameSchema,
-]);
+// Exported so the host's stream resolver can parse a 1.4/1.5 connection
+// against the contract it actually negotiated - the live schema would let a
+// stale or crafted peer dispatch actions those lines do not contain (e.g.
+// `stopBackgroundSession`).
+export const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion(
+  "kind",
+  [
+    ...chatSubscribeClientFrameSchemaBeforeV14Options,
+    activeProfileUpdateClientFrameSchema,
+  ],
+);
 
 // ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
 //

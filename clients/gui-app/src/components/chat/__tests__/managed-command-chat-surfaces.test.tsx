@@ -787,11 +787,14 @@ describe("held shells in the Background panel", () => {
         readOnly={readOnly}
         pendingStopTaskIds={new Set()}
         stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
         onItemClick={() => undefined}
         onStopItem={() => null}
         onStopAll={() => null}
+        onStopSession={() => null}
       />,
     );
   }
