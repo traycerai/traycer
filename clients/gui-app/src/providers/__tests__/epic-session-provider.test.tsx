@@ -140,6 +140,7 @@ import {
   __getOpenEpicRegistryForTests,
   __setEpicStreamClientFactoryForTests,
   EpicSessionPresentationContext,
+  getEpicSessionHandleHostId,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -436,7 +437,7 @@ function ownerIdentityRemoteTarget(
  */
 function installOwnerIdentityRows(): (
   hostId: string,
-  publicKey: string,
+  publicKey: string | null,
 ) => void {
   const listeners = new Set<() => void>();
   sessionHostRows.userId = OWNER_IDENTITY_FIXTURE_USER_ID;
@@ -456,11 +457,17 @@ function installOwnerIdentityRows(): (
     leases: null,
   });
   return (hostId, publicKey) => {
-    sessionHostRows.byHostId.set(hostId, {
-      ...ownerIdentityRemoteTarget(publicKey),
-      hostId,
-      label: hostId,
-    });
+    // `null` removes the row - a deregistration, after which the owner
+    // reading for that host is absent rather than rotated.
+    if (publicKey === null) {
+      sessionHostRows.byHostId.delete(hostId);
+    } else {
+      sessionHostRows.byHostId.set(hostId, {
+        ...ownerIdentityRemoteTarget(publicKey),
+        hostId,
+        label: hostId,
+      });
+    }
     for (const listener of [...listeners]) {
       listener();
     }
@@ -1369,5 +1376,194 @@ describe("<EpicSessionProvider />", () => {
     expect(seenHandles).toEqual([]);
     expect(__getOpenEpicRegistryForTests().size()).toBe(0);
     expect(navigateMock).toHaveBeenCalledWith({ to: "/epics", replace: true });
+  });
+
+  describe("warm-handle adoption after a provider remount (F1)", () => {
+    function installControlledFactory(streams: ControlledEpicStream[]): void {
+      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+        const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
+      });
+    }
+
+    function providerBody(
+      onHandle: (handle: OpenEpicStoreHandle) => void,
+    ): React.JSX.Element {
+      return (
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe onHandle={onHandle} />
+        </EpicSessionProvider>
+      );
+    }
+
+    it("records the warm handle's true binding and re-points instead of relabelling it", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+
+      const firstMountHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        providerBody((handle) => firstMountHandles.push(handle)),
+      );
+      await waitFor(() => expect(firstMountHandles).toHaveLength(1));
+      const warmHandle = firstMountHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+        warmHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      });
+
+      // Tab closes; the MRU registry keeps the session warm (mounted refs
+      // drop to 0, the entry survives below the cap) - the stream keeps
+      // running against host-a the whole time.
+      view.unmount();
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+      expect(streams[0].closeCount).toBe(0);
+
+      // The effective host moves while nothing is mounted.
+      hostState.id = "host-b";
+
+      // Remount: the registry hands back the WARM handle still streaming
+      // from host-a; the factory is not called for the adoption itself.
+      const remountHandles: OpenEpicStoreHandle[] = [];
+      render(providerBody((handle) => remountHandles.push(handle)));
+      await waitFor(() => expect(remountHandles).toHaveLength(1));
+      expect(remountHandles[0]).toBe(warmHandle);
+
+      // The stamp names the host the handle is actually bound to - the six
+      // stamp consumers (chat-backup RPC, capability gates, artifact image
+      // ops, tab model) must route to the machine that owns the stream, not
+      // the one the window moved to while the tab was closed.
+      expect(getEpicSessionHandleHostId(warmHandle)).toBe("host-a");
+
+      // And the provider takes the SAFE RE-POINT arm toward host-b: a second
+      // stream client is constructed while the warm handle stays mounted and
+      // its stream stays open. (Relabelling the warm handle instead leaves
+      // one stream and a stamp that lies "host-b".)
+      await waitFor(() => expect(streams).toHaveLength(2));
+      expect(streams[0].closeCount).toBe(0);
+      expect(getEpicSessionHandleHostId(warmHandle)).toBe("host-a");
+      // End-to-end merge survival across the replacement commit is step 2's
+      // (B5) fixture, deliberately not asserted here - see the remediation
+      // tracker's partition note.
+    });
+
+    it("adopts a warm handle bound to the target as a no-op (control arm)", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+
+      const firstMountHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        providerBody((handle) => firstMountHandles.push(handle)),
+      );
+      await waitFor(() => expect(firstMountHandles).toHaveLength(1));
+      const warmHandle = firstMountHandles[0];
+      view.unmount();
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+
+      // Same remount, host unmoved: adoption must stay a silent no-op. This
+      // arm passes before AND after the F1 fix - it pins the fix against
+      // over-widening (an adoption that rebuilds or re-points here would
+      // churn every tab reopen).
+      const remountHandles: OpenEpicStoreHandle[] = [];
+      render(providerBody((handle) => remountHandles.push(handle)));
+      await waitFor(() => expect(remountHandles).toHaveLength(1));
+      expect(remountHandles[0]).toBe(warmHandle);
+      expect(getEpicSessionHandleHostId(warmHandle)).toBe("host-a");
+      await act(() => Promise.resolve());
+      expect(streams).toHaveLength(1);
+      expect(streams[0].closeCount).toBe(0);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    it("completes an absent owner reading in place, and still rebuilds on a real rotation", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      // The registry source installs with NO row published for host-a, so
+      // the owner-identity reading is absent (null) at acquisition and the
+      // tuple records "not yet read".
+      const rotateRow = installOwnerIdentityRows();
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+
+      // The first real reading for the session's own host lands late. An
+      // absent reading is NOT a rotation: the tuple is completed IN PLACE -
+      // no rebuild, no second stream, the handle survives. (A refresh loop
+      // here fails as "Maximum update depth exceeded"; a rebuild fails the
+      // stream count.)
+      act(() => {
+        rotateRow("host-a", "pubkey-a0");
+      });
+      await act(() => Promise.resolve());
+      expect(streams).toHaveLength(1);
+      expect(streams[0].closeCount).toBe(0);
+      // Reference identity, not just "a handle is still there": a completion
+      // implemented as a rebuild produces correct-looking state, no loop and
+      // no red anywhere else - while discarding the Y.Doc, which is the class
+      // this remediation exists to close. Only an identity compare forbids it.
+      expect(seenHandles.at(-1)).toBe(firstHandle);
+      expect(__getOpenEpicRegistryForTests().peek("epic-session-test")).toBe(
+        firstHandle,
+      );
+
+      // The completion must KEEP the R-1 boundary armed: a genuine same-host
+      // public-key rotation after it still tears down and rebuilds. If this
+      // arm fails, the in-place completion recorded nothing and rotation
+      // detection died with it - the security boundary the discriminator
+      // exists for.
+      act(() => {
+        rotateRow("host-a", "pubkey-a1");
+      });
+      await waitFor(() => {
+        expect(seenHandles.at(-1)).not.toBe(firstHandle);
+      });
+      expect(streams).toHaveLength(2);
+      expect(streams[0].closeCount).toBe(1);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    it("does not treat a vanished owner reading as a rotation", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+
+      // The serving host is deregistered: its row is removed and the owner
+      // reading goes null while the session is mounted. An absent reading is
+      // not a rotation - tearing down the live session (and its unsynced
+      // edits) on a directory removal would be the discard path by another
+      // door.
+      act(() => {
+        rotateRow("host-a", null);
+      });
+      await act(() => Promise.resolve());
+      expect(streams).toHaveLength(1);
+      expect(streams[0].closeCount).toBe(0);
+      expect(seenHandles.at(-1)).toBe(firstHandle);
+    });
   });
 });

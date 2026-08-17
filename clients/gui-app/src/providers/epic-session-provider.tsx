@@ -39,7 +39,6 @@ import {
   getEpicStreamClientFactoryOverride,
   getOpenEpicRegistry,
   handleHostIds,
-  handleOwnerIdentityKeys,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
@@ -55,6 +54,90 @@ interface MountedSessionState {
   readonly handle: OpenEpicStoreHandle;
   readonly hostId: string;
   readonly ownerIdentityKey: string | null;
+}
+
+/**
+ * What a fresh owner-identity reading means for the session being held.
+ *
+ * `completed` is deliberately NOT a rebuild: it carries the session forward
+ * with the reading filled in.
+ */
+type OwnerIdentityVerdict =
+  | { readonly kind: "stable" }
+  | { readonly kind: "completed"; readonly session: MountedSessionState }
+  | { readonly kind: "rotated" };
+
+const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
+
+/**
+ * INVARIANT (R-1): a tuple's `ownerIdentityKey` is the owner identity OF its
+ * own `hostId`, and this is the only place that decides what a new reading
+ * means for it.
+ *
+ * The discriminator exists for a same-`hostId` public-key rotation
+ * (re-enrollment / corruption recovery - `registerOrAdoptHost` overwrites the
+ * key under a stable `hostId`), which `hostId` alone cannot see. Two rules
+ * make the comparison honest, and each closes a different failure:
+ *
+ *  - **Same host, or nothing.** Comparing a key recorded for host A against a
+ *    key read from host B is a category error, not a rotation check - and it
+ *    fires on exactly the paths where the two legitimately differ (a warm
+ *    handle adopted while the window has moved), turning an ordinary re-point
+ *    into a hard rebuild that discards the document.
+ *  - **An absent reading is not a rotation.** A stored `null` is COMPLETED by
+ *    the first real reading rather than treated as a change; a reading that
+ *    vanishes (the row is deregistered) is not one either. Without the
+ *    completion the stored side stays `null` for ever, "absent is not a
+ *    rotation" holds for ever, and the rotation boundary silently dies.
+ *
+ * `ownerIdentityKeyHostId` is widened to `| null` ONLY because the caller
+ * computes it in the component body, above the effect's
+ * `targetHostId === null` early return, and TS cannot narrow across that
+ * boundary. **The null arm is unreachable from both call sites** - both are
+ * straight-line in that effect's body, past its early return, and a tuple's
+ * `hostId` is typed `string`. Do not write a fixture for it: it would pass
+ * while pinning nothing.
+ */
+function readOwnerIdentityVerdict(
+  current: MountedSessionState | null,
+  ownerIdentityKey: string | null,
+  ownerIdentityKeyHostId: string | null,
+): OwnerIdentityVerdict {
+  if (current === null) return OWNER_IDENTITY_STABLE;
+  if (ownerIdentityKeyHostId !== current.hostId) return OWNER_IDENTITY_STABLE;
+  if (ownerIdentityKey === null) return OWNER_IDENTITY_STABLE;
+  if (current.ownerIdentityKey === null) {
+    return { kind: "completed", session: { ...current, ownerIdentityKey } };
+  }
+  if (current.ownerIdentityKey === ownerIdentityKey) {
+    return OWNER_IDENTITY_STABLE;
+  }
+  return { kind: "rotated" };
+}
+
+/**
+ * The honesty rule at RECORDING time, mirroring the comparison above: a key
+ * is recorded against a tuple only when it was read off that tuple's own
+ * host. Any other reading is recorded as absent - never as a key belonging to
+ * a different host, which is the state the invariant exists to exclude.
+ *
+ * Same widening, same unreachability, as `readOwnerIdentityVerdict` above.
+ *
+ * NOT YET APPLIED AT EVERY WRITER. `commitReplacement` still records the raw
+ * hook value, which on a re-point was read off the OLD session's host - so the
+ * comparison above can still be fed a record that is cross-host *as stored*.
+ * The same-host guard cannot catch that: it checks the host a reading was
+ * taken from, not the honesty of a record already labelled with this host. So
+ * the guard is bypassed on the re-point path rather than weakened, and that is
+ * exactly the B5 discard. Closed by the next commit; until then this doc
+ * describes the rule, not yet a property of every write.
+ */
+function ownerIdentityKeyForHost(
+  hostId: string,
+  ownerIdentityKey: string | null,
+  ownerIdentityKeyHostId: string | null,
+): string | null {
+  return ownerIdentityKeyHostId === hostId ? ownerIdentityKey : null;
 }
 
 type SessionPresentationKind = "ready" | "establishing" | "failed";
@@ -189,6 +272,14 @@ export function EpicSessionProvider(
   const ownerIdentityKey = useReactiveOwnerIdentityKey(
     resolvedSessionHostClient,
   );
+  // The host the reading above DESCRIBES - captured from the same expression
+  // the client resolver consumed, so the pairing cannot drift. The acquire
+  // effect's honesty rule compares against THIS value, never `sessionRef`:
+  // the ref updates synchronously while `session` state publishes on a
+  // microtask, so the two can disagree within one run, and pairing the key
+  // with a host the hook never read is exactly the cross-host recording the
+  // rule exists to prevent.
+  const ownerIdentityKeyHostId = session?.hostId ?? targetHostId;
 
   // Presentation writes are IDEMPOTENT by value. The acquire effect re-runs
   // whenever any of its dependencies churn - `openTransport` is a hook result,
@@ -268,9 +359,6 @@ export function EpicSessionProvider(
     // The effect above owns what the shell shows for a null host; acquisition
     // needs a concrete `hostId` and has nothing to do until one arrives.
     if (targetHostId === null) return;
-    if (originalHostIdRef.current === null) {
-      originalHostIdRef.current = targetHostId;
-    }
     const lifecycle = { cancelled: false };
     const registry = getOpenEpicRegistry();
     const handleSessionAuthError = (): void => {
@@ -317,18 +405,41 @@ export function EpicSessionProvider(
         close: result.close,
       };
     };
-    const createHandle = (): OpenEpicStoreHandle =>
-      createOpenEpicStore({
+    const createHandle = (): OpenEpicStoreHandle => {
+      const created = createOpenEpicStore({
         epicId,
         streamClientFactory,
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
       });
-    const current = sessionRef.current;
+      // Construction-honest stamp, written exactly once: `streamClientFactory`
+      // above captures this run's `targetHostId` into the transport it opens,
+      // so the stamp IS the handle's transport binding. Nothing re-stamps a
+      // live handle - a label that can drift from the binding routes RPCs and
+      // capability answers to a host that does not own the stream (F1).
+      handleHostIds.set(created, targetHostId);
+      return created;
+    };
+    let current = sessionRef.current;
+    // R-1: see `readOwnerIdentityVerdict` for the invariant this enforces.
+    const ownerIdentityVerdict = readOwnerIdentityVerdict(
+      current,
+      ownerIdentityKey,
+      ownerIdentityKeyHostId,
+    );
+    if (ownerIdentityVerdict.kind === "completed") {
+      // A write, not a terminal arm: control continues to the host comparison
+      // below in this same run. Returning here would leave an adopted session
+      // parked on its old host with every dependency stable and nothing left
+      // to trigger the re-point.
+      current = ownerIdentityVerdict.session;
+      sessionRef.current = current;
+      setSession(current);
+    }
     if (
       current === null ||
       current.handle.userId !== sessionUserId ||
-      current.ownerIdentityKey !== ownerIdentityKey
+      ownerIdentityVerdict.kind === "rotated"
     ) {
       // Identity changes are security boundaries, not re-points: discard the
       // old user/owner session before opening another stream.
@@ -336,14 +447,46 @@ export function EpicSessionProvider(
         registry.release(epicId);
       }
       const nextHandle = registry.acquireMounted(epicId, createHandle);
-      handleHostIds.set(nextHandle, targetHostId);
-      handleOwnerIdentityKeys.set(nextHandle, ownerIdentityKey);
+      // The stamp is written once, at construction (inside `createHandle`).
+      // When the registry returns a WARM handle the factory never ran and
+      // the stamp names the host the handle's transport was built for - not
+      // necessarily `targetHostId`. Recording the stamp rather than the
+      // target is the F1 fix: the tuple must describe the handle it holds,
+      // so a warm handle bound elsewhere takes the safe re-point arm on the
+      // next pass instead of streaming from one host while labelled with
+      // another. A missing stamp means the write-once invariant broke, and
+      // substituting `targetHostId` would silently re-create F1 - fail loud.
+      // Absence is unreachable rather than merely unlikely: this map and the
+      // registry that hands back warm handles are declared in ONE module, so
+      // no module replacement can produce a surviving warm handle whose stamp
+      // was left behind - they are replaced together or not at all. That
+      // colocation is LOAD-BEARING, not incidental: moving this map to another
+      // module (e.g. beside the terminal/chat registries' equivalents) makes
+      // this throw reachable under HMR, and no test can see it because HMR is
+      // not in the suite.
+      const stampedHostId = handleHostIds.get(nextHandle);
+      if (stampedHostId === undefined || stampedHostId === null) {
+        throw new Error(
+          "epic session handle carries no construction host stamp",
+        );
+      }
       const nextSession = {
         handle: nextHandle,
-        hostId: targetHostId,
-        ownerIdentityKey,
+        hostId: stampedHostId,
+        ownerIdentityKey: ownerIdentityKeyForHost(
+          stampedHostId,
+          ownerIdentityKey,
+          ownerIdentityKeyHostId,
+        ),
       };
       sessionRef.current = nextSession;
+      // The recovery affordance ("Open on original host") must name a host
+      // this session actually served. For a warm adoption that is the
+      // handle's bound host - not wherever the window moved while the tab
+      // was closed.
+      if (originalHostIdRef.current === null) {
+        originalHostIdRef.current = nextSession.hostId;
+      }
       // PUBLISHED ON A MICROTASK, as this provider has since the stream
       // rework - not an implementation detail. Consumers gated on the handle
       // eager-read the projection the instant the gate opens (the initial-chat
@@ -376,8 +519,6 @@ export function EpicSessionProvider(
     // establishes. The successor is deliberately outside the registry until a
     // complete snapshot makes an atomic replacement possible.
     const nextHandle = createHandle();
-    handleHostIds.set(nextHandle, targetHostId);
-    handleOwnerIdentityKeys.set(nextHandle, ownerIdentityKey);
     presentSession({
       kind: "establishing",
       targetHostId,
@@ -458,6 +599,7 @@ export function EpicSessionProvider(
     epicId,
     openTransport,
     ownerIdentityKey,
+    ownerIdentityKeyHostId,
     ownershipClaimed,
     presentSession,
     sessionUserId,

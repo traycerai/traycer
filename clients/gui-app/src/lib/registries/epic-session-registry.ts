@@ -56,11 +56,11 @@ export const EpicSessionHostClientContext =
   createContext<HostClient<HostRpcRegistry> | null>(null);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
-// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
-// so a same-host remote public-key rotation - which `activeHostId` alone
-// cannot see - also forces the acquire effect to close the stale durable
-// stream and mount a fresh session, instead of leaving it pinned to the
-// stale key.
+// The R-1 rotation rationale that used to live here moved to the acquire
+// effect's comparison in `epic-session-provider.tsx` - the mechanism that
+// actually enforces it. This map is write-dead and read-never as of the F1
+// fix (audit remediation step 1) and is deleted in step 2; do not add
+// readers or writers.
 export const handleOwnerIdentityKeys = new WeakMap<
   OpenEpicStoreHandle,
   string | null
