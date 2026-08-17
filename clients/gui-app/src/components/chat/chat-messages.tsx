@@ -753,9 +753,11 @@ export function ChatMessages(props: ChatMessagesProps) {
     clearReadingPositionTombstones(readingPositionIdentityForChat(identity));
   }, [identity]);
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
-  // cards survive the chat tile's full remount on tab switch (decision #17) -
-  // evicted only when the tab permanently closes (canvas store's
-  // tile-removal subscriber), never on a mere remount.
+  // cards survive a remount of this SAME instance - retention-cap or top-level
+  // eviction, or a hosted-eligibility flip; no longer an inner tab switch
+  // (decision #17 was reversed by pane chat retention) - and are evicted when
+  // the tab permanently closes (canvas store's tile-removal subscriber), never
+  // on a mere remount. A reopen is a new instance, not a revival of this one.
   //
   // Ticket 15 review round 3 (mandated simplification): no longer commits
   // to durable on its OWN unmount - the canvas close sweep's promotion
@@ -1522,7 +1524,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, []);
 
   // Persist the reading position on unmount and synchronously on transcript
-  // pointerdown. Chat tiles fully remount per tab switch (decision #17), and
+  // pointerdown. This tile can still be unmounted without warning (evicted past
+  // its pane's chat retention cap or with its top-level surface, closed, or its
+  // hosted eligibility flipped - no longer merely an inner tab switch), and
   // inline artifact/A2A navigation can hand control to browser history in the
   // same interaction; the eager capture guarantees Back observes the source
   // viewport even if unmount ordering changes. The unmount capture remains
@@ -1638,9 +1642,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   });
 
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded
-  // activity groups survive the chat tile's full remount on tab switch
-  // (decision #17) - evicted only when the tab permanently closes (canvas
-  // store's tile-removal subscriber), never on a mere remount.
+  // activity groups survive a remount of this SAME instance - retention-cap or
+  // top-level eviction, or a hosted-eligibility flip; no longer an inner tab
+  // switch (decision #17 was reversed by pane chat retention) - and are evicted
+  // when the tab permanently closes (canvas store's tile-removal subscriber),
+  // never on a mere remount. A reopen is a new instance, not a revival.
   //
   // Ticket 15 review round 3: no longer commits to durable on its own
   // unmount - see the matching comment on `a2aOpenStore` above.
@@ -2104,8 +2110,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // Fixup (fix-top-level-task-tab-scroll-restoration): `ChatMessages` stays
   // mounted while its top-level task/epic pane hides (`TopLevelTabHost`'s
-  // keep-alive) - unlike a same-pane inner chat-tab switch, which fully
-  // unmounts and restores through the mount-time path above. A hide
+  // keep-alive). A same-pane inner chat-tab switch now takes THIS path too
+  // (pane chat retention, which reversed decision #17); the mount-time path
+  // above is reached only by a real remount - retention-cap or top-level
+  // eviction, a close, or a hosted-eligibility flip. A hide
   // eventually zeroes this tile's measured geometry (`PaneVisibilityContext`'s
   // own doc comment: "size-measuring surfaces... read a 0x0 box while
   // hidden"), so this effect never TRUSTS a live DOM read on the transition -
