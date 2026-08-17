@@ -22,7 +22,15 @@ import {
  * nothing at all (§55).
  */
 
-const COMPOSER_KEY = composerSurfaceKey(null);
+// The composer key is the BROWSER TAB's identity now, not the literal
+// `"browser"` every tab used to share - two tabs on one origin would otherwise
+// hydrate each other's placement pin out of localStorage. Pinned to a known id
+// so this suite asserts against the key the hook actually builds.
+vi.mock("@/lib/browser-tab-identity", () => ({
+  browserTabId: () => "tab-test",
+}));
+
+const COMPOSER_KEY = composerSurfaceKey("tab-test");
 
 const mocks = vi.hoisted(() => ({
   selectById: vi.fn(),
@@ -229,9 +237,11 @@ describe("composer host picker writes a surface pin", () => {
     renderComposerPicker({ kind: "active" });
     fireEvent.click(screen.getByTestId("host-option-host-build"));
 
-    // `composerSurfaceKey(null)` is the browser/no-bridge fallback key. A
-    // per-component key here would let the app-wide new-conversation modal
-    // contradict the landing chip behind it.
+    // ONE key for this window, whichever composer instance wrote it: a
+    // per-component key would let the app-wide new-conversation modal
+    // contradict the landing chip behind it. Outside desktop the "window" is
+    // the browser tab, which is why the key carries a tab identity rather
+    // than a constant.
     expect(
       Object.keys(useSurfaceHostSelectionStore.getState().selections),
     ).toEqual([COMPOSER_KEY]);

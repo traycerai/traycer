@@ -21,7 +21,14 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
  * DIFFERENT sources, which is the whole mechanism.
  */
 
-const COMPOSER_KEY = composerSurfaceKey(null);
+// The composer key is now the BROWSER TAB's identity, not the literal
+// `"browser"` every tab used to share. Pinned to a known id here so the key
+// this suite asserts against is the one the hook actually builds.
+vi.mock("@/lib/browser-tab-identity", () => ({
+  browserTabId: () => "tab-test",
+}));
+
+const COMPOSER_KEY = composerSurfaceKey("tab-test");
 
 const mocks = vi.hoisted(() => ({
   effectiveHostId: { current: "host-effective" },
