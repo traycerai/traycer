@@ -14,7 +14,7 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
  * `managedCommand.deliverHeld@1.0` - the human path off a Stop fence's durable
  * hold. `heldManagedCommandUpdateSchema` is shared with the chat stream, so its
  * behaviour THERE (the snapshot field, the `heldUpdatesChanged` frame, and the
- * frozen `1.6` line's refusal of both) lives in
+ * frozen `1.5` line's refusal of both) lives in
  * `agent/gui/__tests__/chat-subscribe-held-updates.test.ts`.
  */
 

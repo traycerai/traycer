@@ -162,7 +162,7 @@ export interface ToolSegment {
   // Owning subagent block id when this call was made by a subagent (nests under
   // that subagent block). Null for top-level / main-agent tool calls.
   parentId: string | null;
-  /** Generated images carried by chat.subscribe@1.7. Normalized at projection. */
+  /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
   imageResults: ReadonlyArray<ImageGenerationResult>;
 }
 

@@ -10,9 +10,11 @@ import {
  * the `epic.createChat` version it negotiated.
  *
  * A cross-host fork rides `sourceOwnerUserId` on the precise-boundary
- * `forkSource` arm, added in v1.2 (v1.1 carries the field on the `"latest"` arm
- * only). A same-MAJOR downgrade Zod-STRIPS an unknown field silently, so against
- * a v1.1 host the request arrives with the hint gone.
+ * `forkSource` arm. That arm carries the hint from v1.1 on; v1.0 carries it on
+ * neither arm. (It arrived on an unreleased v1.2 that the release collapsed
+ * into v1.1, so v1.1 is where it ships.) A same-MAJOR downgrade Zod-STRIPS an
+ * unknown field silently, so against a v1.0 host the request arrives with the
+ * hint gone.
  *
  * What that host then does is LOUD, not silent: `buildForkSeed` walls every
  * precise-boundary fork on `storageAPI.hasChat(sourceChatId)` before it reaches
@@ -30,7 +32,7 @@ export type ChatForkTargetSupport =
    * its build. Deliberately PERMISSIVE: rendering "needs update" here would
    * assert a fact this client does not have, and the state resolves itself on
    * the first completed RPC to the host - which, for a host-parametric surface,
-   * is the moment the user picks it. If the target really is v1.1, the host
+   * is the moment the user picks it. If the target really is v1.0, the host
    * refuses with `E_FORK_CHECKPOINT_UNAVAILABLE` and the user sees an error
    * instead of a silently wrong result.
    */
@@ -44,13 +46,13 @@ export type ChatForkTargetSupport =
     };
 
 /** The `epic.createChat` minor that carries the cross-host owner hint. */
-const CHAT_FORK_REQUIRED_MINOR = 2;
+const CHAT_FORK_REQUIRED_MINOR = 1;
 const CHAT_FORK_MAJOR = 1;
 
 export const CHAT_FORK_NEEDS_UPDATE_WORD = "needs update";
 
 /**
- * `>=` the required minor, not `===`: a later 1.3 is still a superset of 1.2 by
+ * `>=` the required minor, not `===`: a later 1.2 is still a superset of 1.1 by
  * the framework's minor-additivity rule, and pinning to one minor would disable
  * every host the moment the next one ships. An unrecognized MAJOR fails closed
  * - the contract is not one this client can reason about in either direction -
@@ -92,7 +94,7 @@ export function chatForkTargetSupport(
  * every host it lists.
  *
  * `sourceHostId` is exempt on purpose: a same-host fork sends no hint and needs
- * no v1.2 - it is the shape every host that can serve this dialog at all has
+ * no v1.1 - it is the shape every host that can serve this dialog at all has
  * always understood. Gating the source row would disable the ONE row that is
  * always correct, on a build fact that does not apply to it.
  */

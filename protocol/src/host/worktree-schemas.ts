@@ -545,29 +545,27 @@ export const worktreeListByWorkspacePathsRequestSchemaV14 =
 export type WorktreeListByWorkspacePathsRequestV14 =
   WorktreeListByWorkspacePathsRequestV13;
 
+// A V15 SUMMARY on a V14 RESPONSE is deliberate, not a mismatch. The two
+// consumers of this summary carry `presence` on DIFFERENT minors because their
+// released floors differ, not because either line is frozen:
+//
+//   worktree.listByWorkspacePaths - released through 1.3, so its 1.4 was still
+//     open and absorbed `presence` in place.
+//   worktree.listAllForHost       - released through 1.4, so `presence` could
+//     not widen that line and had to open a 1.5.
+//
+// Both presence-bearing lines are therefore UNRELEASED and still mutable; the
+// `V15` name records which minor the fact landed on for the OTHER method, not a
+// freeze. A further field belongs in these same two minors - widen the mutable
+// head rather than freezing 1.5 or opening a 1.6. Check the floors against
+// `__tests__/__fixtures__/released-baseline-surface.json` before assuming
+// otherwise; that fixture, not this comment, is the authority.
 export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
-  workspaces: z.array(worktreeWorkspaceSummarySchemaV14),
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
   scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
 });
 export type WorktreeListByWorkspacePathsResponseV14 = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchemaV14
->;
-
-/**
- * `worktree.listByWorkspacePaths` v1.5 request. Unchanged from v1.4; this
- * minor adds the response presence fact only.
- */
-export const worktreeListByWorkspacePathsRequestSchemaV15 =
-  worktreeListByWorkspacePathsRequestSchemaV14;
-export type WorktreeListByWorkspacePathsRequestV15 =
-  WorktreeListByWorkspacePathsRequestV14;
-
-export const worktreeListByWorkspacePathsResponseSchemaV15 = z.object({
-  workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
-  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
-});
-export type WorktreeListByWorkspacePathsResponseV15 = z.infer<
-  typeof worktreeListByWorkspacePathsResponseSchemaV15
 >;
 
 export const worktreeBranchSchema = z.object({

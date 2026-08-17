@@ -36,7 +36,6 @@ import {
   nativeListResultSchemaV70,
   nativeMutationResultSchema,
   nativeMutationSchema,
-  projectNativeCapabilitiesToV70,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70,
   type ModelProviderAuthAction,
@@ -383,7 +382,7 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
   "status",
   [
     // `absent` deliberately carries NO `version`. The other three arms gained
-    // one on the v8.0 line (the main table labels the row "Installing v1.18.11
+    // one on the v7.0 line (the main table labels the row "Installing v1.18.11
     // · 42%", which needs the version the slot refers to), but `absent` means
     // no managed copy exists, so a version there could only ever be null - a
     // field with one legal value forever informs nothing. "Which version WOULD
@@ -404,7 +403,7 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
       // sibling that STOPS progressing is a different thing entirely and has
       // its own reason (`live-owner-stalled` on the error arm).
       percent: z.number().min(0).max(100).nullable(),
-      // Ships with v8.0; the v8->v7 bridge strips it. Nullable because a host
+      // Ships with v7.0; the v7->v6 bridge strips it. Nullable because a host
       // can be waiting behind a sibling's lease before it has resolved which
       // version that sibling is fetching.
       //
@@ -420,7 +419,7 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
     }),
     z.object({
       status: z.literal("installed"),
-      // Ships with v8.0; the v8->v7 bridge strips it. Nullable so a host that
+      // Ships with v7.0; the v7->v6 bridge strips it. Nullable so a host that
       // can see a usable managed copy but cannot cheaply name its version
       // (the poll lane runs no per-dir verification) reports the truth rather
       // than guessing. Optional for the reason given on the arm above.
@@ -429,7 +428,7 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
     z.object({
       status: z.literal("error"),
       reason: providerManagedInstallErrorReasonSchema,
-      // The version the failed attempt was for. Ships with v8.0; the v8->v7
+      // The version the failed attempt was for. Ships with v7.0; the v7->v6
       // bridge strips it. Nullable: a failure early enough to precede target
       // resolution (a keyring that would not verify - `trust-unavailable`) has
       // no version to name, and inventing one would misattribute a host-wide
@@ -525,12 +524,12 @@ export type ProviderManagedInstallStateV70 = z.infer<
   typeof providerManagedInstallStateSchemaV70
 >;
 
-// ── v8.0: per-pack managed version manager ─────────────────────────────────
+// ── v7.0: per-pack managed version manager ─────────────────────────────────
 //
 // The single-slot `managedInstallState` above answers "what is the managed
 // copy doing"; everything below answers "which managed versions exist on this
-// machine, and what may the user do with them". Both ride v8.0 together; the
-// v8->v7 bridge strips the whole group.
+// machine, and what may the user do with them". Both ride v7.0 together; the
+// v7->v6 bridge strips the whole group.
 //
 // Keyed by PACK, not by provider: one pack serves several providers (the
 // opencode pack backs opencode/traycer/openrouter/huggingface), so every
@@ -1334,14 +1333,20 @@ const providerCliStateBaseShape = {
   // "resolved" reproduces today's exact behavior (no notice) rather than
   // accusing every provider on an old host of a missing binary.
   cliBinaryResolved: z.boolean().catch(true).optional(),
-  // ── v8.0 fields ────────────────────────────────────────────────────────
-  // These three ride `providers.list@8.0`. They are ABSENT from v7.0 and
-  // below by construction, not by a bridge that remembers to strip them: the
-  // v7.0 line is pinned to `providerCliStateBaseShapeV70`, whose hand-frozen
-  // key set does not model them, so the v8->v7 reparse drops them the way
-  // every older bridge drops the keys its target never modelled. That freeze
-  // is the reason these could be added here at all - before it, growing this
-  // shape grew the v7.0 wire too.
+  // ── v7.0 fields ────────────────────────────────────────────────────────
+  // These three ride `providers.list@7.0`, the LIVE head line. They arrived on
+  // an unreleased v8.0 that the release collapsed into v7.0, so v7.0 now binds
+  // the canonical schemas rather than a hand-frozen pin. They are ABSENT from
+  // v6.0 and below because `providerCliStateSchemaV60` is a plain `z.object`
+  // whose key set does not model them, so the v7->v6 reparse drops them the
+  // way every older bridge drops the keys its target never modelled.
+  //
+  // Growing this shape therefore GROWS THE v7.0 WIRE - the freeze that used to
+  // stand between the two is gone. What catches it now is the deep
+  // `z.toJSONSchema` snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts`,
+  // which dumps v7.0's live shape and turns red in a plain `bun run test`. A
+  // field that belongs on the next line needs v8.0 opened for it, not a green
+  // fixture regenerated over it.
   //
   // Which pack (if any) serves this provider's managed binary. Null means the
   // provider has no managed pack on this host - the store is unmanaged, or the
@@ -1442,10 +1447,11 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * v4.0/v5.0/v6.0 request lines too; `host-v1.1.10` then froze those three
  * lines without it, because the commit that added it was not in the release
  * cherry-pick. Every line below v7.0 is pinned to
- * `providersListRequestSchemaBeforeV70` for that reason - and v7.0 itself is
- * now pinned to `providersListRequestSchemaV70`, so NO contract line points
- * here today. This schema is the shape the next major will carry; a request
- * field added here reaches the wire only once that line exists.
+ * `providersListRequestSchemaBeforeV70` for that reason. v7.0 itself BINDS this
+ * live schema (the release collapsed the unreleased v8.0 into it), so a request
+ * field added here reaches the v7.0 wire immediately - it does not wait for a
+ * new line. `providersListRequestSchemaV70` still exists, but as the shared
+ * v7.0-shaped fixture the compat suites parse through, not as a contract pin.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -1495,11 +1501,13 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * As of the v7.0 freeze NO contract line points here - v1.0 through v7.0 each
- * have their own hand-frozen response. This is the shape the host BUILDS and
- * the shape the next major will carry; the per-line schemas project it. A field
- * added to `providerCliStateBaseShape` therefore reaches the wire only once a
- * new line models it, which is the whole point of the freeze below.
+ * v1.0 through v6.0 each have their own hand-frozen response; v7.0 BINDS THIS
+ * ONE, because the release collapsed the unreleased v8.0 that used to sit above
+ * it into v7.0. So this is both the shape the host BUILDS and the shape the
+ * head line serializes: a field added to `providerCliStateBaseShape` reaches
+ * the v7.0 wire immediately rather than waiting for a new line to model it.
+ * The freeze below still guards v1.0-v6.0; v7.0 is guarded by the deep
+ * `frozen-catalog-lines` snapshot instead.
  */
 export const providersListResponseSchema = z.object({
   providers: z.array(providerCliStateSchema),
@@ -1709,28 +1717,37 @@ export type ProvidersListResponseV40 = z.infer<
 // frozen for the opposite reason. Those three were pinned RETROACTIVELY, after
 // a release tag proved that fields had already ridden them: `omp` on v5.0, and
 // the registry fields on v5.0 and v6.0 both. Every one of those pins was damage
-// control. v7.0 is not released (the newest tag, `host-v1.1.11`, still tops out
-// at v6.0), so this pin is the first one taken while the line is still the head
-// - the freeze lands BEFORE the fields that would have leaked through it exist.
+// control. v7.0 is not released either (the newest tag, `host-v1.1.11`, still
+// tops out at v6.0), and that is what let the release collapse the unreleased
+// v8.0 above it back into v7.0.
 //
-// The next line's additions are already known (a `packId`, a per-pack managed-
-// versions block, a `nextRunBinary`, and a version on `managedInstallState`).
-// None of them may appear here. Add them to the live
-// `providerCliStateBaseShape` and open v8.0 with a v8->v7 strip bridge, exactly
-// as the v7->v6 bridge strips the registry fields today.
+// THE CONSEQUENCE, because it inverts what this pin used to mean: the additions
+// this comment once called future (a `packId`, a per-pack managed-versions
+// block, a `nextRunBinary`, and a version on `managedInstallState`) LANDED, and
+// they landed on v7.0. The `providersListV70` contract now binds the LIVE
+// request/response schemas, so this shape no longer backs a wire line. It
+// survives as the shared v7.0-shaped fixture the older bridges and the compat
+// suites parse through. Do not read it as a freeze standing between the live
+// shape and the v7.0 wire - there is nothing between them now.
+//
+// The next line's additions go on the live `providerCliStateBaseShape`, and
+// v8.0 opens with a v8->v7 strip bridge exactly as the v7->v6 bridge strips the
+// version-manager group today.
 //
 // WHAT THIS PIN DOES AND DOES NOT COVER, stated plainly so the v8.0 author does
-// not over-trust it: it freezes v7.0's KEY SET, its provider-id enum, its login
-// capability and its managed-install-state union. It deliberately keeps live
+// not over-trust it: it freezes a v7.0-shaped KEY SET, a provider-id enum, a
+// login capability and a managed-install-state union. It deliberately keeps live
 // references for `providerCliCandidateSchema`, `providerProfileSchema`,
 // `providerVersionVisibilitySchema`, `providerAdvisorySchema`,
 // `providerNativeCapabilitiesSchema` and `nativeListResultSchema` - the same
 // depth `providerCliStateBaseShapeV40` stops at. Those are not unguarded: the
 // deep `z.toJSONSchema` snapshot in
 // `__tests__/__fixtures__/frozen-catalog-lines.ts` pins this schema's ENTIRE
-// nested shape, so growth in any of them turns v7.0 red in plain `bun run test`
-// instead of leaking silently. When that happens, hand-freeze the sub-schema
-// that grew - do not regenerate the fixture to make it green.
+// nested shape, so growth in any of them turns red in plain `bun run test`
+// instead of leaking silently. That fixture is now the ONLY guard on the v7.0
+// wire itself, since v7.0 binds the live schemas - it dumps their real shape
+// for exactly that reason. When it goes red, hand-freeze the sub-schema that
+// grew, or open v8.0 - do not regenerate the fixture to make it green.
 //
 // `native` on this response now uses `nativeListResultSchemaV70` because the
 // live skill row grew `origin` / `conflict`. The capabilities descriptor
@@ -2771,7 +2788,7 @@ export type ProvidersEnsurePackResponse = z.infer<
   typeof providersEnsurePackResponseSchema
 >;
 
-// ── v8.0: the four per-pack version-manager methods ────────────────────────
+// ── v7.0: the four per-pack version-manager methods ────────────────────────
 //
 // Each is a BRAND-NEW METHOD NAME at `@1.0`, and `providers.ensurePack@1.0`
 // above is left byte-identical. That split is deliberate and is not a style
@@ -3100,8 +3117,8 @@ export type DowngradableToV10ProviderState = (
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
     ProviderNativeCapabilities | ProviderNativeCapabilitiesV70;
-  // Widened to the live OR the frozen v7.0 union once v8.0 grew the live arms
-  // with `version`. `providersListDowngradeV7ToV1` feeds this function
+  // Widened to the live OR the frozen v7.0 union once the version-manager work
+  // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds this function
   // v7.0-shaped rows, which no longer satisfy the live type - and the two are
   // both fine here for the same reason the widened `loginCapability` below is:
   // the strict v1.0 parse discards this field either way. Without the
@@ -3114,7 +3131,7 @@ export type DowngradableToV10ProviderState = (
   versionVisibility?: ProviderCliState["versionVisibility"];
   advisory?: ProviderCliState["advisory"];
   cliBinaryResolved?: ProviderCliState["cliBinaryResolved"];
-  // v8.0 fields, present only when the source is a live-shaped row.
+  // v7.0 fields, present only when the source is a live-shaped row.
   packId?: ProviderCliState["packId"];
   managedVersions?: ProviderCliState["managedVersions"];
   managedVersionsUnavailable?: ProviderCliState["managedVersionsUnavailable"];
@@ -3138,7 +3155,7 @@ export function downgradeProviderCliStateToV10(
   //   provider-pack-registry fields.
   // - `cliBinaryResolved` — the binary-absent explanation field.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
-  //   `nextRunBinary` (v8.0) — the version manager. Same trap, and it is worth
+  //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
   //   STRICT, so every field added to the live shape from here to the end of
   //   time must be added to this destructure too. Forgetting one does not
@@ -3288,45 +3305,6 @@ export function downgradeProviderCliStateListToV60(
   });
 }
 
-/**
- * Strip the v8.0 managed-version fields (`packId`, `managedVersions`,
- * `nextRunBinary`, and the `version` that v8.0 added to `managedInstallState`'s
- * arms) for a v7.0 peer. Same filter-by-reparse shape as every bridge above,
- * with one difference worth naming: this is the FIRST of these bridges that
- * strips only FIELDS and drops no providers, because v8.0 adds no provider ids
- * - so an empty result here means something is wrong, where in the older
- * bridges it is routine.
- *
- * The strip is a property of `providerCliStateSchemaV70` being a hand-frozen
- * shape rather than of anything written here: a plain (non-strict) `z.object`
- * keeps only what it models, and the frozen v7.0 shape models none of the
- * four. That is exactly why the freeze had to land before these fields did -
- * had v7.0 still pointed at the live schema, this function would be an
- * identity that silently published all four to v7.0 peers.
- */
-export function downgradeProviderCliStateListToV70(
-  states: readonly unknown[],
-): ProviderCliStateV70[] {
-  return states.flatMap((state) => {
-    // A live-shaped row carries a capability descriptor the frozen v7.0
-    // schema cannot reparse - `supportedTabs` may hold members the frozen
-    // enum rejects WHOLE, and the state's `.catch()` would then serve the
-    // empty default, wiping MCP/Plugins/Skills for the peer. Project the
-    // descriptor first; rows that are not live-shaped parse as-is.
-    const live = providerCliStateSchema.safeParse(state);
-    const candidate = live.success
-      ? {
-          ...live.data,
-          nativeCapabilities: projectNativeCapabilitiesToV70(
-            live.data.nativeCapabilities,
-          ),
-        }
-      : state;
-    const parsed = providerCliStateSchemaV70.safeParse(candidate);
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
 // Upgrades a v1.0 state to the frozen v2.0 shape - used only by
 // `providers.list`'s v1.0 -> v2.0 bridge, whose response is pinned to
 // `providerCliStateSchemaV20` (narrower `providerId`, no `profiles`). Every
@@ -3355,11 +3333,13 @@ export function upgradeProviderMutationCliStateV20ToLatest(
   });
 }
 
-// The `providers.list` fills aimed at the frozen v7.0 line are
+// The `providers.list` fills aimed at the v7.0 line are
 // `upgradeProviderCliStateToV70` / `...ListToV70`, named for their TARGET LINE
-// rather than for "latest". A bridge aims at a line: with v8.0 open above
-// v7.0, a fill named "latest" silently means a shape v7.0 cannot carry. The
-// latest-named fills below aim at the HEAD line and move with it.
+// rather than for "latest". A bridge aims at a line: the moment a v8.0 opens
+// above v7.0, a fill named "latest" silently means a shape v7.0 cannot carry.
+// v7.0 is the head today, so the two coincide - which is exactly when the
+// naming stops being checkable and has to be kept by hand. The latest-named
+// fills below aim at the HEAD line and move with it.
 
 /** Upgrade frozen list@2.0 / v3.0 state to latest by attaching the default descriptor. */
 export function upgradeProviderCliStateToLatest(

@@ -192,35 +192,3 @@ export const chatSchemaV15 = z.object({
   events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),
 });
-
-// Wire-freeze copy of the live `chatSchema` from before image support
-// existed, with `messages` swapped for the frozen `messageSchemaPreImage`.
-// Bound to `chat.subscribe@1.6`'s snapshot serverFrame (the released line
-// that currently binds the live `chatSchema` by reference - see
-// `chatSubscribeV16` in `subscribe.ts`) so that shipped line stays verbatim.
-// Every other field reuses the live shape as of today - `1.6` shipped bound
-// directly to `chatSchema`, so `pinnedUserProviderHandle` and
-// `lastDeliveredRolesDigest` are already on its released wire and must be
-// preserved here, unlike `chatSchemaV14`/`chatSchemaV15` which predate them.
-// Hand-frozen, NOT derived from the live shape, so a future field added to
-// `chatSchema` cannot silently leak onto this frozen line.
-export const chatSchemaPreImage = z.object({
-  parentId: z.string().nullable(),
-  id: z.string(),
-  userId: z.string(),
-  hostId: z.string(),
-  title: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
-  messages: z.array(messageSchemaPreImage),
-  events: z.array(chatEventSchema).default([]),
-  archivedAt: z.number().nullable().default(null),
-  pinnedUserProviderHandle: z.string().nullable().default(null),
-  lastDeliveredRolesDigest: z.string().nullable().default(null),
-});

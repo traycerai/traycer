@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequestV12,
+  CreateChatRequestV11,
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
@@ -57,7 +57,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * is rejected through the mutation error channel instead of creating the chat
  * on the wrong machine.
  */
-export type CreateChatMutationInput = CreateChatRequestV12;
+export type CreateChatMutationInput = CreateChatRequestV11;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
   /**

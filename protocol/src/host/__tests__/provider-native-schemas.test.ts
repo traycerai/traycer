@@ -294,13 +294,17 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [baseState("amp")],
     });
     const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
-    // The v7.0-shaped default, not the live one: this hop's target is the
-    // pinned v7.0 line, whose default carries `modelProviders: null`.
-    expect(upgraded.providers[0]?.nativeCapabilities).toEqual(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
-    );
+    // The v7-era default plus `modelProviders: null` on top. Two fills, in one
+    // hop: this bridge absorbed the v7 -> v8 hop's when that unreleased major
+    // collapsed into v7.0, and the composition has to survive the merge.
+    expect(upgraded.providers[0]?.nativeCapabilities).toEqual({
+      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+      modelProviders: null,
+    });
     expect(upgraded.native).toBeNull();
-    expect(() => providersListResponseSchemaV70.parse(upgraded)).not.toThrow();
+    // Parsed against the LIVE shape, which is what v7.0 binds now that it is
+    // the head line - the v7-era pin would accept a row missing the fill.
+    expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 
   // `native` rides v7.0 ALONE. It was authored against the live request object
@@ -369,7 +373,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       native: { ok: true, kind: "mcp", servers: [] },
     });
     const result = providersListDowngradeV7ToV6.downgradeResponse(
-      providersListResponseSchemaV70.parse(v70),
+      providersListResponseSchema.parse(v70),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -406,7 +410,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
     });
     const result = providersListDowngradeV7ToV3.downgradeResponse(
-      providersListResponseSchemaV70.parse(v31),
+      providersListResponseSchema.parse(v31),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -431,7 +435,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
     });
     const result = providersListDowngradeV7ToV2.downgradeResponse(
-      providersListResponseSchemaV70.parse(v31),
+      providersListResponseSchema.parse(v31),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -466,7 +470,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [latest],
     });
     const listResult = providersListDowngradeV7ToV1.downgradeResponse(
-      providersListResponseSchemaV70.parse(list),
+      providersListResponseSchema.parse(list),
     );
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;

@@ -109,24 +109,6 @@ export const managedCommandSchema = z.object({
 export type ManagedCommand = z.infer<typeof managedCommandSchema>;
 
 /**
- * Wire-freeze copy of `managedCommandSchema` from before the details widening
- * (`command`/`cwd`/`cadence`). Bound to `chat.subscribe@1.6` - the released
- * line the whole Shells surface arrived on - so that line can never observe the
- * new fields. Hand-frozen, NOT derived from the live shape via `.omit()`, so a
- * future field added to the live schema cannot silently leak onto it. Same
- * discipline, and the same reason, as `toolCallBlockSchemaPreImage`.
- */
-export const managedCommandSchemaPreImage = z.object({
-  id: z.string(),
-  monitoring: z.boolean(),
-  description: z.string(),
-  status: managedCommandStatusSchema,
-  chatId: z.string(),
-  createdAtMs: z.number(),
-  updatedAtMs: z.number(),
-});
-
-/**
  * Every id-addressed control names its epic. Scoping is not advisory: a command
  * in another epic is answered exactly as an id that never existed, so the
  * surface cannot be used to probe for commands the caller may not see.

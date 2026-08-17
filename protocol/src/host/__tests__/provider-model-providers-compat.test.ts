@@ -268,26 +268,15 @@ describe("the tab id can only reach a decoder that knows it", () => {
     );
   });
 
-  it("projects the tab away for a v7.0 peer WITHOUT wiping its capabilities", () => {
-    // The trap this projection exists for: the frozen tab enum rejects a
-    // whole `supportedTabs` array over one unknown member, and the state's
-    // `.catch()` would then serve the empty default - costing the peer MCP,
-    // Plugins and Skills over one tab id. Filter, never reparse.
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      liveResponse,
-    );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    const row = downgraded.value.providers.find(
-      (provider) => provider.providerId === "opencode",
-    );
-    expect(row?.nativeCapabilities.supportedTabs).toContain("mcp");
-    expect(row?.nativeCapabilities.mcp).not.toBeNull();
-    expect(JSON.stringify(downgraded.value)).not.toContain("modelProviders");
-  });
+  // A companion test used to drive the 8.0 -> 7.0 hop here, proving the tab
+  // was PROJECTED away for a v7.0 peer rather than reparsed (the frozen tab
+  // enum rejects a whole `supportedTabs` array over one unknown member, and
+  // the state's `.catch()` then serves the empty default - costing that peer
+  // MCP, Plugins and Skills over one tab id). Collapsing the unreleased v8.0
+  // into v7.0 left no peer below the head that models a capability object at
+  // all, so there is no hop that projection can run on. The projection helper
+  // itself is still covered directly by "projects a full live descriptor
+  // without losing a sibling capability" below.
 
   it("drops the whole capability object for a v6.0 client, tab and all", () => {
     // v6.0 models no capability object, so the reparse takes the entire
@@ -295,7 +284,7 @@ describe("the tab id can only reach a decoder that knows it", () => {
     for (const targetMajor of [1, 2, 3, 4, 5, 6] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         targetMajor,
         liveResponse,
       );
@@ -320,23 +309,22 @@ describe("providers.list head line -> every older major", () => {
     4: providersListResponseSchemaV40,
     5: providersListResponseSchemaV50,
     6: providersListResponseSchemaV60,
-    7: providersListResponseSchemaV70,
   } as const;
 
-  it.each([1, 2, 3, 4, 5, 6, 7] as const)(
-    "8.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
+  it.each([1, 2, 3, 4, 5, 6] as const)(
+    "7.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
     (targetMajor) => {
       // Every major gets a DIRECT path (the registry composes nothing), so a
       // missing key here is not a degraded response - it is no response that
       // peer can decode at all.
       expect(
-        hostRpcRegistry["providers.list"][8].downgradePathsFromLatest[
-          targetMajor as 1 | 2 | 3 | 4 | 5 | 6 | 7
+        hostRpcRegistry["providers.list"][7].downgradePathsFromLatest[
+          targetMajor as 1 | 2 | 3 | 4 | 5 | 6
         ],
       ).toBeDefined();
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         targetMajor,
         liveResponse,
       );
@@ -355,7 +343,7 @@ describe("providers.list head line -> every older major", () => {
     // drop it wholesale and the ids survive untouched.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      7,
       6,
       liveResponse,
     );
@@ -371,11 +359,17 @@ describe("providers.list head line -> every older major", () => {
 });
 
 describe("providers.list every older major -> the head line", () => {
-  it("fills the v7.0-shaped default on the v6 -> v7 hop, with no modelProviders key", () => {
+  it("invents the whole capability object on the v6 -> v7 hop, modelProviders included", () => {
     // v6.0 models no capability object at all, so this hop invents the whole
-    // thing from the v7.0-shaped default - which predates `modelProviders`.
-    // `upgradeResponseToVersion` chains bridges by cast with no re-parse, so
-    // the fill has to be real, not a schema default that never runs.
+    // thing: the v7-era default first, then `modelProviders` on top. The two
+    // fills used to sit on separate hops (v6 -> v7 and v7 -> v8); collapsing
+    // the unreleased v8.0 into v7.0 merged them, and this is the guard that
+    // the second one survived the merge.
+    //
+    // A missing key and an explicit null are what a consumer gate has to tell
+    // apart, so `modelProviders` must be an OWN key. `upgradeResponseToVersion`
+    // chains bridges by cast with no re-parse, so the fill has to be real, not
+    // a schema default that never runs - which is what the final parse checks.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 6, minor: 0 },
@@ -385,29 +379,12 @@ describe("providers.list every older major -> the head line", () => {
       }),
     );
     const capabilities = upgraded.providers[0].nativeCapabilities;
-    expect(Object.keys(capabilities)).not.toContain("modelProviders");
-    expect(capabilities).toEqual(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70);
-    expect(providersListResponseSchemaV70.safeParse(upgraded).success).toBe(
-      true,
-    );
-  });
-
-  it("fills modelProviders: null as an OWN key on the v7 -> v8 hop", () => {
-    // A missing key and an explicit null are what a consumer gate has to tell
-    // apart. A v7.0 host predates the feature, so the hop reports exactly
-    // that - null, present.
-    const upgraded = upgradeResponseToVersion(
-      hostRpcRegistry["providers.list"],
-      { major: 7, minor: 0 },
-      { major: 8, minor: 0 },
-      providersListResponseSchemaV70.parse({
-        providers: [providerState("opencode")],
-        native: null,
-      }),
-    );
-    const capabilities = upgraded.providers[0].nativeCapabilities;
     expect(Object.keys(capabilities)).toContain("modelProviders");
     expect(capabilities.modelProviders).toBeNull();
+    expect(capabilities).toEqual({
+      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+      modelProviders: null,
+    });
     expect(providersListResponseSchema.safeParse(upgraded).success).toBe(true);
   });
 
@@ -425,7 +402,7 @@ describe("providers.list every older major -> the head line", () => {
       const upgraded = upgradeResponseToVersion(
         hostRpcRegistry["providers.list"],
         { major: sourceMajor, minor: 0 },
-        { major: 8, minor: 0 },
+        { major: 7, minor: 0 },
         frozen.parse({ providers: [providerState("codex")] }),
       );
       expect(
@@ -1969,7 +1946,6 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
     4: providersListResponseSchemaV40,
     5: providersListResponseSchemaV50,
     6: providersListResponseSchemaV60,
-    7: providersListResponseSchemaV70,
   } as const;
 
   // `huggingface` is post-v6.0, so majors 1-6 must drop it and v7.0 must keep
@@ -1984,7 +1960,7 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         targetMajor,
         { providers: [newestProvider, claudeState], native: null },
       );
