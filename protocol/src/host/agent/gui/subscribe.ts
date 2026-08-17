@@ -107,7 +107,11 @@ export type ChatSubscribeOpenRequest = z.infer<
   typeof chatSubscribeOpenRequestSchema
 >;
 
-export const chatActionSchema = z.enum([
+// Frozen action set of the RELEASED `chat.subscribe@≤1.5` lines. `actionAck`
+// echoes the action kind back, so a new action literal is a host→client
+// surface change and must not reach a released line - the frozen bundles below
+// bind this copy while the live line binds `chatActionSchema`.
+export const chatActionSchemaV15 = z.enum([
   "send",
   "deleteMessageSuffix",
   "editUserMessage",
@@ -134,6 +138,15 @@ export const chatActionSchema = z.enum([
   // and unsupported providers remain inert.
   "stopBackgroundItem",
   "stopAllBackgroundItems",
+]);
+
+export const chatActionSchema = z.enum([
+  ...chatActionSchemaV15.options,
+  // `1.6`: the session-scoped escalation for provider builds whose per-item
+  // command stop doesn't exist (see `individualStopUnavailable` on command
+  // background items). The renderer gates sending on that capability field
+  // being present, so an old host is never asked for an action it lacks.
+  "stopBackgroundSession",
 ]);
 export type ChatAction = z.infer<typeof chatActionSchema>;
 
@@ -283,11 +296,59 @@ export const backgroundItemKindSchema = z.enum([
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
-export const backgroundItemSchema = z.discriminatedUnion("kind", [
+// ─── Frozen `chat.subscribe@1.4–1.5` background-item shapes ────────────────
+//
+// `1.6` splits `command` out of the shared running-item shape below so it can
+// carry `individualStopUnavailable`. A released ≤1.5 peer must never observe
+// that key - this frozen union keeps the released `1.4`/`1.5` frames parsing
+// only shapes a real peer of those lines could produce. Do not add
+// `1.6`-only fields here.
+export const backgroundItemSchemaV14ToV15 = z.discriminatedUnion("kind", [
   ...backgroundItemSchemaV13.def.options,
   mcpBackgroundItemSchema,
 ]);
+
+// ─── Live background-item shapes (`chat.subscribe@1.6`) ────────────────────
+
+const subagentOrMonitorBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.enum(["subagent", "monitor"]),
+  scheduledFor: z.number().nullable().default(null),
+});
+
+// A `command` row splits from the shared running-item shape on `1.6` to say
+// whether its own stop button can work. Some provider builds run commands in
+// the background but expose no per-command stop (e.g. codex below the
+// background-terminals floor); the panel needs that fact BEFORE the user
+// clicks, not as a failing ack after.
+const commandBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.literal("command"),
+  scheduledFor: z.number().nullable().default(null),
+  // Present ⇒ this command cannot be stopped individually on the provider
+  // build that owns it, and only a session-scoped stop can end it. Carries
+  // the copy ingredients (provider display name, minimum version with the
+  // per-command lever) as DATA so the renderer never hardcodes a provider
+  // version. Null (the default, and what every non-gated host sends) ⇒ the
+  // per-item stop works normally.
+  individualStopUnavailable: z
+    .object({
+      providerLabel: z.string(),
+      minVersion: z.string().nullable(),
+    })
+    .nullable()
+    .default(null),
+});
+
+export const backgroundItemSchema = z.discriminatedUnion("kind", [
+  subagentOrMonitorBackgroundItemSchema,
+  commandBackgroundItemSchema,
+  wakeupBackgroundItemSchema,
+  workflowBackgroundItemSchema,
+  mcpBackgroundItemSchema,
+]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
+export type CommandBackgroundItem = z.infer<typeof commandBackgroundItemSchema>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
 export type ChatActionAckStatus = z.infer<typeof chatActionAckStatusSchema>;
@@ -792,7 +853,10 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
 // Order-preserving factory for the common (non-blockDelta) shared frames. The
 // three sender-bearing frames (`messageAccepted`/`queueChanged`/`eventAppended`)
 // are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
-// pre-`inReplyTo` frozen chat-tree while the live line binds the current one.
+// pre-`inReplyTo` frozen chat-tree while the live line binds the current one;
+// `action` is parameterized because `actionAck` echoes the action-kind enum,
+// which grew on the unreleased `1.6` (`stopBackgroundSession`) after `1.5`
+// shipped.
 // Everything else is byte-identical across live and frozen. Variant order is
 // preserved (the wire-compat differ matches union variants by `kind`, but
 // keeping order avoids churn in any order-sensitive fixture).
@@ -800,10 +864,12 @@ function buildChatSubscribeCommonServerFrameSchemas<
   MessageSchema extends z.ZodType,
   QueueSchema extends z.ZodType,
   EventSchema extends z.ZodType,
+  ActionSchema extends z.ZodType,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
   readonly event: EventSchema;
+  readonly action: ActionSchema;
 }) {
   return [
     z.object({
@@ -811,7 +877,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
       ...textFrameFields,
       ...chatReferenceFields,
       clientActionId: z.string(),
-      action: chatActionSchema,
+      action: schemas.action,
       status: chatActionAckStatusSchema,
       reason: z.string().nullable(),
       code: z.string().nullable(),
@@ -940,6 +1006,7 @@ const chatSubscribeCommonServerFrameSchemas =
     message: userMessageSchema,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
+    action: chatActionSchema,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
@@ -948,6 +1015,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     message: userMessageSchemaPreInReplyTo,
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
+    action: chatActionSchemaV15,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
@@ -958,6 +1026,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     message: userMessageSchema,
     queue: chatQueueStateSchemaPreManagedCommand,
     event: chatEventSchema,
+    action: chatActionSchemaV15,
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -1275,6 +1344,16 @@ const [
   ...chatSubscribeClientFrameSchemaRestOptions
 ] = chatSubscribeClientFrameSchemaBeforeV14Options;
 
+// `1.6`: the session-scoped background stop - the escalation the renderer
+// offers when a command item carries `individualStopUnavailable`. Kills the
+// chat's provider session process, ending every background item in it. Live
+// line only: a released ≤1.5 host has no handler for it, and the renderer's
+// capability gate (the item field) means it never sends one there either.
+const stopBackgroundSessionClientFrameSchema = z.object({
+  kind: z.literal("stopBackgroundSession"),
+  ...ownerActionFrameFields,
+});
+
 const chatSubscribeClientFrameSchemaOptions = [
   chatSubscribeClientFrameSchemaBeforeV13Options[0].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
@@ -1285,6 +1364,7 @@ const chatSubscribeClientFrameSchemaOptions = [
   }),
   ...chatSubscribeClientFrameSchemaRestOptions,
   activeProfileUpdateClientFrameSchema,
+  stopBackgroundSessionClientFrameSchema,
 ] as const;
 
 export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
@@ -1297,9 +1377,16 @@ export type ChatSubscribeClientFrame = z.infer<
 
 // `1.4` and `1.5` are released lines. Keep their client frames on the
 // pre-collision intent shape while the live `1.6` line uses the current one.
-const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion(
+// Exported so the host's stream resolver can parse a 1.4/1.5 connection
+// against the contract it actually negotiated - the live schema would let a
+// stale or crafted peer dispatch actions those lines do not contain (e.g.
+// `stopBackgroundSession`).
+export const chatSubscribeClientFrameSchemaV14ToV15 = z.discriminatedUnion(
   "kind",
-  [...chatSubscribeClientFrameSchemaBeforeV14Options, activeProfileUpdateClientFrameSchema],
+  [
+    ...chatSubscribeClientFrameSchemaBeforeV14Options,
+    activeProfileUpdateClientFrameSchema,
+  ],
 );
 
 // ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
@@ -1835,7 +1922,7 @@ const chatSnapshotSchemaV14 = z.object({
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1852,7 +1939,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV14 = z.object({
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1877,10 +1964,10 @@ export const chatSubscribeV14 = defineStreamRpcContract({
 // on `activeTurn` (so the renderer can gate Cmd+Enter steering without
 // duplicating the harness capability table) - but PRE-managed-command queue
 // items. Pinned here so `1.6` cannot mutate this released line: the queue stays
-// the plain prompt shape. `turnStateChanged` carries no queue and `1.6` changes
-// nothing else it holds, so it reuses the live frame - retro-pin it here if a
-// later minor touches background items again (that is exactly what happened to
-// `1.3` and `1.4`).
+// the plain prompt shape. `turnStateChanged` originally reused the live frame
+// ("retro-pin if a later minor touches background items again") - `1.6`'s
+// command stop-capability field did exactly that, so it now binds the `V15`
+// pin below.
 //
 // `chat: chatSchemaV15` (not live `chatSchema`) for the same reason `1.4`
 // uses `chatSchemaV14`: a released line must not follow the persistence
@@ -1899,7 +1986,7 @@ const chatSnapshotSchemaV15 = z.object({
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1910,9 +1997,24 @@ const chatSubscribeSnapshotServerFrameSchemaV15 = z.object({
   snapshot: chatSnapshotSchemaV15,
 });
 
+// The retro-pin the `1.5` doc comment above promised: `1.5` originally reused
+// the live `turnStateChanged` frame, which was safe only while nothing
+// touched background items. `1.6`'s command stop-capability field ends that -
+// pinned with the pre-capability item union so the released line cannot
+// observe it.
+const chatSubscribeTurnStateChangedServerFrameSchemaV15 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
 const chatSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV15,
-  chatSubscribeTurnStateChangedServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchemaV15,
   ...chatSubscribeCommonServerFrameSchemasPreManagedCommand,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreImage),
 ]);
@@ -1949,7 +2051,9 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // record on assistant messages (`assistantMessageSchema.imageResolutions`), the
 // typed `image_resolution.updated` runtime event - and the Stop fence's held
 // updates: the snapshot's `heldUpdates` and the `heldUpdatesChanged` frame, the
-// pair that gives `managedCommand.deliverHeld` something to act on.
+// pair that gives `managedCommand.deliverHeld` something to act on. The
+// background-command stop capability (`individualStopUnavailable` on command
+// items, the `stopBackgroundSession` action) rides this same unreleased line.
 //
 // Those last two arrived on a `1.7` opened above a `1.6` that was itself
 // pinned to a hand-written pre-image bundle, so that the live schemas could

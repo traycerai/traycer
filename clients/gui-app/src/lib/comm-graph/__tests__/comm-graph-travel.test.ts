@@ -45,7 +45,12 @@ describe("commGraphEdgeTravel", () => {
 
   it("is null for a node pulse - a half-edge has no path to travel", () => {
     expect(
-      commGraphEdgeTravel({ kind: "agent", agentId: "a" }, EDGE_ID, "a", "b"),
+      commGraphEdgeTravel(
+        { kind: "agent", agentId: "a", senderAgentId: "a" },
+        EDGE_ID,
+        "a",
+        "b",
+      ),
     ).toBeNull();
   });
 

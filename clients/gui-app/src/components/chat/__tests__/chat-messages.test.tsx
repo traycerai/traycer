@@ -2886,6 +2886,7 @@ describe("ChatMessages scroll policy", () => {
             blockId: "bg-1",
             parentTaskId: null,
             scheduledFor: null,
+            individualStopUnavailable: null,
           } satisfies BackgroundItem,
         ],
         scrollRequest: {
