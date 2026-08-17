@@ -12,7 +12,6 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
-  chatSubscribeV17,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -1682,7 +1681,15 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
       snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(parsed.snapshot.managedCommands).toEqual([shell]);
+    // `toMatchObject`, not `toEqual`: 1.6 binds the LIVE managed-command shape
+    // since the unreleased 1.7 collapsed into it, so the details widening
+    // (`command`/`cwd`/`cadence`) arrives with its defaults on top of the
+    // fields this fixture states. It was `toEqual` while 1.6 was pinned to
+    // `managedCommandSchemaPreImage`, which modelled none of the three.
+    expect(parsed.snapshot.managedCommands).toMatchObject([shell]);
+    expect(parsed.snapshot.managedCommands[0]).toHaveProperty("command");
+    expect(parsed.snapshot.managedCommands[0]).toHaveProperty("cwd");
+    expect(parsed.snapshot.managedCommands[0]).toHaveProperty("cadence");
   });
 
   // Optional on the wire, always present after parsing: no consumer ever
@@ -1723,7 +1730,8 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
     if (parsed.kind !== "managedCommandsChanged") {
       throw new Error("expected managedCommandsChanged");
     }
-    expect(parsed.managedCommands).toEqual([shell]);
+    // Same widening as the snapshot above - both frames read the live shape.
+    expect(parsed.managedCommands).toMatchObject([shell]);
   });
 
   // The frame and the field arrive together or not at all - a 1.5 peer has no
@@ -1828,12 +1836,14 @@ describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
   });
 });
 
-// ─── chat.subscribe@1.7 image generation + rendering ───────────────────────
+// ─── chat.subscribe@1.6 image generation + rendering ───────────────────────
 //
-// Live image shapes land on 1.7 only. Every earlier minor is pinned to a
-// pre-image freeze so additive image fields cannot leak onto a released wire
-// line (the bug this ticket closed).
-describe("chat.subscribe@1.7 (image generation)", () => {
+// Live image shapes land on the head line only. Every earlier minor is pinned
+// to a pre-image freeze so additive image fields cannot leak onto a released
+// wire line (the bug this ticket closed). The head was 1.7 until the release
+// collapsed it into 1.6 - neither minor had ever been negotiated, so the freeze
+// separating them protected no peer.
+describe("chat.subscribe@1.6 (image generation)", () => {
   const imageHashA = "a".repeat(64);
   const imageHashB = "b".repeat(64);
   const resolutionHash = "c".repeat(64);
@@ -1982,11 +1992,10 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     { label: "1.3", contract: chatSubscribeV13 },
     { label: "1.4", contract: chatSubscribeV14 },
     { label: "1.5", contract: chatSubscribeV15 },
-    { label: "1.6", contract: chatSubscribeV16 },
   ] as const;
 
-  it("declares schemaVersion 1.7", () => {
-    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+  it("declares schemaVersion 1.6", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
   });
 
   it("round-trips a tool_call content block with multiple imageResults", () => {
@@ -2030,8 +2039,8 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     });
   });
 
-  it("round-trips tool_call.completed with imageResults through the 1.7 frame", () => {
-    const withImages = chatSubscribeV17.serverFrameSchema.parse(
+  it("round-trips tool_call.completed with imageResults through the head-line frame", () => {
+    const withImages = chatSubscribeV16.serverFrameSchema.parse(
       blockDeltaFrame({
         type: "tool_call.completed",
         blockId: "tool-image-1",
@@ -2051,7 +2060,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       },
     });
 
-    const omitted = chatSubscribeV17.serverFrameSchema.parse(
+    const omitted = chatSubscribeV16.serverFrameSchema.parse(
       blockDeltaFrame({
         type: "tool_call.completed",
         blockId: "tool-image-1",
@@ -2122,9 +2131,9 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     }
   });
 
-  it("round-trips image_resolution.updated through the 1.7 serverFrame", () => {
+  it("round-trips image_resolution.updated through the head-line serverFrame", () => {
     for (const entry of imageResolutions) {
-      const parsed = chatSubscribeV17.serverFrameSchema.parse(
+      const parsed = chatSubscribeV16.serverFrameSchema.parse(
         createImageResolutionUpdatedFrame({
           epicId: "epic-1",
           chatId: "chat-1",
@@ -2149,8 +2158,8 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     }
   });
 
-  it("carries imageResults and imageResolutions through a live 1.7 snapshot", () => {
-    const parsed = chatSubscribeV17.serverFrameSchema.parse(
+  it("carries imageResults and imageResolutions through a live 1.6 snapshot", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -2168,7 +2177,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     expect(toolCall.imageResults).toHaveLength(2);
   });
 
-  it("stays frozen without image fields on every released minor 1.0-1.6", () => {
+  it("stays frozen without image fields on every released minor 1.0-1.5", () => {
     const snapshotFrame = snapshotFrameWithChat(chatWithImages);
     const completedWithImages = blockDeltaFrame({
       type: "tool_call.completed",
@@ -2222,12 +2231,14 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     }
   });
 
-  it("declares schemaVersion 1.6 and freezes chat against pre-image messages", () => {
+  it("binds 1.6 to the LIVE chat schema rather than a pre-image", () => {
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
 
-    // Runtime proof that V16 binds `chatSchemaPreImage`, not live `chatSchema`:
-    // a live host's image-bearing chat still parses, but every image field is
-    // stripped rather than accepted.
+    // The inverse of what this asserted while a 1.7 sat above a pre-image-
+    // pinned 1.6. Collapsing that unreleased minor made 1.6 the live line, so
+    // an image-bearing chat must now arrive INTACT rather than stripped -
+    // stripping is what a frozen line does, and 1.6 has no peer to be frozen
+    // against. The lines below it stay pinned because they DO have peers.
     const parsed = chatSubscribeV16.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
@@ -2238,26 +2249,25 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     if (!assistant || assistant.role !== "assistant") {
       throw new Error("expected assistant message");
     }
-    expect(assistant).not.toHaveProperty("imageResolutions");
+    expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
     const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
-    expect(toolCall).not.toHaveProperty("imageResults");
-    // Live chat still carries pinnedUserProviderHandle / lastDeliveredRolesDigest
-    // on the 1.6 freeze (those predate image support).
+    expect(toolCall.imageResults).toHaveLength(2);
     expect(parsed.snapshot.chat).toHaveProperty("pinnedUserProviderHandle");
     expect(parsed.snapshot.chat).toHaveProperty("lastDeliveredRolesDigest");
   });
 });
 
-describe("chat.subscribe@1.7 registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 7 as chatSubscribeV17", () => {
+describe("chat.subscribe@1.6 registry membership", () => {
+  it("registers chat.subscribe major 1 latestMinor 6 as chatSubscribeV16", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(7);
-    expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
-    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+    expect(entry[1].latestMinor).toBe(6);
+    expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+    expect(entry[1].versions).not.toHaveProperty("7");
   });
 });
 

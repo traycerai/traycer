@@ -176,9 +176,9 @@ export const assistantMessageSchema = z.object({
   serviceTier: z.string().nullable().default(null),
   /**
    * Durable image resolution record for this message's markdown-referenced
-   * images (`chat.subscribe@1.7`), one entry per distinct `canonicalSource`.
+   * images (`chat.subscribe@1.6`), one entry per distinct `canonicalSource`.
    * Defaulted so messages persisted before image support existed parse
-   * cleanly - a pre-1.7 message has no record, and its images render as
+   * cleanly - a pre-1.6 message has no record, and its images render as
    * consent chips (see `imageResolutionEntrySchema`).
    */
   imageResolutions: z.array(imageResolutionEntrySchema).default([]),
@@ -239,11 +239,11 @@ export const messageSchemaPreInReplyTo = z.discriminatedUnion("role", [
 // ── Wire-freeze variant (pre-image) ─────────────────────────────────────────
 // Hand-frozen copy of `assistantMessageSchema` from before image support
 // existed, with `blocks` swapped for the frozen `contentBlockSchemaPreImage`
-// union. Bound to every released `chat.subscribe@1.0-1.6` minor (via the
+// union. Bound to every released `chat.subscribe@1.0-1.5` minor (via the
 // frozen chat-tree schemas) so those lines structurally match the shipped
 // wire and can never observe `imageResults`/the image resolution record.
 // `sender` reuses the LIVE (`inReplyTo`-bearing) shape - `1.4` is the minor
-// that introduced it, and every minor this freeze binds (1.0-1.6) already
+// that introduced it, and every minor this freeze binds (1.0-1.5) already
 // shipped after that point except 1.0-1.3, which bind their own
 // `assistantMessageSchemaPreInReplyTo` above instead. Field-for-field hand
 // copy, NOT `.omit()`, so a future message field cannot silently leak onto a
@@ -264,10 +264,11 @@ export const assistantMessageSchemaPreImage = z.object({
 
 // Wire-freeze copy of `userMessageSchema` with `sessionAnchor` swapped for
 // its pre-`turnTailUuid` freeze (see `claudeChatSessionAnchorSchemaPreTurnTail`).
-// Bound to the released `chat.subscribe@1.6` line - snapshot frames via
-// `messageSchemaPreImage` below, `messageAccepted` frames via the
-// pre-turn-tail common frame bundle in `subscribe.ts` - whose surface is
-// frozen EXACTLY, so it can never observe the Claude anchor's `turnTailUuid`.
+// Bound to the released `chat.subscribe@1.4`/`@1.5` snapshot trees via
+// `messageSchemaPreImage` below, so neither line can observe the Claude
+// anchor's `turnTailUuid`. It also fed a `1.6` freeze and a pre-turn-tail
+// common-frame bundle in `subscribe.ts` until the release collapsed the
+// unreleased `1.6`/`1.7` pair into one live line, which took both.
 // Field-for-field hand copy, NOT `.omit()`/`.extend()` off the live shape.
 export const userMessageSchemaPreTurnTail = z
   .object({
@@ -290,8 +291,8 @@ export const userMessageSchemaPreTurnTail = z
 // The user branch is the pre-turn-tail freeze, not the live `userMessageSchema`:
 // user messages carry no image fields (nothing changed for them at the
 // image-freeze point), but their `sessionAnchor` gained `turnTailUuid` after
-// `chat.subscribe@1.6` shipped, and this union is bound to that exactly-frozen
-// line via the frozen chat trees.
+// the lines this union serves shipped, and it is bound to `chatSchemaV14` /
+// `chatSchemaV15` - both genuinely released - via the frozen chat trees.
 export const messageSchemaPreImage = z.discriminatedUnion("role", [
   userMessageSchemaPreTurnTail,
   assistantMessageSchemaPreImage,

@@ -21,7 +21,6 @@ import {
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV70,
   providersRemovePackVersionRequestSchema,
   providersRemovePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
@@ -71,7 +70,7 @@ const MANAGED_VERSIONS = {
   ],
 };
 
-function v8ProviderState(providerId: string) {
+function versionManagerProviderState(providerId: string) {
   return {
     ...providerState(providerId),
     packId: "pack-shared",
@@ -88,14 +87,16 @@ function v8ProviderState(providerId: string) {
   };
 }
 
-describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
-  it("keeps all four v8 fields live but strips all four through the real v8->v7 bridge", () => {
-    // This is the primary bridge guard: if the v8->v7 path stops reparsing
-    // through the frozen v7 schema, these fields survive the bridge and this
-    // turns red. The separate v7 contract-identity test covers the registry
-    // pointer itself.
+describe("providers.list@7.0 carries the version manager and bridges older lines", () => {
+  it("keeps every version-manager field on the head line and strips them for a v6.0 peer", () => {
+    // This is the primary bridge guard. v7.0 is the head line and the ONLY one
+    // that models the version manager: v8.0 opened for these fields while v7.0
+    // was still unreleased, and the release collapsed the two back into one.
+    // The strip therefore happens on the v7 -> v6 hop, and v6.0 models no
+    // managed-install slot at all - so what has to hold is that the whole key
+    // set is absent, not merely that its values were blanked.
     const response = providersListResponseSchema.parse({
-      providers: [v8ProviderState("claude-code")],
+      providers: [versionManagerProviderState("claude-code")],
       native: null,
     });
     expect(response.providers[0]).toMatchObject({
@@ -109,71 +110,48 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
       managedInstallState: { status: "installed", version: "1.2.3" },
     });
 
-    const frozen = providersListResponseSchemaV70.parse({
-      providers: [response.providers[0]],
-      native: null,
-    });
-    expect(frozen.providers[0].managedInstallState).toEqual({
-      status: "installed",
-    });
-    expect(frozen.providers[0]).not.toHaveProperty("packId");
-    expect(frozen.providers[0]).not.toHaveProperty("managedVersions");
-    expect(frozen.providers[0]).not.toHaveProperty(
-      "managedVersionsUnavailable",
-    );
-    expect(frozen.providers[0]).not.toHaveProperty("nextRunBinary");
-
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
       7,
+      6,
       response,
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
     expect(downgraded.value.providers).toHaveLength(1);
-    expect(downgraded.value.providers[0]).not.toHaveProperty("packId");
-    expect(downgraded.value.providers[0]).not.toHaveProperty("managedVersions");
-    expect(downgraded.value.providers[0]).not.toHaveProperty(
+    for (const key of [
+      "packId",
+      "managedVersions",
       "managedVersionsUnavailable",
-    );
-    expect(downgraded.value.providers[0]).not.toHaveProperty("nextRunBinary");
-    expect(downgraded.value.providers[0].managedInstallState).toEqual({
-      status: "installed",
-    });
-    expect(providersListResponseSchemaV70.safeParse(downgraded.value).success).toBe(
-      true,
-    );
+      "nextRunBinary",
+      "managedInstallState",
+    ]) {
+      expect(downgraded.value.providers[0], key).not.toHaveProperty(key);
+    }
+    expect(
+      providersListResponseSchemaV60.safeParse(downgraded.value).success,
+    ).toBe(true);
   });
 
   it("downgrades to v6..v1, drops huggingface below v7, and strips native below v7", () => {
-    // v8 adds no provider ids, so v7 keeps huggingface and native. Older
-    // frozen lines have both an older provider-id enum and no native response.
+    // `huggingface` and `native` both ride v7.0; every frozen line below it has
+    // an older provider-id enum and no native carrier on the response.
     const response = providersListResponseSchema.parse({
       providers: [
-        v8ProviderState("claude-code"),
-        v8ProviderState("huggingface"),
+        versionManagerProviderState("claude-code"),
+        versionManagerProviderState("huggingface"),
       ],
       native: { ok: true, kind: "skills", skills: [] },
     });
-    const v7 = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      response,
-    );
-    expect(v7.ok).toBe(true);
-    if (!v7.ok) return;
-    expect(v7.value.providers.map((provider) => provider.providerId)).toEqual([
+    expect(response.providers.map((provider) => provider.providerId)).toEqual([
       "claude-code",
       "huggingface",
     ]);
-    expect(v7.value.native).toEqual(response.native);
 
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         target,
         response,
       );
@@ -184,15 +162,14 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
         `v${target} provider ids`,
       ).toEqual(["claude-code"]);
       expect(downgraded.value).not.toHaveProperty("native");
-      if (target === 6) {
-        expect(providersListResponseSchemaV60.safeParse(downgraded.value).success).toBe(
-          true,
-        );
-      }
     }
   });
 
-  it("passes the v8->v7 request through unchanged, while reparsing v8->v6 and below", () => {
+  it("reparses the request for every peer below v7 rather than passing it through", () => {
+    // v7.0 is the only line whose REQUEST models the `native` carrier, so a
+    // pass-through to any older peer would hand it a field its schema does not
+    // model. Asserting `not.toBe(request)` is what distinguishes a real reparse
+    // from an identity that happens to look equal.
     const request = providersListRequestSchema.parse({
       forceAuthRefresh: true,
       native: {
@@ -202,21 +179,11 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
         workspaceRoot: null,
       },
     });
-    const v7 = downgradeRequestAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      request,
-    );
-    expect(v7.ok).toBe(true);
-    if (!v7.ok) return;
-    expect(v7.value).toBe(request);
-    expect(v7.value.native).toEqual(request.native);
 
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeRequestAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         target,
         request,
       );
@@ -229,58 +196,47 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
   });
 });
 
-describe("providers.list@7.0 -> @8.0 upgrades", () => {
-  it("fills null v8 fields and lifts each managed-install arm without adding version to absent", () => {
-    // The absent arm deliberately has no version key. The other three get an
-    // explicit null because v7 had no per-version concept to populate.
-    const cases = [
-      { status: "absent" as const },
-      { status: "downloading" as const, percent: null },
-      { status: "installed" as const },
-      {
-        status: "error" as const,
-        reason: "network" as const,
-        message: "registry unreachable",
-        retryAtMs: null,
-      },
-    ];
-    for (const managedInstallState of cases) {
-      const oldResponse = providersListResponseSchemaV70.parse({
-        providers: [
-          {
-            ...providerState("codex"),
-            managedInstallState,
-          },
-        ],
-        native: null,
-      });
-      const upgraded = upgradeResponseToVersion(
-        hostRpcRegistry["providers.list"],
-        { major: 7, minor: 0 },
-        { major: 8, minor: 0 },
-        oldResponse,
-      );
-      const upgradedState = upgraded.providers[0];
-      expect(upgradedState.packId).toBeNull();
-      expect(upgradedState.managedVersions).toBeNull();
-      expect(upgradedState.nextRunBinary).toBeNull();
-      if (managedInstallState.status === "absent") {
-        expect(upgradedState.managedInstallState).toEqual({ status: "absent" });
-        expect(upgradedState.managedInstallState).not.toHaveProperty("version");
-      } else {
-        expect(upgradedState.managedInstallState).toHaveProperty("version", null);
-      }
-      expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
-    }
+describe("providers.list@6.0 -> @7.0 upgrades", () => {
+  it("fills every version-manager field for a v6.0 host and lands on the live shape", () => {
+    // The fill used to be split across two hops - v6 -> v7 for the registry and
+    // native fields, v7 -> v8 for the version manager. Collapsing v8.0 into
+    // v7.0 merged them, and this is the guard that the second half survived the
+    // merge: deleting a version is never just deleting its contract, whatever
+    // its bridge did has to land on the surviving hop.
+    const oldResponse = providersListResponseSchemaV60.parse({
+      providers: [providerState("codex")],
+    });
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
+      oldResponse,
+    );
+
+    const upgradedState = upgraded.providers[0];
+    expect(upgradedState.packId).toBeNull();
+    expect(upgradedState.managedVersions).toBeNull();
+    expect(upgradedState.nextRunBinary).toBeNull();
+    // A v6.0 row can never carry a managed-install arm: v6.0 does not model the
+    // slot, and the hop's own pre-registry fill nulls it unconditionally. So
+    // the honest projection is `null` outright rather than an arm-by-arm lift.
+    expect(upgradedState.managedInstallState).toBeNull();
+    expect(upgradedState.nativeCapabilities.modelProviders).toBeNull();
+    expect(upgraded.native).toBeNull();
+    // `upgradeResponseToVersion` chains these callbacks BY CAST with no
+    // re-parse, so a missing required key would not surface at the hop - it
+    // would surface as a failed decode on whatever consumer parsed the result
+    // later. This parse is what stands in for that consumer.
+    expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 
-  it("preserves populated managed-install versions on v8 and strips them through the real v8->v7 bridge", () => {
-    // This proves only that a populated `version` survives the v8 schema and
-    // that the frozen v7 line strips it. It does NOT prove a host producer ever
-    // populates this optional field: absence is valid at the protocol layer.
-    // The host's wire-assembly tests must assert that an in-flight download's
-    // assembled row carries a non-null version; protocol tests cannot observe
-    // host construction and must not retire that suspicion.
+  it("keeps a populated managed-install version on the head line and off every older peer", () => {
+    // This proves only that a populated `version` survives the head schema and
+    // reaches no older peer. It does NOT prove a host producer ever populates
+    // the optional field: absence is valid at the protocol layer. The host's
+    // wire-assembly tests must assert that an in-flight download's assembled
+    // row carries a non-null version; protocol tests cannot observe host
+    // construction and must not retire that suspicion.
     for (const managedInstallState of [
       { status: "downloading" as const, percent: 50, version: "1.2.3" },
       { status: "installed" as const, version: "1.2.3" },
@@ -288,7 +244,7 @@ describe("providers.list@7.0 -> @8.0 upgrades", () => {
       const response = providersListResponseSchema.parse({
         providers: [
           {
-            ...v8ProviderState("codex"),
+            ...versionManagerProviderState("codex"),
             managedInstallState,
           },
         ],
@@ -298,22 +254,26 @@ describe("providers.list@7.0 -> @8.0 upgrades", () => {
         "version",
         "1.2.3",
       );
+
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
         7,
+        6,
         response,
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) continue;
-      expect(downgraded.value.providers[0].managedInstallState).not.toHaveProperty(
-        "version",
+      // Asserting the WHOLE key is absent, not just `version`: v6.0 models no
+      // managed-install slot, so a `not.toHaveProperty("version")` on an
+      // already-absent object would pass without proving anything.
+      expect(downgraded.value.providers[0]).not.toHaveProperty(
+        "managedInstallState",
       );
     }
   });
 });
 
-describe("v8 per-pack RPC contracts", () => {
+describe("per-pack RPC contracts", () => {
   const contracts = [
     {
       method: "providers.installPackVersion",
@@ -505,7 +465,7 @@ describe("v8 per-pack RPC contracts", () => {
   });
 });
 
-describe("v8 provider-pack schema distinctions", () => {
+describe("provider-pack schema distinctions", () => {
   it("keeps uncertified distinct from yanked and eligible", () => {
     // The protocol keeps `uncertified` as a distinct value; collapsing it into
     // `yanked` or `eligible` would erase the distinction for consumers.
@@ -583,7 +543,7 @@ describe("v8 provider-pack schema distinctions", () => {
     });
     expect(managedVersions.sharedWithProviders).toEqual([]);
     const row = providerCliStateSchema.parse({
-      ...v8ProviderState("claude-code"),
+      ...versionManagerProviderState("claude-code"),
       managedVersions: {
         ...MANAGED_VERSIONS,
         sharedWithProviders: ["provider-added-after-this-client"],
@@ -622,7 +582,7 @@ describe("managedVersionsUnavailable: why the panel is absent", () => {
   // version panel next to it - down with it.
   it("degrades an unknown reason to null without disturbing managedVersions", () => {
     const parsed = providerCliStateSchema.parse({
-      ...v8ProviderState("claude-code"),
+      ...versionManagerProviderState("claude-code"),
       managedVersions: MANAGED_VERSIONS,
       managedVersionsUnavailable: { reason: "reason-from-a-newer-host" },
     });

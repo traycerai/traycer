@@ -3532,7 +3532,7 @@ describe("accumulateEvent - provider_notice.upsert", () => {
     expect((blocks[0] as SteerBlock).sender).toBeNull();
   });
 
-  // ── image generation (chat.subscribe@1.7) ──────────────────
+  // ── image generation (chat.subscribe@1.6) ──────────────────
 
   it("tool_call.completed stamps imageResults onto an existing block", () => {
     let blocks = makeBlocks();

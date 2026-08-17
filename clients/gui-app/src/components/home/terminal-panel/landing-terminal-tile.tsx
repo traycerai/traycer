@@ -2,7 +2,10 @@ import { Suspense, useCallback, useEffect, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneVisibilityContext,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { TerminalLoadingSkeleton } from "@/components/epic-canvas/renderers/terminal-loading-skeleton";
 import { TerminalGridMeasureProbe } from "@/components/epic-canvas/renderers/terminal-grid-measure-probe";
 import {
@@ -45,9 +48,19 @@ export interface LandingTerminalTileProps {
 export function LandingTerminalTile(
   props: LandingTerminalTileProps,
 ): ReactNode {
+  // Compose with the hosting surface's visibility rather than replacing it: the
+  // panel now stays mounted while its start page is merely retained, so the
+  // ACTIVE tile of a backgrounded page would otherwise report itself visible
+  // (and, through `usePaneFocused`, focused) while its whole pane sits under
+  // `display:none`. Both halves have to be true for this tile to be on screen.
+  const surfaceVisible = usePaneVisible();
+  // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
+  // rewrites an inline `&&` into `? … : null`, which is right for children and
+  // wrong for a boolean prop.
+  const tileVisible = props.active && surfaceVisible;
   return (
     <TabHostProvider hostId={props.tab.hostId}>
-      <PaneVisibilityContext.Provider value={props.active}>
+      <PaneVisibilityContext.Provider value={tileVisible}>
         <LandingTerminalTileBody {...props} />
       </PaneVisibilityContext.Provider>
     </TabHostProvider>

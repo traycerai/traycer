@@ -197,6 +197,9 @@ export const ARTIFACT_HEADING_SCROLL_PADDING = 24;
 /** Matches the rail's `left-3` inset. */
 export const ARTIFACT_HEADING_RAIL_EDGE_INSET = 12;
 export const ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH = 40;
+/** Painted widths at full size; narrower gutters retain the 2:1 hierarchy. */
+const ARTIFACT_HEADING_LEVEL_ONE_TICK_MAX_WIDTH = 24;
+const ARTIFACT_HEADING_LEVEL_TWO_TICK_MAX_WIDTH = 12;
 
 /**
  * Width of the transparent pointer target, capped to the real gutter between
@@ -221,4 +224,25 @@ export function resolveArtifactHeadingHitStripWidth(input: {
       Math.floor(gutter - ARTIFACT_HEADING_RAIL_EDGE_INSET),
     ),
   );
+}
+
+/**
+ * Keeps every painted tick inside the same measured gutter as its hit target.
+ *
+ * The full-size 24px h1 marker used to extend past the narrow-pane gutter and
+ * over artifact text even though the transparent hit target was correctly
+ * capped. Scale both levels together until their normal 24px/12px widths fit;
+ * zero available width naturally hides the rail when no safe gutter remains.
+ */
+export function resolveArtifactHeadingTickWidth(
+  availableWidth: number,
+  level: ArtifactHeadingLevel,
+): number {
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) return 0;
+  const maxWidth =
+    level === 1
+      ? ARTIFACT_HEADING_LEVEL_ONE_TICK_MAX_WIDTH
+      : ARTIFACT_HEADING_LEVEL_TWO_TICK_MAX_WIDTH;
+  const scaledWidth = level === 1 ? availableWidth : availableWidth / 2;
+  return Math.min(maxWidth, scaledWidth);
 }
