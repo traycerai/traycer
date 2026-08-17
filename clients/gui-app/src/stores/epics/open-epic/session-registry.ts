@@ -619,9 +619,21 @@ export class OpenEpicSessionRegistry {
    * discard-confirmation gate.
    */
   hasUnsyncedEdits(epicId: string): boolean {
-    const state = this.entries.get(epicId)?.handle.store.getState() ?? null;
-    if (state !== null && state.isDirty) return true;
-    return (this.retained.get(epicId)?.length ?? 0) > 0;
+    // A real projection of the shared walk, not a parallel implementation.
+    // This used to do its own `entries` + `retained` lookup, which agreed with
+    // `collectUnsyncedRows` only by maintenance - and the comment above that
+    // method already asserted the enforcement that did not exist. Two
+    // independent traversals of this fact is exactly what let the projection
+    // and `epicHasUnsyncedEdits` drift apart before, and that drift discarded
+    // work without asking.
+    //
+    // Deliberately NOT routed through `getUnsyncedEdits()`: that memoizes on a
+    // cache key built by joining every row's `epicId:queueSize:isDirty:title`,
+    // which is a LIST identity. A per-epic boolean must not depend on a string
+    // that changes when an unrelated epic's title does. The walk is bounded by
+    // `maxLive` (5) plus retentions and this is a gate on a user gesture, so it
+    // stays unmemoized rather than borrowing an invalidation it does not fit.
+    return this.collectUnsyncedRows().some((row) => row.epicId === epicId);
   }
 
   getUnsyncedEdits(): ReadonlyArray<UnsyncedEditsEntry> {
