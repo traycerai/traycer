@@ -14,12 +14,20 @@ const allSources = import.meta.glob<string>("../../../**/*.{ts,tsx}", {
 });
 
 function productionSourceEntries(): readonly (readonly [string, string])[] {
-  return Object.entries(allSources).filter(
-    ([filePath]) =>
-      !filePath.includes("/__tests__/") &&
-      !/\.test\.(ts|tsx)$/.test(filePath) &&
-      !filePath.endsWith("routeTree.gen.ts"),
-  );
+  // Vite emits glob keys RELATIVE to this file ("../../ui/sidebar.tsx"), so
+  // resolve each against this file's directory before matching: every suffix
+  // and allowlist below is written against the src-rooted path, and a
+  // relative key would silently match none of them (which reads as "no
+  // violations" for a grep contract - the failure mode is invisible).
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  return Object.entries(allSources)
+    .map(([filePath, source]) => [join(testDir, filePath), source] as const)
+    .filter(
+      ([filePath]) =>
+        !filePath.includes("/__tests__/") &&
+        !/\.test\.(ts|tsx)$/.test(filePath) &&
+        !filePath.endsWith("routeTree.gen.ts"),
+    );
 }
 
 function findSource(suffix: string): string {
