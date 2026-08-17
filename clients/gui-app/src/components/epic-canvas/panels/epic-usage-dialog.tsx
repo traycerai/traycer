@@ -1,11 +1,14 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Copy, Download } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useUsageImageExport } from "@/hooks/usage-analytics/use-usage-image-export";
 import {
   buildUsageSummaryRequest,
   useUsageSummaryForClient,
@@ -28,6 +31,7 @@ import {
   type UsageServedBy,
 } from "@/lib/usage-analytics/cost-format";
 import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
+import { USAGE_EXPORT_REGION_SELECTOR } from "@/lib/usage-analytics/usage-export-image";
 import { cn } from "@/lib/utils";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageChartGroupByToggle } from "@/components/usage-analytics/usage-chart-groupby-toggle";
@@ -100,10 +104,37 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   );
   const query = useUsageSummaryForClient(client, request, open, false);
   const { openSettings } = useSystemTabModalActions();
+  // The capture region is found by data attribute under this dialog's own
+  // content node at click time, not held as a threaded RefObject - the
+  // React Compiler's ref rules reject a ref object travelling through
+  // props, and an event-time DOM query needs no render-time ref reads.
+  // Scoping the query to this content node (rather than `document`) keeps
+  // it correct if another usage surface ever grows its own export region.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const exportReady =
+    query.data !== undefined && query.data.summary.totals.factCount > 0;
+  const { mutation, copyImage, downloadImage } = useUsageImageExport({
+    getExportNode: () =>
+      contentRef.current?.querySelector<HTMLElement>(
+        USAGE_EXPORT_REGION_SELECTOR,
+      ) ?? null,
+    fileName: `traycer-usage-${String(windowDays)}d.png`,
+    heading: "Usage",
+    subheading: "Cost and token usage for this task.",
+    errorSource: "Epic usage dialog",
+    analyticsSource: "epic_dialog",
+  });
+  // One export runs at a time, so BOTH buttons go disabled while either is
+  // pending; only the button that started it shows the spinner, which is
+  // what the variables discriminate.
+  const isExporting = mutation.isPending;
+  const isCopying = isExporting && mutation.variables.action === "copy";
+  const isDownloading = isExporting && mutation.variables.action === "download";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        ref={contentRef}
         // Fixed `h` - not `max-h` - is the no-jump fix: every state renders
         // into the same frame. `sm:max-w-3xl` overrides the primitive's
         // `sm:max-w-sm` cap (load-bearing, same reason the earlier shape
@@ -117,7 +148,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
       >
         <UsageDialogFrame
           title="Usage"
-          description="Cost and token usage for this epic."
+          description="Cost and token usage for this task."
           headerControls={
             <UsageWindowPicker
               windowDays={windowDays}
@@ -126,19 +157,67 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
             />
           }
           footer={
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="max-[28rem]:w-full"
-              data-testid="epic-usage-view-full-dashboard"
-              onClick={() => {
-                onOpenChange(false);
-                openSettings({ section: "usage", resetToGeneral: false });
-              }}
-            >
-              View full usage →
-            </Button>
+            <>
+              {/* `sm:mr-auto` splits the band: export actions lead, the
+                  Settings hand-off keeps the trailing primary slot. On the
+                  sheet tier the footer column-reverses, so this group
+                  stacks below it, full width like its sibling. */}
+              <div className="flex gap-2 max-[28rem]:flex-col sm:mr-auto">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="max-[28rem]:w-full"
+                  data-testid="epic-usage-copy-image"
+                  disabled={!exportReady || isExporting}
+                  onClick={copyImage}
+                >
+                  {isCopying ? (
+                    <AgentSpinningDots
+                      className="size-3"
+                      testId={undefined}
+                      variant={undefined}
+                    />
+                  ) : (
+                    <Copy aria-hidden />
+                  )}
+                  Copy image
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="max-[28rem]:w-full"
+                  data-testid="epic-usage-download-image"
+                  disabled={!exportReady || isExporting}
+                  onClick={downloadImage}
+                >
+                  {isDownloading ? (
+                    <AgentSpinningDots
+                      className="size-3"
+                      testId={undefined}
+                      variant={undefined}
+                    />
+                  ) : (
+                    <Download aria-hidden />
+                  )}
+                  Download image
+                </Button>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="max-[28rem]:w-full"
+                data-testid="epic-usage-view-full-dashboard"
+                onClick={() => {
+                  onOpenChange(false);
+                  openSettings({ section: "usage", resetToGeneral: false });
+                }}
+              >
+                View full usage →
+              </Button>
+            </>
           }
         >
           <EpicUsageDialogBody
@@ -296,66 +375,79 @@ function EpicUsageLoadedBody(props: {
     // consumers - the chart and its sibling harness split - the same
     // reason Settings hangs it on their common ancestor.
     <div className="usage-chart-root flex flex-col gap-5">
+      {/* The image-export capture region: summary hero + trend chart, and
+          deliberately not the by-chat table below - "what did this cost"
+          shares fine, an unbounded row list doesn't. Inside
+          `usage-chart-root` so the chart's `var(...)` palette resolves in
+          the capture's computed styles. */}
       <div
-        className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]"
-        data-testid="epic-usage-hero"
+        className="flex flex-col gap-5"
+        data-usage-export-region=""
+        data-testid="epic-usage-export-region"
       >
-        <div className="flex min-w-0 flex-col gap-3">
-          <div className="flex flex-col gap-0.5">
-            <UsageCostFigure
-              totals={summary.totals}
-              coverage={coverage}
-              servedBy={servedBy}
-              // The host dimension is irrelevant at this scope: an epic's
-              // (or a chat's) work is the same work wherever it ran.
-              hostScopeName={null}
-              size="display"
+        <div
+          className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]"
+          data-testid="epic-usage-hero"
+        >
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex flex-col gap-0.5">
+              <UsageCostFigure
+                totals={summary.totals}
+                coverage={coverage}
+                servedBy={servedBy}
+                // The host dimension is irrelevant at this scope: an epic's
+                // (or a chat's) work is the same work wherever it ran.
+                hostScopeName={null}
+                size="display"
+              />
+              <span
+                className="text-ui-xs text-muted-foreground"
+                data-testid="usage-date-range-label"
+              >
+                {dateRangeLabel}
+              </span>
+            </div>
+            <UsageHarnessSplit
+              rows={harnessRows}
+              scale={scale}
+              showTokens={false}
             />
-            <span
-              className="text-ui-xs text-muted-foreground"
-              data-testid="usage-date-range-label"
-            >
-              {dateRangeLabel}
-            </span>
           </div>
-          <UsageHarnessSplit
-            rows={harnessRows}
-            scale={scale}
-            showTokens={false}
-          />
+          <div className="flex flex-col gap-1.5">
+            <UsageStatTiles tiles={statTiles} variant="curated" />
+            {absentNote === null ? null : (
+              <p
+                className="text-ui-xs text-muted-foreground/80"
+                data-testid="usage-stat-tiles-absent-note"
+              >
+                {absentNote}
+              </p>
+            )}
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <UsageStatTiles tiles={statTiles} variant="curated" />
-          {absentNote === null ? null : (
-            <p
-              className="text-ui-xs text-muted-foreground/80"
-              data-testid="usage-stat-tiles-absent-note"
-            >
-              {absentNote}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-ui-sm font-medium text-foreground">Daily cost</h3>
-          <UsageChartGroupByToggle
-            groupBy={chartGroupBy}
-            onChange={props.onChartGroupByChange}
-            triggerClassName={COARSE_POINTER_TRIGGER}
-          />
-        </div>
-        {/* `key` per the prop's contract: the legend's hidden-series set is
+        <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-ui-sm font-medium text-foreground">
+              Daily cost
+            </h3>
+            <UsageChartGroupByToggle
+              groupBy={chartGroupBy}
+              onChange={props.onChartGroupByChange}
+              triggerClassName={COARSE_POINTER_TRIGGER}
+            />
+          </div>
+          {/* `key` per the prop's contract: the legend's hidden-series set is
             keyed by the current grouping's series keys, so a switch
             remounts rather than letting stale harness keys filter model
             bands. */}
-        <UsageDailyChart
-          key={chartGroupBy}
-          columns={columns}
-          scale={chartScale}
-          metric="cost"
-          groupBy={chartGroupBy}
-        />
+          <UsageDailyChart
+            key={chartGroupBy}
+            columns={columns}
+            scale={chartScale}
+            metric="cost"
+            groupBy={chartGroupBy}
+          />
+        </div>
       </div>
       <div>
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">

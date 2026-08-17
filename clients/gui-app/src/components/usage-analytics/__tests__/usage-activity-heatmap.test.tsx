@@ -125,6 +125,18 @@ describe("<UsageActivityHeatmap />", () => {
     expect(scroller.scrollLeft).toBe(YEAR_GRID_WIDTH);
   });
 
+  it("marks the scroller so an image export captures the whole year", () => {
+    // A shared image has no scrollbar: without the marker the export would
+    // crop the year to whatever slice the live scroller was anchored to.
+    render(
+      <TooltipProvider>
+        <UsageActivityHeatmap calendar={calendar} metric="cost" />
+      </TooltipProvider>,
+    );
+    const scroller = screen.getByTestId("usage-activity-scroller");
+    expect(scroller.hasAttribute("data-usage-export-fit")).toBe(true);
+  });
+
   it("shows the stat row computed from the same calendar", () => {
     render(
       <TooltipProvider>

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
+import { USAGE_EXPORT_REDACT_ATTRIBUTE } from "@/lib/usage-analytics/usage-export-image";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 
 afterEach(cleanup);
@@ -139,6 +140,47 @@ describe("UsageCostFigure", () => {
       hostScopeName: null,
     });
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
+  });
+
+  it("names the picked host on screen but marks the note for redaction in a shared image", () => {
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "cloud",
+      hostScopeName: "Studio Mac",
+    });
+    const note = screen.getByTestId("usage-served-by-local-note");
+    expect(note.textContent).toBe(
+      "Studio Mac only — your other hosts aren't included.",
+    );
+    expect(note.getAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(
+      "Selected host only — your other hosts aren't included.",
+    );
+  });
+
+  it("leaves the local-plane note unredacted - it carries no host name to leak", () => {
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "local",
+      hostScopeName: "Studio Mac",
+    });
+    const note = screen.getByTestId("usage-served-by-local-note");
+    expect(note.textContent).toMatch(/this machine/i);
+    expect(note.hasAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(false);
+  });
+
+  it("leaves an unfiltered cloud read with no note at all to redact", () => {
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "cloud",
+      hostScopeName: null,
+    });
+    expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
+    expect(
+      document.querySelector(`[${USAGE_EXPORT_REDACT_ATTRIBUTE}]`),
+    ).toBeNull();
   });
 
   it("renders the no-usage sentence, not a bare $0.00 or asterisk, for an empty window", () => {
