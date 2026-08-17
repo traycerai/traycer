@@ -927,6 +927,21 @@ export function createChatSessionStoreWithNotificationDependencies(
     return sent;
   };
 
+  // The graceful downgrade for a confirmed session stop whose gated command
+  // settled on its own: stop the remaining rows individually so wakeups stay
+  // scheduled (the confirmation's count excluded them) and rows whose stop
+  // is already in flight are left alone rather than tripping stop-all's
+  // in-flight guard into stopping nothing.
+  const stopRemainingItemsIndividually = (
+    get: ChatSessionGetState,
+    items: readonly BackgroundItem[],
+  ): void => {
+    for (const item of items) {
+      if (item.kind === "wakeup") continue;
+      get().stopBackgroundItem(item.taskId);
+    }
+  };
+
   // Deliberately state-based rather than edge-based: called after every
   // turn-state, action-ack AND snapshot reduction, so a phase-one turn stop
   // that races the turn's natural end (its `stop` rejected with
@@ -977,10 +992,10 @@ export function createChatSessionStoreWithNotificationDependencies(
     ) {
       // The gated command settled on its own while the turn wound down, so
       // the reason for killing the provider session is gone. Honor the
-      // confirmed "stop my background work" with the graceful per-item path
+      // confirmed "stop my background work" with graceful per-item stops
       // instead of the process kill.
       set(() => ({ pendingBackgroundSessionStop: null }));
-      get().stopAllBackgroundItems();
+      stopRemainingItemsIndividually(get, items);
       return;
     }
     sendBackgroundSessionStopFrame({ set, get });

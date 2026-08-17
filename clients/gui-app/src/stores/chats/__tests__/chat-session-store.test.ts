@@ -3902,7 +3902,7 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  it("falls back to a plain stop-all when the gated command settles on its own during wind-down", () => {
+  it("falls back to graceful per-item stops when the gated command settles on its own during wind-down", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     const gatedCommand: BackgroundItem = {
@@ -3925,6 +3925,14 @@ describe("createChatSessionStore", () => {
       parentTaskId: null,
       scheduledFor: null,
       individualStopUnavailable: null,
+    };
+    const wakeup: BackgroundItem = {
+      taskId: "wake-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+      scheduledFor: 123456,
     };
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
@@ -3963,8 +3971,8 @@ describe("createChatSessionStore", () => {
       turnId: "turn-1",
     });
 
-    // The gated command finished on its own during wind-down - only the
-    // ungated one is still running when the turn settles.
+    // The gated command finished on its own during wind-down - the ungated
+    // command and a scheduled wakeup remain when the turn settles.
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
       hasBinaryPayload: false,
@@ -3973,26 +3981,28 @@ describe("createChatSessionStore", () => {
       runStatus: "idle",
       activeTurn: null,
       turnInProgress: false,
-      backgroundItems: [ungatedCommand],
+      backgroundItems: [ungatedCommand, wakeup],
     });
 
     // No process-kill frame - the reason for one is gone. The confirmed
-    // "stop my background work" is honored via the graceful per-item path.
+    // "stop my background work" is honored via per-item stops that leave
+    // the wakeup scheduled, matching the confirmation's count.
     expect(
       harness.sent.some((frame) => frame.kind === "stopBackgroundSession"),
     ).toBe(false);
-    const lastFrame = harness.sent.at(-1);
-    if (lastFrame === undefined || lastFrame.kind === "ping") {
-      throw new Error("Expected stopAllBackgroundItems frame");
-    }
-    expect(lastFrame.kind).toBe("stopAllBackgroundItems");
+    expect(
+      harness.sent.some((frame) => frame.kind === "stopAllBackgroundItems"),
+    ).toBe(false);
+    const itemStops = harness.sent.filter(
+      (frame) => frame.kind === "stopBackgroundItem",
+    );
+    expect(itemStops.map((frame) => frame.taskId)).toEqual(["task-ungated"]);
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
     ).toBeNull();
-    expect(harness.handle.store.getState().pendingBackgroundStopAll).toEqual({
-      clientActionId: lastFrame.clientActionId,
-      taskIds: new Set(["task-ungated"]),
-    });
+    expect(
+      harness.handle.store.getState().pendingBackgroundStops,
+    ).toHaveProperty("task-ungated");
   });
 
   it("clears the escalation without firing when a different turn is seen active", () => {
