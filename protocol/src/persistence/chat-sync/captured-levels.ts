@@ -46,11 +46,19 @@
  *
  * A same-major minor that gets this wrong loses data silently: an older client
  * clones the chat, the field is simply absent from the re-published shards, and
- * nothing anywhere reports a loss. The client surface states the gap explicitly
- * for that reason - see `chatCloneResidualsOf`, where `shard` is recorded
- * `{ kind: "unavailable" }` rather than `dropped`, because the difference
- * between "we chose not to carry it" and "it never reached us" is the whole
- * content of that table.
+ * nothing anywhere reports a loss. Nothing downstream can report it either,
+ * which is why the rule has to be stated here rather than enforced there: a
+ * shard bag never reaches a re-publishing reader at all, so the difference
+ * between "we chose not to carry it" and "it never reached us" is invisible on
+ * the other side.
+ *
+ * The completeness guard below is what makes the level list itself
+ * non-optional, and it does bind across the package boundary: a consumer holds
+ * an exhaustive `Record<CapturedResidualLevelId, …>` deciding what each level
+ * carries, so adding a level here is a compile error there until somebody
+ * answers for it. (The Traycer host's chat-sync record adapter is that
+ * consumer today; named as a role rather than a symbol, since it lives in a
+ * different repository and this file must not depend on it.)
  *
  * `hostPrivate` under a GRADUATED shard is not an exception to this: it is one
  * schema instance and one level, and a clone blanks it deliberately (origin-host
