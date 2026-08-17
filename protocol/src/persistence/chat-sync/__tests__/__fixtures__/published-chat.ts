@@ -404,10 +404,9 @@ export function publishChat(options: {
     parentHeadSha256: options.parentHeadSha256,
     throughRecordSeq: 42,
     capturedAt: 1_700_000_000_000,
-    minReaderVersion: {
-      major: CHAT_SYNC_SCHEMA_VERSION.major,
-      minor: CHAT_SYNC_SCHEMA_VERSION.minor,
-    },
+    // What a correct 1.1 publisher stamps. The floor is for a change an older
+    // reader cannot safely INTERPRET, and the 1.1 reshape is neither.
+    minReaderVersion: null,
     cdc: { ...FIXTURE_CDC },
     core: {
       chatId: CHAT_ID,

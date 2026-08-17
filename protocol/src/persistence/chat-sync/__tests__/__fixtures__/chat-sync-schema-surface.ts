@@ -43,20 +43,30 @@ export const chatSyncSchemaSurfaceBaseline = {
           "type": "number"
         },
         "minReaderVersion": {
-          "type": "object",
-          "properties": {
-            "major": {
-              "type": "number",
-              "const": 1
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "major": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "minor": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "major",
+                "minor"
+              ]
             },
-            "minor": {
-              "type": "number",
-              "const": 1
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "major",
-            "minor"
           ]
         },
         "cdc": {
@@ -424,7 +434,6 @@ export const chatSyncSchemaSurfaceBaseline = {
         "parentHeadSha256",
         "throughRecordSeq",
         "capturedAt",
-        "minReaderVersion",
         "cdc",
         "core",
         "messageShards",
@@ -477,22 +486,32 @@ export const chatSyncSchemaSurfaceBaseline = {
           "type": "number"
         },
         "minReaderVersion": {
-          "type": "object",
-          "properties": {
-            "major": {
-              "type": "number",
-              "const": 1
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "major": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "minor": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "major",
+                "minor"
+              ],
+              "additionalProperties": false
             },
-            "minor": {
-              "type": "number",
-              "const": 1
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "major",
-            "minor"
-          ],
-          "additionalProperties": false
+          ]
         },
         "cdc": {
           "type": "object",
