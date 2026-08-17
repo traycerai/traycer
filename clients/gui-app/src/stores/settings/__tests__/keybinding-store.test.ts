@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 
 describe("useKeybindingStore", () => {
   beforeEach(() => {
@@ -111,14 +112,16 @@ describe("useKeybindingStore", () => {
   });
 
   it("migrates legacy nav.back/nav.forward arrow defaults to mod+shift+, and mod+shift+.", async () => {
+    const legacyBack = isMac() ? "mod+arrowleft" : "alt+arrowleft";
+    const legacyForward = isMac() ? "mod+arrowright" : "alt+arrowright";
     window.localStorage.setItem(
       "traycer-gui-app:keybindings",
       JSON.stringify({
         state: {
           bindings: {
             ...getDefaultBindings(),
-            "nav.back": "mod+arrowleft",
-            "nav.forward": "alt+arrowright",
+            "nav.back": legacyBack,
+            "nav.forward": legacyForward,
           },
         },
         version: 1,
@@ -132,6 +135,31 @@ describe("useKeybindingStore", () => {
     );
     expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
       "mod+shift+.",
+    );
+  });
+
+  it("preserves the other platform's former defaults as custom bindings", async () => {
+    const customBack = isMac() ? "alt+arrowleft" : "mod+arrowleft";
+    const customForward = isMac() ? "alt+arrowright" : "mod+arrowright";
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": customBack,
+            "nav.forward": customForward,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(customBack);
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      customForward,
     );
   });
 

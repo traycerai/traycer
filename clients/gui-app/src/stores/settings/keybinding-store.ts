@@ -10,6 +10,7 @@ import {
   type ActionId,
 } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
 
 /**
  * User-configured keyboard shortcuts. `bindings[id] === null` means the
@@ -28,14 +29,12 @@ export interface KeybindingState {
 
 const LEGACY_SPLIT_RIGHT_CHORD = "mod+shift+d";
 const LEGACY_SPLIT_DOWN_CHORD = "mod+d";
-const LEGACY_NAV_BACK_CHORDS = new Set<ChordString>([
-  "mod+arrowleft",
-  "alt+arrowleft",
-]);
-const LEGACY_NAV_FORWARD_CHORDS = new Set<ChordString>([
-  "mod+arrowright",
-  "alt+arrowright",
-]);
+const LEGACY_NAV_BACK_CHORD: ChordString = isMac()
+  ? "mod+arrowleft"
+  : "alt+arrowleft";
+const LEGACY_NAV_FORWARD_CHORD: ChordString = isMac()
+  ? "mod+arrowright"
+  : "alt+arrowright";
 const NAV_BACK_CHORD: ChordString = "mod+shift+,";
 const NAV_FORWARD_CHORD: ChordString = "mod+shift+.";
 
@@ -123,9 +122,8 @@ function normalizePersistedBindings(
   }
   const back = normalized["nav.back"];
   const forward = normalized["nav.forward"];
-  const migrateBack = back !== null && LEGACY_NAV_BACK_CHORDS.has(back);
-  const migrateForward =
-    forward !== null && LEGACY_NAV_FORWARD_CHORDS.has(forward);
+  const migrateBack = back === LEGACY_NAV_BACK_CHORD;
+  const migrateForward = forward === LEGACY_NAV_FORWARD_CHORD;
   if (migrateBack || migrateForward) {
     normalized = {
       ...normalized,
