@@ -1378,6 +1378,240 @@ describe("<EpicSessionProvider />", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/epics", replace: true });
   });
 
+  describe("a completed re-point keeps the document it merged (B5)", () => {
+    function installControlledFactory(streams: ControlledEpicStream[]): void {
+      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+        const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
+      });
+    }
+
+    function providerBody(
+      onHandle: (handle: OpenEpicStoreHandle) => void,
+    ): React.JSX.Element {
+      return (
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe onHandle={onHandle} />
+        </EpicSessionProvider>
+      );
+    }
+
+    /**
+     * The production path, and the one cell the shipped suite never ran: a
+     * re-point that SUCCEEDS while directory rows exist for both hosts.
+     *
+     * The pre-existing merge test publishes no rows, so `ownerIdentityKey` is
+     * a constant `null` for both hosts and the identity branch is unreachable
+     * in the only test that would exercise it. Publishing rows is the whole
+     * difference - it is what lets the tuple carry a key at all, and so what
+     * lets a key recorded for host-a be compared against one read from
+     * host-b.
+     */
+    it("does not rebuild after the merge commits, with rows published for both hosts", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+
+      // Same room on both sides, so the merge arm runs and the unacknowledged
+      // edit is carried into the replacement.
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      await act(() => Promise.resolve());
+
+      // The merged edit must SURVIVE the commit. Today the tuple written at
+      // commit pairs host-b's handle with host-a's key, the next render reads
+      // host-b's key, and the mismatch takes the hard-rebuild arm - disposing
+      // the handle that is holding the merge.
+      expect(
+        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      ).toBe("pending");
+      expect(streams).toHaveLength(2);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    /**
+     * The control arm: identical to the catch except the signed-in user is
+     * cleared, so the key is `null` on BOTH sides and nothing else moves.
+     * Must pass before AND after the fix - if it fails, the cause is the rows
+     * or the registry emit, not the identity discriminator.
+     */
+    it("survives a re-point when no owner identity is readable at all", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+      sessionHostRows.userId = null; // ← THE ONLY DIFFERENCE
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      await act(() => Promise.resolve());
+
+      expect(
+        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      ).toBe("pending");
+      expect(streams).toHaveLength(2);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    /**
+     * The failover shape. A transport-death failover reaches this provider
+     * with input BYTE-IDENTICAL to a manual Activate, so the ∅ transit is not
+     * a mitigation - and it is the worse case, because the host that would
+     * have acknowledged the pending edits is the one that died.
+     */
+    it("keeps the merged document across an A -> null -> B transit", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = null;
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await act(() => Promise.resolve());
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      await act(() => Promise.resolve());
+
+      expect(
+        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      ).toBe("pending");
+      expect(streams).toHaveLength(2);
+    });
+
+    /**
+     * The null-at-commit arm. host-b's directory row is deliberately absent
+     * when the replacement commits, so the honest record is "not read yet",
+     * and the row lands afterwards.
+     *
+     * This is NOT covered by the control arm above, which holds the key at
+     * `null` on both sides and so never performs a `null -> key` transition.
+     * Without this fixture the null-tolerance half ships unproven.
+     */
+    it("does not rebuild when the new host's row lands after the commit", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      // host-b's row is deliberately ABSENT at commit, so its key reads null.
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const mergedHandle = seenHandles.at(-1);
+
+      // The row lands late. An absent reading is not a rotation, so this must
+      // complete the tuple in place rather than tear the session down.
+      act(() => {
+        rotateRow("host-b", "pubkey-b0");
+      });
+      await act(() => Promise.resolve());
+
+      expect(seenHandles.at(-1)).toBe(mergedHandle);
+      expect(
+        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      ).toBe("pending");
+      expect(streams).toHaveLength(2);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+
+      // The survival above pins the null TOLERANCE, and tolerance alone is
+      // satisfied by doing nothing at all - so it cannot see whether the late
+      // row was actually RECORDED. This arm is what proves the completion
+      // fired on the re-point path: a genuine rotation on the new host must
+      // now tear down. Without it the R-1 boundary would be dead for every
+      // re-pointed session and every assertion above would still be green.
+      act(() => {
+        rotateRow("host-b", "pubkey-b1");
+      });
+      await waitFor(() => {
+        expect(seenHandles.at(-1)).not.toBe(mergedHandle);
+      });
+      expect(streams).toHaveLength(3);
+    });
+  });
+
   describe("warm-handle adoption after a provider remount (F1)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
       __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {

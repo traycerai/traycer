@@ -56,15 +56,13 @@ export const EpicSessionHostClientContext =
   createContext<HostClient<HostRpcRegistry> | null>(null);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
-// The R-1 rotation rationale that used to live here moved to the acquire
-// effect's comparison in `epic-session-provider.tsx` - the mechanism that
-// actually enforces it. This map is write-dead and read-never as of the F1
-// fix (audit remediation step 1) and is deleted in step 2; do not add
-// readers or writers.
-export const handleOwnerIdentityKeys = new WeakMap<
-  OpenEpicStoreHandle,
-  string | null
->();
+// The R-1 rotation rationale that used to live here now lives at the acquire
+// effect's comparison in `epic-session-provider.tsx` (`readOwnerIdentityVerdict`)
+// - the mechanism that actually enforces it. The `handleOwnerIdentityKeys` map
+// that used to sit here was written twice, read never, and exported: a future
+// consumer would have imported it and silently received a PRE-MOVE key, which
+// is the defect the comparison was fixed to exclude. Deleted rather than
+// corrected; read the tuple.
 
 export function getEpicSessionHandleHostId(
   handle: OpenEpicStoreHandle,

@@ -149,6 +149,18 @@ export function dialableHostEndpointFor(
  * that decides whether to `acquireRemoteSession` again keep or replace what
  * it holds) and must not be conflated with dialability.
  */
+/**
+ * LATENT HAZARD, harmless only while the relay base is constant. This folds
+ * `websocketUrl` into the key while the comment above argues it should not be
+ * folded in - and `remote-fetcher.ts` supplies one fixed relay attach URL
+ * today, which is the only reason the two do not collide.
+ *
+ * If it ever becomes per-instance, every routine same-host respawn changes the
+ * key, and the epic session provider's identity comparison takes the rebuild
+ * arm - which disposes the handle. That is not a re-render cost; it is the
+ * data-loss path (audit finding B5) reached by a different trigger. Make the
+ * URL per-instance and this needs the same treatment the room-swap path got.
+ */
 export function remoteAwareOwnerIdentity(
   target: HostDirectoryEntry,
   userId: string,

@@ -123,14 +123,12 @@ function readOwnerIdentityVerdict(
  *
  * Same widening, same unreachability, as `readOwnerIdentityVerdict` above.
  *
- * NOT YET APPLIED AT EVERY WRITER. `commitReplacement` still records the raw
- * hook value, which on a re-point was read off the OLD session's host - so the
- * comparison above can still be fed a record that is cross-host *as stored*.
- * The same-host guard cannot catch that: it checks the host a reading was
- * taken from, not the honesty of a record already labelled with this host. So
- * the guard is bypassed on the re-point path rather than weakened, and that is
- * exactly the B5 discard. Closed by the next commit; until then this doc
- * describes the rule, not yet a property of every write.
+ * APPLIED AT BOTH TUPLE WRITERS - the adoption arm and `commitReplacement`.
+ * That is not optional at the second one: the same-host guard checks the host
+ * a reading was TAKEN FROM, not the honesty of a record already labelled with
+ * this host, so a cross-host record written there passes the guard and reaches
+ * the rotation arm, which is exactly the B5 discard. Any third tuple writer
+ * must route through here too.
  */
 function ownerIdentityKeyForHost(
   hostId: string,
@@ -432,6 +430,15 @@ export function EpicSessionProvider(
       // below in this same run. Returning here would leave an adopted session
       // parked on its old host with every dependency stable and nothing left
       // to trigger the re-point.
+      //
+      // This is the third tuple writer, and the only one that does NOT route
+      // through `ownerIdentityKeyForHost` - deliberately. It is honest by
+      // construction: the verdict is built as `{...current, ownerIdentityKey}`
+      // and is only reachable after the same-host check inside
+      // `readOwnerIdentityVerdict`, so the key provably describes
+      // `current.hostId` already. Routing it through the helper would be a
+      // no-op that reads as the safety it is not. Any FOURTH writer,
+      // assembling a tuple from raw inputs, must route.
       current = ownerIdentityVerdict.session;
       sessionRef.current = current;
       setSession(current);
@@ -567,7 +574,24 @@ export function EpicSessionProvider(
       const nextSession = {
         handle: nextHandle,
         hostId: targetHostId,
-        ownerIdentityKey,
+        // The captured reading describes the host this session was on when
+        // the re-point STARTED, not `targetHostId` - so recording it here
+        // pairs the replacement's handle with the previous host's key. The
+        // next render reads the new host's key, the two differ, and the
+        // rebuild arm disposes the handle that is holding the document this
+        // function just merged into it (B5).
+        //
+        // Recording honest-absent instead is what the completion above is
+        // for: it fills the tuple from the new host's own reading on the next
+        // pass, same handle, no rebuild. That also covers the case where the
+        // new host's directory row has not landed yet, where there is no
+        // post-move key to record at all - one mechanism for both, which is
+        // why an eager post-move read would not have been enough.
+        ownerIdentityKey: ownerIdentityKeyForHost(
+          targetHostId,
+          ownerIdentityKey,
+          ownerIdentityKeyHostId,
+        ),
       };
       sessionRef.current = nextSession;
       setSession(nextSession);
