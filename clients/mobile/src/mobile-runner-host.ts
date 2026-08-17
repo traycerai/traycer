@@ -58,6 +58,7 @@ import type {
   IDeviceFlowHost,
   IHostPicker,
   INotificationHost,
+  IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -65,6 +66,7 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   NotificationShowOutcome,
+  PushPermissionState,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
@@ -84,10 +86,20 @@ export interface MobileRunnerHostOptions {
   readonly relayBaseUrl: string;
   /**
    * OS push lifecycle owner, or `null` where pushes cannot exist (the dev web
-   * entry, tests). Only its click relay is consumed here - registration
-   * follows the token store on its own once `start()` runs in bootstrap.
+   * entry, tests). Its click relay and its permission reads are consumed here -
+   * registration itself follows the token store on its own once `start()` runs
+   * in bootstrap.
    */
   readonly pushRegistration: MobilePushRegistration | null;
+  /**
+   * Jumps to this app's notification page in the OS Settings app - the only
+   * repair path once the OS has remembered a refusal. Injected (rather than
+   * called from here) so the native-settings plugin stays in the bootstrap
+   * entry and these host tests stay plugin-free; `null` on the dev web entry,
+   * where there is no OS page to open - which also makes `pushPermission`
+   * itself `null` there (see `buildPushPermission`).
+   */
+  readonly openPushSettings: (() => Promise<void>) | null;
   /**
    * The deep-link scheme this build's NATIVE shell registered (`traycer` from
    * Info.plist / AndroidManifest), threaded into the verification URL as
@@ -150,6 +162,13 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly hostManagement = null;
   readonly hostTray = null;
   readonly deviceFlow: IDeviceFlowHost;
+  /**
+   * The phone's own notification switch. `null` wherever this shell cannot
+   * both read the permission AND open the OS page to repair it (the dev web
+   * entry, tests) - so the GUI's one branch on `null` hides the Settings row
+   * wherever it would have nothing to report or no working button.
+   */
+  readonly pushPermission: IPushPermissionHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   private readonly systemResume = new MobileSystemResume();
 
@@ -158,6 +177,11 @@ export class MobileRunnerHost implements IRunnerHost {
     this.authnBaseUrl = options.authnBaseUrl;
     this.relayBaseUrl = options.relayBaseUrl;
     this.notifications = buildNotifications(options.pushRegistration);
+    this.pushPermission = buildPushPermission(
+      options.pushRegistration,
+      options.openPushSettings,
+      this.systemResume,
+    );
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
       options.authnBaseUrl,
@@ -350,7 +374,7 @@ export class MobileRunnerHost implements IRunnerHost {
     // WebView resumes, its `visibilitychange` edge is the same "the browser
     // returned" fact. Subscribing to the resume source instead of a native
     // App-plugin `appUrlOpen` listener keeps the shell on its deliberate
-    // four-plugin footprint, and also nudges the poll when the user returns
+    // five-plugin footprint, and also nudges the poll when the user returns
     // MANUALLY (no deep link at all - e.g. after using the manual-code page).
     // A resume with no in-flight attempt is a no-op in the consumer
     // (`AuthService.handleReturnSignal` only collapses an active poll wait).
@@ -827,6 +851,80 @@ function disposable(): Disposable {
 }
 
 /**
+ * BOTH halves of the capability or none of it.
+ *
+ * A `pushPermission` that could read the OS answer but not open the OS page
+ * would render the Settings row with a repair button that resolves
+ * successfully and does nothing - the mutation's error toast, the one thing
+ * that would report it, can never fire on a resolved promise. The two inputs
+ * come from independent platform branches in `main.tsx` (the registration
+ * target and the settings opener), so the agreement between them is asserted
+ * HERE, once, instead of being assumed twice.
+ */
+function buildPushPermission(
+  push: MobilePushRegistration | null,
+  openPushSettings: (() => Promise<void>) | null,
+  systemResume: MobileSystemResume,
+): IPushPermissionHost | null {
+  if (push === null || openPushSettings === null) return null;
+  return new MobilePushPermissionHost(push, openPushSettings, systemResume);
+}
+
+/**
+ * `IRunnerHost.pushPermission` on the phone: a thin adapter over the object
+ * that already owns the plugin and the registration guard
+ * (`MobilePushRegistration`) plus the shell's own resume edge.
+ *
+ * `onChange` deliberately carries no state - it says "this MAY have changed,
+ * re-read it". Two things can change it without this app doing anything: the
+ * person flipping the switch in the OS Settings app (observed as the
+ * foreground-resume edge on the way back, the same edge registration follows)
+ * and the OS prompt a `request()` just raised. Neither tells us the new value,
+ * so the reader's `get()` is what settles it.
+ */
+class MobilePushPermissionHost implements IPushPermissionHost {
+  private readonly handlers = new Set<() => void>();
+
+  constructor(
+    private readonly registration: MobilePushRegistration,
+    private readonly openPushSettings: () => Promise<void>,
+    private readonly systemResume: MobileSystemResume,
+  ) {}
+
+  get(): Promise<PushPermissionState> {
+    return this.registration.permissionState();
+  }
+
+  async request(): Promise<PushPermissionState> {
+    const state = await this.registration.requestPermission();
+    // The prompt has settled (either way) - tell subscribers to re-read rather
+    // than trusting them to correlate this with the value returned above.
+    for (const handler of Array.from(this.handlers)) {
+      handler();
+    }
+    return state;
+  }
+
+  async openSettings(): Promise<void> {
+    // Always a real jump: this object only exists where an opener was
+    // injected, so a rejection here means the OS refused, which is exactly
+    // what the caller's error toast is for.
+    await this.openPushSettings();
+  }
+
+  onChange(handler: () => void): Disposable {
+    const resumeSubscription = this.systemResume.subscribe(handler);
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        resumeSubscription.dispose();
+        this.handlers.delete(handler);
+      },
+    };
+  }
+}
+
+/**
  * The phone's `IRunnerHost.onSystemResumed` source.
  *
  * On this platform "the machine woke up" is not a power event - it is the app
@@ -839,8 +937,9 @@ function disposable(): Disposable {
  * the network never went anywhere, only this runtime did.
  *
  * `visibilitychange` and not a Capacitor App-state plugin: WKWebView and the
- * Android WebView both raise it, so this costs no new native dependency in a
- * shell that deliberately carries only core, keyboard, push and app-launcher.
+ * Android WebView both raise it, so this costs no ADDITIONAL native dependency
+ * in a shell that deliberately carries only core, keyboard, push,
+ * app-launcher, secure-storage and native-settings.
  *
  * Fires ONLY on the hidden -> visible edge. That edge filter is also the whole
  * dedupe, deliberately with no debounce timer: the event is edge-driven (a

@@ -92,6 +92,9 @@ export function createFakeRunnerHost(
     hostManagement: null,
     hostTray: null,
     zoom: null,
+    // Desktop-shaped by default; a phone-shaped test passes its own
+    // `pushPermission` double through `overrides`.
+    pushPermission: null,
   };
   return { ...base, ...overrides };
 }

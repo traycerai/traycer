@@ -38,7 +38,8 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
 
 - `src/mobile-runner-host.ts` — `IRunnerHost`, device flow, secure token store.
 - `src/push-registration.ts` — push permission/registration/tap-relay,
-  platform-agnostic; platform only picks `pushRegistrationTarget`.
+  platform-agnostic; platform only picks `pushRegistrationTarget`. Also backs
+  the `IRunnerHost.pushPermission` capability the Settings row reads.
 - `src/web/main.tsx` — mounts the shared GUI.
 - `src/web/index.css` — its `@source` for `gui-app` is required or shared
   utility classes vanish from the bundle. `mobile.css` — mobile-only overrides.

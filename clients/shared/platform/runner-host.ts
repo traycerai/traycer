@@ -420,6 +420,47 @@ export interface IRunnerHost {
    * tray clicks route through the same host-management surface as Settings.
    */
   readonly hostTray: IHostTray | null;
+
+  /**
+   * OS push permission of the DEVICE running this renderer - the phone's own
+   * notification switch, not anything host-scoped. Present on shells where OS
+   * push exists (the native mobile shells) and `null` everywhere else
+   * (desktop, dev web, tests), where the GUI hides the surface entirely.
+   */
+  readonly pushPermission: IPushPermissionHost | null;
+}
+
+/**
+ * The three states the GUI reasons about. Deliberately platform-neutral:
+ * Capacitor's fourth state (`prompt-with-rationale`, Android's "we may ask
+ * once more") collapses to `prompt` at the mobile boundary, so plugin
+ * vocabulary never reaches shared code.
+ */
+export type PushPermissionState = "prompt" | "granted" | "denied";
+
+/**
+ * Read/repair surface for the device's OS push permission, backing the
+ * Settings → Notifications "this phone" row. Only reachable where
+ * `IRunnerHost.pushPermission` is non-null.
+ */
+export interface IPushPermissionHost {
+  /** Local OS read; never prompts. */
+  get(): Promise<PushPermissionState>;
+  /**
+   * Raises the OS prompt if the OS still allows one (before the first ask, or
+   * Android's single rationale retry) and resolves the resulting state. A
+   * grant here also registers the device token immediately, through the same
+   * narrow path a late grant from the OS Settings app takes.
+   */
+  request(): Promise<PushPermissionState>;
+  /** Jumps to this app's notification page in the OS Settings app. */
+  openSettings(): Promise<void>;
+  /**
+   * Fires when the state MAY have changed - a foreground resume (the person
+   * may have just changed it in OS Settings) or a completed `request()`.
+   * Subscribers re-read via `get()`; the signal carries no state itself.
+   */
+  onChange(handler: () => void): Disposable;
 }
 
 /** Outcome of `IRunnerHost.requestMicrophoneAccess()`. */

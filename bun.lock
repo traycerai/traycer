@@ -214,6 +214,7 @@
         "@capacitor/ios": "8.4.2",
         "@capacitor/keyboard": "8.0.5",
         "@capacitor/push-notifications": "8.1.2",
+        "capacitor-native-settings": "8.2.0",
         "capacitor-secure-storage-plugin": "0.13.0",
         "react": "catalog:",
         "react-dom": "catalog:",
@@ -1839,6 +1840,8 @@
     "callsites": ["callsites@3.1.0", "", {}, "sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ=="],
 
     "caniuse-lite": ["caniuse-lite@1.0.30001806", "", {}, "sha512-72Cuvd95zbSYPKq6Fhg8eDJRlzgWDf7/mtoZv6Qe/DYNCEBdNxoA3+rZAU2ZhGCpZlns3EssFavaZomckT5Uuw=="],
+
+    "capacitor-native-settings": ["capacitor-native-settings@8.2.0", "", { "peerDependencies": { "@capacitor/core": ">=8.0.2" } }, "sha512-jqklDll5YFvPpt2SI+wa+oMy0ykvWESSclDMhSI/t1TvJDnomATa7Iz0eE219DY/6pJxRhI7+8RYE0ePtAYxAw=="],
 
     "capacitor-secure-storage-plugin": ["capacitor-secure-storage-plugin@0.13.0", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-+rLC/9Z0LTaRRt6L6HjBwcDh5gqgI3NPmDSwo4hk41XQOy3EBrRo81VleIqFsowsMA3oMT+E59Bl8/HiWk0nhQ=="],
 

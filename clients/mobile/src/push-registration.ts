@@ -4,8 +4,16 @@
  *
  * Everything here is BEST-EFFORT around the login session: a denied
  * permission or a failed HTTP call costs pushes, not notifications (the
- * in-app feed and its poll are unaffected). Accordingly nothing in this file
- * throws into a caller; failures are logged and swallowed.
+ * in-app feed and its poll are unaffected). Accordingly the lifecycle paths
+ * below never throw into a caller; failures are logged and swallowed.
+ *
+ * ONE DELIBERATE EXCEPTION: the two methods behind
+ * `IRunnerHost.pushPermission` - `permissionState()` and `requestPermission()` -
+ * let a plugin rejection propagate. They answer a person who is looking at the
+ * Settings row right now, and the GUI renders that failure (the query shows an
+ * error row, the mutation raises a toast). Wrapping either one in this file's
+ * `logPushFailure` would fabricate a state and silently delete the designed
+ * error surface. Their register-once side effect stays swallowed, as above.
  *
  * One asymmetry is worth knowing. EXPLICIT revocation (sessions panel,
  * revoke-all) cascades the token row away server-side - but plain sign-out is
@@ -24,6 +32,7 @@
  */
 import type { PluginListenerHandle } from "@capacitor/core";
 import type {
+  PushPermissionState,
   StoredCredentials,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -36,8 +45,24 @@ import type {
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 
 /** Capacitor's PermissionState, spelled out (no type dep on the plugin). */
-export type PushPermissionState =
+export type CapacitorPushPermissionState =
   "prompt" | "prompt-with-rationale" | "granted" | "denied";
+
+/**
+ * Capacitor's four states down to the three the shared contract speaks
+ * (`IRunnerHost.pushPermission`). `prompt-with-rationale` is Android's "denied
+ * once, the OS will still allow one more ask" - from the GUI's side that is
+ * indistinguishable from a first ask, so it collapses to `prompt` and the row
+ * keeps offering Enable. This file stays the only place that knows the
+ * plugin's vocabulary.
+ */
+export function toPushPermissionState(
+  state: CapacitorPushPermissionState,
+): PushPermissionState {
+  if (state === "granted") return "granted";
+  if (state === "denied") return "denied";
+  return "prompt";
+}
 
 export interface PushRegistrationToken {
   readonly value: string;
@@ -60,8 +85,12 @@ export interface PushNotificationAction {
  * structurally.
  */
 export interface PushNotificationsPluginSlice {
-  checkPermissions(): Promise<{ readonly receive: PushPermissionState }>;
-  requestPermissions(): Promise<{ readonly receive: PushPermissionState }>;
+  checkPermissions(): Promise<{
+    readonly receive: CapacitorPushPermissionState;
+  }>;
+  requestPermissions(): Promise<{
+    readonly receive: CapacitorPushPermissionState;
+  }>;
   register(): Promise<void>;
   addListener(
     eventName: "registration",
@@ -163,6 +192,13 @@ export class MobilePushRegistration {
   private userId: string | null = null;
   private clickHandler: ((payload: unknown) => void) | null = null;
   private readonly pendingClicks: unknown[] = [];
+  /**
+   * The login session `start()` was given, retained so the register-once path
+   * can also be driven by a caller that has no token source of its own - the
+   * Settings row's `request()`. `null` until `start()` runs (tests that only
+   * exercise the permission reads never start it).
+   */
+  private tokenSource: PushTokenSource | null = null;
 
   constructor(private readonly options: MobilePushRegistrationOptions) {}
 
@@ -175,6 +211,7 @@ export class MobilePushRegistration {
   start(tokenStore: PushTokenSource, systemResume: SystemResumeSource): void {
     if (this.started) return;
     this.started = true;
+    this.tokenSource = tokenStore;
 
     void this.options.plugin
       .addListener("registration", (token) => {
@@ -206,10 +243,39 @@ export class MobilePushRegistration {
     // App start while already signed in: same path as a sign-in event.
     void this.ensureRegistered(tokenStore);
     // Foreground resume: the narrow late-grant path, NOT a re-run of the
-    // sign-in path (see `registerAfterResume`).
+    // sign-in path (see `registerIfGranted`).
     systemResume.onSystemResumed(() => {
-      void this.registerAfterResume(tokenStore);
+      void this.registerIfGranted(false);
     });
+  }
+
+  /**
+   * What the OS currently says, mapped to the shared three-state vocabulary.
+   * A LOCAL read: `checkPermissions` never prompts, so the Settings row can
+   * poll it as often as it likes.
+   */
+  async permissionState(): Promise<PushPermissionState> {
+    const permission = await this.options.plugin.checkPermissions();
+    return toPushPermissionState(permission.receive);
+  }
+
+  /**
+   * The Settings row's Enable button. Raises the OS prompt if the OS still
+   * allows one - after a refusal `requestPermissions` resolves the remembered
+   * answer without showing anything, which is why the row only offers this in
+   * the `prompt` state - and, on a grant, registers the device token right
+   * away through the SAME narrow path a late grant from OS Settings takes.
+   * Registration stays best-effort as everywhere else in this file: a failed
+   * token round trip is logged and swallowed, so a granted permission still
+   * reports `"granted"`.
+   */
+  async requestPermission(): Promise<PushPermissionState> {
+    const permission = await this.options.plugin.requestPermissions();
+    const state = toPushPermissionState(permission.receive);
+    if (state === "granted") {
+      await this.registerIfGranted(true);
+    }
+    return state;
   }
 
   /**
@@ -275,36 +341,45 @@ export class MobilePushRegistration {
   }
 
   /**
-   * The late-grant path: permission was refused at the sign-in prompt, the
-   * person enabled Traycer in the OS Settings app, and came back to the same
-   * running app. Deliberately narrower than `ensureRegistered`, cheapest gate
-   * first, so a resume is free for everyone it does not concern:
+   * The late-grant path, shared by BOTH ways a permission can turn on after
+   * the sign-in prompt was refused: the person enabled Traycer in the OS
+   * Settings app and came back to the same running app (the foreground-resume
+   * edge), or they tapped Enable on the Settings row and granted the prompt.
+   * Deliberately narrower than `ensureRegistered`, cheapest gate first, so a
+   * resume is free for everyone it does not concern:
    *
    *   1. already registered      -> in-memory read, stop (the common case)
-   *   2. signed out              -> local credential read, stop
-   *   3. permission not granted  -> local OS read, stop (still refused)
-   *   4. register once           -> APNs/FCM + one authn call; the guard set
+   *   2. never started           -> no token source to read, stop
+   *   3. signed out              -> local credential read, stop
+   *   4. permission not granted  -> local OS read, stop (still refused)
+   *   5. register once           -> APNs/FCM + one authn call; the guard set
    *                                 by `registerCurrentToken` then makes every
    *                                 later resume stop at (1)
    *
    * `requestPermissions` is never called from here: a resume must not raise
-   * the OS prompt (and on iOS it cannot after a refusal anyway).
+   * the OS prompt (and on iOS it cannot after a refusal anyway). The one
+   * caller that DID prompt passes `permissionKnownGranted` so gate (4) is not
+   * re-asked of the OS immediately after it just answered.
    */
-  private async registerAfterResume(
-    tokenStore: PushTokenSource,
+  private async registerIfGranted(
+    permissionKnownGranted: boolean,
   ): Promise<void> {
     if (this.lastRegisteredKey !== null) return;
+    const tokenStore = this.tokenSource;
+    if (tokenStore === null) return;
     try {
       const credentials = await tokenStore.get();
       if (credentials === null) return;
-      const permission = await this.options.plugin.checkPermissions();
-      if (permission.receive !== "granted") return;
+      if (!permissionKnownGranted) {
+        const permission = await this.options.plugin.checkPermissions();
+        if (permission.receive !== "granted") return;
+      }
       this.bearerToken = credentials.token;
       this.userId = credentials.user.id;
       await this.options.plugin.register();
       await this.registerCurrentToken();
     } catch (error) {
-      logPushFailure("register after resume")(error);
+      logPushFailure("register after permission grant")(error);
     }
   }
 

@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import {
+  AndroidSettings,
+  IOSSettings,
+  NativeSettings,
+} from "capacitor-native-settings";
+import {
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
@@ -48,6 +53,34 @@ function buildPushRegistration(
     registerToken: registerDevicePushTokenViaHttp,
     removeToken: removeDevicePushTokenViaHttp,
   });
+}
+
+/**
+ * How the Settings row's "Open Settings" button leaves the app, or `null` on
+ * the dev web entry, which has no OS page to open (and no push permission to
+ * repair - `pushRegistration` is `null` there too, so the row never renders).
+ *
+ * Both platforms land on the app's NOTIFICATION screen, one tap from the
+ * switch: `AppNotification` resolves iOS 15.4+'s notification-settings URL and
+ * falls back to the app page (`UIApplication.openSettingsURLString`, the one
+ * screen Apple supports opening) below that, where Notifications is one row
+ * down anyway.
+ */
+function buildOpenPushSettings(): (() => Promise<void>) | null {
+  const platform = Capacitor.getPlatform();
+  if (platform === "ios") {
+    return async (): Promise<void> => {
+      await NativeSettings.openIOS({ option: IOSSettings.AppNotification });
+    };
+  }
+  if (platform === "android") {
+    return async (): Promise<void> => {
+      await NativeSettings.openAndroid({
+        option: AndroidSettings.AppNotification,
+      });
+    };
+  }
+  return null;
 }
 
 const config = __TRAYCER_MOBILE_CONFIG__;
@@ -126,6 +159,7 @@ function bootstrap(): void {
     hostLabel: config.hostLabel,
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,
+    openPushSettings: buildOpenPushSettings(),
     // The scheme registration ships with the NATIVE shell (Info.plist /
     // AndroidManifest), so platform - not Vite environment - decides: any
     // native install of this app answers `traycer://`, while the dev web
