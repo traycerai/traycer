@@ -225,6 +225,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     awareness: {} as never,
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],

@@ -119,9 +119,19 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
  * confirmation dialog.
  */
 export function epicHasUnsyncedEdits(epicId: string): boolean {
-  const handle = registry.get(epicId);
-  if (handle === null) return false;
-  return handle.store.getState().isDirty;
+  return registry.hasUnsyncedEdits(epicId);
+}
+
+/**
+ * Discard every unsynced edit for an epic, live and retained.
+ *
+ * The action counterpart to the per-epic row in the unsynced sheet. Callers
+ * must not reach for `registry.get(epicId)` and drain that handle instead:
+ * that reaches only the live session, and a retained buffer would survive a
+ * Discard the user believes covered everything.
+ */
+export function drainEpicUnsyncedEdits(epicId: string): void {
+  registry.drainUnsyncedEdits(epicId);
 }
 
 /**

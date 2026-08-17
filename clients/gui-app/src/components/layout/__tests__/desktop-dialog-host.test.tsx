@@ -501,6 +501,7 @@ function createDirtyEpicHandle(
     getArtifactRoomId: () => null,
     acquireArtifactBodyLease: () => () => {},
     readArtifactTitle: () => null,
+    detachTransport: () => undefined,
   }));
   return {
     epicId,
@@ -509,6 +510,7 @@ function createDirtyEpicHandle(
     awareness,
     store,
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],

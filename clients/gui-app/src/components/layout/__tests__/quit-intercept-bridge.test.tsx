@@ -85,6 +85,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     awareness: {} as never,
     store,
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !state.isDirty,
     hotArtifactRoomIdsForTests: () => [],

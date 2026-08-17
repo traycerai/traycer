@@ -216,10 +216,12 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     // Drain in-memory edits on every dirty session before responding so main
     // does not race the teardown and so the next mount sees a clean slate.
     for (const entry of registry.getUnsyncedEdits()) {
-      const handle = registry.get(entry.epicId);
-      if (handle === null) continue;
       try {
-        handle.store.getState().discardUnsyncedEdits();
+        // Per epic, not per handle. A row can cover a live session AND
+        // buffers retained across a host re-point; `get(epicId)` returns only
+        // the live one, so draining through it would leave the retained edits
+        // behind after a Discard the user believes covered the whole row.
+        registry.drainUnsyncedEdits(entry.epicId);
       } catch {
         // Ignore per-session failures - the quit must continue either way.
       }

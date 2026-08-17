@@ -1,4 +1,8 @@
-import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type {
+  OpenEpicState,
+  OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import * as Y from "yjs";
 import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 import {
@@ -19,6 +23,24 @@ import {
  */
 export const DEFAULT_MAX_LIVE_EPICS = 5;
 const loggedLiveTitleReadFailures = new Set<string>();
+
+/**
+ * Soft threshold on retained-dirty buffers (see {@link RetainedUnsyncedBuffer}).
+ *
+ * Deliberately a MONITOR, not an enforced cap. Every eviction policy available
+ * at this layer destroys unsynced edits the user has not been offered a
+ * decision about - which is the exact defect the retention exists to fix, so a
+ * hard cap would reintroduce it through a different door. Crossing this logs
+ * once at `error`; nothing is dropped.
+ *
+ * What actually bounds the collection is the retirement set: only dirty
+ * handles are retained at all, a second retention for the same
+ * `(epicId, hostStamp)` merges rather than appends, and closing the tab,
+ * draining, or signing out reclaims. Growing past this therefore means an
+ * epic is being re-pointed repeatedly, dirty every time, with its tab never
+ * closed - worth a log line, not worth deleting a user's work over.
+ */
+const RETAINED_UNSYNCED_SOFT_CAP = 16;
 
 export interface OpenEpicSessionRegistryOptions {
   readonly maxLive: number;
@@ -74,6 +96,85 @@ export interface UnsyncedEditsEntry {
 }
 
 /**
+ * A dirty session preserved across a host re-point (F10).
+ *
+ * Below protocol `@1.2` the host sends no `roomId`, so the cross-host document
+ * merge is unreachable and `replaceMounted` would otherwise destroy the
+ * outgoing handle's unsynced edits outright. Retaining it keeps the user's work
+ * addressable until they are actually offered a decision about it.
+ *
+ * The handle here has had `detachTransport()` called on it: it holds a live
+ * `Y.Doc` and no socket. Its store is frozen at retention time, which is why
+ * `queueSize` is captured on the record rather than read back through the
+ * store - a merge has to be able to sum it.
+ */
+interface RetainedUnsyncedBuffer {
+  readonly epicId: string;
+  /**
+   * The construction stamp of the handle that was retained - the host it was
+   * built for. Never substituted: a retention whose stamp is unknown is kept
+   * separate rather than given a placeholder, because the merge decision keys
+   * on this and a placeholder would merge two different hosts' buffers.
+   */
+  readonly hostStamp: string | null;
+  /**
+   * The owner identity this buffer belongs to, or `null` when the reading was
+   * not available at retention time (legitimate after B5's honest-absent
+   * write). `null` never matches anything, including another `null`.
+   */
+  readonly ownerIdentityKey: string | null;
+  /** Monotonic, so two retentions for one epic can never collide in storage. */
+  readonly seq: number;
+  readonly handle: OpenEpicStoreHandle;
+  /** Summed on merge; frozen otherwise. */
+  queueSize: number;
+}
+
+/**
+ * How a handle being retained identifies itself: the host it was constructed
+ * for, and the owner identity that host was proven to have at the time.
+ *
+ * Supplied by the caller rather than read here on purpose. The construction
+ * stamp lives in a `WeakMap` owned by the provider layer, and reaching back
+ * for it would make this module import from its own consumer.
+ */
+export interface RetainedHandleIdentity {
+  readonly hostStamp: string | null;
+  readonly ownerIdentityKey: string | null;
+}
+
+/**
+ * The existing retention a new one should merge into, or `null` for none.
+ *
+ * **A merge requires positive proof on all three axes.** Same epic and same
+ * host is not enough: an owner-identity rotation is only ever reachable on a
+ * single host (the identity comparison returns "stable" whenever the reading
+ * describes a different host), so two retentions straddling a rotation share
+ * an epic and a stamp while belonging to different identities. Merging those
+ * produces one buffer with no owner it can honestly flush to.
+ *
+ * A `null` on either side is absence of proof, not a match - including
+ * `null === null`, which is why this cannot be a plain equality check. That
+ * also keeps two retentions whose identity reading had not landed yet from
+ * colliding on a shared "unknown" key. Costing an extra inert retention is the
+ * safe direction; a wrong merge is not recoverable.
+ */
+function findMergeTarget(
+  bucket: readonly RetainedUnsyncedBuffer[],
+  identity: RetainedHandleIdentity,
+): RetainedUnsyncedBuffer | null {
+  if (identity.hostStamp === null) return null;
+  if (identity.ownerIdentityKey === null) return null;
+  return (
+    bucket.find(
+      (buffer) =>
+        buffer.hostStamp === identity.hostStamp &&
+        buffer.ownerIdentityKey === identity.ownerIdentityKey,
+    ) ?? null
+  );
+}
+
+/**
  * Registry lifecycle:
  *   - `acquire(epicId, factory)` returns the existing handle or constructs a
  *     new one via `factory(epicId)`; recency is bumped on every call so the
@@ -97,6 +198,22 @@ export class OpenEpicSessionRegistry {
    */
   private cachedUnsynced: ReadonlyArray<UnsyncedEditsEntry> = [];
   private cachedKey: string = "";
+  /**
+   * Dirty sessions preserved across a host re-point, by epic. Parallel to
+   * `entries` and deliberately NOT reachable through it: a retained buffer has
+   * no mounted tab and must never be handed back by `get`/`peek`/`acquire`,
+   * or a re-point would adopt the corpse of the session it just replaced.
+   *
+   * `prune()` cannot reach these and must not: MRU eviction exists to reclaim
+   * idle *clean* sessions, and every entry here is dirty by construction.
+   * Reclamation is `release` (tab closed - the user has answered the close
+   * confirmation), `drainUnsyncedEdits` (the user discarded), and
+   * `disposeAll` (sign-out).
+   */
+  private readonly retained = new Map<string, RetainedUnsyncedBuffer[]>();
+  private retainedCount: number = 0;
+  private retainedSoftCapLogged: boolean = false;
+  private nextRetentionSeq: number = 0;
 
   constructor(options: OpenEpicSessionRegistryOptions) {
     this.maxLive = options.maxLive;
@@ -104,6 +221,18 @@ export class OpenEpicSessionRegistry {
 
   size(): number {
     return this.entries.size;
+  }
+
+  /**
+   * How many separate buffers are retained for an epic.
+   *
+   * A test seam, and a necessary one: the projection deliberately merges every
+   * retention for an epic into ONE row, so "merged into the existing buffer"
+   * and "kept as a second buffer" are indistinguishable through the public
+   * read path - which is the entire question the merge rules turn on.
+   */
+  retainedCountForTests(epicId: string): number {
+    return this.retained.get(epicId)?.length ?? 0;
   }
 
   setReleaseListener(listener: ((epicId: string) => void) | null): void {
@@ -166,6 +295,7 @@ export class OpenEpicSessionRegistry {
     epicId: string,
     previousHandle: OpenEpicStoreHandle,
     nextHandle: OpenEpicStoreHandle,
+    previousIdentity: RetainedHandleIdentity,
   ): boolean {
     const previous = this.entries.get(epicId);
     if (previous === undefined || previous.handle !== previousHandle) {
@@ -173,10 +303,97 @@ export class OpenEpicSessionRegistry {
     }
     const next = this.createEntry(epicId, nextHandle, previous.mountedRefs);
     this.entries.set(epicId, next);
-    this.disposeEntry(previous, false);
+    // The one disposal path that used to ignore the rule `prune()` already
+    // follows: never destroy a session holding unsynced edits. Below `@1.2`
+    // the cross-host merge is unreachable, so this dispose WAS the data loss
+    // (F10). Gated on `isDirty` rather than `isClean()` deliberately -
+    // `isClean()` also requires an open transport, which a re-point has by
+    // definition taken away, so it would retain every failover including
+    // fully-synced ones and nothing would ever retire them.
+    if (previous.handle.store.getState().isDirty) {
+      this.retainDirtyHandle(previous, previousIdentity);
+    } else {
+      this.disposeEntry(previous, false);
+    }
     this.prune();
     this.emit();
     return true;
+  }
+
+  /**
+   * Move a dirty entry out of `entries` and into the retention, transport
+   * first. The caller has already installed the replacement, so this is only
+   * ever the outgoing handle.
+   */
+  private retainDirtyHandle(
+    entry: RegistryEntry,
+    identity: RetainedHandleIdentity,
+  ): void {
+    // Same teardown `disposeEntry` does, minus the handle: the entry's
+    // subscriptions close over `entry` and call `prune()`/`emit()`, and it is
+    // no longer in `entries` for either to be about.
+    this.unsubscribeEntry(entry);
+    // Before anything else: stop it dialing. A retained handle that keeps its
+    // stream client reports dial evidence for a host this window has left,
+    // into the selection authority's death-detection input.
+    entry.handle.detachTransport();
+
+    const queueSize = entry.handle.store.getState().unsyncedQueueSize;
+    const bucket = this.retained.get(entry.epicId) ?? [];
+    const mergeTarget = findMergeTarget(bucket, identity);
+    if (mergeTarget !== null) {
+      // Same epic, same host, same proven owner identity - so the same room,
+      // which is what makes this legal with no `roomId` and therefore legal
+      // below `@1.2`. Merge rather than append; a second slot for one room
+      // would show the user two rows for one task.
+      Y.applyUpdate(
+        mergeTarget.handle.doc,
+        Y.encodeStateAsUpdate(entry.handle.doc),
+      );
+      mergeTarget.queueSize += queueSize;
+      entry.handle.dispose();
+      return;
+    }
+
+    this.nextRetentionSeq += 1;
+    bucket.push({
+      epicId: entry.epicId,
+      hostStamp: identity.hostStamp,
+      ownerIdentityKey: identity.ownerIdentityKey,
+      seq: this.nextRetentionSeq,
+      handle: entry.handle,
+      queueSize,
+    });
+    this.retained.set(entry.epicId, bucket);
+    this.retainedCount += 1;
+    this.warnOnceIfRetentionGrowthLooksWrong();
+  }
+
+  private warnOnceIfRetentionGrowthLooksWrong(): void {
+    if (this.retainedCount <= RETAINED_UNSYNCED_SOFT_CAP) return;
+    if (this.retainedSoftCapLogged) return;
+    this.retainedSoftCapLogged = true;
+    // Logged, never enforced. Dropping one of these would destroy unsynced
+    // edits the user was never offered a decision about, which is the defect
+    // the retention exists to fix.
+    appLogger.error(
+      "[open-epic-session-registry] retained unsynced buffers above soft cap",
+      {
+        retainedCount: this.retainedCount,
+        softCap: RETAINED_UNSYNCED_SOFT_CAP,
+      },
+      new Error("retained unsynced buffers above soft cap"),
+    );
+  }
+
+  private disposeRetainedForEpic(epicId: string): void {
+    const bucket = this.retained.get(epicId);
+    if (bucket === undefined) return;
+    this.retained.delete(epicId);
+    this.retainedCount -= bucket.length;
+    for (const buffer of bucket) {
+      buffer.handle.dispose();
+    }
   }
 
   private acquireWithMountRefs(
@@ -241,9 +458,39 @@ export class OpenEpicSessionRegistry {
 
   release(epicId: string): void {
     const entry = this.entries.get(epicId);
-    if (entry === undefined) return;
+    // Retentions are reclaimed even when there is no live entry left: closing
+    // the tab is the user answering the close confirmation, which is now
+    // driven by the retained buffer too. Ordered before the early return so a
+    // retention cannot outlive the tab that could act on it.
+    this.disposeRetainedForEpic(epicId);
+    if (entry === undefined) {
+      this.emit();
+      return;
+    }
     this.entries.delete(epicId);
     this.disposeEntry(entry, true);
+    this.emit();
+  }
+
+  /**
+   * Discard every unsynced edit for an epic - live session and retained
+   * buffers alike.
+   *
+   * The action half of "merge for presentation, enumerate for action". The
+   * quit sheet shows one row per epic, so Discard is one decision per epic;
+   * routing it through `get(epicId)` would drain only the live session and
+   * silently skip the retained buffer the row is partly about.
+   *
+   * Draining a retention disposes it rather than clearing its queue: its store
+   * is frozen and it has no transport, so "discard these edits" and "destroy
+   * this buffer" are the same operation.
+   */
+  drainUnsyncedEdits(epicId: string): void {
+    const entry = this.entries.get(epicId);
+    if (entry !== undefined) {
+      entry.handle.store.getState().discardUnsyncedEdits();
+    }
+    this.disposeRetainedForEpic(epicId);
     this.emit();
   }
 
@@ -259,6 +506,20 @@ export class OpenEpicSessionRegistry {
       this.disposeEntry(entry, true);
     }
     this.entries.clear();
+    // Retentions go too. This is the auth lifecycle's hook - sign-out,
+    // user-switch, token expiry - and its whole contract is that no prior
+    // identity's Y.Doc survives into the next session. A retention that
+    // outlived it would be that leak with an unsynced buffer attached, and
+    // `entries.clear()` alone would not touch it. The edits are lost, which
+    // is the same policy already applied to a dirty live session here.
+    for (const bucket of this.retained.values()) {
+      for (const buffer of bucket) {
+        buffer.handle.dispose();
+      }
+    }
+    this.retained.clear();
+    this.retainedCount = 0;
+    this.retainedSoftCapLogged = false;
     this.emit();
   }
 
@@ -268,23 +529,79 @@ export class OpenEpicSessionRegistry {
    * title, falling back to snapshot-meta epicLight). Empty array means
    * every tab is either fully synced or has no unresolved local dirty state.
    */
-  getUnsyncedEdits(): ReadonlyArray<UnsyncedEditsEntry> {
+  /**
+   * The ONE walk over both collections. `getUnsyncedEdits()` and
+   * {@link hasUnsyncedEdits} are both projections of it, and nothing else may
+   * traverse `entries` to answer "does this epic have unsynced work".
+   *
+   * Two independent traversals is what let the projection and
+   * `epicHasUnsyncedEdits` drift apart in the first place - one gained the
+   * retained buffer and the other kept answering off the live entry alone,
+   * so the quit sheet protected work that tab-close discarded without asking.
+   *
+   * One row per epic, merged: the row is an offer to discard, discard is one
+   * decision per task, so two rows for one epic would be two buttons for one
+   * decision - and "live session vs retained buffer" is a fact about session
+   * machinery that means nothing to the reader.
+   */
+  private collectUnsyncedRows(): UnsyncedEditsEntry[] {
     const out: UnsyncedEditsEntry[] = [];
+    const seen = new Set<string>();
     for (const entry of this.entries.values()) {
       const state = entry.handle.store.getState();
-      if (!state.isDirty) continue;
-      const title = resolveUnsyncedTitle(
-        readLiveTitle(entry.handle, entry.epicId),
-        state.snapshotMeta?.epicLight?.title ?? "",
-        entry.epicId,
-      );
+      const retainedBucket = this.retained.get(entry.epicId) ?? [];
+      const retainedQueueSize = sumRetainedQueueSize(retainedBucket);
+      seen.add(entry.epicId);
+      // The row's EXISTENCE condition, not just its content: a clean live
+      // session beside a dirty retained buffer must still produce a row.
+      // Skipping on the live entry alone is exactly the state a re-point
+      // leaves behind - new session established and clean, retained buffer
+      // holding everything unsynced - so the first moment this matters is the
+      // first moment F10 does.
+      if (!state.isDirty && retainedBucket.length === 0) continue;
       out.push({
         epicId: entry.epicId,
-        title,
-        queueSize: state.unsyncedQueueSize,
-        isDirty: state.isDirty,
+        title: resolveUnsyncedTitle(
+          liveTitleCandidates(entry.handle, entry.epicId, state).concat(
+            retainedTitleCandidates(retainedBucket, entry.epicId),
+          ),
+          entry.epicId,
+        ),
+        queueSize: state.unsyncedQueueSize + retainedQueueSize,
+        isDirty: state.isDirty || retainedBucket.length > 0,
       });
     }
+    // Retentions whose live session is gone. Reachable while a tab is open on
+    // an epic whose live entry was pruned, and the buffer still holds work.
+    for (const [epicId, bucket] of this.retained) {
+      if (seen.has(epicId)) continue;
+      if (bucket.length === 0) continue;
+      out.push({
+        epicId,
+        title: resolveUnsyncedTitle(
+          retainedTitleCandidates(bucket, epicId),
+          epicId,
+        ),
+        queueSize: sumRetainedQueueSize(bucket),
+        isDirty: true,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * True when this epic has unsynced edits anywhere - live session or retained
+   * buffer. The predicate behind every tab-close, window-move and
+   * discard-confirmation gate.
+   */
+  hasUnsyncedEdits(epicId: string): boolean {
+    const state = this.entries.get(epicId)?.handle.store.getState() ?? null;
+    if (state !== null && state.isDirty) return true;
+    return (this.retained.get(epicId)?.length ?? 0) > 0;
+  }
+
+  getUnsyncedEdits(): ReadonlyArray<UnsyncedEditsEntry> {
+    const out = this.collectUnsyncedRows();
     const cacheKey = out
       .map((e) => `${e.epicId}:${e.queueSize}:${e.isDirty}:${e.title}`)
       .join("|");
@@ -330,9 +647,15 @@ export class OpenEpicSessionRegistry {
     }
   }
 
-  private disposeEntry(entry: RegistryEntry, notifyRelease: boolean): void {
+  private unsubscribeEntry(entry: RegistryEntry): void {
     if (entry.unsubscribe !== null) entry.unsubscribe();
     if (entry.unsubscribeActivity !== null) entry.unsubscribeActivity();
+    entry.unsubscribe = null;
+    entry.unsubscribeActivity = null;
+  }
+
+  private disposeEntry(entry: RegistryEntry, notifyRelease: boolean): void {
+    this.unsubscribeEntry(entry);
     entry.handle.dispose();
     if (notifyRelease) {
       this.releaseListener?.(entry.epicId);
@@ -356,14 +679,49 @@ function hasActiveAgentWork(epicId: string): boolean {
   return getEpicAgentActivity(epicId).working.size > 0;
 }
 
+/**
+ * First candidate that resolves to something real, live sources before
+ * retained, `epicId` only when nothing does.
+ *
+ * Live-first is a preference, NOT a precedence: a freshly re-pointed session
+ * has neither a populated Y.Doc title nor snapshot meta yet, so preferring the
+ * live entry unconditionally would put a bare epic UUID in the quit sheet -
+ * the one surface whose whole job is letting someone recognise the work they
+ * are about to lose - while the retained buffer holds the real name. Falling
+ * through on empty also removes a re-emit, since `title` is in the cache key.
+ */
 function resolveUnsyncedTitle(
-  liveTitle: string,
-  metaTitle: string,
+  candidates: readonly string[],
   epicId: string,
 ): string {
-  if (liveTitle.length > 0) return liveTitle;
-  if (metaTitle.length > 0) return metaTitle;
-  return epicId;
+  return candidates.find((candidate) => candidate.length > 0) ?? epicId;
+}
+
+function liveTitleCandidates(
+  handle: OpenEpicStoreHandle,
+  epicId: string,
+  state: OpenEpicState,
+): string[] {
+  return [
+    readLiveTitle(handle, epicId),
+    state.snapshotMeta?.epicLight?.title ?? "",
+  ];
+}
+
+function retainedTitleCandidates(
+  bucket: readonly RetainedUnsyncedBuffer[],
+  epicId: string,
+): string[] {
+  return bucket.flatMap((buffer) => [
+    readLiveTitle(buffer.handle, epicId),
+    buffer.handle.store.getState().snapshotMeta?.epicLight?.title ?? "",
+  ]);
+}
+
+function sumRetainedQueueSize(
+  bucket: readonly RetainedUnsyncedBuffer[],
+): number {
+  return bucket.reduce((total, buffer) => total + buffer.queueSize, 0);
 }
 
 function readLiveTitle(handle: OpenEpicStoreHandle, epicId: string): string {

@@ -37,6 +37,7 @@ import {
   EpicSessionHostClientContext,
   EpicSessionPresentationContext,
   getEpicStreamClientFactoryOverride,
+  getEpicSessionHandleHostId,
   getOpenEpicRegistry,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
@@ -562,10 +563,21 @@ export function EpicSessionProvider(
           LOCAL_ORIGIN,
         );
       }
+      // Identity of the handle being REPLACED, for the retention (F10). Read
+      // from the construction stamp rather than from `current.hostId`: the two
+      // agree today, but "derive, don't assert" is the whole of step 1, and
+      // this value decides whether a later retention merges into this buffer.
+      // A wrong host here would merge two hosts' unsynced edits into one
+      // document that can be honestly flushed to neither.
+      const previousIdentity = {
+        hostStamp: getEpicSessionHandleHostId(current.handle),
+        ownerIdentityKey: current.ownerIdentityKey,
+      };
       const replaced = registry.replaceMounted(
         epicId,
         current.handle,
         nextHandle,
+        previousIdentity,
       );
       if (!replaced) {
         nextHandle.dispose();

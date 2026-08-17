@@ -552,6 +552,30 @@ export interface OpenEpicState {
   clearPendingChatCreation: (chatId: string) => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
+  /**
+   * Closes the transport but KEEPS the Y.Doc, its replica and the unsynced
+   * queue alive and readable. Idempotent.
+   *
+   * The partial teardown a retained-dirty buffer needs (F10): after a host
+   * re-point the previous handle still holds unsynced edits the user has not
+   * been offered a decision about, so it cannot be disposed - but it must not
+   * keep dialing either. `EpicStreamClient` subscribes through the shared
+   * `WsStreamClient`, whose dial reports feed the selection authority's
+   * `ingestDial`; a retained handle reconnect-looping against a host the
+   * window has left would report dials from it, into the very evidence stream
+   * host-death detection reads. Its staleness guard does not filter them - it
+   * drops on `incarnationId` mismatch, and a retained handle is the same
+   * renderer incarnation. It would also reintroduce an idle-publish floor
+   * driven by write activity on a machine the user is no longer on.
+   *
+   * The store's projected state (`isDirty`, `unsyncedQueueSize`) deliberately
+   * freezes at its retention-time values: the detached handle takes no further
+   * input, so the frozen reading IS the honest one, and it is what the
+   * unsynced-edits projection reports. `discardUnsyncedEdits` still works -
+   * it operates on local state only - which is what lets the user act on a
+   * retained buffer.
+   */
+  detachTransport: () => void;
 
   // ── Actions: artifact + chat mutations (own `doc.transact`) ──────────
   // Creation is deliberately NOT a local doc write: `epic.createArtifact` /
@@ -653,6 +677,12 @@ export interface OpenEpicStoreHandle {
   readonly awareness: Awareness;
   readonly store: UseBoundStore<StoreApi<OpenEpicState>>;
   readonly dispose: () => void;
+  /**
+   * Closes the transport, keeps the doc and its unsynced queue. See
+   * {@link OpenEpicState.detachTransport} - a retained-dirty buffer must stop
+   * dialing a host the window has left without losing the edits it holds.
+   */
+  readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
@@ -818,6 +848,16 @@ export function createOpenEpicStore(
   };
 
   let disposed = false;
+  /**
+   * Set by `detachTransport`. Deliberately NOT `disposed`: a detached handle
+   * must keep serving local-state actions (`discardUnsyncedEdits` above all),
+   * which every `if (disposed) return` guard would turn into silent no-ops -
+   * leaving the user a retained buffer they can see and cannot drain.
+   * `dispose()` after a detach stays safe: both steps it repeats are
+   * idempotent (`detachInternal` returns on a null attachment,
+   * `closeStreamClient` on a null client).
+   */
+  let transportDetached = false;
   /**
    * Local root updates produced while the renderer↔host transport is down.
    *
@@ -3077,6 +3117,24 @@ export function createOpenEpicStore(
             publishChatRecords(null);
           },
 
+          detachTransport: () => {
+            if (disposed) return;
+            if (transportDetached) return;
+            transportDetached = true;
+            // Order mirrors `dispose`'s first two teardown steps and stops
+            // there: the projector unbinds so no late stream frame can write
+            // into a doc nobody is watching, the socket closes so this handle
+            // stops producing dial evidence for a host the window has left -
+            // and the doc, its replica and the unsynced queue are left intact,
+            // because they are the thing being retained.
+            projector.detach();
+            closeStreamClient();
+            // Say so rather than leaving the last live reading in place. The
+            // handle is unreachable from the transport now, and `isClean()`
+            // reads this field.
+            set({ hostTransportStatus: "closed" });
+          },
+
           dispose: () => {
             if (disposed) return;
             disposed = true;
@@ -3319,6 +3377,9 @@ export function createOpenEpicStore(
     store,
     dispose: () => {
       store.getState().dispose();
+    },
+    detachTransport: () => {
+      store.getState().detachTransport();
     },
     hotArtifactRoomIdsForTests: () => Array.from(artifactRoomReplicas.keys()),
     requestFreshSnapshot: () => {
