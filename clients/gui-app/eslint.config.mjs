@@ -584,7 +584,7 @@ export default tseslint.config(
       // `expect(mocks.selectById).not.toHaveBeenCalled()` - which PROVES the
       // invariant - is indistinguishable from a violation. Restoring them would
       // redden the assertions that enforce the rule. See the characterization
-      // test in `nested-focus-boundary-lint.test.ts`, which pins this and pairs
+      // test in `lint-rule-guards.test.ts`, which pins this and pairs
       // it against `tabActivate` presence so a wiped block cannot pass as
       // correct.
       //

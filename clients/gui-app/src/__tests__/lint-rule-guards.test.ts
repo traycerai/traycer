@@ -906,9 +906,9 @@ describe("eslint config gates the read-path import restriction to its allowlist"
  * called; restoring the ban here would redden those correct assertions and
  * pressure someone into deleting the very tests that enforce this rule.
  *
- * This file - `nested-focus-boundary-lint.test.ts` itself - matches
- * `testFileGlobs` too, so the guard suite you are reading runs under the
- * exemption it documents here.
+ * This file - `lint-rule-guards.test.ts` itself - matches `testFileGlobs`
+ * too, so the guard suite you are reading runs under the exemption it
+ * documents here.
  *
  * The residual risk this leaves open: a test could call the real
  * `selectById`/`selectionAuthority` and lint clean. That risk is accepted,
@@ -930,8 +930,15 @@ describe("eslint config gates the read-path import restriction to its allowlist"
  * staying present is independent proof the block still composes at all.
  */
 describe("eslint config: test-files block deliberately exempts selectById (characterization, not a regression)", () => {
-  const TEST_FILE = "src/__tests__/nested-focus-boundary-lint.test.ts";
+  const TEST_FILE = "src/__tests__/lint-rule-guards.test.ts";
 
+  // This anchor is load-bearing, not a courtesy check, and the rename that
+  // produced this comment is the proof: `calculateConfigForFile` resolves a
+  // path by GLOB, so it answers happily for a file that does not exist. With
+  // the file renamed and this constant left stale, the two arms below both
+  // PASSED - they were characterizing a phantom - and this assertion was the
+  // only one that failed. Delete it as redundant and those two go vacuous
+  // silently.
   it("anchors on this file, which must exist on disk", () => {
     expect(existsSync(path.join(guiAppRoot, TEST_FILE))).toBe(true);
   });
