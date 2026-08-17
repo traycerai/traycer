@@ -4,6 +4,7 @@ export const notificationsMutationKeys = {
   resolveAll: () => ["notifications.resolveAll"] as const,
   markEntityRead: () => ["notifications.markEntityRead"] as const,
   markAllRead: () => ["notifications.markAllRead"] as const,
+  clearAll: () => ["notifications.clearAll"] as const,
   cloudMarkRead: () => ["notifications.cloudFeed.markRead"] as const,
   cloudMarkAllRead: () => ["notifications.cloudFeed.markAllRead"] as const,
   cloudResolve: () => ["notifications.cloudFeed.resolve"] as const,

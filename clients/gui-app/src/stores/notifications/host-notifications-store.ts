@@ -138,6 +138,10 @@ interface HostNotificationsState {
     readAt: number,
     expectedSnapshotEpoch: number,
   ) => void;
+  clearAllLocally: (
+    beforeUpdatedAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
   markSummaryUnknown: () => void;
   setPageStatus: (
     track: "attention" | "recent" | "unreadRecent",
@@ -367,6 +371,17 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
           .map((entry) => entry.id);
         const byId = applyReadStateById(state.byId, ids, readAt, undefined);
         return byId === state.byId ? state : { byId };
+      });
+    },
+
+    clearAllLocally: (beforeUpdatedAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const ids = Object.values(state.byId)
+          .filter((entry) => entry.updatedAt <= beforeUpdatedAt)
+          .map((entry) => entry.id);
+        const byId = withoutIds(state.byId, ids);
+        return byId === state.byId ? state : { byId, summary: null };
       });
     },
 
