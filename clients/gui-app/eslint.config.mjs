@@ -588,12 +588,43 @@ export default tseslint.config(
       // it against `tabActivate` presence so a wiped block cannot pass as
       // correct.
       //
-      // `nativeTitleTooltip` / `forwardRef`: NOT a decision, pending
-      // adjudication. Restoring them surfaces 19 occurrences across 14 files
-      // (12 forwardRef, 7 title), each of which needs a per-file call: a test
-      // may legitimately name `forwardRef` because it is testing forwardRef
-      // behaviour. Closed one family at a time so each closure's reddened
-      // anchors record exactly what widened and when.
+      // `nativeTitleTooltip` / `forwardRef`: DELIBERATE. Both bans govern
+      // SHIPPED PRODUCT SURFACES, and every occurrence in a test file is a test
+      // double imitating a contract it does not own.
+      //
+      // Censused, not sampled: restoring both surfaces 19 occurrences across 14
+      // files, and all 19 are mock scaffolding - 18 inside a `vi.mock` /
+      // `vi.hoisted` factory, and the 19th is the `forwardRef` import that feeds
+      // one of those factories in the same file.
+      //
+      // The `forwardRef` ban is React-19 migration debt about OUR components; a
+      // double standing in for `react-zoom-pan-pinch` or a Radix item, both of
+      // which really do forward a ref, is matching a contract rather than
+      // carrying that debt. The `title` ban is about a tooltip a USER hovers,
+      // and a mock forwarding `title` to a DOM node so a test can observe it is
+      // instrumenting a tooltip, not shipping one.
+      //
+      // What makes it conclusive rather than arguable: several of those
+      // `title={props.title}` lines ARE what the assertions read. Applying the
+      // rule literally would edit away the observation the test exists to make.
+      // A lint rule that deletes the mechanism of the tests it touches is being
+      // applied outside its domain - that is the tell.
+      //
+      // Not per-line waivers, and the difference from
+      // `muted-fill-on-raised-surface-lint.test.ts` is the point: that guard
+      // takes waivers because its population is MIXED, so the waiver carries the
+      // reason for THAT line. Here the population is uniformly clean, so a
+      // waiver on all 19 would carry no information and would train readers to
+      // skip waivers that do. Per-line waivers are for mixed populations; a
+      // uniform population wants one stated exemption. A selector narrow enough
+      // to mean "inside a `vi.mock` callback" is not expressible, and one that
+      // tried would be the fails-by-passing shape this file keeps out.
+      //
+      // Residual, precisely: a component DEFINED in a test file and then
+      // imported by product code would escape both bans. That is pathological,
+      // would not survive review, and no rule in this file is the right place to
+      // catch it. Everything short of it - a mock, a fixture, a harness
+      // component - is scaffolding these two bans were never written about.
       "no-restricted-syntax": syntaxRestrictions({
         exempt: [
           "nativeTitleTooltip",
