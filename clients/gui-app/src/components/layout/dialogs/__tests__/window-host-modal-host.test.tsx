@@ -376,7 +376,7 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
   });
 
-  it("cold-start, settled failure (provisioningError set): Retry, Report issue and Open settings(button) all present", async () => {
+  it("cold-start, settled failure (provisioningError set): Retry, Report issue and Open settings(button) present; spinner + stage line absent; attempt panel + log toggle present", async () => {
     applySnapshot({
       attached: true,
       effectiveHostId: LOCAL_HOST_ID,
