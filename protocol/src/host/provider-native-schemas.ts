@@ -855,13 +855,15 @@ export type ProviderSkill = z.infer<typeof providerSkillSchema>;
  * Frozen skill row as of the `providers.list@7.0` cut. Live
  * {@link providerSkillSchema} grew `origin` / `conflict`; v7.0 must not.
  */
-export const providerSkillSchemaV70 = z.object({
+export const providerSkillSchemaV70Preimage = z.object({
   name: z.string(),
   description: z.string().nullable(),
   path: z.string(),
   source: providerSkillSourceBadgeSchema,
 });
-export type ProviderSkillV70 = z.infer<typeof providerSkillSchemaV70>;
+export type ProviderSkillV70Preimage = z.infer<
+  typeof providerSkillSchemaV70Preimage
+>;
 
 export const providerSkillInspectCandidateSchema = z.object({
   name: z.string().min(1),
@@ -1141,7 +1143,7 @@ export type NativeListResult = z.infer<typeof nativeListResultSchema>;
  * v7.0 must not. Other arms stay pointed at the live object schemas they
  * already used - those have not grown.
  */
-const nativeListSuccessResultSchemaV70 = z.discriminatedUnion("kind", [
+const nativeListSuccessResultSchemaV70Preimage = z.discriminatedUnion("kind", [
   z.object({
     ok: z.literal(true),
     kind: z.literal("mcp"),
@@ -1155,7 +1157,7 @@ const nativeListSuccessResultSchemaV70 = z.discriminatedUnion("kind", [
   z.object({
     ok: z.literal(true),
     kind: z.literal("skills"),
-    skills: z.array(providerSkillSchemaV70),
+    skills: z.array(providerSkillSchemaV70Preimage),
   }),
   z.object({
     ok: z.literal(true),
@@ -1169,11 +1171,13 @@ const nativeListSuccessResultSchemaV70 = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const nativeListResultSchemaV70 = z.union([
-  nativeListSuccessResultSchemaV70,
+export const nativeListResultSchemaV70Preimage = z.union([
+  nativeListSuccessResultSchemaV70Preimage,
   providerNativeErrorResultSchema,
 ]);
-export type NativeListResultV70 = z.infer<typeof nativeListResultSchemaV70>;
+export type NativeListResultV70Preimage = z.infer<
+  typeof nativeListResultSchemaV70Preimage
+>;
 
 // ── Carrier payloads: mutate (providers.setEnabled@2.1) ────────────────────
 
@@ -2063,17 +2067,23 @@ export type ModelProviderAuthResult = z.infer<
   typeof modelProviderAuthResultSchema
 >;
 
-// ── Frozen v7.0 native payloads ────────────────────────────────────────────
+// ── v7.0 pre-image native payloads ─────────────────────────────────────────
 //
-// The capability descriptor as the frozen `providers.list@7.0` line carries
-// it, hand-copied. `providerCliStateSchemaV70` reads the whole descriptor
+// The capability descriptor as it stood BEFORE `modelProviders` landed,
+// hand-copied. `providerCliStateSchemaV70Preimage` reads the whole descriptor
 // through one `.catch()`, which is what makes growth here FATAL rather than
 // additive: one unknown enum member fails its array, then the object, and the
-// `.catch()` serves the empty default - a v7.0 peer would lose MCP, Plugins
-// and Skills over a value it merely could not read. So every closed enum
-// reachable from the descriptor is copied; the bridge down from the head line
-// projects live growth away (see `projectNativeCapabilitiesToV70`) instead of
-// letting a reparse hit that trap.
+// `.catch()` serves the empty default - a reader would lose MCP, Plugins and
+// Skills over a value it merely could not read. So every closed enum reachable
+// from the descriptor is copied; the projection down from the live descriptor
+// strips that growth away (see `projectNativeCapabilitiesToV70Preimage`)
+// instead of letting a reparse hit the trap.
+//
+// Only the copies that actually DIVERGED from live carry `Preimage`. The enums
+// below that still equal their live counterparts keep a bare `V70`, because an
+// unchanged shape is still exactly what v7.0 serializes - that name blocks
+// nothing, and `provider-model-providers-compat.test.ts` fails the day one of
+// them stops matching live.
 //
 // The deep JSON-Schema snapshot in
 // `__tests__/__fixtures__/frozen-catalog-lines.ts` pins the v7.0 shape end to
@@ -2090,7 +2100,7 @@ export const providerEnvOverrideScopeSchemaV70 = z.enum([
   "native-config-only",
 ]);
 
-export const providerSettingsTabSchemaV70 = z.enum([
+export const providerSettingsTabSchemaV70Preimage = z.enum([
   "general",
   "env",
   "usage",
@@ -2099,13 +2109,13 @@ export const providerSettingsTabSchemaV70 = z.enum([
   "skills",
   // `modelProviders` is NOT here. The tab rides the live enum (the v8.0 head
   // line); a v7.0 peer receives `supportedTabs` through
-  // `projectNativeCapabilitiesToV70` below, which FILTERS the array rather
+  // `projectNativeCapabilitiesToV70Preimage` below, which FILTERS the array rather
   // than reparsing it - the enum rejects a whole array for one unknown
   // member, and the capability object's `.catch()` would then serve an empty
   // default, costing the peer MCP, Plugins and Skills over one tab id.
 ]);
-export type ProviderSettingsTabV70 = z.infer<
-  typeof providerSettingsTabSchemaV70
+export type ProviderSettingsTabV70Preimage = z.infer<
+  typeof providerSettingsTabSchemaV70Preimage
 >;
 
 export const providerMcpTransportSchemaV70 = z.enum(["stdio", "http", "sse"]);
@@ -2185,7 +2195,7 @@ export const providerPluginsCapabilitiesSchemaV70 = z.object({
   traycerSessionToolsNotice: z.boolean(),
 });
 
-export const providerSkillsCapabilitiesSchemaV70 = z.object({
+export const providerSkillsCapabilitiesSchemaV70Preimage = z.object({
   actionScopes: z.object({
     list: z.array(providerNativeScopeSchemaV70),
     add: z.array(providerNativeScopeSchemaV70),
@@ -2194,8 +2204,8 @@ export const providerSkillsCapabilitiesSchemaV70 = z.object({
     remove: z.array(providerNativeScopeSchemaV70),
   }),
 });
-export type ProviderSkillsCapabilitiesV70 = z.infer<
-  typeof providerSkillsCapabilitiesSchemaV70
+export type ProviderSkillsCapabilitiesV70Preimage = z.infer<
+  typeof providerSkillsCapabilitiesSchemaV70Preimage
 >;
 
 /**
@@ -2210,25 +2220,25 @@ export type ProviderSkillsCapabilitiesV70 = z.infer<
  * live trees. Pointing them at the live trees would have pinned the OUTER
  * object while leaving every enum inside it free to grow - and this descriptor
  * is the one place where growth is not merely leaked but fatal, because
- * `providerCliStateSchemaV70` reads the whole thing through one `.catch()`.
+ * `providerCliStateSchemaV70Preimage` reads the whole thing through one `.catch()`.
  */
-export const providerNativeCapabilitiesSchemaV70 = z.object({
-  supportedTabs: z.array(providerSettingsTabSchemaV70),
+export const providerNativeCapabilitiesSchemaV70Preimage = z.object({
+  supportedTabs: z.array(providerSettingsTabSchemaV70Preimage),
   envOverrideScope: providerEnvOverrideScopeSchemaV70.optional(),
   mcp: providerMcpCapabilitiesSchemaV70.nullable(),
   plugins: providerPluginsCapabilitiesSchemaV70.nullable(),
-  skills: providerSkillsCapabilitiesSchemaV70.nullable(),
+  skills: providerSkillsCapabilitiesSchemaV70Preimage.nullable(),
 });
-export type ProviderNativeCapabilitiesV70 = z.infer<
-  typeof providerNativeCapabilitiesSchemaV70
+export type ProviderNativeCapabilitiesV70Preimage = z.infer<
+  typeof providerNativeCapabilitiesSchemaV70Preimage
 >;
 
 /**
- * The v7.0-shaped counterpart of {@link DEFAULT_PROVIDER_NATIVE_CAPABILITIES},
- * used by the frozen v7.0 state's own `.catch()` so that line keeps decoding
- * exactly as it does today.
+ * The pre-image counterpart of {@link DEFAULT_PROVIDER_NATIVE_CAPABILITIES},
+ * used by `providerCliStateSchemaV70Preimage`'s own `.catch()` so that shape
+ * keeps decoding exactly as it does today.
  */
-export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitiesV70 =
+export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCapabilitiesV70Preimage =
   {
     supportedTabs: ["general", "env", "usage"],
     mcp: null,
@@ -2237,27 +2247,34 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
   };
 
 /**
- * Project a live capability descriptor to the frozen v7.0 shape for the
- * v8->v7 response bridge.
+ * Project a live capability descriptor onto the v7.0 PRE-IMAGE shape.
+ *
+ * NO PRODUCTION CALLER TODAY, and that is deliberate rather than an oversight
+ * to tidy away. This fed the v8->v7 response bridge; the release collapsed v8.0
+ * into v7.0 and deleted that hop, leaving the projection with only its own
+ * tests. It is kept because it is the ready-made cut the next v8.0 needs - the
+ * three decisions below were the hard part, not the code - and its tests keep
+ * documenting what a pre-image reader sees. Delete it only together with the
+ * pre-image schemas it targets.
  *
  * Three cuts, made in different ways on purpose:
  *
  * 1. `supportedTabs` is FILTERED before the parse, never reparsed:
  *    `z.array(enum)` rejects a whole array for one unknown member, the
- *    capability object fails with it, and the `.catch()` on the v7.0 state
- *    would then serve the empty default - a v7.0 client would lose MCP,
+ *    capability object fails with it, and the `.catch()` on the pre-image
+ *    state would then serve the empty default - a reader would lose MCP,
  *    Plugins AND Skills over one tab id it never knew.
- * 2. `modelProviders` is dropped. The v7.0 line does not model it; the
- *    strict reparse through `providerNativeCapabilitiesSchemaV70` is what
+ * 2. `modelProviders` is dropped. The pre-image does not model it; the strict
+ *    reparse through `providerNativeCapabilitiesSchemaV70Preimage` is what
  *    performs the drop, and the destructure writes it out so the projection
  *    reads as the contract it is.
  * 3. Skills `inspect` / `edit` / `update` actionScopes are dropped. The
- *    frozen v7.0 table does not model them; a live descriptor that
- *    advertises them must not leak those keys to a v7.0 peer.
+ *    pre-image table does not model them; a live descriptor that advertises
+ *    them must not leak those keys into the pre-image shape.
  */
-function projectSkillsCapabilitiesToV70(
+function projectSkillsCapabilitiesToV70Preimage(
   skills: ProviderSkillsCapabilities | null,
-): ProviderSkillsCapabilitiesV70 | null {
+): ProviderSkillsCapabilitiesV70Preimage | null {
   if (skills === null) {
     return null;
   }
@@ -2270,14 +2287,14 @@ function projectSkillsCapabilitiesToV70(
   return { actionScopes: legacyScopes };
 }
 
-export function projectNativeCapabilitiesToV70(
+export function projectNativeCapabilitiesToV70Preimage(
   capabilities: ProviderNativeCapabilities,
-): ProviderNativeCapabilitiesV70 {
-  const v70Tabs = new Set<string>(providerSettingsTabSchemaV70.options);
+): ProviderNativeCapabilitiesV70Preimage {
+  const v70Tabs = new Set<string>(providerSettingsTabSchemaV70Preimage.options);
   const { modelProviders: _modelProviders, ...rest } = capabilities;
-  return providerNativeCapabilitiesSchemaV70.parse({
+  return providerNativeCapabilitiesSchemaV70Preimage.parse({
     ...rest,
-    skills: projectSkillsCapabilitiesToV70(capabilities.skills),
+    skills: projectSkillsCapabilitiesToV70Preimage(capabilities.skills),
     supportedTabs: capabilities.supportedTabs.filter((tab) => v70Tabs.has(tab)),
   });
 }

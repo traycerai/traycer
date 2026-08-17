@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providerMutationCliStateSchemaV20,
@@ -21,7 +21,7 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
-  providersListResponseSchemaV70,
+  providersListResponseSchemaV70Preimage,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -298,7 +298,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     // hop: this bridge absorbed the v7 -> v8 hop's when that unreleased major
     // collapsed into v7.0, and the composition has to survive the merge.
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual({
-      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
       modelProviders: null,
     });
     expect(upgraded.native).toBeNull();

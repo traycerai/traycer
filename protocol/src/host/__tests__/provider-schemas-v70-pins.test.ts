@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   downgradeRequestAcrossMajors,
   downgradeResponseAcrossMajors,
@@ -8,37 +9,42 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   providerCliStateSchema,
-  providerCliStateSchemaV70,
+  providerCliStateSchemaV70Preimage,
   providerIdSchema,
   providerIdSchemaV70,
   providerLoginCapabilitySchemaV70,
   providerManagedInstallErrorReasonSchemaV70,
-  providerManagedInstallStateSchemaV70,
+  providerManagedInstallStateSchemaV70Preimage,
   providersListRequestSchema,
   providersListRequestSchemaV70,
   providersListResponseSchema,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV70,
+  providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
- * Pins the `providersList*SchemaV70` family - the v7-era wire shapes, hand-
- * copied off the live schemas instead of aliased to them (see the freeze
- * comment on `providerCliStateBaseShapeV70` in `provider-schemas.ts`).
+ * Pins the frozen `providers.list` shapes around v7.0 - hand-copied off the
+ * live schemas instead of aliased to them (see the freeze comment on
+ * `providerCliStateBaseShapeV70Preimage` in `provider-schemas.ts`).
  *
- * These shapes BACK NO CONTRACT any more, and that is worth stating plainly
- * because the file reads as if they do. They were frozen when the version-
- * manager fields opened a v8.0 above an unreleased v7.0, so that growing the
- * live shape could not reach the v7.0 contract. The release collapsed those
- * two tree-only majors back into one: v7.0 is the head again and points at the
- * canonical schemas, and the pre-image these exports capture was negotiated by
- * no peer, ever.
+ * TWO different kinds of shape share this file, and the names now say which is
+ * which. The `*V70Preimage` exports BACK NO CONTRACT and never did: they were
+ * frozen when the version-manager fields opened a v8.0 above an unreleased
+ * v7.0, so that growing the live shape could not reach the v7.0 contract. The
+ * release collapsed those two tree-only majors back into one, so v7.0 is the
+ * head again and points at the canonical schemas - the shape those exports
+ * capture was negotiated by no peer, ever.
  *
- * What still makes them worth pinning is that the provider compat suites and
- * `rate-limit/schemas.ts` parse through them as the shared "v7-era" shape, and
- * several of them (`providerCliStateBaseShapeV70`) still reference live sub-
- * schemas. A pin is what stops live growth from silently redefining what those
- * callers assert.
+ * `providersListRequestSchemaV70` is the other kind. The collapse moved only
+ * the response, so the frozen request still equals what v7.0 serializes: a real
+ * freeze, which is why it keeps a bare `V70` name. The equality is asserted
+ * below rather than assumed, because nothing else enforces it.
+ *
+ * What makes the pre-image worth pinning is that the v6 -> v7 bridge re-parses
+ * every upgraded row through it and the provider compat suites share it, while
+ * parts of it (`providerCliStateBaseShapeV70Preimage`) still reference live
+ * sub-schemas. A pin is what stops live growth from silently redefining what
+ * those callers assert.
  *
  * The PRE-SHIP freeze this file used to provide for v7.0 now lives in
  * `__tests__/__fixtures__/frozen-catalog-lines.ts`, which dumps the live shape
@@ -133,8 +139,8 @@ const EXPECTED_PROVIDER_ID_V70_OPTIONS = [
 ].sort();
 
 describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
-  it("providerCliStateSchemaV70 has exactly these 19 keys", () => {
-    expect(Object.keys(providerCliStateSchemaV70.shape).sort()).toEqual(
+  it("providerCliStateSchemaV70Preimage has exactly these 19 keys", () => {
+    expect(Object.keys(providerCliStateSchemaV70Preimage.shape).sort()).toEqual(
       EXPECTED_PROVIDER_CLI_STATE_V70_KEYS,
     );
   });
@@ -145,10 +151,10 @@ describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
     );
   });
 
-  it("providersListResponseSchemaV70 has exactly these keys", () => {
-    expect(Object.keys(providersListResponseSchemaV70.shape).sort()).toEqual(
-      EXPECTED_PROVIDERS_LIST_RESPONSE_V70_KEYS,
-    );
+  it("providersListResponseSchemaV70Preimage has exactly these keys", () => {
+    expect(
+      Object.keys(providersListResponseSchemaV70Preimage.shape).sort(),
+    ).toEqual(EXPECTED_PROVIDERS_LIST_RESPONSE_V70_KEYS);
   });
 
   it("providerIdSchemaV70 has exactly these 19 ids", () => {
@@ -163,7 +169,7 @@ describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
 describe("the v7-era schemas are distinct objects from the canonical live ones", () => {
   it("providersListRequestSchemaV70 / ResponseSchemaV70 are not the canonical exports", () => {
     expect(providersListRequestSchemaV70).not.toBe(providersListRequestSchema);
-    expect(providersListResponseSchemaV70).not.toBe(
+    expect(providersListResponseSchemaV70Preimage).not.toBe(
       providersListResponseSchema,
     );
   });
@@ -180,7 +186,9 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     expect(contract.requestSchema).toBe(providersListRequestSchema);
     expect(contract.responseSchema).toBe(providersListResponseSchema);
     expect(contract.requestSchema).not.toBe(providersListRequestSchemaV70);
-    expect(contract.responseSchema).not.toBe(providersListResponseSchemaV70);
+    expect(contract.responseSchema).not.toBe(
+      providersListResponseSchemaV70Preimage,
+    );
   });
 
   it("providerIdSchemaV70 includes huggingface, the sole v7.0-only provider id", () => {
@@ -206,10 +214,11 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
 
 // The version-manager fields ride the LIVE schema, which `providers.list@7.0`
 // now binds directly - the release collapsed the unreleased v8.0 that used to
-// carry them into v7.0. `providerCliStateSchemaV70` survives as the v7.0-SHAPED
-// PIN that the older bridges and compat suites parse through, not as the v7.0
-// wire. These tests keep that contrast real: the same payload is accepted by
-// the live schema and loses the fields only when decoded through the pin.
+// carry them into v7.0. `providerCliStateSchemaV70Preimage` survives as the
+// PRE-IMAGE that the v6 -> v7 bridge and the compat suites parse through, not
+// as the v7.0 wire. These tests keep that contrast real: the same payload is
+// accepted by the live schema and loses the fields only when decoded through
+// the pre-image.
 describe("the v7.0 pin does not track the live shape forward", () => {
   it("drops the live provider-row fields (packId, managedVersions, nextRunBinary)", () => {
     const liveShapedRow = {
@@ -247,7 +256,7 @@ describe("the v7.0 pin does not track the live shape forward", () => {
         version: "1.2.3",
       },
     });
-    const parsed = providerCliStateSchemaV70.parse(liveShapedRow);
+    const parsed = providerCliStateSchemaV70Preimage.parse(liveShapedRow);
     expect(parsed).not.toHaveProperty("packId");
     expect(parsed).not.toHaveProperty("managedVersions");
     expect(parsed).not.toHaveProperty("nextRunBinary");
@@ -259,7 +268,7 @@ describe("the v7.0 pin does not track the live shape forward", () => {
       profiles: [],
       managedInstallState: { status: "installed", version: "1.2.3" },
     };
-    const parsed = providerCliStateSchemaV70.parse(liveShapedRow);
+    const parsed = providerCliStateSchemaV70Preimage.parse(liveShapedRow);
     expect(parsed.managedInstallState).toEqual({ status: "installed" });
     expect(parsed.managedInstallState).not.toHaveProperty("version");
 
@@ -272,7 +281,8 @@ describe("the v7.0 pin does not track the live shape forward", () => {
         version: "1.2.3",
       },
     };
-    const parsedDownloading = providerCliStateSchemaV70.parse(downloadingRow);
+    const parsedDownloading =
+      providerCliStateSchemaV70Preimage.parse(downloadingRow);
     expect(parsedDownloading.managedInstallState).toEqual({
       status: "downloading",
       percent: 50,
@@ -380,7 +390,7 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
       providers: [canonical],
       native: NATIVE_RESULT_SAMPLE,
     });
-    const viaFrozen = providersListResponseSchemaV70.parse({
+    const viaFrozen = providersListResponseSchemaV70Preimage.parse({
       providers: [canonical],
       native: NATIVE_RESULT_SAMPLE,
     });
@@ -419,6 +429,21 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     };
     expect(providersListRequestSchemaV70.parse(raw)).toEqual(
       providersListRequestSchema.parse(raw),
+    );
+  });
+
+  // The round-trip above drives ONE sample value, which an added optional field
+  // would slip straight past. This compares the schemas themselves, and it is
+  // what keeps the bare `V70` name honest: v7.0 binds the LIVE request, so the
+  // day a field is added there the frozen copy stops being the v7.0 wire - the
+  // exact drift the response side had to be renamed out of. Red here means
+  // "update the copy, or rename it `Preimage` like the response", never
+  // "regenerate to green".
+  it("the frozen v7.0 request is still exactly the live request", () => {
+    expect(
+      z.toJSONSchema(providersListRequestSchemaV70, { unrepresentable: "any" }),
+    ).toEqual(
+      z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
     );
   });
 });
@@ -501,7 +526,9 @@ describe("upgrade bridge v6.0 -> v7.0 still fills native / registry fields / ter
     expect(upgraded.providers[0].loginCapability).toBeNull();
     // The more precise assertion the freeze enables: the upgraded payload is
     // a valid v7.0 wire, not just a valid canonical one.
-    expect(() => providersListResponseSchemaV70.parse(upgraded)).not.toThrow();
+    expect(() =>
+      providersListResponseSchemaV70Preimage.parse(upgraded),
+    ).not.toThrow();
   });
 });
 
@@ -513,17 +540,18 @@ describe("upgrade bridge v6.0 -> v7.0 still fills native / registry fields / ter
 // REJECTING them after the live union starts accepting them (a `paused` arm,
 // a new reason), which the analogous "growth" tests above (packId,
 // managedVersions, version) demonstrate concretely for the sibling schemas.
-describe("providerManagedInstallStateSchemaV70 pins the v7.0 arm and reason sets", () => {
+describe("providerManagedInstallStateSchemaV70Preimage pins the v7.0 arm and reason sets", () => {
   it("rejects a fifth status arm", () => {
     expect(
-      providerManagedInstallStateSchemaV70.safeParse({ status: "paused" })
-        .success,
+      providerManagedInstallStateSchemaV70Preimage.safeParse({
+        status: "paused",
+      }).success,
     ).toBe(false);
   });
 
   it("rejects an unmodeled error reason", () => {
     expect(
-      providerManagedInstallStateSchemaV70.safeParse({
+      providerManagedInstallStateSchemaV70Preimage.safeParse({
         status: "error",
         reason: "some-future-reason",
         message: "boom",
@@ -560,7 +588,7 @@ describe("providerManagedInstallStateSchemaV70 pins the v7.0 arm and reason sets
   it("still accepts every reason it does model", () => {
     for (const reason of providerManagedInstallErrorReasonSchemaV70.options) {
       expect(
-        providerManagedInstallStateSchemaV70.safeParse({
+        providerManagedInstallStateSchemaV70Preimage.safeParse({
           status: "error",
           reason,
           message: "boom",

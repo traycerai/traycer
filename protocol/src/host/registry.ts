@@ -611,7 +611,7 @@ import {
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
   upgradeProviderCliStateV10ToV20,
-  upgradeProviderCliStateListToV70,
+  upgradeProviderCliStateListToV70Preimage,
   upgradeProviderCliStateV10ToMutationV20,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathRequestSchemaV10,
@@ -646,7 +646,6 @@ import {
   providersSetTerminalAgentArgsResponseSchemaV20,
   type DowngradableToV10ProviderState,
   type ProviderCliState,
-
   type ProviderCliStateV10,
   type ProviderMutationCliStateV20,
   type ProviderLoginCapability,
@@ -839,7 +838,6 @@ export const worktreeListByWorkspacePathsUpgradeV13ToV14 = defineUpgradePath<
     })),
   }),
 });
-
 
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
@@ -1579,16 +1577,25 @@ export const providersListV60 = defineRpcContract({
 // head, which keeps pointing at the canonical schemas; freezing under `V80`
 // would leave v7.0 bound to a schema that keeps moving.
 //
-// That name is currently OCCUPIED, and this is the trap: the existing
-// `providersListRequestSchemaV70` / `providersListResponseSchemaV70` /
-// `providerCliStateSchemaV70` exports are NOT the v7.0 wire. They are the
-// pre-image this line had BEFORE the version-manager fields arrived, back when
-// those fields sat on a v8.0 above it. No peer ever negotiated that shape and
-// no contract binds it now; it survives only as the shared "v7-era" fixture the
-// provider compat suites and `rate-limit/schemas.ts` parse through. Whoever
-// opens v8.0 must therefore rename that pre-image for what it is (it is a
-// fixture, not a line) before taking the real v7.0 freeze under the `V70`
-// names - not add a third naming scheme beside it.
+// The response-side `V70` names are FREE for that freeze. They were occupied
+// until this line's pre-image was renamed out of the way: the
+// `*V70Preimage` exports (`providersListResponseSchemaV70Preimage`,
+// `providerCliStateSchemaV70Preimage` and the leaves they reach) are the shape
+// this line had BEFORE the version-manager fields arrived, back when those
+// fields sat on a v8.0 above it. No peer ever negotiated that shape and no
+// contract binds it.
+//
+// It is not dead code, so do not delete it to make room: the v6 -> v7 bridge's
+// FIRST pass re-parses every row through it before the version-manager fill
+// lands on top (see `upgradeProviderCliStateListToV70Preimage` below), and the
+// provider compat suites share it as their v7-era shape. Take the real v7.0
+// freeze under the `V70` names and leave the pre-image beside it - do not add a
+// third naming scheme.
+//
+// The REQUEST side needs no such work. The collapse moved only the response, so
+// `providersListRequestSchemaV70` still equals what v7.0 serializes and is
+// already the real freeze; `providersListRequestSchemaBeforeV70` covers
+// v1.0-v6.0. Only the response ever diverged.
 export const providersListV70 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 0 } as const,
@@ -1611,7 +1618,7 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
   // `upgradeResponseToVersion` chains these callbacks by cast with no re-parse
   // - so a fill onto a frozen target is simply dropped. They are all filled on
   // the v6.0 -> v7.0 hop instead, whose target
-  // (`providersListResponseSchemaV70`) is the first one that models them. That
+  // (`providersListResponseSchemaV70Preimage`) is the first one that models them. That
   // target is now frozen too, which does not move the fill: v7.0 models these
   // fields, and freezing a shape pins what it models rather than removing it.
   upgradeRequest: (request) => request,
@@ -1644,7 +1651,7 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
   //
   // `terminalLogin` is filled here for the same reason and on the same hop:
   // this is the first bridge whose target models it. Stated explicitly rather
-  // than left to `upgradeProviderCliStateListToV70`'s live re-parse, whose
+  // than left to `upgradeProviderCliStateListToV70Preimage`'s live re-parse, whose
   // job is `nativeCapabilities` - the fill must not silently depend on a
   // re-parse that exists for another field. See
   // `upgradeLoginCapabilityFromV40`.
@@ -1657,7 +1664,7 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
   upgradeRequest: (request) => ({ ...request, native: null }),
   // Two passes, in order, and the order is load-bearing.
   //
-  // `upgradeProviderCliStateListToV70` first: it re-parses each row through the
+  // `upgradeProviderCliStateListToV70Preimage` first: it re-parses each row through the
   // v7-era shape, which is what normalizes a v6.0 row (dropping what v6.0 alone
   // carried, applying the `.catch()` defaults) before anything is added on top.
   // Running the version-manager fill first and this second would strip the very
@@ -1682,7 +1689,7 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
   // unconditionally (it spreads AFTER the row), so no arm can reach this point.
   // The unconditional `null` is what that mapping already evaluated to.
   upgradeResponse: (response) => ({
-    providers: upgradeProviderCliStateListToV70(
+    providers: upgradeProviderCliStateListToV70Preimage(
       response.providers.map((provider) => ({
         ...provider,
         ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
