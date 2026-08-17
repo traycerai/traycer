@@ -82,21 +82,12 @@ export function isPersistentTerminalSurface(tab: EpicCanvasTileRef): boolean {
 }
 
 /**
- * Chat tabs are retained by their own `activationHistory`-driven policy
- * instead of the LRU, and - like terminals - conceal via `visibility` so the
- * concealed body keeps its box. See the module doc comment above.
- */
-export function isRetainedChatSurface(tab: EpicCanvasTileRef): boolean {
-  return isRetainablePaneChat(tab);
-}
-
-/**
  * Whether a concealed layer for `tab` must keep its layout box rather than
  * collapse out of flow. True for terminals (xterm needs its dimensions) and
  * for retained chats (a zero-width reflow republishes bogus item sizes).
  */
 export function concealsWithoutCollapsing(tab: EpicCanvasTileRef): boolean {
-  return isPersistentTerminalSurface(tab) || isRetainedChatSurface(tab);
+  return isPersistentTerminalSurface(tab) || isRetainablePaneChat(tab);
 }
 
 export interface UseMountedPaneTabsInput {
@@ -163,7 +154,7 @@ export function useMountedPaneTabs(
       byInstanceId.set(tab.instanceId, tab);
       if (isPersistentTerminalSurface(tab)) {
         pinned.add(tab.instanceId);
-      } else if (!isRetainedChatSurface(tab)) {
+      } else if (!isRetainablePaneChat(tab)) {
         available.add(tab.instanceId);
       }
     }
@@ -177,10 +168,13 @@ export function useMountedPaneTabs(
   // The SAME window `tile-surface-membership.ts` picks, from the same
   // kind-only predicate. Membership then drops the ineligible ones (a
   // remote-deleted chat, a published-copy takeover) from THIS set, so it is a
-  // genuine subset and every member is guaranteed a slot here. Keeping a
-  // layer mounted for a chat membership rejected costs one concealed
-  // placeholder; the reverse - a member with no slot - strands a hosted body
-  // on a disconnected anchor (cold review F1).
+  // genuine subset and every member is guaranteed a slot here. Two costs, and
+  // they are not the same: on THIS side an ineligible chat costs one concealed
+  // placeholder, while on the membership side it consumes a retention slot, so
+  // a pane holding a dead chat among its two most recent retains only one live
+  // chat and the second still churns. Both are strictly better than the
+  // reverse - a member with no slot strands a hosted body on a disconnected
+  // anchor (cold review F1).
   const retainedChatIds = useMemo(
     () =>
       new Set(

@@ -10,12 +10,14 @@
  * just the cursor being live. The transport that MOVES the cursor is docked at
  * the bottom of this canvas.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
   ReactFlow,
+  type OnMove,
   type NodeMouseHandler,
+  type ReactFlowInstance,
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -67,6 +69,7 @@ const EDGE_TYPES = { [COMM_GRAPH_EDGE_TYPE]: CommGraphEdgeView };
 const PRO_OPTIONS = { hideAttribution: true };
 // React Flow defaults to 0.5, which is too close for a wide agent graph to fit.
 const COMM_GRAPH_MIN_ZOOM = 0.1;
+const COMM_GRAPH_AUTO_PAN_MS = 250;
 
 /** Which detail surface the canvas has open, if any. */
 type CommGraphSelectedDetail =
@@ -91,6 +94,8 @@ export interface CommGraphCanvasProps {
   readonly hosts: ReadonlyArray<CommGraphHostState>;
   /** Every source has delivered its initial bounded history. */
   readonly initialHistoryCaughtUp: boolean;
+  /** Whether the detached timeline cursor is currently advancing. */
+  readonly playing: boolean;
   /** What the cursor event lights up, or null when it lights up nothing. */
   readonly pulse: CommGraphPulse | null;
   readonly view: CommGraphTileViewState;
@@ -132,6 +137,11 @@ function nodeHostStatus(
   return byHost.get(hostId) ?? "connecting";
 }
 
+function pulseSenderAgentId(pulse: CommGraphPulse | null): string | null {
+  if (pulse === null) return null;
+  return pulse.kind === "edge" ? pulse.fromAgentId : pulse.senderAgentId;
+}
+
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
   // ReactFlow must create its own provider from the computed nodes below. An
   // empty outer provider would make it reuse a store initialized before those
@@ -164,6 +174,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     onJumpToSender,
     onOpenAgent,
     onViewChange,
+    playing,
     pulse,
     view,
   } = props;
@@ -171,6 +182,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   // vice versa, so the canvas never has two competing explanations beside it.
   const [selectedDetail, setSelectedDetail] =
     useState<CommGraphSelectedDetail | null>(null);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
+    CommGraphAgentFlowNode,
+    CommGraphFlowEdge
+  > | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const autoPanEnabledRef = useRef(true);
+  const wasPlayingRef = useRef(playing);
   // React Flow paints its own chrome (background dots, zoom controls) outside
   // the Tailwind cascade, so it needs the resolved mode handed to it.
   const { resolvedTheme } = useResolvedTheme();
@@ -310,6 +328,59 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     [aggregated, edgeInteraction, handleSelectEdge, travelFor],
   );
 
+  // Pressing Play is an explicit request to follow the action again. Pause
+  // leaves the current choice alone; only the next false -> true transition
+  // re-arms after a person has taken manual control of the canvas.
+  useEffect(() => {
+    if (playing && !wasPlayingRef.current) {
+      autoPanEnabledRef.current = true;
+    }
+    wasPlayingRef.current = playing;
+  }, [playing]);
+
+  const stopAutoPan = () => {
+    autoPanEnabledRef.current = false;
+  };
+  const handleMoveStart: OnMove = (event) => {
+    // React Flow uses `null` for programmatic viewport changes, including our
+    // own `setCenter`; a real interaction event means the person took over.
+    if (event !== null) stopAutoPan();
+  };
+
+  const senderAgentId = pulseSenderAgentId(pulse);
+  useEffect(() => {
+    if (
+      !playing ||
+      !autoPanEnabledRef.current ||
+      senderAgentId === null ||
+      flowInstance === null
+    ) {
+      return;
+    }
+    const canvas = canvasRef.current;
+    const sender = nodes.find((node) => node.id === senderAgentId);
+    if (canvas === null || sender === undefined) return;
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewport = flowInstance.getViewport();
+    const left = sender.position.x * viewport.zoom + viewport.x;
+    const top = sender.position.y * viewport.zoom + viewport.y;
+    const right = left + COMM_GRAPH_NODE_WIDTH * viewport.zoom;
+    const bottom = top + COMM_GRAPH_NODE_HEIGHT * viewport.zoom;
+    const intersectsViewport =
+      right >= 0 && left <= rect.width && bottom >= 0 && top <= rect.height;
+    if (intersectsViewport) return;
+
+    void flowInstance.setCenter(
+      sender.position.x + COMM_GRAPH_NODE_WIDTH / 2,
+      sender.position.y + COMM_GRAPH_NODE_HEIGHT / 2,
+      { zoom: viewport.zoom, duration: COMM_GRAPH_AUTO_PAN_MS },
+    );
+    // `pulse` is intentionally a dependency even when two consecutive rows
+    // share a sender: every cursor step gets its own visibility decision.
+  }, [flowInstance, nodes, playing, pulse, senderAgentId]);
+
   const selectedEdge =
     selectedDetail?.kind === "pair"
       ? (aggregated.find((edge) => edge.id === selectedDetail.edgeId) ?? null)
@@ -355,7 +426,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     // The canvas fills the tile: the timeline lives in the epic sidebar now, so
     // the only thing sharing this row is the edge click-through.
     <div className="flex h-full min-h-0 w-full min-w-0">
-      <div className="min-h-0 min-w-0 flex-1" data-testid="comm-graph-canvas">
+      <div
+        ref={canvasRef}
+        className="min-h-0 min-w-0 flex-1"
+        data-testid="comm-graph-canvas"
+        onPointerDownCapture={stopAutoPan}
+        onWheelCapture={stopAutoPan}
+      >
         <ReactFlow
           nodes={[...nodes]}
           edges={[...edges]}
@@ -367,6 +444,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           // a persisted pan/zoom still restores exactly as the user left it.
           fitView={isDefaultView(view)}
           minZoom={COMM_GRAPH_MIN_ZOOM}
+          onInit={setFlowInstance}
+          onMoveStart={handleMoveStart}
           onMoveEnd={handleMoveEnd}
           // REQUIRED, and not merely as a tidier click path. React Flow's
           // `NodeWrapper` computes

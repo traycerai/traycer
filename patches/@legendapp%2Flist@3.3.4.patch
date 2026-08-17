@@ -1,8 +1,8 @@
 diff --git a/react.js b/react.js
-index 175894634f889d5aa790c56ac7d2933e1adb2f0b..4f6ce17e5d92545548b2a5e153a34e1b4488f4a2 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..da1122f37394a790c5feebf77bbb9fd749749576 100644
 --- a/react.js
 +++ b/react.js
-@@ -1341,6 +1341,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+@@ -1143,6 +1143,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -10,7 +10,7 @@ index 175894634f889d5aa790c56ac7d2933e1adb2f0b..4f6ce17e5d92545548b2a5e153a34e1b
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1356,8 +1357,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1158,8 +1159,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -31,7 +31,7 @@ index 175894634f889d5aa790c56ac7d2933e1adb2f0b..4f6ce17e5d92545548b2a5e153a34e1b
        return renderedSize;
      }
    }
-@@ -1366,9 +1377,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1168,9 +1179,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -43,34 +43,23 @@ index 175894634f889d5aa790c56ac7d2933e1adb2f0b..4f6ce17e5d92545548b2a5e153a34e1b
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4700,14 +4711,20 @@ function updateItemSizes(ctx, measurement) {
-   }
- }
- function applyItemSize(ctx, itemKey, sizeObj) {
--  var _a3;
+@@ -4806,6 +4817,11 @@ function updateItemSizesBatch(ctx, measurements) {
+ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   var _a3, _b;
    const state = ctx.state;
-+  const horizontal = state.props.horizontal;
 +  // A zero cross-axis is a hidden/collapsed layout, not an item measurement.
 +  // Keep a pending scroll-anchor-reset key until a real measurement drains it.
-+  if ((horizontal ? sizeObj.height : sizeObj.width) <= 0) {
++  if ((state.props.horizontal ? sizeObj.height : sizeObj.width) <= 0) {
 +    return {};
 +  }
-+  var _a3;
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-     didContainersLayout,
-     sizesKnown,
--    props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
-+    props: { getFixedItemSize, getItemType, onItemSizeChanged, data, maintainScrollAtEnd }
-   } = state;
-   if (!data) return { didMeasureUserScrollAnchorResetItem };
-   const index = state.indexByKey.get(itemKey);
 diff --git a/react.mjs b/react.mjs
-index 96d41eb7b36ab0a112b8f875fcf6e82e7f45151a..90e9a580325f3280babec398bcb640a554420c95 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..17d1124bffa6a5d86b6e9a2695ba68204f3f1354 100644
 --- a/react.mjs
 +++ b/react.mjs
-@@ -1320,6 +1320,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+@@ -1122,6 +1122,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -78,7 +67,7 @@ index 96d41eb7b36ab0a112b8f875fcf6e82e7f45151a..90e9a580325f3280babec398bcb640a5
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1335,8 +1336,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1137,8 +1138,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -99,7 +88,7 @@ index 96d41eb7b36ab0a112b8f875fcf6e82e7f45151a..90e9a580325f3280babec398bcb640a5
        return renderedSize;
      }
    }
-@@ -1345,9 +1356,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1147,9 +1158,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -111,26 +100,15 @@ index 96d41eb7b36ab0a112b8f875fcf6e82e7f45151a..90e9a580325f3280babec398bcb640a5
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4679,14 +4690,20 @@ function updateItemSizes(ctx, measurement) {
-   }
- }
- function applyItemSize(ctx, itemKey, sizeObj) {
--  var _a3;
+@@ -4785,6 +4796,11 @@ function updateItemSizesBatch(ctx, measurements) {
+ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   var _a3, _b;
    const state = ctx.state;
-+  const horizontal = state.props.horizontal;
 +  // A zero cross-axis is a hidden/collapsed layout, not an item measurement.
 +  // Keep a pending scroll-anchor-reset key until a real measurement drains it.
-+  if ((horizontal ? sizeObj.height : sizeObj.width) <= 0) {
++  if ((state.props.horizontal ? sizeObj.height : sizeObj.width) <= 0) {
 +    return {};
 +  }
-+  var _a3;
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-     didContainersLayout,
-     sizesKnown,
--    props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
-+    props: { getFixedItemSize, getItemType, onItemSizeChanged, data, maintainScrollAtEnd }
-   } = state;
-   if (!data) return { didMeasureUserScrollAnchorResetItem };
-   const index = state.indexByKey.get(itemKey);

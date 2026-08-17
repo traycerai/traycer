@@ -203,11 +203,14 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
         readOnly={false}
         pendingStopTaskIds={new Set()}
         stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
         onItemClick={() => undefined}
         onStopItem={() => null}
         onStopAll={() => null}
+        onStopSession={() => null}
       />
       {alongside}
     </>,
