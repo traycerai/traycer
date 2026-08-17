@@ -67,7 +67,6 @@ import {
   listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
-  providersListResponseSchemaV70,
   PROVIDER_AUTH_STATUS_SCHEMA,
   PROVIDER_AUTH_STATUS_SCHEMA_V10,
   providerCliStateSchemaV10,
@@ -440,9 +439,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       ],
     });
 
-    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(
-      providersListResponseSchemaV70.parse(liveResponse),
-    );
+    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(liveResponse);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -452,9 +449,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(
-      providersListResponseSchemaV70.parse(liveResponse),
-    );
+    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(liveResponse);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -464,9 +459,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(
-      providersListResponseSchemaV70.parse(liveResponse),
-    );
+    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(liveResponse);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -838,9 +831,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       ],
     });
 
-    const toV6 = providersListDowngradeV7ToV6.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV6 = providersListDowngradeV7ToV6.downgradeResponse(v7Response);
     expect(toV6.ok).toBe(true);
     if (!toV6.ok) return;
     expect(toV6.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -850,9 +841,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       providersListResponseSchemaV60.parse(toV6.value),
     ).not.toThrow();
 
-    const toV5 = providersListDowngradeV7ToV5.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV5 = providersListDowngradeV7ToV5.downgradeResponse(v7Response);
     expect(toV5.ok).toBe(true);
     if (!toV5.ok) return;
     expect(toV5.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -862,9 +851,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       providersListResponseSchemaV50.parse(toV5.value),
     ).not.toThrow();
 
-    const toV4 = providersListDowngradeV7ToV4.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV4 = providersListDowngradeV7ToV4.downgradeResponse(v7Response);
     expect(toV4.ok).toBe(true);
     if (!toV4.ok) return;
     expect(toV4.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -874,9 +861,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       providersListResponseSchemaV40.parse(toV4.value),
     ).not.toThrow();
 
-    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(v7Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -886,9 +871,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(v7Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -898,9 +881,7 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(
-      providersListResponseSchemaV70.parse(v7Response),
-    );
+    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(v7Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(

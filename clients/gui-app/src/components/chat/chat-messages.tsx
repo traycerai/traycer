@@ -55,6 +55,10 @@ import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group
 import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import {
+  ChatTranscriptProvider,
+  type ChatTranscriptIdentity,
+} from "@/components/chat/chat-transcript-context";
+import {
   chatTabPersistenceChatKey,
   type ChatTabPersistenceIdentity,
 } from "@/stores/chats/chat-tab-persistence-key";
@@ -720,6 +724,17 @@ export function ChatMessages(props: ChatMessagesProps) {
     chatId: props.taskId,
     hostId: props.hostId,
   }));
+  // The transcript's own chat, for segments that ask its live session whether
+  // a shell still exists. Memoised so the provider does not re-render every
+  // consumer per transcript render; `null` with no bound host, where no live
+  // session can exist to ask.
+  const transcriptIdentity = useMemo<ChatTranscriptIdentity | null>(
+    () =>
+      props.hostId === null
+        ? null
+        : { chatId: props.taskId, hostId: props.hostId },
+    [props.hostId, props.taskId],
+  );
   // Ticket 15 review round 3: opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has
   // genuinely recreated it, which mints a fresh chatId in practice - this
@@ -753,7 +768,9 @@ export function ChatMessages(props: ChatMessagesProps) {
   return (
     <A2AOpenStoreProvider store={a2aOpenStore}>
       <ChatFindForceStoreProvider tileInstanceId={props.instanceId}>
-        <ChatMessagesInner {...props} identity={identity} />
+        <ChatTranscriptProvider value={transcriptIdentity}>
+          <ChatMessagesInner {...props} identity={identity} />
+        </ChatTranscriptProvider>
       </ChatFindForceStoreProvider>
     </A2AOpenStoreProvider>
   );

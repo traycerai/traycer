@@ -53,11 +53,38 @@ import { z } from "zod";
  * optional. `storageProjection` below exists for exactly that gap; the frozen
  * `storage` surface is generated from it, not from these schemas.
  *
- * ## Reserved name
+ * ## Reserved name, and why capture is idempotent
  *
  * `residual` is reserved at every captured level: a future modeled field must
- * not be called that. A persisted key of that name still round-trips (it lands
- * in the bag and is re-emitted from there), it just reads oddly.
+ * not be called that. It is reserved in a stronger sense than "do not use it",
+ * because capture READS it: an own `residual` key whose value is a JSON OBJECT
+ * is taken to be a PRIOR BAG and its contents are merged into the new one,
+ * recursively, rather than re-bagged under a second `residual` key.
+ *
+ * That is what makes `capture` idempotent -
+ * `capture(capture(x)) === capture(x)` - and idempotence is not cosmetic here.
+ * A capturing level whose emission does not spread the bag back out re-offers
+ * its own POST-CAPTURE object on the next decode. Without this rule each cycle
+ * would wrap the bag one level deeper (`{residual: R}` →
+ * `{residual: {residual: R}}` → …), so a chat's inline surface would drift by
+ * an empty wrapper per reconcile and stop matching a fresh fold of the same
+ * state. It did exactly that in the field, to depth 19. Reading a prior bag
+ * back also HEALS an already-nested lineage on its next parse, with no repair
+ * pass.
+ *
+ * A NON-object `residual` (string, number, array, `null`) cannot be a bag this
+ * module produced, so it survives as ordinary data under the key `residual`.
+ * On collision the SHALLOWER key wins: the outermost keys are the newest
+ * capture cycle's reading of the object, and deeper ones are older copies of
+ * the same thing.
+ *
+ * Merging routes each key to the home the CURRENT schema gives it: a key the
+ * schema now declares is promoted out of the bag and into the modeled fields,
+ * because after a version skew the bag can hold that field's only copy. See
+ * `absorbPriorResidual` for the sequence that produces one.
+ *
+ * The wire is unchanged by any of this - the encoder still emits one bag - so
+ * this is a decode-side rule only.
  */
 
 export const CHAT_SNAPSHOT_RESIDUAL_KEY = "residual";
@@ -75,8 +102,107 @@ function defineOwn(target: JsonObject, key: string, value: unknown): void {
 }
 
 /**
+ * Is this value a JSON OBJECT rather than an array, a primitive or `null`?
+ *
+ * PRECONDITION: `value` has already been deep-validated as JSON, by an
+ * `isJsonObject` call on an ancestor. Sound only under that precondition, which
+ * is why it is local to this module and not exported beside `isJsonObject` -
+ * as a general validator it would accept a `Date` or a class instance.
+ *
+ * It exists because the chain walk below would otherwise be QUADRATIC.
+ * `isJsonObject` validates every descendant, so calling it once per level
+ * re-validates the whole remaining suffix: a chain of depth N costs
+ * N + (N-1) + … + 1. Capture already validated the entire raw tree on entry, so
+ * every prior bag in the chain is a descendant of an object that was checked -
+ * re-deriving that is work with no question attached to it. At depth 10,000 the
+ * quadratic form occupied the decoder for seconds on a value under 130 KB.
+ */
+function isJsonObjectKind(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merges an already-captured bag into the object being built, descending
+ * through however many times the pre-idempotence encoder wrapped it.
+ *
+ * Written first-wins because the caller has already read the object's OWN keys
+ * into `kept` and `into`: those are this cycle's reading of the level, and each
+ * level down is an older copy of the same key. Descent stops at the first
+ * `residual` that is not an object - that one is data, and it lands as data.
+ *
+ * ## Where a declared key found in a bag goes
+ *
+ * To `kept`, not to the bag - and this is the subtle half. The rule cannot be
+ * "drop it", even though the bag's standing invariant is that it holds only
+ * unmodeled keys, because the bag can hold the SOLE copy of a now-modeled
+ * field. That is an ordinary same-major version skew, not a corrupt input:
+ *
+ * 1. A 1.1 writer puts `newSetting: V` on the wire.
+ * 2. A 1.0 reader does not declare it, so capture bags it:
+ *    `{…, residual: { newSetting: V }}`. There is no top-level copy - the 1.0
+ *    reader never had one to write.
+ * 3. That post-capture shape is a supported CARRIER, not a foreign format: a
+ *    clone seed carries `core.settings` verbatim, and the host's settings
+ *    adapter re-offers its opaque settings object whole.
+ * 4. A 1.1 schema re-captures it. `newSetting` is declared now, and the bag is
+ *    the only place it exists.
+ *
+ * Dropping there destroys the newer writer's field - silently for a defaulted
+ * one like `serviceTier` or `profileId`, and as a hard parse failure for a
+ * required one. Either way it contradicts the mechanically-lossless promise at
+ * the top of this module, in exactly the case the bag exists to serve.
+ *
+ * So each bag key is routed to the home it belongs in - `kept` if the current
+ * schema declares it, the bag otherwise - and shallowest still wins in both. A
+ * declared key that `kept` ALREADY holds is therefore skipped, which keeps the
+ * stale-shadow behaviour: an own modeled value is never overwritten by a bagged
+ * copy of itself, the same precedence `mergeResidual` applies on the way out.
+ */
+function absorbPriorResidual(
+  into: JsonObject,
+  kept: JsonObject,
+  prior: JsonObject,
+  declared: ReadonlySet<string>,
+): void {
+  let level: JsonObject | null = prior;
+
+  while (level !== null) {
+    let deeper: JsonObject | null = null;
+
+    for (const key of Object.getOwnPropertyNames(level)) {
+      const descriptor = Object.getOwnPropertyDescriptor(level, key);
+      if (descriptor === undefined) continue;
+
+      if (
+        key === CHAT_SNAPSHOT_RESIDUAL_KEY &&
+        isJsonObjectKind(descriptor.value)
+      ) {
+        deeper = descriptor.value;
+        continue;
+      }
+
+      const target = declared.has(key) ? kept : into;
+      // Shallower wins, for promotion as for retention.
+      // `getOwnPropertyDescriptor` rather than `in` or a truthiness check so a
+      // legal `__proto__` key is tested as the own key it is, and a
+      // present-but-null value still counts as present.
+      if (Object.getOwnPropertyDescriptor(target, key) !== undefined) continue;
+      defineOwn(target, key, descriptor.value);
+    }
+
+    level = deeper;
+  }
+}
+
+/**
  * Splits `raw`'s own keys into the declared ones and a canonicalized
  * `residual` bag, ahead of the object schema that will parse the result.
+ *
+ * Idempotent: an own `residual` key holding a JSON OBJECT is read as a prior
+ * bag and merged in rather than re-bagged, so re-capturing an object this
+ * function already produced is a no-op and a legacy nest flattens on the way
+ * through. See the "Reserved name" note above for why that matters and what it
+ * costs (an object-valued `residual` on the wire is no longer ordinary data).
  *
  * A non-object input is handed straight through so the inner schema produces
  * the normal type error rather than this step swallowing it.
@@ -91,12 +217,32 @@ export function captureResidualKeys(
 
     const kept: JsonObject = Object.create(null);
     const residual: JsonObject = Object.create(null);
+    let prior: JsonObject | null = null;
 
     for (const key of Object.getOwnPropertyNames(raw)) {
       const descriptor = Object.getOwnPropertyDescriptor(raw, key);
       if (descriptor === undefined) continue;
-      defineOwn(declared.has(key) ? kept : residual, key, descriptor.value);
+
+      if (declared.has(key)) {
+        defineOwn(kept, key, descriptor.value);
+        continue;
+      }
+
+      // `isJsonObjectKind`, not `isJsonObject`: the guard above already
+      // deep-validated `raw`, so re-validating this subtree would be the first
+      // step of the quadratic walk the chain descent exists to avoid.
+      if (
+        key === CHAT_SNAPSHOT_RESIDUAL_KEY &&
+        isJsonObjectKind(descriptor.value)
+      ) {
+        prior = descriptor.value;
+        continue;
+      }
+
+      defineOwn(residual, key, descriptor.value);
     }
+
+    if (prior !== null) absorbPriorResidual(residual, kept, prior, declared);
 
     defineOwn(
       kept,

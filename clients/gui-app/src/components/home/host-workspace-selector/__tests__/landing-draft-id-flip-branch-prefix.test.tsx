@@ -274,7 +274,11 @@ function LandingLikeHarness(props: {
   readonly draftId: string | null;
 }): ReactNode {
   const stagingKey = useMemo(
-    () => ({ surface: "landing" as const, draftId: props.draftId }),
+    () => ({
+      surface: "landing" as const,
+      hostId: "host-test",
+      draftId: props.draftId,
+    }),
     [props.draftId],
   );
   return (
@@ -334,7 +338,11 @@ function outerBranchLabelText(): string {
 }
 
 function stagedBranchName(draftId: string | null): string | null {
-  const intent = readStagedWorktreeIntent({ surface: "landing", draftId });
+  const intent = readStagedWorktreeIntent({
+    surface: "landing",
+    hostId: "host-test",
+    draftId,
+  });
   const entry = intent?.entries.find((e) => e.workspacePath === WORKSPACE_PATH);
   if (entry === undefined || entry.kind !== "worktree") return null;
   if (entry.branch.type !== "new") return null;
@@ -352,9 +360,9 @@ function mintLandingDraftMidSetup(
 ): void {
   useWorktreeIntentStagingStore
     .getState()
-    .migrateKey(
-      { surface: "landing", draftId: null },
-      { surface: "landing", draftId: mintedDraftId },
+    .migrateKeyForAllHosts(
+      { surface: "landing", hostId: "host-test", draftId: null },
+      { surface: "landing", hostId: "host-test", draftId: mintedDraftId },
     );
   rerenderWithDraftId(mintedDraftId);
 }

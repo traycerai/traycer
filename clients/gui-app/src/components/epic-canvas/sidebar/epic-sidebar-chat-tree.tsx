@@ -104,7 +104,7 @@ import {
   type NodeComparator,
 } from "@/lib/epic-sort";
 import {
-  findOpenArtifactInTab,
+  findOpenTileInTab,
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
@@ -1494,7 +1494,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const handleDoubleClick = useCallback(() => {
     if (isRenaming) return;
     if (openableType === null) return;
-    const found = findOpenArtifactInTab(tabId, nodeId);
+    // Host-aware: a cross-host clone holds one tab per host for the same
+    // copied chat id, and this row means its own.
+    const found = findOpenTileInTab(tabId, openRef());
     if (found !== null) {
       navigateNested(epicId, tabId, () => {
         promotePreviewInTab(tabId, found.paneId);
@@ -1512,13 +1514,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       );
     }
   }, [
-    // `nodeId` stays - `findOpenArtifactInTab` reads it directly. `nodeName`
-    // does not: it reaches the tile ref only through `openRef`.
+    // `nodeId` and `nodeName` both reach the lookup through `openRef` now,
+    // which is itself a dependency.
     openRef,
     epicId,
     isRenaming,
     navigateNested,
-    nodeId,
     openableType,
     prepareOpenTileInTabFocusTarget,
     promotePreviewInTab,
@@ -1613,7 +1614,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
-      const found = findOpenArtifactInTab(tabId, nodeId);
+      // The tab for THIS row's host - closing the clone's twin would leave
+      // the deleted chat's own tab open and shut a live one.
+      const found = findOpenTileInTab(tabId, openRef());
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
           prepareCloseCanvasTabFocusTarget(

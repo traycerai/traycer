@@ -72,11 +72,12 @@ export function useLatestConversationWorkspaceSeed(
     if (epicId === null || latestOwner === null) return null;
     return {
       surface: "owner",
+      hostId: seedHostId,
       epicId,
       ownerKind: latestOwner.ownerKind,
       ownerId: latestOwner.id,
     };
-  }, [epicId, latestOwner]);
+  }, [epicId, latestOwner, seedHostId]);
   const stagingKeyId =
     stagingKey === null ? null : worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore((state) =>
@@ -89,6 +90,7 @@ export function useLatestConversationWorkspaceSeed(
     const seed = buildForkWorkspaceSeed({
       binding,
       stagedIntent,
+      hostId: seedHostId,
     });
     if (seed.intent === null) return null;
     return {
@@ -96,7 +98,7 @@ export function useLatestConversationWorkspaceSeed(
       sourceOwnerId: latestOwner.id,
       sourceOwnerKind: latestOwner.ownerKind,
     };
-  }, [binding, canReadBinding, latestOwner, stagedIntent]);
+  }, [binding, canReadBinding, latestOwner, seedHostId, stagedIntent]);
 }
 
 export function latestCreatedConversationOwner(

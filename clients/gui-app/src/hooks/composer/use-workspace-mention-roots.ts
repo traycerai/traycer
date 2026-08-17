@@ -64,6 +64,7 @@ export function useLandingComposerMentionRoots(
   );
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
+    hostId: activeHostId,
     draftId,
   });
   const stagedIntent = useWorktreeIntentStagingStore(

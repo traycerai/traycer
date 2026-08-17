@@ -18,6 +18,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/components/ui/button";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { useLandingTerminalSurfaceActive } from "./landing-terminal-surface-binding";
 import {
   LEADER_SCOPE_LANDING_TERMINAL,
   registerLeaderScope,
@@ -508,7 +509,7 @@ export function LandingTerminalPanel(): ReactNode {
   // additionally re-targets that cwd: reuse a terminal already running there,
   // otherwise spawn a fresh one, and focus it either way. The settled
   // generation's context is authoritative - not React state.
-  const handleReconciliationSettled = useCallback(
+  const runReconciliationSettlement = useCallback(
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
       if (!landingTerminalLayoutFor(state, targetLandingPageId).panelOpen) {
@@ -606,6 +607,42 @@ export function LandingTerminalPanel(): ReactNode {
       targetLandingPageId,
     ],
   );
+
+  // Settlement is the panel's other outward-facing act, and it must gate on
+  // surface activity for the same reason the chords do. Before the panel
+  // outlived its page's activation, a tab switch UNMOUNTED it and aborted the
+  // in-flight pass; now the pass survives, so an `open -> switch away ->
+  // settle` sequence would auto-spawn a terminal into a `display:none` pane
+  // (which cannot be measured, so it lands at the 80x24 fallback grid) and pull
+  // the keyboard out of whatever the user switched to.
+  //
+  // Held rather than dropped: the reconciliation key does not change on the way
+  // back, so a discarded settlement would never be recomputed and a panel
+  // opened just before the switch would sit empty forever. The newest
+  // settlement wins - an older one is superseded, which is what the generation
+  // and host-identity guards inside the body already check for.
+  const surfaceActive = useLandingTerminalSurfaceActive();
+  const deferredSettlementRef = useRef<{
+    readonly generation: number;
+    readonly context: LandingTerminalHostContext;
+  } | null>(null);
+  const handleReconciliationSettled = useCallback(
+    (generation: number, context: LandingTerminalHostContext) => {
+      if (!surfaceActive) {
+        deferredSettlementRef.current = { generation, context };
+        return;
+      }
+      runReconciliationSettlement(generation, context);
+    },
+    [runReconciliationSettlement, surfaceActive],
+  );
+  useEffect(() => {
+    if (!surfaceActive) return;
+    const deferred = deferredSettlementRef.current;
+    if (deferred === null) return;
+    deferredSettlementRef.current = null;
+    runReconciliationSettlement(deferred.generation, deferred.context);
+  }, [runReconciliationSettlement, surfaceActive]);
 
   useLandingTerminalReconciliation({
     landingPageId: targetLandingPageId,
@@ -1065,69 +1102,74 @@ function useLandingTerminalShortcuts(args: {
     onCloseTab,
     onCloseAllTabs,
   } = args;
-  useEffect(
-    () => registerDynamicActionHandler("app.terminal.toggle", onTogglePanel),
-    [onTogglePanel],
-  );
+  // The panel now outlives its start page's ACTIVATION (it stays mounted while
+  // the page is merely retained, so terminals survive a header-tab switch), but
+  // these registrations must not. `dispatchAction` hands a registered dynamic
+  // handler absolute precedence over the static one and reports the chord as
+  // handled, so a backgrounded panel that kept its slots would not just answer
+  // the epic canvas's `tab.*` chords - it would SWALLOW them. Skipping the
+  // registration (rather than no-oping inside the handler) is what lets the
+  // static canvas handler run.
+  const surfaceActive = useLandingTerminalSurfaceActive();
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("app.terminal.toggle", onTogglePanel);
+  }, [onTogglePanel, surfaceActive]);
   // Reveal-and-create is one gesture in the panel: a collapsed panel captures
   // the open gesture and creates from that captured snapshot up-front (the
   // non-empty set suppresses reconciliation's auto-spawn), while an open panel
   // is just a `+`. It self-gates, so this is safe while the host is connecting.
-  useEffect(
-    () => registerDynamicActionHandler("app.terminal.new", onRevealAndCreate),
-    [onRevealAndCreate],
-  );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("tab.new", () => {
-        if (systemTabOverlayActive()) return;
-        onRevealAndCreate();
-      }),
-    [onRevealAndCreate],
-  );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.terminal.maximize", () => {
-        if (!panelOpen) {
-          // Revealing an already-maximized panel (possible when the last tab
-          // closed while maximized) must not un-maximize it.
-          onOpenPanel();
-          if (!maximized) onToggleMaximized();
-          return;
-        }
-        onToggleMaximized();
-      }),
-    [maximized, onOpenPanel, onToggleMaximized, panelOpen],
-  );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("tab.close", () => {
-        if (systemTabOverlayActive()) return;
-        const state = useLandingTerminalStore.getState();
-        if (!landingTerminalLayoutFor(state, landingPageId).panelOpen) return;
-        const active = state.tabs.find(
-          (tab) => tab.instanceId === state.activeInstanceId,
-        );
-        if (active === undefined) return;
-        onCloseTab(active);
-      }),
-    [landingPageId, onCloseTab],
-  );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("tab.close-all", () => {
-        if (systemTabOverlayActive()) return;
-        const state = useLandingTerminalStore.getState();
-        if (
-          !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
-          state.tabs.length === 0
-        ) {
-          return;
-        }
-        onCloseAllTabs();
-      }),
-    [landingPageId, onCloseAllTabs],
-  );
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("app.terminal.new", onRevealAndCreate);
+  }, [onRevealAndCreate, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("tab.new", () => {
+      if (systemTabOverlayActive()) return;
+      onRevealAndCreate();
+    });
+  }, [onRevealAndCreate, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("app.terminal.maximize", () => {
+      if (!panelOpen) {
+        // Revealing an already-maximized panel (possible when the last tab
+        // closed while maximized) must not un-maximize it.
+        onOpenPanel();
+        if (!maximized) onToggleMaximized();
+        return;
+      }
+      onToggleMaximized();
+    });
+  }, [maximized, onOpenPanel, onToggleMaximized, panelOpen, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("tab.close", () => {
+      if (systemTabOverlayActive()) return;
+      const state = useLandingTerminalStore.getState();
+      if (!landingTerminalLayoutFor(state, landingPageId).panelOpen) return;
+      const active = state.tabs.find(
+        (tab) => tab.instanceId === state.activeInstanceId,
+      );
+      if (active === undefined) return;
+      onCloseTab(active);
+    });
+  }, [landingPageId, onCloseTab, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("tab.close-all", () => {
+      if (systemTabOverlayActive()) return;
+      const state = useLandingTerminalStore.getState();
+      if (
+        !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
+        state.tabs.length === 0
+      ) {
+        return;
+      }
+      onCloseAllTabs();
+    });
+  }, [landingPageId, onCloseAllTabs, surfaceActive]);
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {
       if (systemTabOverlayActive()) return;
@@ -1147,47 +1189,48 @@ function useLandingTerminalShortcuts(args: {
     },
     [landingPageId, onActivateTab],
   );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("tab.next", () => activateAdjacentTab(1)),
-    [activateAdjacentTab],
-  );
-  useEffect(
-    () =>
-      registerDynamicActionHandler("tab.prev", () => activateAdjacentTab(-1)),
-    [activateAdjacentTab],
-  );
-  useEffect(
-    () =>
-      registerLeaderScope({
-        id: LEADER_SCOPE_LANDING_TERMINAL,
-        actions: [
-          {
-            actionId: "tab.switch.byDigit",
-            isActive: () => {
-              const state = useLandingTerminalStore.getState();
-              return (
-                landingTerminalLayoutFor(state, landingPageId).panelOpen &&
-                state.tabs.length > 0 &&
-                !systemTabOverlayActive()
-              );
-            },
-            // Same digit convention as the canvas strip: physical "1"-"9"
-            // reach tabs 1-9; "0" maps to index -1 and falls through.
-            dispatch: (digit) => {
-              const index = digit - 1;
-              const tabs = useLandingTerminalStore.getState().tabs;
-              if (index < 0 || index >= tabs.length) return false;
-              onActivateTab(tabs[index].instanceId);
-              return true;
-            },
-            dispatchSequence: null,
-            sequenceState: null,
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("tab.next", () =>
+      activateAdjacentTab(1),
+    );
+  }, [activateAdjacentTab, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerDynamicActionHandler("tab.prev", () =>
+      activateAdjacentTab(-1),
+    );
+  }, [activateAdjacentTab, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive) return;
+    return registerLeaderScope({
+      id: LEADER_SCOPE_LANDING_TERMINAL,
+      actions: [
+        {
+          actionId: "tab.switch.byDigit",
+          isActive: () => {
+            const state = useLandingTerminalStore.getState();
+            return (
+              landingTerminalLayoutFor(state, landingPageId).panelOpen &&
+              state.tabs.length > 0 &&
+              !systemTabOverlayActive()
+            );
           },
-        ],
-      }),
-    [landingPageId, onActivateTab],
-  );
+          // Same digit convention as the canvas strip: physical "1"-"9"
+          // reach tabs 1-9; "0" maps to index -1 and falls through.
+          dispatch: (digit) => {
+            const index = digit - 1;
+            const tabs = useLandingTerminalStore.getState().tabs;
+            if (index < 0 || index >= tabs.length) return false;
+            onActivateTab(tabs[index].instanceId);
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+      ],
+    });
+  }, [landingPageId, onActivateTab, surfaceActive]);
 }
 
 function LandingTerminalPanelToggle(props: {

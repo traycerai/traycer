@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
+  forkChatStagingKeysForEpic,
   newConversationModalStagingKey,
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
@@ -12,12 +13,17 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { worktreeIntentStagingKey } from "@/lib/persist";
 
+const HOST_A = "host-a";
+const HOST_B = "host-b";
+
 const LANDING_KEY: WorktreeStagingKey = {
   surface: "landing",
+  hostId: HOST_A,
   draftId: "draft-1",
 };
 const OWNER_KEY: WorktreeStagingKey = {
   surface: "owner",
+  hostId: HOST_A,
   epicId: "epic-1",
   ownerKind: "chat",
   ownerId: "chat-1",
@@ -57,13 +63,28 @@ describe("worktree-intent-staging-store", () => {
     window.localStorage.clear();
   });
 
-  it("serializes keys distinctly per surface", () => {
-    expect(worktreeStagingKeyString(LANDING_KEY)).toBe("landing:draft-1");
+  it("serializes keys distinctly per surface, host first", () => {
+    expect(worktreeStagingKeyString(LANDING_KEY)).toBe(
+      "landing:host-a:draft-1",
+    );
     expect(
-      worktreeStagingKeyString({ surface: "landing", draftId: null }),
-    ).toBe("landing:");
+      worktreeStagingKeyString({
+        surface: "landing",
+        hostId: HOST_A,
+        draftId: null,
+      }),
+    ).toBe("landing:host-a:");
+    // The unresolved-host bucket is an EMPTY segment, which no encoded host id
+    // can produce.
+    expect(
+      worktreeStagingKeyString({
+        surface: "landing",
+        hostId: null,
+        draftId: null,
+      }),
+    ).toBe("landing::");
     expect(worktreeStagingKeyString(OWNER_KEY)).toBe(
-      "owner:epic-1:chat:chat-1",
+      "owner:host-a:epic-1:chat:chat-1",
     );
   });
 
@@ -110,13 +131,155 @@ describe("worktree-intent-staging-store", () => {
     expect(readStagedWorktreeIntent(OWNER_KEY)).toBeNull();
   });
 
-  describe("migrateKey", () => {
+  it("keys the SAME slot separately per host, and reads back per host", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    // Identical draft/epic/owner coordinates on two machines. The paths are
+    // host-local, so these must not share one slot.
+    const onA: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: HOST_A,
+      draftId: "draft-1",
+    };
+    const onB: WorktreeStagingKey = { ...onA, hostId: HOST_B };
+    store.stageEntry(onA, localEntry("/repo", true));
+    store.stageEntry(onB, worktreeEntry("/repo"));
+
+    expect(worktreeStagingKeyString(onA)).not.toBe(
+      worktreeStagingKeyString(onB),
+    );
+    expect(readStagedWorktreeIntent(onA)?.entries[0].kind).toBe("local");
+    expect(readStagedWorktreeIntent(onB)?.entries[0].kind).toBe("worktree");
+  });
+
+  it("keeps the unresolved-host bucket separate from every real host", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    const unresolved: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: null,
+      draftId: "draft-1",
+    };
+    store.stageEntry(unresolved, localEntry("/repo", true));
+
+    expect(
+      readStagedWorktreeIntent({ ...unresolved, hostId: HOST_A }),
+    ).toBeNull();
+    expect(readStagedWorktreeIntent(unresolved)).not.toBeNull();
+  });
+
+  // A `:` in a host id must not split the key into a different slot - the same
+  // percent-encoding rule the persist-key builders apply to their id segments.
+  it("encodes a host id so a colon cannot forge another slot", () => {
+    const colonHost: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host:a",
+      epicId: "epic-1",
+      ownerKind: "chat",
+      ownerId: "chat-1",
+    };
+    const serialized = worktreeStagingKeyString(colonHost);
+    expect(serialized).toBe("owner:host%3Aa:epic-1:chat:chat-1");
+    expect(serialized).not.toBe(
+      worktreeStagingKeyString({ ...colonHost, hostId: "host" }),
+    );
+  });
+
+  // A slot's host can change under an open session, so both "consume this
+  // slot" and "this slot's identity changed" have to act on the whole family -
+  // otherwise the host the user drifted away from keeps a live copy.
+  describe("across-host slot lifecycle", () => {
+    const nullDraftA: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: HOST_A,
+      draftId: null,
+    };
+    const nullDraftB: WorktreeStagingKey = { ...nullDraftA, hostId: HOST_B };
+
+    it("clearForAllHosts consumes every host's copy of one slot", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(nullDraftB, localEntry("/b", true));
+      store.setSuspendedWorkspacePaths(nullDraftA, ["/a"]);
+
+      // Submitted while B happened to be selected.
+      useWorktreeIntentStagingStore.getState().clearForAllHosts(nullDraftB);
+
+      const next = useWorktreeIntentStagingStore.getState();
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(nullDraftB)).toBeNull();
+      expect(
+        next.suspendedWorkspacePathsByKey[worktreeStagingKeyString(nullDraftA)],
+      ).toBeUndefined();
+    });
+
+    it("clearForAllHosts leaves a DIFFERENT slot identity alone", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      const otherDraft: WorktreeStagingKey = { ...nullDraftA, draftId: "keep" };
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(otherDraft, localEntry("/keep", true));
+
+      useWorktreeIntentStagingStore.getState().clearForAllHosts(nullDraftA);
+
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(otherDraft)).not.toBeNull();
+    });
+
+    // Minting the draft id must carry BOTH hosts' picks onto their own
+    // destination slots. Moving only the active host's copy loses the other
+    // pick AND strands it under the null-draft key, where the next brand-new
+    // landing page on that host would inherit it.
+    it("migrateKeyForAllHosts moves each host's copy onto its own host", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(nullDraftA, localEntry("/a", true));
+      store.stageEntry(nullDraftB, localEntry("/b", true));
+
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKeyForAllHosts(nullDraftB, {
+          ...nullDraftB,
+          draftId: "minted",
+        });
+
+      const mintedA: WorktreeStagingKey = { ...nullDraftA, draftId: "minted" };
+      const mintedB: WorktreeStagingKey = { ...nullDraftB, draftId: "minted" };
+      expect(readStagedWorktreeIntent(mintedA)?.entries[0].workspacePath).toBe(
+        "/a",
+      );
+      expect(readStagedWorktreeIntent(mintedB)?.entries[0].workspacePath).toBe(
+        "/b",
+      );
+      // Nothing is stranded under the null-draft key for either host.
+      expect(readStagedWorktreeIntent(nullDraftA)).toBeNull();
+      expect(readStagedWorktreeIntent(nullDraftB)).toBeNull();
+    });
+
+    it("migrateKeyForAllHosts never clobbers a destination that already picked", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      const mintedA: WorktreeStagingKey = { ...nullDraftA, draftId: "minted" };
+      store.stageEntry(nullDraftA, localEntry("/from", true));
+      store.stageEntry(mintedA, localEntry("/already-there", true));
+
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKeyForAllHosts(nullDraftA, mintedA);
+
+      expect(readStagedWorktreeIntent(mintedA)?.entries[0].workspacePath).toBe(
+        "/already-there",
+      );
+      expect(
+        readStagedWorktreeIntent(nullDraftA)?.entries[0].workspacePath,
+      ).toBe("/from");
+    });
+  });
+
+  describe("migrateKeyForAllHosts", () => {
     const fromKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: HOST_A,
       draftId: null,
     };
     const toKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: HOST_A,
       draftId: "draft-minted",
     };
 
@@ -131,7 +294,7 @@ describe("worktree-intent-staging-store", () => {
       const toRevisionBefore =
         useWorktreeIntentStagingStore.getState().revisionByKey[toId] ?? 0;
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       expect(readStagedWorktreeIntent(fromKey)).toBeNull();
       expect(readStagedWorktreeIntent(toKey)?.entries).toEqual([
@@ -161,7 +324,7 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(toKey, localEntry("/b", true));
       store.setSuspendedWorkspacePaths(fromKey, ["/a"]);
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       expect(readStagedWorktreeIntent(fromKey)?.entries).toEqual([
         worktreeEntry("/a"),
@@ -181,7 +344,7 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(toKey, localEntry("/b", true));
       const before = useWorktreeIntentStagingStore.getState();
 
-      store.migrateKey(fromKey, toKey);
+      store.migrateKeyForAllHosts(fromKey, toKey);
 
       const after = useWorktreeIntentStagingStore.getState();
       expect(after.intentByKey).toEqual(before.intentByKey);
@@ -196,7 +359,11 @@ describe("worktree-intent-staging-store", () => {
       store.stageEntry(fromKey, worktreeEntry("/a"));
       const before = useWorktreeIntentStagingStore.getState();
 
-      store.migrateKey(fromKey, { surface: "landing", draftId: null });
+      store.migrateKeyForAllHosts(fromKey, {
+        surface: "landing",
+        hostId: HOST_A,
+        draftId: null,
+      });
 
       const after = useWorktreeIntentStagingStore.getState();
       expect(after.intentByKey).toEqual(before.intentByKey);
@@ -233,46 +400,105 @@ describe("worktree-intent-staging-store", () => {
   it("scopes the pending launcher / fork keys per epic (no cross-epic bleed)", () => {
     const store = useWorktreeIntentStagingStore.getState();
     store.stageEntry(
-      pendingTerminalAgentStagingKey("epic-A"),
+      pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
       worktreeEntry("/a"),
     );
     // A different epic's launcher slot is independent.
     expect(
-      readStagedWorktreeIntent(pendingTerminalAgentStagingKey("epic-B")),
+      readStagedWorktreeIntent(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-B"),
+      ),
     ).toBeNull();
     expect(
-      readStagedWorktreeIntent(pendingTerminalAgentStagingKey("epic-A")),
+      readStagedWorktreeIntent(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
+      ),
     ).not.toBeNull();
     // The launcher and the fork dialog are distinct slots within one epic.
     expect(
-      worktreeStagingKeyString(pendingTerminalAgentStagingKey("epic-A")),
-    ).not.toBe(worktreeStagingKeyString(pendingForkChatStagingKey("epic-A")));
+      worktreeStagingKeyString(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
+      ),
+    ).not.toBe(
+      worktreeStagingKeyString(pendingForkChatStagingKey(HOST_A, "epic-A")),
+    );
+  });
+
+  // The fork slot is the one `owner` slot whose host is a live choice rather
+  // than a property of its owner: the dialog can retarget while open.
+  it("scopes the pending fork-chat key per target host (no cross-host bleed)", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    const hostA = pendingForkChatStagingKey("host-a", "epic-A");
+    const hostB = pendingForkChatStagingKey("host-b", "epic-A");
+    expect(worktreeStagingKeyString(hostA)).not.toBe(
+      worktreeStagingKeyString(hostB),
+    );
+    store.stageEntry(hostA, worktreeEntry("/a"));
+    expect(readStagedWorktreeIntent(hostB)).toBeNull();
+    expect(readStagedWorktreeIntent(hostA)).not.toBeNull();
+  });
+
+  it("enumerates every fork-chat slot for an epic, including snapshot-only extras", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    store.stageEntry(
+      pendingForkChatStagingKey("host-a", "epic-A"),
+      worktreeEntry("/a"),
+    );
+    const extraB = worktreeStagingKeyString(
+      pendingForkChatStagingKey("host-b", "epic-A"),
+    );
+    const otherEpic = worktreeStagingKeyString(
+      pendingForkChatStagingKey("host-c", "epic-B"),
+    );
+    const keys = forkChatStagingKeysForEpic("epic-A", [extraB, otherEpic]);
+    expect(keys.map(worktreeStagingKeyString).sort()).toEqual(
+      [
+        worktreeStagingKeyString(pendingForkChatStagingKey("host-a", "epic-A")),
+        extraB,
+      ].sort(),
+    );
+  });
+
+  // A host id containing the key separator must survive the round trip the
+  // enumeration does - it is the only place a serialized key is decoded.
+  it("recovers a fork-chat host id that contains the key separator", () => {
+    const weird = "host:with:colons";
+    const store = useWorktreeIntentStagingStore.getState();
+    store.stageEntry(
+      pendingForkChatStagingKey(weird, "epic-A"),
+      worktreeEntry("/a"),
+    );
+    const keys = forkChatStagingKeysForEpic("epic-A", []);
+    expect(keys).toHaveLength(1);
+    expect(keys[0].hostId).toBe(weird);
   });
 
   it("scopes the per-parent child slot per parent (no concurrent-row collisions)", () => {
     const store = useWorktreeIntentStagingStore.getState();
     store.stageEntry(
-      pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+      pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       worktreeEntry("/a"),
     );
     // A sibling row (different parent) has an independent slot.
     expect(
       readStagedWorktreeIntent(
-        pendingChildTerminalAgentStagingKey("epic-A", "parent-2"),
+        pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-2"),
       ),
     ).toBeNull();
     expect(
       readStagedWorktreeIntent(
-        pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+        pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     ).not.toBeNull();
     // The per-parent slot is distinct from the shared epic launcher slot.
     expect(
       worktreeStagingKeyString(
-        pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+        pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     ).not.toBe(
-      worktreeStagingKeyString(pendingTerminalAgentStagingKey("epic-A")),
+      worktreeStagingKeyString(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
+      ),
     );
   });
 
@@ -280,27 +506,29 @@ describe("worktree-intent-staging-store", () => {
     const store = useWorktreeIntentStagingStore.getState();
     // A top-level create stages under the epic/null slot.
     store.stageEntry(
-      newConversationModalStagingKey("epic-A", null),
+      newConversationModalStagingKey(HOST_A, "epic-A", null),
       worktreeEntry("/a"),
     );
     // Reopening the modal to add a CHILD reads an independent slot, so it never
     // inherits the top-level (or another parent's) staged worktree intent.
     expect(
       readStagedWorktreeIntent(
-        newConversationModalStagingKey("epic-A", "parent-1"),
+        newConversationModalStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     ).toBeNull();
     expect(
-      readStagedWorktreeIntent(newConversationModalStagingKey("epic-A", null)),
+      readStagedWorktreeIntent(
+        newConversationModalStagingKey(HOST_A, "epic-A", null),
+      ),
     ).not.toBeNull();
     // Different parents get distinct slots.
     expect(
       worktreeStagingKeyString(
-        newConversationModalStagingKey("epic-A", "parent-1"),
+        newConversationModalStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     ).not.toBe(
       worktreeStagingKeyString(
-        newConversationModalStagingKey("epic-A", "parent-2"),
+        newConversationModalStagingKey(HOST_A, "epic-A", "parent-2"),
       ),
     );
   });
@@ -308,7 +536,7 @@ describe("worktree-intent-staging-store", () => {
   it("never persists the per-parent child scratch slot", () => {
     const store = useWorktreeIntentStagingStore.getState();
     store.stageEntry(
-      pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+      pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       worktreeEntry("/a"),
     );
     const raw = window.localStorage.getItem(worktreeIntentStagingKey(null));
@@ -320,13 +548,13 @@ describe("worktree-intent-staging-store", () => {
           });
     expect(Object.keys(persisted.state.intentByKey)).not.toContain(
       worktreeStagingKeyString(
-        pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+        pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     );
     // Still readable in-memory for the open submenu.
     expect(
       readStagedWorktreeIntent(
-        pendingChildTerminalAgentStagingKey("epic-A", "parent-1"),
+        pendingChildTerminalAgentStagingKey(HOST_A, "epic-A", "parent-1"),
       ),
     ).not.toBeNull();
   });
@@ -336,7 +564,7 @@ describe("worktree-intent-staging-store", () => {
     store.stageEntry(OWNER_KEY, worktreeEntry("/a"));
     store.stageEntry(LANDING_KEY, localEntry("/b", true));
     store.stageEntry(
-      pendingTerminalAgentStagingKey("epic-A"),
+      pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
       worktreeEntry("/c"),
     );
 
@@ -350,10 +578,14 @@ describe("worktree-intent-staging-store", () => {
     expect(keys).toContain(worktreeStagingKeyString(LANDING_KEY));
     // The transient launcher scratch slot is staged in-memory but never written.
     expect(keys).not.toContain(
-      worktreeStagingKeyString(pendingTerminalAgentStagingKey("epic-A")),
+      worktreeStagingKeyString(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
+      ),
     );
     expect(
-      readStagedWorktreeIntent(pendingTerminalAgentStagingKey("epic-A")),
+      readStagedWorktreeIntent(
+        pendingTerminalAgentStagingKey(HOST_A, "epic-A"),
+      ),
     ).not.toBeNull();
   });
 
@@ -367,7 +599,7 @@ describe("worktree-intent-staging-store", () => {
             [ownerId]: { entries: [worktreeEntry("/a")] },
           },
         },
-        version: 1,
+        version: 2,
       }),
     );
 
@@ -376,5 +608,25 @@ describe("worktree-intent-staging-store", () => {
     expect(readStagedWorktreeIntent(OWNER_KEY)?.entries[0]?.workspacePath).toBe(
       "/a",
     );
+  });
+
+  // A v1 key carries no host, so no live key can ever address it again - and
+  // leaving it would let the purge read its epic id as a host segment.
+  it("drops pre-host-scoping (v1) slots on rehydrate", async () => {
+    window.localStorage.setItem(
+      worktreeIntentStagingKey(null),
+      JSON.stringify({
+        state: {
+          intentByKey: {
+            "owner:epic-1:chat:chat-1": { entries: [worktreeEntry("/a")] },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useWorktreeIntentStagingStore.persist.rehydrate();
+
+    expect(useWorktreeIntentStagingStore.getState().intentByKey).toEqual({});
   });
 });

@@ -32,6 +32,7 @@ describe("child conversation workspace seed", () => {
         binding: null,
         stagedIntent: null,
         fallbackWorkspaceFolders: [],
+        hostId: null,
       }),
     ).toBeNull();
   });
@@ -51,6 +52,7 @@ describe("child conversation workspace seed", () => {
       },
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/legacy/local"],
+      hostId: null,
     });
 
     expect(seed?.intent).toEqual({
@@ -71,6 +73,7 @@ describe("child conversation workspace seed", () => {
       binding: null,
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/workspace/a", "/workspace/b"],
+      hostId: "host-source",
     });
 
     expect(seed?.intent).toEqual({
@@ -89,6 +92,9 @@ describe("child conversation workspace seed", () => {
         },
       ],
     });
+    expect(seed?.workspace.folderInfoByPath["/workspace/a"]?.hostId).toBe(
+      "host-source",
+    );
   });
 
   it("ignores stale staged owner intent when no parent binding exists", () => {
@@ -105,6 +111,7 @@ describe("child conversation workspace seed", () => {
         ],
       },
       fallbackWorkspaceFolders: ["/workspace/a"],
+      hostId: null,
     });
 
     expect(seed?.intent).toEqual({
@@ -127,6 +134,7 @@ describe("child conversation workspace seed", () => {
       binding: null,
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/workspace/a"],
+      hostId: null,
     });
 
     // Must be non-null: a `null` seed makes the picker fall back to the global
@@ -146,6 +154,7 @@ describe("child conversation workspace seed", () => {
       binding: null,
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/workspace/a"],
+      hostId: null,
     });
 
     expect(seed).toBeNull();
@@ -159,6 +168,7 @@ describe("child conversation workspace seed", () => {
       binding: null,
       stagedIntent: null,
       fallbackWorkspaceFolders: ["/workspace/a"],
+      hostId: null,
     });
 
     expect(seed?.intent).toEqual({

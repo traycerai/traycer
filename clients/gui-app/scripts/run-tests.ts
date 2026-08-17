@@ -100,6 +100,14 @@ function readShardValue(args: string[]): string | undefined {
 
 const shard = readShardValue(testArgs);
 const runsFirstShard = shard === undefined || shard.split("/", 1)[0] === "1";
+const shardValueArgs = new Set<string>(
+  shard !== undefined && testArgs.includes("--shard") ? [shard] : [],
+);
+const runsWholeSuite = !testArgs.some(
+  (arg) => !arg.startsWith("-") && !shardValueArgs.has(arg),
+);
+const runsDiffEditBrowser =
+  runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
 runVitest("vitest.config.ts", undefined);
 if (runsFirstShard) {
@@ -107,4 +115,18 @@ if (runsFirstShard) {
     "vitest.react-compiler.config.ts",
     "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
   );
+  if (runsDiffEditBrowser) runDiffEditBrowserRegression();
+}
+
+function runDiffEditBrowserRegression(): void {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/diff-edit-browser-regression.mjs"],
+    { stdio: "inherit" },
+  );
+  if (result.error !== undefined) throw result.error;
+  if (result.signal !== null) {
+    process.exit(SIGNAL_EXIT_CODES[result.signal] ?? 1);
+  }
+  if (result.status !== 0) process.exit(result.status ?? 1);
 }

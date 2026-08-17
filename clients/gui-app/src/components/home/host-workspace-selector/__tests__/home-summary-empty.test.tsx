@@ -336,7 +336,11 @@ function renderControl(layout: "inline" | "stacked") {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          stagingKey={{
+            surface: "landing",
+            hostId: "host-home",
+            draftId: null,
+          }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -355,7 +359,7 @@ function DelayedBranchValidationHarness() {
     <>
       <ActiveHostWorkspaceControls
         disabled={false}
-        stagingKey={{ surface: "landing", draftId: null }}
+        stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
         seedIntentOverride={null}
@@ -715,6 +719,7 @@ describe("landing workspace summary empty state", () => {
       },
     });
     useWorktreeIntentMemoryStore.getState().setFolderIntent(
+      "host-home",
       {
         kind: "worktree",
         scripts: null,
@@ -750,7 +755,11 @@ describe("landing workspace summary empty state", () => {
       }),
     );
     expect(
-      readStagedWorktreeIntent({ surface: "landing", draftId: null }),
+      readStagedWorktreeIntent({
+        surface: "landing",
+        hostId: "host-home",
+        draftId: null,
+      }),
     ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Create task" }));
@@ -877,7 +886,11 @@ describe("landing workspace summary empty state", () => {
     });
 
     const queryClient = renderControl("stacked");
-    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: "host-home",
+      draftId: null,
+    };
 
     await waitFor(() => {
       const staged = readStagedWorktreeIntent(stagingKey);

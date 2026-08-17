@@ -158,6 +158,7 @@ export function CommandSegment(props: CommandSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}

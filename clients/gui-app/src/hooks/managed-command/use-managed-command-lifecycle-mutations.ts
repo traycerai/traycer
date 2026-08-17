@@ -10,6 +10,11 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type {
+  ManagedCommandHeldReleaseFailure,
+  ManagedCommandHeldReleaseUnattributed,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   useHostClient,
   useHostDirectory,
@@ -43,6 +48,23 @@ export interface ManagedCommandLifecycleVariables {
 type LifecycleMethod =
   "managedCommand.start" | "managedCommand.stop" | "managedCommand.delete";
 
+/**
+ * Resolve the per-command host client from an already-looked-up directory
+ * entry. Both "no such host in the directory" and "that host is not reachable"
+ * collapse to `null` here, because every caller answers them the same way: the
+ * `hostClientUnavailableError` rejection, named for its own method.
+ *
+ * Takes the ENTRY rather than the directory so this stays a plain function.
+ * `useHostClientFor` is the render-time equivalent and is a hook, so it cannot
+ * be called from inside a `mutationFn`.
+ */
+function transientClientForEntry(
+  defaultClient: HostClient<HostRpcRegistry>,
+  entry: HostDirectoryEntry | null,
+): HostClient<HostRpcRegistry> | null {
+  return entry === null ? null : buildTransientHostClient(defaultClient, entry);
+}
+
 function useManagedCommandLifecycleMutation<Method extends LifecycleMethod>(
   method: Method,
   mutationKey: readonly string[],
@@ -67,11 +89,10 @@ function useManagedCommandLifecycleMutation<Method extends LifecycleMethod>(
       mutationKey,
       mutationFn: (variables: ManagedCommandLifecycleVariables) =>
         withHostRpcErrorBoundary(method, () => {
-          const entry = directory.findById(variables.hostId);
-          const client: HostClient<HostRpcRegistry> | null =
-            entry === null
-              ? null
-              : buildTransientHostClient(defaultClient, entry);
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
           if (client === null) {
             return Promise.reject(hostClientUnavailableError(method));
           }
@@ -219,5 +240,170 @@ export function useManagedCommandDelete(): UseMutationResult<
         epicId: variables.epicId,
         commandId: variables.commandId,
       }),
+  );
+}
+
+/**
+ * The Deliver outcome, as copy.
+ *
+ * Read in the order the response schema mandates, and `unattributed` FIRST for
+ * a reason that is not stylistic: a non-empty one means the host proved NOTHING
+ * about this chat, so `released` and `held` are empty because nothing was
+ * determined rather than because nothing was there. Reporting it as a shell
+ * count - or letting the empty `held` beside it read as "nothing is held" -
+ * tells a person their holds are gone when every one of them still stands.
+ *
+ * The host's `message` is rendered verbatim as the toast's description wherever
+ * a single failure is the whole story, because it is the ONLY field that
+ * distinguishes the two remedies `retryable: false` covers: a delivery row a
+ * newer build wrote (upgrade this host) and a boot record that failed to load
+ * (restart it). Copy composed from the boolean alone can only name both and
+ * settle neither, which is what "Restarting or updating it may help" was.
+ */
+function reportDeliverHeldOutcome(
+  response: ResponseOfMethod<HostRpcRegistry, "managedCommand.deliverHeld">,
+): void {
+  if (response.unattributed.length > 0) {
+    reportUnattributedDeliverFailure(response.unattributed);
+    return;
+  }
+  if (response.unresolved.length === 0) return;
+  reportUnresolvedDeliverHolds(response.unresolved);
+}
+
+/**
+ * A failure that belongs to the CALL. Never phrased as a count of shells: one
+ * of these is produced whether the chat holds one shell or four, so any number
+ * here would be a number of internal proof arms rather than of anything a
+ * person can see.
+ */
+function reportUnattributedDeliverFailure(
+  failures: readonly ManagedCommandHeldReleaseUnattributed[],
+): void {
+  const detail =
+    failures.length === 1 ? { description: failures[0].message } : undefined;
+  if (failures.every((failure) => !failure.retryable)) {
+    toast.error(
+      "Nothing was delivered — this host can't tell what it's holding for this chat.",
+      detail,
+    );
+    return;
+  }
+  toast.warning("Nothing was delivered. Try again in a moment.", detail);
+}
+
+/**
+ * The per-command split. `unresolved.length` is a true shell count, so it is
+ * safe to render as one - but only within a group that shares a remedy. The
+ * mixed case used to count the permanent failures into "N shells are still
+ * held. Try again in a moment.", which told a person to retry the very shells
+ * where retrying can never work; it reports the split instead.
+ */
+function reportUnresolvedDeliverHolds(
+  failures: readonly ManagedCommandHeldReleaseFailure[],
+): void {
+  const permanent = failures.filter((failure) => !failure.retryable);
+  const retryable = failures.filter((failure) => failure.retryable);
+  if (retryable.length === 0) {
+    toast.error(
+      permanent.length === 1
+        ? "That shell's output can't be delivered by this host."
+        : `${permanent.length} shells' output can't be delivered by this host.`,
+      permanent.length === 1
+        ? { description: permanent[0].message }
+        : undefined,
+    );
+    return;
+  }
+  if (permanent.length === 0) {
+    toast.warning(
+      retryable.length === 1
+        ? "One shell is still held. Try again in a moment."
+        : `${retryable.length} shells are still held. Try again in a moment.`,
+      retryable.length === 1
+        ? { description: retryable[0].message }
+        : undefined,
+    );
+    return;
+  }
+  // Mixed: the two halves have different remedies and no single `message`
+  // stands for both, so the count is the honest report and it is reported per
+  // half rather than summed under the retryable half's advice.
+  toast.warning(
+    `${failures.length} shells are still held: ${retryable.length} can be delivered on a retry, ${permanent.length} can't be delivered by this host.`,
+  );
+}
+
+export interface ManagedCommandDeliverHeldVariables {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  /** Null releases every hold this chat owns. */
+  readonly commandIds: readonly string[] | null;
+}
+
+/**
+ * Whether a Deliver is in flight for this chat, across every mounted panel -
+ * the same shared-pending read `Stop all` needs, and for a stronger reason: a
+ * null-ids Deliver names no commands, so a second tile re-sending it is not a
+ * duplicate of a narrower request but the identical whole-chat action.
+ */
+export function useManagedCommandDeliverHeldIsPending(chatId: string): boolean {
+  return (
+    useIsMutating({
+      mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
+    }) > 0
+  );
+}
+
+/**
+ * Releases the holds a committed Stop fence left on this chat's shells.
+ *
+ * Unlike the lifecycle three this does NOT go through
+ * {@link useManagedCommandLifecycleMutation}: those are keyed by a single
+ * `commandId` and answer with a command, while Deliver is chat-scoped and
+ * answers with a per-command split. It still pins a transient client to the
+ * command's OWN host for the same reason they do - a hold belongs to a
+ * specific host process, and a host switch mid-flight must not redirect it.
+ *
+ * A partial failure is a RESOLVED response carrying `unresolved`, not a
+ * rejection, so the success path has to report it. Rejecting is reserved for
+ * the call failing outright.
+ */
+export function useManagedCommandDeliverHeld(
+  chatId: string,
+): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "managedCommand.deliverHeld">,
+  HostRpcError,
+  ManagedCommandDeliverHeldVariables
+> {
+  const defaultClient = useHostClient();
+  const directory = useHostDirectory();
+
+  return useMutation(
+    withHostMutationLifecycleBoundary("managedCommand.deliverHeld", {
+      mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
+      mutationFn: (variables: ManagedCommandDeliverHeldVariables) =>
+        withHostRpcErrorBoundary("managedCommand.deliverHeld", () => {
+          const client = transientClientForEntry(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
+          if (client === null) {
+            return Promise.reject(
+              hostClientUnavailableError("managedCommand.deliverHeld"),
+            );
+          }
+          return client.request("managedCommand.deliverHeld", {
+            epicId: variables.epicId,
+            chatId: variables.chatId,
+            commandIds:
+              variables.commandIds === null ? null : [...variables.commandIds],
+          });
+        }),
+      onSuccess: reportDeliverHeldOutcome,
+      onError: (error: HostRpcError) =>
+        toastFromHostError(error, "Couldn't deliver it."),
+    }),
   );
 }

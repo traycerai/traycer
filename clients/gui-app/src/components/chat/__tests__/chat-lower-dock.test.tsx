@@ -72,6 +72,8 @@ vi.mock(
     useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeldIsPending: () => false,
   }),
 );
 
@@ -97,6 +99,7 @@ describe("<ChatLowerDock />", () => {
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
       backgroundItems: undefined,
+      heldManagedCommandCount: 0,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -126,6 +129,7 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [fileChange()],
       backgroundItems: undefined,
+      heldManagedCommandCount: 0,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -159,6 +163,7 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [],
       backgroundItems: [item],
+      heldManagedCommandCount: 0,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick,
@@ -185,12 +190,54 @@ describe("<ChatLowerDock />", () => {
     expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
   });
 
+  // The dock's own half of the hold gate. A hold lingers only on a shell that
+  // has FINISHED, so it reaches neither the harness's background items nor the
+  // running-command count - and on those two alone the dock returned null,
+  // taking the only affordance that clears a hold off screen. The count is the
+  // parent's to compute (the surfaces below size themselves from the same one);
+  // what this pins is that the dock opens the section on it.
+  it("opens the Background section on the held count alone", () => {
+    renderDock({
+      queue: queueState([]),
+      todo: null,
+      changes: [],
+      backgroundItems: [],
+      heldManagedCommandCount: 1,
+      selfAgent: null,
+      activeAgents: [],
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
+    });
+
+    expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+    expect(screen.getByTestId("background-items-panel")).not.toBeNull();
+  });
+
+  it("stays closed when nothing is held, running, or queued", () => {
+    renderDock({
+      queue: queueState([]),
+      todo: null,
+      changes: [],
+      backgroundItems: [],
+      heldManagedCommandCount: 0,
+      selfAgent: null,
+      activeAgents: [],
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
+    });
+
+    expect(screen.queryByTestId("chat-lower-dock")).toBeNull();
+  });
+
   it("mounts the parent Active agents bar when awareness reports an active child", () => {
     renderDock({
       queue: queueState([]),
       todo: null,
       changes: [],
       backgroundItems: undefined,
+      heldManagedCommandCount: 0,
       selfAgent: agentRow("parent", "Parent agent", false),
       activeAgents: [agentRow("child", "Unopened child", true)],
       onBackgroundItemClick: () => undefined,
@@ -210,6 +257,7 @@ interface DockInput {
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly heldManagedCommandCount: number;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
@@ -237,6 +285,7 @@ function renderDock(input: DockInput) {
           queueKeepPausedRequested={false}
           backgroundItems={input.backgroundItems}
           runningManagedCommandCount={0}
+          heldManagedCommandCount={input.heldManagedCommandCount}
           backgroundStopPendingTaskIds={new Set()}
           backgroundStopAllPending={false}
           activeTurnStatus="running"

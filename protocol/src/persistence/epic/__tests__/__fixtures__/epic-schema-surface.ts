@@ -3296,6 +3296,192 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "managedCommand": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "event": {
+                                              "type": "string",
+                                              "const": "restarted"
+                                            },
+                                            "commandId": {
+                                              "type": "string"
+                                            },
+                                            "description": {
+                                              "type": "string"
+                                            },
+                                            "monitoring": {
+                                              "type": "boolean"
+                                            },
+                                            "effectiveCommand": {
+                                              "type": "string"
+                                            },
+                                            "effectiveCwd": {
+                                              "type": "string"
+                                            },
+                                            "commandChanged": {
+                                              "type": "boolean"
+                                            },
+                                            "cwdChanged": {
+                                              "type": "boolean"
+                                            },
+                                            "outcome": {
+                                              "oneOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "running"
+                                                    },
+                                                    "pid": {
+                                                      "type": "integer",
+                                                      "minimum": -9007199254740991,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "startedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "pid",
+                                                    "startedAtMs"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "stopped"
+                                                    },
+                                                    "stoppedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "stoppedAtMs"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "exited"
+                                                    },
+                                                    "exitCode": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "signal": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "exitedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "exitCode",
+                                                    "signal",
+                                                    "exitedAtMs"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "interrupted"
+                                                    },
+                                                    "interruptedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "interruptedAtMs"
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "event",
+                                            "commandId",
+                                            "description",
+                                            "monitoring",
+                                            "effectiveCommand",
+                                            "effectiveCwd",
+                                            "commandChanged",
+                                            "cwdChanged",
+                                            "outcome"
+                                          ]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "event": {
+                                              "default": "started",
+                                              "type": "string",
+                                              "const": "started"
+                                            },
+                                            "commandId": {
+                                              "type": "string"
+                                            },
+                                            "description": {
+                                              "type": "string"
+                                            },
+                                            "monitoring": {
+                                              "type": "boolean"
+                                            },
+                                            "cwd": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "commandId",
+                                            "description",
+                                            "monitoring"
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "progress": {
                                   "default": null,
                                   "anyOf": [
@@ -10719,6 +10905,200 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
+                                "managedCommand": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "event": {
+                                              "type": "string",
+                                              "const": "restarted"
+                                            },
+                                            "commandId": {
+                                              "type": "string"
+                                            },
+                                            "description": {
+                                              "type": "string"
+                                            },
+                                            "monitoring": {
+                                              "type": "boolean"
+                                            },
+                                            "effectiveCommand": {
+                                              "type": "string"
+                                            },
+                                            "effectiveCwd": {
+                                              "type": "string"
+                                            },
+                                            "commandChanged": {
+                                              "type": "boolean"
+                                            },
+                                            "cwdChanged": {
+                                              "type": "boolean"
+                                            },
+                                            "outcome": {
+                                              "oneOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "running"
+                                                    },
+                                                    "pid": {
+                                                      "type": "integer",
+                                                      "minimum": -9007199254740991,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "startedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "pid",
+                                                    "startedAtMs"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "stopped"
+                                                    },
+                                                    "stoppedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "stoppedAtMs"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "exited"
+                                                    },
+                                                    "exitCode": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "signal": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "exitedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "exitCode",
+                                                    "signal",
+                                                    "exitedAtMs"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "state": {
+                                                      "type": "string",
+                                                      "const": "interrupted"
+                                                    },
+                                                    "interruptedAtMs": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "state",
+                                                    "interruptedAtMs"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "event",
+                                            "commandId",
+                                            "description",
+                                            "monitoring",
+                                            "effectiveCommand",
+                                            "effectiveCwd",
+                                            "commandChanged",
+                                            "cwdChanged",
+                                            "outcome"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "event": {
+                                              "default": "started",
+                                              "type": "string",
+                                              "const": "started"
+                                            },
+                                            "commandId": {
+                                              "type": "string"
+                                            },
+                                            "description": {
+                                              "type": "string"
+                                            },
+                                            "monitoring": {
+                                              "type": "boolean"
+                                            },
+                                            "cwd": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "event",
+                                            "commandId",
+                                            "description",
+                                            "monitoring",
+                                            "cwd"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "progress": {
                                   "default": null,
                                   "anyOf": [
@@ -10905,6 +11285,7 @@ export const epicSchemaSurfaceBaseline = {
                                 "taskTodoItems",
                                 "error",
                                 "agentMessageSend",
+                                "managedCommand",
                                 "progress",
                                 "backgroundOutput",
                                 "startedAt",

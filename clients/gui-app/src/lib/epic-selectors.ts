@@ -42,7 +42,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -862,6 +862,8 @@ type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
   readonly type: string | undefined;
+  /** The tab's bound host, for the node kinds that have one. */
+  readonly hostId: string | null;
 };
 
 export function useEpicTabDisplayTitle(
@@ -879,10 +881,15 @@ export function useEpicTabDisplayTitle(
   // An output window's tile carries no label at all (its persisted shape is
   // just the command pointer), so the kind-explicit title comes from the owning
   // chat's live set - and follows a rename the agent makes.
-  const managedCommand = useManagedCommandInEpic(
+  const isManagedCommandOutput = node.type === "managed-command-output";
+  const managedCommand = useManagedCommandOnHost({
     epicId,
-    node.type === "managed-command-output" ? node.id : "",
-  );
+    // The tab's own host, never the epic at large: a clone carries the source
+    // transcript's command ids, and a title read across hosts would name a
+    // shell this tab cannot open.
+    hostId: isManagedCommandOutput ? (node.hostId ?? "") : "",
+    commandId: isManagedCommandOutput ? node.id : "",
+  });
   const liveManagedCommandTitle =
     managedCommand === null ? null : managedCommandTitle(managedCommand);
   return (

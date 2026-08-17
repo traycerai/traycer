@@ -545,7 +545,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
   });
 
-  it("renders terminal failure text for pre-1.7 history with no resolution records", () => {
+  it("renders terminal failure text for pre-1.6 history with no resolution records", () => {
     renderImage({
       src: "/workspace/legacy.png",
       alt: undefined,

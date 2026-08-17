@@ -163,6 +163,7 @@ describe("buildForkWorkspaceSeed", () => {
         ],
       },
       stagedIntent: null,
+      hostId: null,
     });
 
     expect(seed.workspace).toEqual({
@@ -180,10 +181,10 @@ describe("buildForkWorkspaceSeed", () => {
   });
 
   it("builds a local fallback seed from persisted terminal-agent folders", () => {
-    const seed = buildForkWorkspaceSeedFromWorkspaceFolders([
-      "/Users/me/traycer",
-      "/Users/me/project/some-pkg",
-    ]);
+    const seed = buildForkWorkspaceSeedFromWorkspaceFolders(
+      ["/Users/me/traycer", "/Users/me/project/some-pkg"],
+      "host-source",
+    );
 
     expect(seed.intent).toEqual({
       entries: [
@@ -205,5 +206,8 @@ describe("buildForkWorkspaceSeed", () => {
       "/Users/me/traycer",
       "/Users/me/project/some-pkg",
     ]);
+    expect(seed.workspace.folderInfoByPath["/Users/me/traycer"].hostId).toBe(
+      "host-source",
+    );
   });
 });

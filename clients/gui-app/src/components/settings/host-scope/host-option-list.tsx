@@ -2,6 +2,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
   isHostOptionSelectable,
   type HostPickIntent,
 } from "@/components/settings/host-scope/host-option-model";
@@ -91,14 +92,27 @@ export function HostOptionList(props: {
   // only — activation stays on Enter/Space — because choosing a host here can
   // switch scope or rebind a surface, which select-on-focus would fire on
   // every arrow press.
+  // No surface refusal on any of this list's containers (the workspace/worktree
+  // popovers and the shell's Select host dialog all bind the window to a host,
+  // which every dialable host can serve), so the third argument is a constant
+  // `null` here rather than a map lookup — see `NO_HOST_OPTION_REFUSALS`.
   const rovingHostId =
     props.hosts.find(
       (host) =>
         host.hostId === props.pickedHostId &&
-        isHostOptionSelectable(host, props.intent),
+        isHostOptionSelectable(
+          host,
+          props.intent,
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
     )?.hostId ??
-    props.hosts.find((host) => isHostOptionSelectable(host, props.intent))
-      ?.hostId ??
+    props.hosts.find((host) =>
+      isHostOptionSelectable(
+        host,
+        props.intent,
+        AVAILABLE_HOST_ROW_SURFACE_STATE,
+      ),
+    )?.hostId ??
     null;
   return (
     <div
@@ -170,7 +184,11 @@ function HostOptionListRow(props: {
   // surface is busy, or this host is not a legal answer for what choosing means
   // here. Both end in `disabled`, but only the second is explained on the row
   // itself (`hostOptionStatusWord`), because only the second is about the host.
-  const unselectable = !isHostOptionSelectable(host, props.intent);
+  const unselectable = !isHostOptionSelectable(
+    host,
+    props.intent,
+    AVAILABLE_HOST_ROW_SURFACE_STATE,
+  );
   const disabled = props.disabled || unselectable;
   return (
     <button
@@ -203,6 +221,7 @@ function HostOptionListRow(props: {
         picked={props.picked}
         active={props.active}
         intent={props.intent}
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
       />
     </button>
   );

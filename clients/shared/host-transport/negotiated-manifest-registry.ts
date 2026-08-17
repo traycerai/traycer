@@ -10,12 +10,14 @@
  * off the released floor is that older hosts negotiate it away instead of
  * failing the handshake.
  *
- * So the client records each `openAck`'s merged method names here, keyed by
- * host id, and UI layers read it through a subscription. BOTH transports must
- * publish - this registry is the one place "does host X have method Y" is
- * answered, and a transport that skips it makes every optional-method gate
- * fail closed forever for its hosts (the exact defect that shipped when the
- * remote transport initially didn't publish):
+ * So the client records each `openAck`'s merged method manifest here, keyed
+ * by host id, and UI layers read it through a subscription. The method set is
+ * retained for existing presence gates, and each method's negotiated version
+ * is retained for same-major feature gates. BOTH transports must publish -
+ * this registry is the one place "does host X have method Y (and at which
+ * version)?" is answered, and a transport that skips it makes every
+ * optional-method gate fail closed forever for its hosts (the exact defect
+ * that shipped when the remote transport initially didn't publish):
  *
  * - `WsRpcClient` (local): records on every unary ack - per-call re-handshake
  *   is the refresh cadence.
@@ -43,16 +45,56 @@
  * {@link resetNegotiatedManifests} exists so tests start from a clean slate.
  */
 
+import type {
+  ConnectionManifest,
+  SchemaVersion,
+} from "@traycer/protocol/framework/index";
+
 type ManifestListener = () => void;
 
 const methodsByHostId = new Map<string, ReadonlySet<string>>();
+const versionsByHostId = new Map<string, ReadonlyMap<string, SchemaVersion>>();
 const listeners = new Set<ManifestListener>();
 
 /**
- * Records the method names a host advertised in its `openAck`. Called by the
- * transport after every successful handshake, so this runs on the hot path -
- * it exits without notifying when the set is unchanged, which is the
- * overwhelmingly common case (every RPC to an already-seen host).
+ * Records every method and canonical `{ major, minor }` a host advertised in
+ * its `openAck`. Both transports call this after every successful handshake.
+ *
+ * A version-only change notifies subscribers while retaining the existing
+ * method-set object. Presence consumers therefore retain their stable snapshot
+ * when a host updates a method without adding or removing one.
+ */
+export function recordNegotiatedHostManifest(
+  hostId: string,
+  manifest: ConnectionManifest,
+): void {
+  const methodNames = Object.keys(manifest);
+  const currentMethods = methodsByHostId.get(hostId);
+  const methodsChanged =
+    currentMethods === undefined || !coversExactly(currentMethods, methodNames);
+  const versionsChanged = !hasMatchingVersions(
+    versionsByHostId.get(hostId),
+    manifest,
+  );
+  if (!methodsChanged && !versionsChanged) return;
+
+  if (methodsChanged) {
+    methodsByHostId.set(hostId, new Set(methodNames));
+  }
+  if (versionsChanged) {
+    versionsByHostId.set(hostId, copyManifestVersions(manifest));
+  }
+  notifyListeners();
+}
+
+/**
+ * Legacy name-only record surface. Existing presence-only consumers and test
+ * fixtures keep using this unchanged; transports use
+ * {@link recordNegotiatedHostManifest} so the version information is retained.
+ * A name-only recording invalidates any retained versions for that host: it
+ * cannot truthfully attest that an older version is still current. It exits
+ * without notifying only when both its method set and version knowledge are
+ * already unchanged.
  *
  * **A recorded absence is refreshed by TRAFFIC, and by nothing else.** There is
  * no eviction here and no production caller of `resetNegotiatedManifests`: an
@@ -78,13 +120,21 @@ export function recordNegotiatedHostMethods(
   methodNames: ReadonlyArray<string>,
 ): void {
   const current = methodsByHostId.get(hostId);
+  const methodsChanged =
+    current === undefined || !coversExactly(current, methodNames);
+  // This API carries no versions. It must supersede a prior full manifest even
+  // when the method names happen to match, otherwise a later legacy recording
+  // makes callers confidently consume stale version data.
+  const versionsCleared = versionsByHostId.delete(hostId);
   // The unchanged case is the overwhelmingly common one - every RPC to a host
   // already seen - so it is checked against the incoming names directly rather
   // than by building a `Set` first and comparing. Only a genuine change (first
   // contact, or a host upgraded under a live session) allocates.
-  if (current !== undefined && coversExactly(current, methodNames)) return;
-  methodsByHostId.set(hostId, new Set(methodNames));
-  for (const listener of listeners) listener();
+  if (!methodsChanged && !versionsCleared) return;
+  if (methodsChanged) {
+    methodsByHostId.set(hostId, new Set(methodNames));
+  }
+  notifyListeners();
 }
 
 /**
@@ -96,6 +146,19 @@ export function getNegotiatedHostMethods(
   hostId: string,
 ): ReadonlySet<string> | null {
   return methodsByHostId.get(hostId) ?? null;
+}
+
+/**
+ * The last negotiated version for `method` on `hostId`, or `null` when the
+ * method is absent, the host has not negotiated yet, or only a legacy
+ * name-only recording exists. The returned version is stable by reference
+ * until that method's negotiated version changes.
+ */
+export function getNegotiatedHostMethodVersion(
+  hostId: string,
+  method: string,
+): SchemaVersion | null {
+  return versionsByHostId.get(hostId)?.get(method) ?? null;
 }
 
 /**
@@ -114,8 +177,13 @@ export function subscribeNegotiatedManifests(
 
 /** Test seam: drops every recorded manifest. Listeners are left attached. */
 export function resetNegotiatedManifests(): void {
-  if (methodsByHostId.size === 0) return;
+  if (methodsByHostId.size === 0 && versionsByHostId.size === 0) return;
   methodsByHostId.clear();
+  versionsByHostId.clear();
+  notifyListeners();
+}
+
+function notifyListeners(): void {
   for (const listener of listeners) listener();
 }
 
@@ -129,4 +197,30 @@ function coversExactly(
 ): boolean {
   if (current.size !== names.length) return false;
   return names.every((name) => current.has(name));
+}
+
+function hasMatchingVersions(
+  current: ReadonlyMap<string, SchemaVersion> | undefined,
+  manifest: ConnectionManifest,
+): boolean {
+  const entries = Object.entries(manifest);
+  if (current === undefined || current.size !== entries.length) return false;
+  return entries.every(([method, version]) => {
+    const currentVersion = current.get(method);
+    return (
+      currentVersion !== undefined &&
+      currentVersion.major === version.major &&
+      currentVersion.minor === version.minor
+    );
+  });
+}
+
+function copyManifestVersions(
+  manifest: ConnectionManifest,
+): ReadonlyMap<string, SchemaVersion> {
+  const versions = new Map<string, SchemaVersion>();
+  for (const [method, version] of Object.entries(manifest)) {
+    versions.set(method, { major: version.major, minor: version.minor });
+  }
+  return versions;
 }

@@ -122,6 +122,24 @@ function isMarkAllReadDisabled(input: {
   return input.unreadCount === 0 && actionableHostAttention === 0;
 }
 
+function isClearAllDisabled(input: {
+  readonly feedMode: NotificationFeedMode;
+  readonly cloudHasSnapshot: boolean;
+  readonly cloudConnectionState: CloudNotificationsConnectionState;
+  readonly cloudTotalCount: number;
+  readonly hasActiveHost: boolean;
+  readonly hasLoadedHostNotifications: boolean;
+}): boolean {
+  if (input.feedMode === "cloud") {
+    return (
+      !input.cloudHasSnapshot ||
+      input.cloudConnectionState !== "connected" ||
+      input.cloudTotalCount === 0
+    );
+  }
+  return !input.hasActiveHost || !input.hasLoadedHostNotifications;
+}
+
 /** Local-fallback header subtitle text. A partial host state is either
  * transient (still
  * connecting - the exact wording carries no permanence claim) or confirmed
@@ -257,6 +275,9 @@ export function NotificationsPopover(
   // detection, so a Recent filter can never blind the arrival set to a row it
   // currently hides (see "N-new" in the technical plan).
   const fullOccurrenceOrder = useMergedNotificationOccurrenceEntries();
+  const hasLoadedHostNotifications = fullOccurrenceOrder.some((entry) =>
+    entry.feedId.startsWith("host:"),
+  );
   const occurrenceKeyByFeedId = useMemo(
     () =>
       new Map(
@@ -422,12 +443,15 @@ export function NotificationsPopover(
             hasActiveHost: activeHostId !== null,
             cloudConnectionState: cloudPresentationState,
           })}
-          showClearAll={feedMode === "cloud"}
-          isClearAllDisabled={
-            !cloudHasSnapshot ||
-            cloudConnectionState !== "connected" ||
-            cloudTotalCount === 0
-          }
+          showClearAll={feedMode === "cloud" || feedMode === "local"}
+          isClearAllDisabled={isClearAllDisabled({
+            feedMode,
+            cloudHasSnapshot,
+            cloudConnectionState,
+            cloudTotalCount,
+            hasActiveHost: activeHostId !== null,
+            hasLoadedHostNotifications,
+          })}
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}
           subtitle={notificationsSubtitle(feedMode, {
@@ -490,8 +514,8 @@ export function NotificationsPopover(
       <ConfirmDestructiveDialog
         open={clearAllConfirmOpen}
         onOpenChange={setClearAllConfirmOpen}
-        title="Clear all cloud notifications?"
-        description="This permanently clears every notification currently visible in your cloud feed across your devices."
+        title="Clear all notifications?"
+        description="This permanently clears every notification currently visible in this feed."
         cascadeSummary={null}
         actionLabel="Clear all"
         isPending={false}
@@ -662,7 +686,7 @@ function NotificationsPopoverHeader({
           </TooltipWrapper>
           {showClearAll ? (
             <TooltipWrapper
-              label="Clear cloud notifications"
+              label="Clear notifications"
               side="bottom"
               sideOffset={6}
               align="end"
@@ -674,7 +698,7 @@ function NotificationsPopoverHeader({
                 onClick={onClearAll}
                 disabled={isClearAllDisabled}
                 data-testid="notifications-clear-all"
-                aria-label="Clear cloud notifications"
+                aria-label="Clear notifications"
                 className="text-muted-foreground hover:text-foreground"
               >
                 <Trash2 className="size-3.5" aria-hidden />

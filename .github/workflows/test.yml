@@ -119,6 +119,8 @@ jobs:
       # exits 1 before running anything, which would redden every job here.
       # `stream` is already a non-TUI style, so nothing is lost.
       - name: Test
+        env:
+          RUN_DIFF_EDIT_BROWSER_REGRESSION: ${{ matrix.project == 'traycer-clients-gui-app' && '1' || '0' }}
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
       # Diagnostics for the gui-app shard flake: shards die with every visible
       # test passing, a log truncated mid-write, and exit 1 with no vitest

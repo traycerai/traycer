@@ -199,7 +199,7 @@ describe("useLandingComposerMentionRoots", () => {
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(
-        { surface: "landing", draftId: null },
+        { surface: "landing", hostId: "host-a", draftId: null },
         worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
       );
 
@@ -214,7 +214,7 @@ describe("useLandingComposerMentionRoots", () => {
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(
-        { surface: "landing", draftId },
+        { surface: "landing", hostId: "host-a", draftId },
         worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
       );
 

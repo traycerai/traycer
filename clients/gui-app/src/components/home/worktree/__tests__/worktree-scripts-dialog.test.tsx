@@ -180,7 +180,11 @@ import {
 } from "@/components/home/worktree/worktree-scripts-dialog";
 
 const WORKSPACE = "/tmp/a";
-const STAGING_KEY: WorktreeStagingKey = { surface: "landing", draftId: null };
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "landing",
+  hostId: "host-a",
+  draftId: null,
+};
 const KEY_STRING = worktreeStagingKeyString(STAGING_KEY);
 
 function osScript(value: string): WorktreeEntryScripts["setup"] {

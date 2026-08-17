@@ -702,6 +702,67 @@ describe("chat activity grouping", () => {
     expect(timeline[1].segment.toolName).toBe("Bash");
   });
 
+  it("promotes host-stamped shell calls (run_shell / restart_shell) out of activity groups for their whole life", () => {
+    // A shell the agent ran outlives the turn, like a backgrounded Bash - and
+    // its card is the shell's own surface (live status, the door to its
+    // output), so it must never fold into "Used N tools". The durable signal
+    // is the host-stamped correlation payload on the block, which holds after
+    // reload and once the call has long settled.
+    const started = {
+      ...toolSegment("tool-1", "mcp__traycer_a2a__traycer_run_shell", {
+        command: "tail -f deploy.log",
+      }),
+      managedCommand: {
+        event: "started" as const,
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+        cwd: null,
+      },
+      isStreaming: false,
+    };
+    const restarted = {
+      ...toolSegment("tool-3", "mcp__traycer_a2a__traycer_restart_shell", {
+        id: "cmd-1",
+      }),
+      managedCommand: {
+        event: "restarted" as const,
+        commandId: "cmd-1",
+        description: "deploy watcher",
+        monitoring: true,
+        effectiveCommand: "tail -f deploy.log",
+        effectiveCwd: "/work/repo",
+        commandChanged: false,
+        cwdChanged: false,
+        outcome: {
+          state: "running" as const,
+          pid: 4410,
+          startedAtMs: 1,
+        },
+      },
+      isStreaming: false,
+    };
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      started,
+      toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+      restarted,
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+      "segment",
+    ]);
+    for (const item of [timeline[1], timeline[3]]) {
+      if (item.kind !== "segment" || item.segment.kind !== "tool") {
+        throw new Error("Expected promoted shell tool segment");
+      }
+      expect(item.segment.managedCommand).not.toBeNull();
+    }
+  });
+
   it("promotes command tools that are completed locally but still backgrounded by the host", () => {
     const bash = toolSegment("tool-1", "Bash", {
       command: "sleep 60",
@@ -1319,6 +1380,7 @@ function toolSegment(
     ...toolInputFields(toolName, input),
     error: null,
     agentMessageSend: null,
+    managedCommand: null,
     isStreaming: false,
     endState: null,
     stopped: false,
@@ -1347,6 +1409,7 @@ function a2aToolSegment(
       responseId: send.responseId,
       expectReply: send.expectReply,
     }),
+    managedCommand: null,
     error: null,
     agentMessageSend: send,
     isStreaming: false,

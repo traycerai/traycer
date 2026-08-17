@@ -195,7 +195,7 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     });
     useWorktreeIntentStagingStore
       .getState()
-      .setIntent(pendingTerminalAgentStagingKey("epic-test"), {
+      .setIntent(pendingTerminalAgentStagingKey("active-host", "epic-test"), {
         entries: [entry],
       });
 

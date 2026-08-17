@@ -222,6 +222,7 @@ describe.each(["chat", "terminal-agent"] as const)(
 it("refuses terminal Update when metadata regresses to unresolved", async () => {
   const key = {
     surface: "owner" as const,
+    hostId: "host-test",
     epicId: "epic-1",
     ownerKind: "terminal-agent" as const,
     ownerId: "owner-1",

@@ -76,6 +76,8 @@ import {
   recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  chatPublicationStateRequestSchema,
+  chatPublicationStateResponseSchema,
   setChatArchivedRequestSchema,
   setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
@@ -356,6 +358,11 @@ export const epicCreateChatV11 = defineRpcContract({
 // `boundary: "assistantMessage"` and leaves every other field untouched.
 // `null`/`undefined` pass through unchanged (no fork requested). The response
 // is identical between the two minors.
+//
+// `sourceOwnerUserId` is filled with the honest `null` - "the client genuinely
+// does not know who owns this" - which the host reads as "no hint" and falls
+// back to its own registry facts exactly as before. A v1.0 caller has no owner
+// hint to give: the field did not exist on its fork source at all.
 export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
   typeof epicCreateChatV10,
   typeof epicCreateChatV11
@@ -378,10 +385,12 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
             assistantMessageId: request.forkSource.assistantMessageId,
             interviewBlockId: request.forkSource.interviewBlockId,
             carriedInterviews: request.forkSource.carriedInterviews,
+            sourceOwnerUserId: null,
           },
   }),
   upgradeResponse: (response) => response,
 });
+
 
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",
@@ -458,6 +467,19 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability - see the registry entry for why a new method
+ * NAME may only ride the optional channel. Old source hosts simply do not
+ * advertise it, the caller gets `E_HOST_UNSUPPORTED` for this call alone, and
+ * the fork dialog treats that as "unknown" rather than as "unpublished".
+ */
+export const epicChatPublicationStateV10 = defineRpcContract({
+  method: "epic.chatPublicationState",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatPublicationStateRequestSchema,
+  responseSchema: chatPublicationStateResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({

@@ -195,6 +195,35 @@ describe("ArtifactHeadingMinimap", () => {
     ]);
   });
 
+  it("scales painted ticks to the measured safe gutter", async () => {
+    const editor = makeEditor(THREE_HEADING_CONTENT);
+    // px-6 leaves 24px before the artifact body in a narrow pane. With the
+    // rail inset 12px from the edge, only 12px remain before text begins.
+    editor.view.dom.getBoundingClientRect = () => rectAt({ top: 0, left: 24 });
+    const scroller = makeScroller({
+      top: 0,
+      left: 0,
+      scrollTop: 0,
+      clientHeight: 400,
+      scrollHeight: 700,
+    });
+    stubHeadingTops(editor, [0, 300, 600]);
+
+    render(
+      <ArtifactHeadingMinimap
+        editor={editor}
+        scroller={scroller.element}
+        refreshRef={makeRefreshRef()}
+      />,
+    );
+    await flushFrame();
+
+    const ticks = screen.getAllByTestId("artifact-heading-minimap-tick");
+    expect(ticks[0].style.width).toBe("12px");
+    expect(ticks[1].style.width).toBe("6px");
+    expect(ticks[2].style.width).toBe("6px");
+  });
+
   it("keeps the card absent until hover, then shows one row per heading with the deeper indent on level-2 rows", async () => {
     await mountThreeHeadingRail();
     expect(screen.queryByTestId("artifact-heading-minimap-card")).toBeNull();

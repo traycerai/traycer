@@ -17,6 +17,11 @@ import {
 
 const ACME = { owner: "acme", repo: "app" } as const;
 
+// The host the sweep actually ran on, and a second enrolled host that happens
+// to use the same local paths and branch names.
+const SWEPT_HOST = "host-swept";
+const OTHER_HOST = "host-other";
+
 const REMOVED: RemovedWorktreeRefs = {
   worktreePaths: new Set(["/wt/gone"]),
   branches: [{ repoIdentifier: ACME, branch: "traycer/gone-branch" }],
@@ -180,9 +185,14 @@ describe("worktree intent purge on sweep completion", () => {
 
   it("drops stale per-folder memory and filters per-epic memory entries", () => {
     const memory = useWorktreeIntentMemoryStore.getState();
-    memory.setFolderIntent(existingBranchIntent("traycer/gone-branch"), 1);
+    memory.setFolderIntent(
+      SWEPT_HOST,
+      existingBranchIntent("traycer/gone-branch"),
+      1,
+    );
     memory.setEpicIntent(
       "epic-1",
+      SWEPT_HOST,
       {
         entries: [
           existingBranchIntent("traycer/gone-branch"),
@@ -191,31 +201,78 @@ describe("worktree intent purge on sweep completion", () => {
       },
       2,
     );
-    memory.setEpicIntent("epic-2", { entries: [importIntent("/wt/gone")] }, 3);
+    memory.setEpicIntent(
+      "epic-2",
+      SWEPT_HOST,
+      { entries: [importIntent("/wt/gone")] },
+      3,
+    );
 
     useWorktreeIntentMemoryStore
       .getState()
-      .purgeRemovedWorktreeIntents(REMOVED);
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
 
     const next = useWorktreeIntentMemoryStore.getState();
-    expect(next.getFolderIntent("/repo")).toBeNull();
+    expect(next.getFolderIntent(SWEPT_HOST, "/repo")).toBeNull();
     // The still-valid entry survives; the stale one is filtered out.
-    expect(next.getEpicIntent("epic-1")).toEqual({
+    expect(next.getEpicIntent("epic-1", SWEPT_HOST)).toEqual({
       entries: [existingBranchIntent("main")],
     });
     // An epic intent left empty is dropped wholesale.
-    expect(next.getEpicIntent("epic-2")).toBeNull();
+    expect(next.getEpicIntent("epic-2", SWEPT_HOST)).toBeNull();
+  });
+
+  // A sweep is one machine's filesystem event. The identically-named path and
+  // branch on another host still materialize there, so purging them would
+  // destroy a selection that is perfectly valid.
+  it("leaves ANOTHER host's identically-named path and branch untouched", () => {
+    const memory = useWorktreeIntentMemoryStore.getState();
+    for (const hostId of [SWEPT_HOST, OTHER_HOST]) {
+      memory.setFolderIntent(
+        hostId,
+        existingBranchIntent("traycer/gone-branch"),
+        1,
+      );
+      memory.setEpicIntent(
+        "epic-1",
+        hostId,
+        { entries: [importIntent("/wt/gone")] },
+        2,
+      );
+    }
+
+    useWorktreeIntentMemoryStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const next = useWorktreeIntentMemoryStore.getState();
+    expect(next.getFolderIntent(SWEPT_HOST, "/repo")).toBeNull();
+    expect(next.getEpicIntent("epic-1", SWEPT_HOST)).toBeNull();
+    expect(next.getFolderIntent(OTHER_HOST, "/repo")).not.toBeNull();
+    expect(next.getEpicIntent("epic-1", OTHER_HOST)).not.toBeNull();
+  });
+
+  it("does not mint a bucket for a host that remembered nothing", () => {
+    useWorktreeIntentMemoryStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+    expect(useWorktreeIntentMemoryStore.getState().byHost).toEqual({});
   });
 
   it("filters staged entries across slots, clearing emptied slots and bumping revisions", () => {
     const staging = useWorktreeIntentStagingStore.getState();
-    const staleKey: WorktreeStagingKey = { surface: "landing", draftId: null };
+    const staleKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: SWEPT_HOST,
+      draftId: null,
+    };
     const staleId = worktreeStagingKeyString(staleKey);
     staging.setIntent(staleKey, {
       entries: [existingBranchIntent("traycer/gone-branch")],
     });
     const mixedKey: WorktreeStagingKey = {
       surface: "landing",
+      hostId: SWEPT_HOST,
       draftId: "draft-1",
     };
     staging.setIntent(mixedKey, {
@@ -226,7 +283,7 @@ describe("worktree intent purge on sweep completion", () => {
 
     useWorktreeIntentStagingStore
       .getState()
-      .purgeRemovedWorktreeIntents(REMOVED);
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
 
     const next = useWorktreeIntentStagingStore.getState();
     // Fully-stale slot cleared like setIntent(null)...
@@ -238,6 +295,64 @@ describe("worktree intent purge on sweep completion", () => {
     expect(next.intentByKey[worktreeStagingKeyString(mixedKey)]).toEqual({
       entries: [existingBranchIntent("main")],
     });
+  });
+
+  // The staged tier is deliberately never re-validated by the seeding tiers, so
+  // an over-broad purge here silently destroys a pick the other machine can
+  // still execute.
+  it("leaves ANOTHER host's staged slot alone", () => {
+    const staging = useWorktreeIntentStagingStore.getState();
+    const sweptKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: SWEPT_HOST,
+      draftId: null,
+    };
+    const otherKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: OTHER_HOST,
+      draftId: null,
+    };
+    for (const key of [sweptKey, otherKey]) {
+      staging.setIntent(key, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      });
+    }
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const next = useWorktreeIntentStagingStore.getState();
+    expect(
+      next.intentByKey[worktreeStagingKeyString(sweptKey)],
+    ).toBeUndefined();
+    expect(next.intentByKey[worktreeStagingKeyString(otherKey)]).toEqual({
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+  });
+
+  // The other half of that filter. Pinned separately, because a later
+  // tightening to an exact host match would leave a `hostId: null` slot
+  // offering a deleted worktree with nothing failing.
+  it("purges the unresolved-host staged bucket with the swept host", () => {
+    const unresolvedKey: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: null,
+      draftId: null,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(unresolvedKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(unresolvedKey)
+      ],
+    ).toBeUndefined();
   });
 });
 
