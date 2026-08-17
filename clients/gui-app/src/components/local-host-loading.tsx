@@ -125,7 +125,27 @@ export function LocalHostLoadingContent(
         variant="pulse"
         className="h-8 min-w-8 text-title-md text-foreground"
       />
-      <p className="text-ui font-medium text-foreground">
+      {/* The STAGE, subordinate to the modal's title - not a second heading.
+          It used to be `text-ui font-medium text-foreground`, which put it 2px
+          from the dialog title at the identical weight and colour, so one event
+          arrived as two competing headings ("Setting up Traycer" above
+          "Setting up Traycer Host…").
+
+          Demoted in SIZE and COLOUR, which is the endorsed variant. `font-medium`
+          is deliberately KEPT rather than dropped: the lane's own detail line
+          directly below is already `text-ui-sm text-muted-foreground`, so
+          dropping weight too would make the stage byte-identical to the message
+          it is meant to caption, and the modal description above it is that
+          same pair. Weight is the one channel left that separates the three.
+
+          The COPY is untouched on purpose. `hostProgressHeading` is D10's shared
+          one-wording-per-event table, read by Settings ▸ Host as well; rewording
+          it here to reduce a within-surface duplication would break the
+          across-surface rule that table exists to enforce. */}
+      <p
+        data-testid="local-host-loading-stage"
+        className="text-ui-sm font-medium text-muted-foreground"
+      >
         {progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
       </p>
       <ProgressLines view={progressView} />

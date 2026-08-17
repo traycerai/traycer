@@ -171,6 +171,22 @@ try {
         justifyContent: getComputedStyle(el).justifyContent,
       };
     };
+    // The type ramp, for the "one event, two headings" claim. Read as COMPUTED
+    // values rather than class names: the finding is about what the eye receives,
+    // and two different utility strings can resolve to the same pixel size and
+    // the same colour.
+    const type = (name, el) => {
+      if (el === null || el === undefined) return { name, present: false };
+      const s = getComputedStyle(el);
+      return {
+        name,
+        present: true,
+        fontSizePx: Number(Number.parseFloat(s.fontSize).toFixed(2)),
+        fontWeight: Number(s.fontWeight),
+        color: s.color,
+        text: el.textContent.trim().slice(0, 48),
+      };
+    };
     return {
       tailwindCompiled:
         getComputedStyle(document.querySelector('[data-probe-planted-column]')).display === 'flex',
@@ -197,6 +213,16 @@ try {
       plantedHeading: edge(document.querySelector('[data-probe-planted-heading]')),
       plantedControl: edge(document.querySelector('[data-probe-planted-control]')),
       plantedInnerLabel: edge(document.querySelector('[data-probe-planted-inner-label]')),
+      typeRamp: [
+        type('dialogTitle', byTestId('window-host-modal-title')),
+        type('dialogDescription', byTestId('window-host-modal-description')),
+        type('stage', heading),
+        type('laneDetail', byTestId('local-host-loading-progress-detail')),
+        type('toggleLabel', (() => {
+          const el = byTestId('local-host-loading-toggle-details');
+          return el === null ? null : el.querySelector('span');
+        })()),
+      ],
       toggleExpanded: (() => {
         const el = byTestId('local-host-loading-toggle-details');
         return el === null ? null : el.getAttribute('aria-expanded');
@@ -370,6 +396,42 @@ try {
       open.toggleControls?.resolves === true,
     { closed: closed.toggleControls, open: open.toggleControls },
   );
+
+  // A5 - one event, ONE heading. The dialog title is the card's only row that is
+  // both the title's colour AND at heading weight; every other row differs on at
+  // least one of the two. Stated as "no OTHER row matches the title" rather than
+  // "the stage is muted", so it cannot be satisfied by demoting the stage while
+  // some third row is promoted into the gap.
+  const ramp = closed.typeRamp.filter((row) => row.present);
+  const titleRow = ramp.find((row) => row.name === "dialogTitle") ?? null;
+  const rivals =
+    titleRow === null
+      ? []
+      : ramp.filter(
+          (row) =>
+            row.name !== "dialogTitle" &&
+            row.color === titleRow.color &&
+            row.fontWeight >= titleRow.fontWeight,
+        );
+  check(
+    "A5_the_dialog_title_is_the_cards_only_heading",
+    titleRow !== null && rivals.length === 0,
+    {
+      title: titleRow,
+      rivalsAtTitleColourAndWeight: rivals.map((r) => r.name),
+      ramp,
+    },
+  );
+
+  // PC3 - the ramp reader resolved real rows. Every row it compared must be
+  // present with a non-zero size; a ramp of absent rows has no rivals either,
+  // and would pass A5 for the one reason that makes it meaningless.
+  const rampMissing = closed.typeRamp
+    .filter((row) => !row.present || !(row.fontSizePx > 0))
+    .map((row) => row.name);
+  check("PC3_every_type_ramp_row_resolved", rampMissing.length === 0, {
+    missingOrZero: rampMissing,
+  });
 
   const failed = checks.filter((c) => !c.passed);
   console.log(
