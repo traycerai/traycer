@@ -898,9 +898,23 @@ export type PrGetLocalDiffSummaryResponse = z.infer<
  * EVERY negotiated peer receives these rows, including two rows whose lossy
  * `path` strings collide under distinct `pathBytes`. The host's legacy
  * fold-back-to-lossy-merge BRANCH went with the 1.0 line that needed it, so a
- * client keying rows or its patch map by `path` alone is now the broken case -
- * key by the token. (`pr.getLocalDiff`, a separate released method, still
- * folds; that fold is unrelated to this line.)
+ * client keying rows or its patch map by `path` alone is now the broken case.
+ *
+ * Key by a DISCRIMINATED identity - tag the side, then the value: byte-
+ * addressed when `pathBytes` is non-null, clean otherwise. Neither half works
+ * alone. Keying on the token is not implementable, because `pathBytes` is null
+ * for every byte-exact UTF-8 path, which is most rows; and `pathBytes ?? path`
+ * collapses both into one string space, where a clean file literally named
+ * like some token collides with that token's file. The tag is what keeps the
+ * two domains disjoint.
+ *
+ * The GUI already does this - `clients/gui-app/src/lib/pr/pr-local-diff-file-
+ * key.ts` is the one function every row key, collapse entry, find id and patch
+ * cache scope derives from. A new consumer should reuse it rather than
+ * re-deriving an identity here.
+ *
+ * (`pr.getLocalDiff`, a separate released method, still folds; that fold is
+ * unrelated to this line.)
  */
 export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
   "kind",
