@@ -792,6 +792,7 @@ describe("canModifyChatMessages", () => {
               blockId: "t1",
               parentTaskId: null,
               scheduledFor: null,
+              individualStopUnavailable: null,
             },
           ],
         }),

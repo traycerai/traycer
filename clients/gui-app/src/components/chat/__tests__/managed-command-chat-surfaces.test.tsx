@@ -121,6 +121,7 @@ const HARNESS_ITEM: BackgroundItem = {
   blockId: "harness-task-tool",
   parentTaskId: null,
   scheduledFor: null,
+  individualStopUnavailable: null,
 };
 
 function command(over: Partial<ManagedCommand>): ManagedCommand {
@@ -427,11 +428,14 @@ describe("running commands in the Background panel", () => {
         readOnly={false}
         pendingStopTaskIds={new Set()}
         stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
         onItemClick={() => undefined}
         onStopItem={() => null}
         onStopAll={onStopAll}
+        onStopSession={() => null}
       />,
     );
     return { onStopAll };
@@ -783,11 +787,14 @@ describe("held shells in the Background panel", () => {
         readOnly={readOnly}
         pendingStopTaskIds={new Set()}
         stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
         onItemClick={() => undefined}
         onStopItem={() => null}
         onStopAll={() => null}
+        onStopSession={() => null}
       />,
     );
   }

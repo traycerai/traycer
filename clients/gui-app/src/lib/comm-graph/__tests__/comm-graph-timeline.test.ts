@@ -274,7 +274,21 @@ describe("commGraphPulseForEvent", () => {
         a2a({ id: 1, timestamp: 10, receiverAgentId: "outside" }),
         VISIBLE,
       ),
-    ).toEqual({ kind: "agent", agentId: "a" });
+    ).toEqual({ kind: "agent", agentId: "a", senderAgentId: "a" });
+  });
+
+  it("carries sender identity when only the receiver is on canvas", () => {
+    expect(
+      commGraphPulseForEvent(
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "outside",
+          receiverAgentId: "a",
+        }),
+        new Set(["a"]),
+      ),
+    ).toEqual({ kind: "agent", agentId: "a", senderAgentId: "outside" });
   });
 
   it("pulses nothing when neither endpoint is on the canvas", () => {
