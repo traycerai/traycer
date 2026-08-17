@@ -2063,7 +2063,7 @@ function addAssistantMessageToAccumulator(
     addAssistantImageProjection(
       existing,
       message.blocks,
-      message.imageResolutions.map((entry) => ({
+      assistantImageResolutions(message).map((entry) => ({
         messageId: message.messageId,
         entry,
       })),
@@ -2111,7 +2111,7 @@ function addAssistantMessageToAccumulator(
   addAssistantImageProjection(
     created,
     message.blocks,
-    message.imageResolutions.map((entry) => ({
+    assistantImageResolutions(message).map((entry) => ({
       messageId: message.messageId,
       entry,
     })),
@@ -2247,6 +2247,54 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
   return blocksIdentityCounter;
 }
 
+/**
+ * The empty list every record without `imageResolutions` shares.
+ *
+ * One module-level array, deliberately not a fresh `[]` per call:
+ * `imageResolutionsIdentityToken` keys a WeakMap on this value to build a memo
+ * signature, so a new array per read would change that signature on every
+ * projection and defeat the cache it exists to feed.
+ *
+ * Distinct from `NO_IMAGE_RESOLUTIONS` below, which is the empty PROJECTION
+ * (`AssistantMarkdownImageResolution`, entries already paired with their owning
+ * message id). This one is the empty PERSISTED list a record carries.
+ */
+const NO_PERSISTED_IMAGE_RESOLUTIONS: AssistantMessage["imageResolutions"] = [];
+
+/**
+ * `imageResolutions` for a persisted assistant record, tolerating one that
+ * never carried the field.
+ *
+ * The type says it is always present, and for a record parsed off the wire it
+ * is. A snapshot on the live schema line takes `ChatStreamClient`'s SHALLOW
+ * parse path, which validates `chat.messages` with
+ * `z.custom<Message>(isStructuralRecord)` - a structural check only, so none of
+ * the zod defaults run and `imageResolutions: z.array(...).default([])` never
+ * fills. A host replaying a record stored before the field existed hands it
+ * straight through, typed as present and genuinely `undefined`. Reading it
+ * blind threw "Invalid value used as weak map key" out of
+ * `imageResolutionsIdentityToken` and took the whole chat tile down through its
+ * error boundary.
+ *
+ * The tolerance belongs here and not in the transport: the shallow path is
+ * structural by design - that is what makes it cheap - and a contract test in
+ * `chat-stream-client.test.ts` pins it to hand a live snapshot's message
+ * through structurally unchanged.
+ */
+function assistantImageResolutions(
+  message: AssistantMessage,
+): AssistantMessage["imageResolutions"] {
+  // Read through `unknown` deliberately. The declared field type is not
+  // optional, so annotating a local `| undefined` does not survive: TypeScript
+  // narrows a `const` to its initializer's type and `no-unnecessary-condition`
+  // then rejects the `??` as dead. `unknown` is the honest declaration here -
+  // the type system cannot express the runtime shape this guards against.
+  const resolutions: unknown = message.imageResolutions;
+  return Array.isArray(resolutions)
+    ? message.imageResolutions
+    : NO_PERSISTED_IMAGE_RESOLUTIONS;
+}
+
 let imageResolutionsIdentityCounter = 0;
 const imageResolutionsIdentity = new WeakMap<
   AssistantMessage["imageResolutions"],
@@ -2266,7 +2314,9 @@ function imageResolutionsIdentityToken(
 }
 
 function assistantRecordSignature(message: AssistantMessage): string {
-  const imageIdentity = imageResolutionsIdentityToken(message.imageResolutions);
+  const imageIdentity = imageResolutionsIdentityToken(
+    assistantImageResolutions(message),
+  );
   const version = message.blocksVersion;
   if (version !== undefined) {
     return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}`;
