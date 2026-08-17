@@ -1161,7 +1161,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     ).toBe("p3");
   });
 
-  it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat gets its one intended decision-17 remount, and the emptied source pane dissolves", async () => {
+  it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat is retained rather than remounted, and the emptied source pane dissolves", async () => {
     // Review finding 2: row 3 only drives an empty-target move; row 11 only
     // drives `setActiveTileTab` (a plain in-pane switch), never
     // `moveTabOnTabStrip` across two panes. Neither composes the real drop's
@@ -1200,14 +1200,15 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
     expectRefsStable(container, CHAT_TRACKED.instanceId, draggedBefore);
 
-    // (b) The displaced destination chat: exactly the ONE intended
-    // decision-17 remount (no longer pB's active tab -> chat tabs never
-    // keep-alive when inactive -> real unmount), not a leaked hosted body.
-    await waitFor(() => {
-      expect(queryHostedRecord(container, CHAT_SIBLING.instanceId)).toBeNull();
-    });
+    // (b) The displaced destination chat: still pB's most recently active
+    // chat after TRACKED, so pane retention keeps it. It loses the pane's
+    // foreground, not its body - a drop onto an occupied pane no longer costs
+    // the chat it displaces a remount.
+    expect(
+      queryHostedRecord(container, CHAT_SIBLING.instanceId),
+    ).not.toBeNull();
     expect(mountCount(CHAT_SIBLING.instanceId)).toBe(1);
-    expect(unmountCount(CHAT_SIBLING.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_SIBLING.instanceId)).toBe(0);
 
     // (c) Source-pane dissolve: pA had only TRACKED, so the move empties
     // and closes it, collapsing the 2-child root group down to pB as the
@@ -1561,7 +1562,14 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(container.querySelector('[data-testid="chat-tile"]')).toBeNull();
   });
 
-  it("row 11 - NEGATIVE CONTROL (decision #17): switching the active inner tab away then back is the ONE intentional remount", async () => {
+  it("row 11b - the retained record is genuinely unpainted, through the REAL store -> slot -> publish path", async () => {
+    // Cold review F3: the presentation guard's only other coverage builds
+    // `canvasActivity: { tabSelected: false }` by hand, so a regression in
+    // `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that
+    // actually produces that field in production - would ship green. This row
+    // never names `tabSelected`: it drives a real store activation and reads
+    // the rendered record, so it fails if EITHER the guard or the wiring that
+    // feeds it breaks.
     seedCanvas(
       pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
       [CHAT_TRACKED, CHAT_SIBLING],
@@ -1569,25 +1577,79 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     );
     const { container } = renderMatrix(undefined);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
-    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
-    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+    const tracked = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+    expect(tracked?.getAttribute("aria-hidden")).toBe("false");
+    expect(tracked?.hasAttribute("inert")).toBe(false);
 
     act(() => {
       useEpicCanvasStore
         .getState()
         .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
     });
+    await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
+
+    // Retained, mounted, and provably not painting over the newly selected
+    // sibling that shares its rect.
+    const retained = queryHostedRecord(container, CHAT_TRACKED.instanceId);
+    expect(retained).not.toBeNull();
+    expect(retained?.getAttribute("aria-hidden")).toBe("true");
+    expect(retained?.hasAttribute("inert")).toBe(true);
+    expect(retained?.classList.contains("invisible")).toBe(true);
+    expect(retained?.classList.contains("opacity-0")).toBe(true);
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+
+    // ...and the sibling that took the foreground IS painting.
+    const sibling = queryHostedRecord(container, CHAT_SIBLING.instanceId);
+    expect(sibling?.getAttribute("aria-hidden")).toBe("false");
+    expect(sibling?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("row 11 - NEGATIVE CONTROL: an inner tab switch is no longer a remount; falling past the pane's chat retention cap still is", async () => {
+    const activate = (instanceId: string): void => {
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .setActiveTileTab(VIEW_TAB_ID, "p1", instanceId);
+      });
+    };
+
+    seedCanvas(
+      pane("p1", [
+        CHAT_TRACKED.instanceId,
+        CHAT_SIBLING.instanceId,
+        CHAT_WRAP_PARTNER.instanceId,
+      ]),
+      [CHAT_TRACKED, CHAT_SIBLING, CHAT_WRAP_PARTNER],
+      "p1",
+    );
+    const { container } = renderMatrix(undefined);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+
+    // Away and back inside the pane: retained the whole time. This is the
+    // transition that used to remount, and with it the transcript's visible
+    // re-convergence on the way back.
+    activate(CHAT_SIBLING.instanceId);
+    expect(
+      queryHostedRecord(container, CHAT_TRACKED.instanceId),
+    ).not.toBeNull();
+    activate(CHAT_TRACKED.instanceId);
+    await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
+
+    // Retention is bounded, so the control still has a real remount to
+    // detect: two other chats claim the pane's slots and evict this one.
+    activate(CHAT_SIBLING.instanceId);
+    activate(CHAT_WRAP_PARTNER.instanceId);
     await waitFor(() => {
       expect(queryHostedRecord(container, CHAT_TRACKED.instanceId)).toBeNull();
     });
-    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(1);
 
-    act(() => {
-      useEpicCanvasStore
-        .getState()
-        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_TRACKED.instanceId);
-    });
+    activate(CHAT_TRACKED.instanceId);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
     // Exactly one fresh mount, one prior unmount: proves the mount-count
@@ -1840,9 +1902,10 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
         .getState()
         .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
     });
-    await waitFor(() => {
-      expect(queryHostedRecord(container, CHAT_TRACKED.instanceId)).toBeNull();
-    });
+    // Retained, not unmounted: the pane switch is now a presentation change.
+    expect(
+      queryHostedRecord(container, CHAT_TRACKED.instanceId),
+    ).not.toBeNull();
     await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
 
     act(() => {
@@ -1855,6 +1918,10 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     const restoredScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
     expect(restoredScroll.dataset.scrollMode).toBe("following-end");
     expect(restoredScroll.scrollTop).toBe(bottomTop);
+    // Bottom-follow now survives because the body never went away, rather
+    // than because a remount's restore happened to land back on the tail.
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
+    expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
@@ -1869,9 +1936,15 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // else ever released `restorePersistencePendingRef` for this mount.
     // Every later persist (scroll mirror, unmount save) then silently
     // no-ops, leaving the STALE free-scrolling entry in the tab-key cache
-    // across the next same-pane remount - reproducing the live evidence's
-    // stable, repeatable detached landing (identical scrollTop every
-    // cycle, since the cache is never touched again).
+    // across the next remount - reproducing the live evidence's stable,
+    // repeatable detached landing (identical scrollTop every cycle, since
+    // the cache is never touched again).
+    //
+    // The remount is driven by RETENTION EVICTION rather than a bare
+    // same-pane switch: a switch no longer unmounts the body, so it would
+    // leave this regression with nothing to detect. Eviction (and close, and
+    // top-level surface eviction) is where a real remount still happens, and
+    // therefore where a stale cache entry would still land detached.
     const longMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     installChatStreamFactory(new Map([[CHAT_TRACKED.id, longMessages]]));
     setLegendListScrollContainerScrollHeightOverride(
@@ -1893,8 +1966,12 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
       offset: 12,
     });
     seedCanvas(
-      pane("p1", [CHAT_TRACKED.instanceId, CHAT_SIBLING.instanceId]),
-      [CHAT_TRACKED, CHAT_SIBLING],
+      pane("p1", [
+        CHAT_TRACKED.instanceId,
+        CHAT_SIBLING.instanceId,
+        CHAT_WRAP_PARTNER.instanceId,
+      ]),
+      [CHAT_TRACKED, CHAT_SIBLING, CHAT_WRAP_PARTNER],
       "p1",
     );
     const { container } = renderMatrix(undefined);
@@ -1929,15 +2006,22 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await settleLegendList();
     expect(trackedScroll.dataset.scrollMode).toBe("following-end");
 
+    // Two other chats claim the pane's retention slots, evicting TRACKED and
+    // forcing the real unmount this regression needs.
     act(() => {
       useEpicCanvasStore
         .getState()
         .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_SIBLING.instanceId);
     });
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_WRAP_PARTNER.instanceId);
+    });
     await waitFor(() => {
       expect(queryHostedRecord(container, CHAT_TRACKED.instanceId)).toBeNull();
     });
-    await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
+    await waitForHostedChatLoaded(container, CHAT_WRAP_PARTNER.instanceId);
 
     act(() => {
       useEpicCanvasStore
@@ -1945,6 +2029,9 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
         .setActiveTileTab(VIEW_TAB_ID, "p1", CHAT_TRACKED.instanceId);
     });
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
+    // A genuine second mount - otherwise the assertion below would be
+    // satisfied by a body that never left.
+    expect(mountCount(CHAT_TRACKED.instanceId)).toBe(2);
 
     const restoredScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
     expect(restoredScroll.dataset.scrollMode).toBe("following-end");

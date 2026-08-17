@@ -534,7 +534,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result).toEqual({ epics: {}, chats: {} });
   });
 
-  it("lights an approval only while it is unresolved and unread", () => {
+  it("lights an approval while it is unresolved, including after it is read", () => {
     const unresolved = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null, null)]),
       [],
@@ -553,7 +553,23 @@ describe("cloud notification indicator derivation", () => {
 
     expect(unresolved.chats["chat-1"].pendingApproval).toBe(true);
     expect(resolvedButUnread.chats["chat-1"]).toBeUndefined();
-    expect(unresolvedButRead.chats["chat-1"]).toBeUndefined();
+    expect(unresolvedButRead.chats["chat-1"].pendingApproval).toBe(true);
+  });
+
+  it("lights a read-but-unresolved interview and clears it once resolved", () => {
+    const unresolvedButRead = selectCloudNotificationIndicators(
+      rowsById([prompt("interview", "interview.requested", null, 10)]),
+      [],
+      ["chat-1"],
+    );
+    const resolved = selectCloudNotificationIndicators(
+      rowsById([prompt("interview", "interview.requested", 11, 10)]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(unresolvedButRead.chats["chat-1"].pendingInterview).toBe(true);
+    expect(resolved.chats["chat-1"]).toBeUndefined();
   });
 
   it("pends an interview independently of the approval arm", () => {

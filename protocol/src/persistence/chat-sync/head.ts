@@ -263,31 +263,46 @@ export const chatHeadRecordShape = {
 } as const;
 
 /**
- * The reader floor the 1.1 reshape imposes, as a value: a 1.0 reader meeting
- * a 1.1 head would misread the cut plan it cannot see, so every 1.1 head
- * must gate readers below 1.1. Pinned literally rather than derived from
- * `CHAT_SYNC_SCHEMA_VERSION`, because a future ADDITIVE minor (1.2+) keeps
- * this floor - raising it is a deliberate act reserved for a change an older
- * reader cannot safely interpret, exactly as `minReaderVersion`'s own doc
- * says.
+ * The 1.1 line's reader floor, as a value, for the day one is deliberately
+ * imposed. **No writer stamps it today**, and that is the policy, not an
+ * omission: the 1.1 reshape is additive and read-safe, so per
+ * `minReaderVersion`'s own doc (and `COMPATIBILITY.md` §4) there is nothing to
+ * gate. A 1.0 reader admits a 1.1 head, reads each part entry as the address it
+ * is, ignores the membership fields beside it, and re-derives its own cut plan
+ * from its op log - so it renders and re-publishes the chat correctly without
+ * modelling any of it. (Head-level `cdc` additionally rides the head's residual
+ * bag; the per-part fields have no capture site, deliberately - see the
+ * publisher-derived-levels rule in `captured-levels.ts`. The floor is
+ * unnecessary either way, but for re-derivation, not for preservation.)
+ *
+ * Pinned literally rather than derived from `CHAT_SYNC_SCHEMA_VERSION` so
+ * that raising the floor stays a DELIBERATE act. Deriving it made "every
+ * minor bump locks out every older reader" the structural default, which is
+ * exactly the bug this constant's existence is meant to prevent: a publisher
+ * that stamps its own version refuses readers for additive changes it was
+ * designed to survive.
+ *
+ * Also the threshold `refineClaimedCutPlanCompleteness` reads as "1.1 or
+ * later", which is the one place it is load-bearing today.
  */
 export const CHAT_SYNC_1_1_READER_FLOOR = { major: 1, minor: 1 } as const;
 
 /**
  * Writer shape for the registered 1.1 contract: CDC params and per-cohort
- * seq ranges plus membership are required, and `minReaderVersion` must be
- * exactly the 1.1 floor - inherited nullable, an incorrectly-built
- * publication could omit it, and a 1.0 reader's same-major gate would then
- * ADMIT a head whose cut plan it misreads instead of refusing cleanly. The
- * reader shape above stays additive so a 1.0 head still opens.
+ * seq ranges plus membership are required. The reader shape above stays
+ * additive so a 1.0 head still opens.
+ *
+ * `minReaderVersion` is deliberately NOT narrowed here. It inherits the
+ * shared shape's nullable default, because `null` is the value a correct 1.1
+ * publisher stamps: the floor belongs to a change an older reader cannot
+ * safely INTERPRET, and a nullable inheritance is also what keeps the next
+ * additive minor publishable - a literal pin on this build's own version
+ * would make `toChatHeadRecord`'s own stamp unparseable the moment
+ * `CHAT_SYNC_SCHEMA_VERSION` moves to 1.2.
  */
 export const chatHeadWriterRecordShape = {
   ...chatHeadRecordShape,
   cdc: chatHeadCdcParamsSchema,
-  minReaderVersion: z.object({
-    major: z.literal(CHAT_SYNC_1_1_READER_FLOOR.major),
-    minor: z.literal(CHAT_SYNC_1_1_READER_FLOOR.minor),
-  }),
   messageShards: z.array(chatHeadCohortPartSchema),
   eventShards: z.array(chatHeadCohortPartSchema),
 } as const;

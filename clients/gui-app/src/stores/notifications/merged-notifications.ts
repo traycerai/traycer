@@ -78,6 +78,7 @@ import {
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
+  type HostNotificationsClearAllRequest,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
@@ -825,6 +826,34 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     },
   });
 
+  const clearHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.clearAll",
+    HostNotificationMutationContext,
+    HostNotificationsClearAllRequest
+  >({
+    client,
+    method: "host.notifications.clearAll",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.clearAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      onSuccess: (_data, variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .clearAllLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+        if (context.hostId !== null) {
+          invalidateNotificationIndicators(queryClient, context.hostId, client);
+        }
+      },
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't clear notifications.");
+      },
+    },
+  });
+
   const loadMoreHost = useHostMutation<
     HostRpcRegistry,
     "host.notifications.list",
@@ -1098,13 +1127,23 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClear.mutate({ entryId: row.sourceId });
       },
       clearAll: () => {
-        if (feedMode !== "cloud" || cloudVersion === null) return;
-        // Send the version of the snapshot the user is LOOKING AT, not
-        // whatever the cloud head has reached by the time this lands. The
-        // fan-out then covers exactly the rows on screen, and an entry that
-        // arrives in between survives however many times a lost-response
-        // retry replays this call.
-        cloudClearAll.mutate({ observedVersion: cloudVersion });
+        if (feedMode === "cloud") {
+          if (cloudVersion === null) return;
+          // Send the version of the snapshot the user is LOOKING AT, not
+          // whatever the cloud head has reached by the time this lands. The
+          // fan-out then covers exactly the rows on screen, and an entry that
+          // arrives in between survives however many times a lost-response
+          // retry replays this call.
+          cloudClearAll.mutate({ observedVersion: cloudVersion });
+          return;
+        }
+        if (
+          feedMode === "local" &&
+          client !== null &&
+          client.getActiveHostId() !== null
+        ) {
+          clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
+        }
       },
       loadMoreHost: () => {
         if (feedMode !== "local") return;
@@ -1149,6 +1188,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       appLocalMarkAllAsRead,
       markHostRead,
       markHostAllRead,
+      clearHostAll,
       loadMoreHost,
       hostNextCursor,
       hasHostLoadError,

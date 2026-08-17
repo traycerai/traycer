@@ -66,6 +66,11 @@ type UsageSummaryResponse = ResponseOfMethod<
 
 const mocks = vi.hoisted(() => ({
   openSettings: vi.fn(),
+  captureUsageExportImageBlob: vi.fn(),
+  copyImageBlobToClipboard: vi.fn(),
+  copyImageBlobPromiseToClipboard:
+    vi.fn<(blobPromise: Promise<Blob>) => Promise<void>>(),
+  saveBlobToDisk: vi.fn(),
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -76,9 +81,31 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTreeNode: (id: string) => ({ title: `Chat ${id}` }),
 }));
 
+// html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
+// the hook's own capture step is stubbed here so these tests exercise the
+// dialog's wiring (which node it resolves, what it hands off) rather than
+// real rasterisation.
+vi.mock("@/lib/usage-analytics/usage-export-image", () => ({
+  USAGE_EXPORT_REGION_SELECTOR: "[data-usage-export-region]",
+  captureUsageExportImageBlob: mocks.captureUsageExportImageBlob,
+}));
+
+vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
+  copyImageBlobToClipboard: mocks.copyImageBlobToClipboard,
+  copyImageBlobPromiseToClipboard: mocks.copyImageBlobPromiseToClipboard,
+}));
+
+vi.mock("@/lib/files/save-blob-to-disk", () => ({
+  saveBlobToDisk: mocks.saveBlobToDisk,
+}));
+
 afterEach(() => {
   cleanup();
   mocks.openSettings.mockClear();
+  mocks.captureUsageExportImageBlob.mockReset();
+  mocks.copyImageBlobToClipboard.mockReset();
+  mocks.copyImageBlobPromiseToClipboard.mockReset();
+  mocks.saveBlobToDisk.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -486,5 +513,160 @@ describe("<EpicUsageDialog />", () => {
     // The frame stays constant around the error fill.
     expect(screen.getByTestId("usage-window-7")).toBeTruthy();
     expect(screen.getByTestId("epic-usage-view-full-dashboard")).toBeTruthy();
+  });
+
+  it("enables the image-export footer buttons and renders the capture region once loaded", async () => {
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    const copyButton = screen.getByTestId("epic-usage-copy-image");
+    const downloadButton = screen.getByTestId("epic-usage-download-image");
+    expect(copyButton instanceof HTMLButtonElement && copyButton.disabled).toBe(
+      false,
+    );
+    expect(
+      downloadButton instanceof HTMLButtonElement && downloadButton.disabled,
+    ).toBe(false);
+    expect(screen.getByTestId("epic-usage-export-region")).toBeTruthy();
+  });
+
+  it("disables the image-export footer buttons when the window has no facts", async () => {
+    const handler = vi.fn(
+      (_request: UsageSummaryRequest): UsageSummaryResponse => {
+        const base = usageSummaryResponse();
+        return {
+          ...base,
+          summary: {
+            ...base.summary,
+            totals: { ...base.summary.totals, factCount: 0, knownCostUsd: 0 },
+            buckets: [],
+            chatBuckets: [],
+          },
+        };
+      },
+    );
+    renderDialog(handler);
+
+    await screen.findByTestId("usage-dialog-empty");
+    const copyButton = screen.getByTestId("epic-usage-copy-image");
+    const downloadButton = screen.getByTestId("epic-usage-download-image");
+    expect(copyButton instanceof HTMLButtonElement && copyButton.disabled).toBe(
+      true,
+    );
+    expect(
+      downloadButton instanceof HTMLButtonElement && downloadButton.disabled,
+    ).toBe(true);
+  });
+
+  it("captures the export region and copies it to the clipboard from 'Copy image'", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.copyImageBlobPromiseToClipboard.mockResolvedValue(undefined);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    const exportRegion = screen.getByTestId("epic-usage-export-region");
+
+    await user.click(screen.getByTestId("epic-usage-copy-image"));
+
+    await waitFor(() => {
+      expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
+    });
+    const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
+    await expect(captured).resolves.toBe(blob);
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({
+      region: exportRegion,
+      heading: "Usage",
+      subheading: "Cost and token usage for this task.",
+    });
+    expect(mocks.saveBlobToDisk).not.toHaveBeenCalled();
+  });
+
+  it("hands the pending capture to the clipboard on click, before it resolves", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    let resolveCapture: (value: Blob) => void = () => undefined;
+    mocks.captureUsageExportImageBlob.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+    mocks.copyImageBlobPromiseToClipboard.mockResolvedValue(undefined);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    await user.click(screen.getByTestId("epic-usage-copy-image"));
+
+    // The clipboard call is what has to happen inside the click's user
+    // activation, so it must already have been made while the capture it was
+    // handed is still pending - not after the blob lands.
+    expect(mocks.copyImageBlobPromiseToClipboard).toHaveBeenCalledTimes(1);
+    const [captured] = mocks.copyImageBlobPromiseToClipboard.mock.calls[0];
+    resolveCapture(blob);
+    await expect(captured).resolves.toBe(blob);
+  });
+
+  it("disables the download button too while a copy export is in flight", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    let resolveCapture: (value: Blob) => void = () => undefined;
+    mocks.captureUsageExportImageBlob.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+    mocks.copyImageBlobPromiseToClipboard.mockImplementation(
+      async (blobPromise) => {
+        await blobPromise;
+      },
+    );
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    await user.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Copy image" }),
+    );
+
+    // A capture is a full-region rasterisation, so the two legs share one
+    // mutation: while the copy runs, DOWNLOAD is disabled too - not just the
+    // button that was pressed.
+    const downloadButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Download image",
+    });
+    await waitFor(() => {
+      expect(downloadButton.disabled).toBe(true);
+    });
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledTimes(1);
+
+    resolveCapture(blob);
+
+    await waitFor(() => {
+      expect(downloadButton.disabled).toBe(false);
+    });
+  });
+
+  it("captures the export region and saves it to disk from 'Download image'", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.saveBlobToDisk.mockResolvedValue("traycer-usage-7d.png");
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    const exportRegion = screen.getByTestId("epic-usage-export-region");
+
+    await user.click(screen.getByTestId("epic-usage-download-image"));
+
+    await waitFor(() => {
+      expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
+        blob,
+        "traycer-usage-7d.png",
+      );
+    });
+    expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({
+      region: exportRegion,
+      heading: "Usage",
+      subheading: "Cost and token usage for this task.",
+    });
+    expect(mocks.copyImageBlobPromiseToClipboard).not.toHaveBeenCalled();
   });
 });

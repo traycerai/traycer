@@ -51,7 +51,7 @@ import {
 import { EpicNodeTile } from "@/components/epic-canvas/renderers/epic-node-tile";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
 import {
-  isPersistentTerminalSurface,
+  concealsWithoutCollapsing,
   useMountedPaneTabs,
 } from "@/components/epic-canvas/canvas/use-mounted-pane-tabs";
 import {
@@ -359,11 +359,13 @@ export const TabGroupView = memo(function TabGroupView(
   }, [pane.activeTabId, pane.tabInstanceIds, tabs]);
   // Keep-alive mounting policy: pinned terminals ∪ LRU(cap 3) of recently
   // active tabs, with the active tab as the LRU head (so at most 3
-  // non-terminal bodies are mounted, INCLUDING the active one); a hidden
-  // pane collapses to active-only(+terminals). See use-mounted-pane-tabs.ts.
+  // non-terminal bodies are mounted, INCLUDING the active one), ∪ the pane's
+  // retained chats; a hidden pane collapses the LRU to active-only
+  // (+terminals, +chats). See use-mounted-pane-tabs.ts.
   const paneVisible = usePaneVisible();
   const mountedTabIds = useMountedPaneTabs({
     activeTabId: activeTab?.instanceId ?? null,
+    pane,
     tabs,
     paneVisible,
   });
@@ -438,11 +440,13 @@ export const TabGroupView = memo(function TabGroupView(
               {activeTab !== null
                 ? mountedTabs.map((tab) => {
                     const selected = activeTab.instanceId === tab.instanceId;
-                    // Hidden terminals conceal via `visibility` so xterm keeps
-                    // its box dimensions; hidden LRU keep-alives use
+                    // Hidden terminals and retained chats conceal via
+                    // `visibility` so the concealed body keeps its box - xterm
+                    // needs its dimensions, and a chat reflowed at zero width
+                    // republishes bogus item sizes. Hidden LRU keep-alives use
                     // `display:none` so concealed heavy bodies cost no layout
                     // or paint.
-                    const terminal = isPersistentTerminalSurface(tab);
+                    const keepsBox = concealsWithoutCollapsing(tab);
                     return (
                       <div
                         key={tab.instanceId}
@@ -454,9 +458,9 @@ export const TabGroupView = memo(function TabGroupView(
                           "absolute inset-0 min-h-0",
                           selected && "visible pointer-events-auto",
                           !selected &&
-                            terminal &&
+                            keepsBox &&
                             "invisible pointer-events-none",
-                          !selected && !terminal && "hidden",
+                          !selected && !keepsBox && "hidden",
                         )}
                         aria-hidden={selected ? undefined : true}
                       >
