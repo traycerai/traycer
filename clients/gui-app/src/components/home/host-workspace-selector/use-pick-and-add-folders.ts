@@ -6,6 +6,9 @@ import {
 } from "@/hooks/workspace/use-workspace-folder-actions";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import type { HomeWorkspaceSource } from "./use-home-workspace-source";
 
 /**
@@ -33,6 +36,52 @@ export function usePickAndAddWorkspaceFolders(
     workspaceSource.addResolvedFolders(folders);
     return folders.length > 0;
   }, [folderActions, workspaceSource]);
+}
+
+/**
+ * Empty-home CTA: pick a folder and make it THIS project's main in one step.
+ */
+export function usePickAndCreateProject(
+  client: HostClient<HostRpcRegistry> | null,
+  workspaceSource: HomeWorkspaceSource,
+): () => Promise<boolean> {
+  const folderActions = useWorkspaceFolderActionsForClient(client);
+  return useCallback(async (): Promise<boolean> => {
+    const result = await folderActions.pickAndPrepareFolders();
+    if (result === null) return false;
+    const folders = result.folders.map((folder) =>
+      preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
+    );
+    if (folders.length === 0) return false;
+    workspaceSource.addResolvedFolders(folders);
+    return createProjectFromPickedFolders({
+      hostId: result.hostId,
+      folders,
+    });
+  }, [folderActions, workspaceSource]);
+}
+
+export function createProjectFromPickedFolders(args: {
+  readonly hostId: string;
+  readonly folders: ReadonlyArray<WorkspaceFolderInfo>;
+}): boolean {
+  if (args.folders.length === 0) return false;
+  const first = args.folders[0];
+  const name =
+    first.name.trim().length > 0
+      ? first.name.trim()
+      : workspaceFolderName(first.path);
+  const store = useProjectProfilesStore.getState();
+  const id = store.createProfile(args.hostId, {
+    name,
+    color: "orange",
+    folderPaths: args.folders.map((folder) => folder.path),
+    primaryPath: first.path,
+  });
+  if (id === null) return false;
+  store.setActiveProfile(args.hostId, id);
+  useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
+  return true;
 }
 
 /**

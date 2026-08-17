@@ -26,6 +26,8 @@ export function WorkspaceFolderRows(props: {
   readonly addFolderPending: boolean;
   readonly addFolderDisabled: boolean;
   readonly addFolderDisabledReason: string | null;
+  /** Empty-home landing passes "Add project"; everywhere else omit. */
+  readonly addFolderLabel?: string;
   // Terminal-agent "Update": applies the staged folder edits and resumes the
   // PTY. `null` on chat / landing surfaces (no live session to resume), where
   // the button is hidden. When set, it renders to the right of "Add folder".
@@ -98,6 +100,9 @@ export function WorkspaceFolderRows(props: {
       pending={props.addFolderPending}
       disabled={props.addFolderDisabled}
       disabledReason={props.addFolderDisabledReason}
+      label={
+        props.addFolderLabel === undefined ? "Add folder" : props.addFolderLabel
+      }
     />
   );
   // Terminal-agent "Update" action: pinned to the far right of the folder block
@@ -187,6 +192,7 @@ export function AddFolderButton(props: {
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly disabledReason: string | null;
+  readonly label: string;
 }) {
   const button = (
     <Button
@@ -209,7 +215,7 @@ export function AddFolderButton(props: {
       ) : (
         <FolderPlus data-icon="inline-start" />
       )}
-      <span className="truncate">Add folder</span>
+<span className="truncate">{props.label}</span>
     </Button>
   );
   if (props.disabled && props.disabledReason !== null) {
