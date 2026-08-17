@@ -429,12 +429,29 @@ export default tseslint.config(
     // The activation module owns raw tabActivate. Every other caller reaches
     // activateTabIntent, which binds the coordinated layout commit to the
     // history-entry envelope before navigating.
+    //
+    // The exemption this block exists for is tabActivate and NOTHING ELSE, so
+    // the selection bans are restated. Rebuilding the value from
+    // `traycerTypeSafetyRestrictions` alone had silently dropped them here:
+    // `--print-config` on this file reported 8 restrictions against 71 for an
+    // ordinary production module, with no `selectById` entry among them - so
+    // the one file allowed to name a tab-activation internal was also the one
+    // file allowed to call `selectById`, which nothing intended and no test
+    // would have noticed. That is the last-block-wins hazard this config warns
+    // about at :30, fired rather than hypothetical.
+    //
+    // Restated individually rather than by spreading
+    // `generalCustomSyntaxRestrictions`, because that array carries the
+    // tabNavigation bans this block must not have. Measured: adding these two
+    // families produces zero violations here - the file never names either.
     files: ["src/lib/tab-navigation.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
+        ...selectByIdRestrictions,
+        ...selectionAuthorityRestrictions,
       ],
     },
   },

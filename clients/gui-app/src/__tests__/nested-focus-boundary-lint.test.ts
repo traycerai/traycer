@@ -79,6 +79,63 @@ const lintRuleModuleUrl = pathToFileURL(
 const importedLintRuleModule: unknown = await import(lintRuleModuleUrl);
 const lintRuleModule = readLintRuleModule(importedLintRuleModule);
 
+/**
+ * D12/F2 host-selection layer (`eslint/traycer-host-selection-layer-rules.mjs`).
+ * Unlike the nested-focus module above, these six families are plain exported
+ * arrays/lists, not factories - `selectByIdRestrictions` and
+ * `selectionAuthorityRestrictions` need no allowlist parameter because
+ * `selectByIdRestrictions` has NO allowlist at all (the write-path allowlist
+ * was deleted on purpose - see the module's own doc comment at :84-98) and
+ * `selectionAuthorityRestrictions` is gated by file location
+ * (`selectionAuthorityWriteAllowlist`), not by a runtime parameter. So this
+ * gets its own small reader instead of being forced through
+ * `readRestrictionFactory`.
+ */
+type SelectionLayerRuleModule = {
+  readonly selectByIdRestrictions: readonly RestrictedSyntaxRestriction[];
+  readonly selectionAuthorityRestrictions: readonly RestrictedSyntaxRestriction[];
+  readonly selectionAuthorityWriteAllowlist: readonly string[];
+  readonly selectionKernelOwner: readonly string[];
+};
+
+function readStringArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    throw new Error("Expected string array export");
+  }
+  return value;
+}
+
+function readSelectionLayerRuleModule(
+  value: unknown,
+): SelectionLayerRuleModule {
+  if (!isRecord(value)) {
+    throw new Error("Expected selection layer rule module object");
+  }
+  return {
+    selectByIdRestrictions: readRestrictionArray(value.selectByIdRestrictions),
+    selectionAuthorityRestrictions: readRestrictionArray(
+      value.selectionAuthorityRestrictions,
+    ),
+    selectionAuthorityWriteAllowlist: readStringArray(
+      value.selectionAuthorityWriteAllowlist,
+    ),
+    selectionKernelOwner: readStringArray(value.selectionKernelOwner),
+  };
+}
+
+const selectionLayerRuleModuleUrl = pathToFileURL(
+  path.resolve(
+    process.cwd(),
+    "../../eslint/traycer-host-selection-layer-rules.mjs",
+  ),
+).href;
+const importedSelectionLayerRuleModule: unknown = await import(
+  selectionLayerRuleModuleUrl
+);
+const selectionLayerRuleModule = readSelectionLayerRuleModule(
+  importedSelectionLayerRuleModule,
+);
+
 function lint(
   code: string,
   restrictions: readonly RestrictedSyntaxRestriction[],
@@ -314,6 +371,115 @@ describe("tabNavigationStoreActionRestrictions", () => {
 });
 
 /**
+ * D12 write path, lower half: `selectById` has NO allowlist (see the rules
+ * module's doc comment at :84-98) - every shape must flag with zero
+ * conditions, unlike `nestedFocusBoundaryRestrictions`/
+ * `tabNavigationStoreActionRestrictions` above, which both take an allowlist
+ * parameter.
+ */
+describe("selectByIdRestrictions", () => {
+  const restrictions = selectionLayerRuleModule.selectByIdRestrictions;
+
+  it.each([
+    {
+      name: "named import",
+      code: 'import { selectById } from "@/lib/host/directory";\nvoid selectById;\n',
+    },
+    {
+      name: "quoted named import",
+      code: 'import { "selectById" as pick } from "@/lib/host/directory";\nvoid pick;\n',
+    },
+    {
+      name: "plain member access",
+      code: "directoryService.selectById(hostId);",
+    },
+    {
+      name: "computed literal member access",
+      code: 'directoryService["selectById"](hostId);',
+    },
+    {
+      name: "computed template member access",
+      code: "directoryService[`selectById`](hostId);",
+    },
+    {
+      name: "destructure identifier",
+      code: "const { selectById } = directoryService;\nvoid selectById;\n",
+    },
+    {
+      name: "destructure literal key",
+      code: 'const { "selectById": pick } = directoryService;\nvoid pick;\n',
+    },
+    {
+      name: "destructure template key",
+      code: "const { [`selectById`]: pick } = directoryService;\nvoid pick;\n",
+    },
+  ])("flags $name", ({ code }) => {
+    expect(lint(code, restrictions)).toHaveLength(1);
+  });
+
+  it("does not flag near-miss shapes with a different property name", () => {
+    // Negative control for a receiver-agnostic total ban: since none of the
+    // selectors above check the receiver (there is no allowlist to gate on),
+    // the meaningful false-positive risk is substring/name confusion, not an
+    // unrelated receiver. This proves exact-name matching, not prefix/suffix.
+    expect(
+      lint(
+        `
+          directoryService.selectByIdentifier(hostId);
+          directoryService.oldSelectById(hostId);
+          const other = { selectById: 1 };
+          other.notSelectById(hostId);
+          import { selectByIdFactory } from "@/lib/host/factory";
+          void other;
+          void selectByIdFactory;
+        `,
+        restrictions,
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+/**
+ * D12 write path, upper half: `selectionAuthority` is banned except for the
+ * two files in `selectionAuthorityWriteAllowlist`, enforced at the config
+ * layer (below), not by a runtime allowlist parameter here.
+ */
+describe("selectionAuthorityRestrictions", () => {
+  const restrictions = selectionLayerRuleModule.selectionAuthorityRestrictions;
+
+  it.each([
+    {
+      name: "plain member access",
+      code: "runnerHost.selectionAuthority.activate(hostId);",
+    },
+    {
+      name: "computed literal member access",
+      code: 'runnerHost["selectionAuthority"].activate(hostId);',
+    },
+    {
+      name: "destructure identifier",
+      code: "const { selectionAuthority } = runnerHost;\nvoid selectionAuthority;\n",
+    },
+  ])("flags $name", ({ code }) => {
+    expect(lint(code, restrictions)).toHaveLength(1);
+  });
+
+  it("does not flag near-miss shapes with a different property name", () => {
+    expect(
+      lint(
+        `
+          runnerHost.selectionAuthorityLegacy;
+          const { authority } = runnerHost;
+          other.selectionAuthority2;
+          void authority;
+        `,
+        restrictions,
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+/**
  * Cold review #10: production flat-config overrides that rewrite
  * `no-restricted-syntax` must keep raw `tabActivate` restricted except for
  * the sole allowed activation module (`src/lib/tab-navigation.ts`).
@@ -503,5 +669,384 @@ describe("eslint config actually catches tabActivate bypass forms (lintText)", (
       PRODUCTION_FILE_PATH,
     );
     expect(tabActivateRestrictedSyntaxMessages(messages)).toHaveLength(0);
+  });
+});
+
+/**
+ * D12/F2 host-selection layer, Layer 2: the config-mention sweep. This is the
+ * layer that catches the hazard documented at `eslint.config.mjs:30-48` -
+ * flat config REPLACES a rule's options rather than merging them, so the LAST
+ * block matching a file supplies that file's entire `no-restricted-syntax`
+ * value, and a from-scratch appended block silently switches every earlier
+ * restriction off. Measured on this tree: one appended block dropped
+ * `no-restricted-syntax` from 71 entries (including `selectById`) to 1.
+ *
+ * `eslint.config.mjs` has thirteen blocks that assign `no-restricted-syntax`.
+ * One row below per block, each anchored to a real on-disk file that block
+ * actually matches - breadth across override blocks is the point, since that
+ * is where the hazard lives, not depth on any one file.
+ */
+const guiAppRoot = path.resolve(process.cwd());
+
+function configRuleValueMentions(ruleValue: unknown, needle: string): boolean {
+  if (!Array.isArray(ruleValue)) return false;
+  return ruleValue.some((entry) => {
+    if (typeof entry === "string" || typeof entry === "number") return false;
+    if (!isRecord(entry)) return false;
+    const selector = typeof entry.selector === "string" ? entry.selector : "";
+    const message = typeof entry.message === "string" ? entry.message : "";
+    return selector.includes(needle) || message.includes(needle);
+  });
+}
+
+function restrictedImportPatternsMention(
+  ruleValue: unknown,
+  needle: string,
+): boolean {
+  if (!Array.isArray(ruleValue)) return false;
+  // Annotated `unknown` deliberately: `Array.isArray` on an `unknown` narrows
+  // to `any[]`, so an unannotated `ruleValue[1]` is an `any` assignment, which
+  // this package's lint rejects. `isRecord` below is what actually narrows it.
+  const options: unknown = ruleValue[1];
+  if (!isRecord(options) || !Array.isArray(options.patterns)) return false;
+  return options.patterns.some((pattern: unknown) => {
+    if (!isRecord(pattern)) return false;
+    const importNames = Array.isArray(pattern.importNames)
+      ? pattern.importNames
+      : [];
+    const group = Array.isArray(pattern.group) ? pattern.group : [];
+    return (
+      importNames.includes(needle) ||
+      group.some((entry) => typeof entry === "string" && entry.includes(needle))
+    );
+  });
+}
+
+async function calculatedRulesFor(
+  relativePath: string,
+): Promise<Readonly<Record<string, unknown>> | undefined> {
+  const eslint = new ESLint({ cwd: guiAppRoot });
+  const config = readEslintFileConfig(
+    await eslint.calculateConfigForFile(path.join(guiAppRoot, relativePath)),
+  );
+  return config.rules;
+}
+
+async function fileHasSelectByIdRestriction(
+  relativePath: string,
+): Promise<boolean> {
+  const rules = await calculatedRulesFor(relativePath);
+  return configRuleValueMentions(rules?.["no-restricted-syntax"], "selectById");
+}
+
+async function fileHasSelectionAuthorityRestriction(
+  relativePath: string,
+): Promise<boolean> {
+  const rules = await calculatedRulesFor(relativePath);
+  return configRuleValueMentions(
+    rules?.["no-restricted-syntax"],
+    "selectionAuthority",
+  );
+}
+
+async function fileHasKernelImportRestriction(
+  relativePath: string,
+): Promise<boolean> {
+  const rules = await calculatedRulesFor(relativePath);
+  return restrictedImportPatternsMention(
+    rules?.["@typescript-eslint/no-restricted-imports"],
+    "SelectionEvidenceKernel",
+  );
+}
+
+async function fileHasReadPathImportRestriction(
+  relativePath: string,
+): Promise<boolean> {
+  const rules = await calculatedRulesFor(relativePath);
+  return restrictedImportPatternsMention(
+    rules?.["@typescript-eslint/no-restricted-imports"],
+    "useAddressableHostId",
+  );
+}
+
+describe("eslint config retains selectById across every no-restricted-syntax override block", () => {
+  // One real file per block that rewrites `no-restricted-syntax`
+  // (`eslint.config.mjs`, grep the rule name): the general base block, both
+  // `selectionAuthorityWriteAllowlist` files, `markdown-anchor.tsx`,
+  // `tab-navigation.ts` (see the fix at :429-457 - this row is what would
+  // have caught that gap), `tab-command-coordinator.ts`, the two tab `kinds/`
+  // descriptors, `epic-tab-route-components.tsx`, and the four
+  // nested-focus-boundary overrides. The test-files block is deliberately
+  // NOT in this table - see the characterization describe below.
+  const overrideBlockAnchors = [
+    "src/lib/registries/epic-session-registry.ts",
+    "src/components/settings/host-scope/use-host-scope.ts",
+    "src/providers/host-runtime-provider.tsx",
+    "src/markdown/components/markdown-anchor.tsx",
+    "src/lib/tab-navigation.ts",
+    "src/stores/tabs/tab-command-coordinator.ts",
+    "src/stores/tabs/kinds/draft.tsx",
+    "src/stores/tabs/kinds/epic.tsx",
+    "src/routes/epic-tab-route-components.tsx",
+    "src/components/epic-canvas/hooks/use-epic-route-synchronization.ts",
+    "src/components/epic-canvas/canvas/tile-canvas.tsx",
+    "src/hooks/worktree/use-register-setup-terminal-tabs-from-binding.ts",
+    "src/components/epic-canvas/sidebar/epic-sidebar.tsx",
+  ] as const;
+
+  it.each(overrideBlockAnchors.map((file) => ({ file })))(
+    "anchors on $file, which must exist on disk",
+    ({ file }) => {
+      expect(existsSync(path.join(guiAppRoot, file))).toBe(true);
+    },
+  );
+
+  it.each(overrideBlockAnchors.map((file) => ({ file })))(
+    "retains the selectById restriction for $file",
+    async ({ file }) => {
+      expect(await fileHasSelectByIdRestriction(file)).toBe(true);
+    },
+  );
+});
+
+describe("eslint config gates selectionAuthority to its write allowlist", () => {
+  const ORDINARY_FILE = "src/lib/registries/epic-session-registry.ts";
+  const WRITE_ALLOWLIST_FILES =
+    selectionLayerRuleModule.selectionAuthorityWriteAllowlist;
+
+  it("keeps selectionAuthority restricted on an ordinary production file", async () => {
+    expect(await fileHasSelectionAuthorityRestriction(ORDINARY_FILE)).toBe(
+      true,
+    );
+  });
+
+  it.each(WRITE_ALLOWLIST_FILES.map((file) => ({ file })))(
+    "lifts selectionAuthority for allowlisted writer $file",
+    async ({ file }) => {
+      expect(await fileHasSelectionAuthorityRestriction(file)).toBe(false);
+    },
+  );
+
+  it.each(WRITE_ALLOWLIST_FILES.map((file) => ({ file })))(
+    "POSITIVE: $file still carries selectById, proving the lift is selective, not a wholesale drop",
+    async ({ file }) => {
+      // Without this pairing, a block that dropped ALL selection-layer
+      // restrictions for these two files (not just selectionAuthority) would
+      // still pass the "absent" assertion above - the exemption working would
+      // be indistinguishable from the whole guard being disabled here.
+      expect(await fileHasSelectByIdRestriction(file)).toBe(true);
+    },
+  );
+});
+
+function singleEntry(list: readonly string[]): string {
+  if (list.length !== 1) {
+    throw new Error(`Expected exactly one entry, got ${list.length}`);
+  }
+  const [entry] = list;
+  return entry;
+}
+
+describe("eslint config gates the kernel import restriction to its owner", () => {
+  const ORDINARY_FILE = "src/lib/registries/epic-session-registry.ts";
+  const KERNEL_OWNER = singleEntry(
+    selectionLayerRuleModule.selectionKernelOwner,
+  );
+
+  it("keeps the kernel import restricted on an ordinary production file", async () => {
+    expect(await fileHasKernelImportRestriction(ORDINARY_FILE)).toBe(true);
+  });
+
+  it("lifts the kernel import restriction for the owner", async () => {
+    expect(await fileHasKernelImportRestriction(KERNEL_OWNER)).toBe(false);
+  });
+
+  it("POSITIVE: the owner still carries selectById, proving the lift is selective", async () => {
+    expect(await fileHasSelectByIdRestriction(KERNEL_OWNER)).toBe(true);
+  });
+});
+
+describe("eslint config gates the read-path import restriction to its allowlist", () => {
+  // Deliberately outside `hostSelectionReadAllowlist`: ordinary tab-content
+  // trees under src/components/chat/ carry no directory-level exemption.
+  const TAB_CONTENT_FILE = "src/components/chat/agent-stop-button.tsx";
+  // Inside the allowlist: `src/components/epic-canvas/panels/epic-sharing/**`
+  // is named explicitly.
+  const ALLOWLISTED_FILE =
+    "src/components/epic-canvas/panels/epic-sharing/panel.tsx";
+
+  it.each([TAB_CONTENT_FILE, ALLOWLISTED_FILE])(
+    "anchors on %s, which must exist on disk",
+    (file) => {
+      expect(existsSync(path.join(guiAppRoot, file))).toBe(true);
+    },
+  );
+
+  it("restricts the read-path import for tab-content outside the allowlist", async () => {
+    expect(await fileHasReadPathImportRestriction(TAB_CONTENT_FILE)).toBe(
+      true,
+    );
+  });
+
+  it("lifts the read-path import restriction inside an allowlisted directory", async () => {
+    expect(await fileHasReadPathImportRestriction(ALLOWLISTED_FILE)).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * The test-files override block (`files: testFileGlobs`) does NOT restate
+ * `selectById`/`selectionAuthority`. This is a DELIBERATE, reasoned exemption,
+ * not an oversight like the `tab-navigation.ts` gap fixed above - confirmed
+ * with the coordinator. The AST selectors are pure property-name matches with
+ * no call-site distinction, so `expect(mocks.selectById).not.toHaveBeenCalled()`
+ * (which PROVES the invariant) is indistinguishable from an actual violation
+ * to the selector. At least 15 test files assert `selectById` is never
+ * called; restoring the ban here would redden those correct assertions and
+ * pressure someone into deleting the very tests that enforce this rule.
+ *
+ * This file - `nested-focus-boundary-lint.test.ts` itself - matches
+ * `testFileGlobs` too, so the guard suite you are reading runs under the
+ * exemption it documents here.
+ *
+ * The residual risk this leaves open: a test could call the real
+ * `selectById`/`selectionAuthority` and lint clean. That risk is accepted,
+ * not eliminated - this describe makes it visible instead of silent.
+ *
+ * A narrower selector that could eventually let tests carry the ban -
+ * `CallExpression[callee.property.name='selectById']` - would separate the
+ * assertion from the violation: a bare `mocks.selectById` reference (the
+ * assertion) is not a callee, so it would stop matching, while
+ * `mocks.selectById(hostId)` (the violation) still would. It is NOT
+ * sufficient on its own, though: it misses the indirection
+ * `const f = x.selectById; f();`, where the call site never names
+ * `selectById` at all. Recorded here so the next person doesn't re-derive
+ * this and stop at the first, incomplete version.
+ *
+ * The pairing below is what keeps this test honest: asserting ONLY that
+ * `selectById` is absent would still pass if some future block wiped every
+ * restriction for test files (not just the two selection ones) - `tabActivate`
+ * staying present is independent proof the block still composes at all.
+ */
+describe("eslint config: test-files block deliberately exempts selectById (characterization, not a regression)", () => {
+  const TEST_FILE = "src/__tests__/nested-focus-boundary-lint.test.ts";
+
+  it("anchors on this file, which must exist on disk", () => {
+    expect(existsSync(path.join(guiAppRoot, TEST_FILE))).toBe(true);
+  });
+
+  it("CHARACTERIZATION: test files do not carry the selectById restriction", async () => {
+    expect(await fileHasSelectByIdRestriction(TEST_FILE)).toBe(false);
+  });
+
+  it("still carries the tabActivate restriction, proving the block still composes at all", async () => {
+    const rules = await calculatedRulesFor(TEST_FILE);
+    expect(
+      configRuleValueMentions(rules?.["no-restricted-syntax"], "tabActivate"),
+    ).toBe(true);
+  });
+});
+
+/**
+ * Layer 2, end-to-end: the config-mention tests above only prove a matching
+ * selector object exists somewhere in the array for a given file.
+ * `ESLint#lintText` against the real `eslint.config.mjs` proves the rule
+ * actually FIRES. Production paths only - the test-files exemption above
+ * means a `selectById` bypass in a test path legitimately lints clean today,
+ * so asserting it gets caught there would be asserting something false.
+ */
+describe("eslint config actually catches selectById bypass forms (lintText)", () => {
+  const SELECTION_PRODUCTION_FILE_PATH = "src/lib/routes.ts";
+
+  it("anchors lintText on the production file, which must exist on disk", () => {
+    expect(existsSync(path.join(guiAppRoot, SELECTION_PRODUCTION_FILE_PATH))).toBe(
+      true,
+    );
+  });
+
+  function selectByIdRestrictedSyntaxMessages(
+    messages: readonly Linter.LintMessage[],
+  ): readonly Linter.LintMessage[] {
+    return messages.filter(
+      (message) =>
+        message.ruleId === "no-restricted-syntax" &&
+        message.message.includes("selectById"),
+    );
+  }
+
+  async function lintSelectionBypassAt(
+    code: string,
+    relativePath: string,
+  ): Promise<readonly Linter.LintMessage[]> {
+    const eslint = new ESLint({ cwd: guiAppRoot });
+    const results = await eslint.lintText(code, {
+      filePath: path.join(guiAppRoot, relativePath),
+    });
+    const result = results[0];
+    expect(result, `expected a lint result for ${relativePath}`).toBeDefined();
+    return result.messages;
+  }
+
+  const selectByIdBypassForms = [
+    {
+      name: "named import",
+      code: 'import { selectById } from "@/lib/host/directory";\nvoid selectById;\n',
+    },
+    {
+      name: "quoted named import",
+      code: 'import { "selectById" as pick } from "@/lib/host/directory";\nvoid pick;\n',
+    },
+    {
+      name: "computed literal member",
+      code: 'const directoryService = { selectById: () => {} };\ndirectoryService["selectById"]("host-1");\n',
+    },
+    {
+      name: "computed template member",
+      code: "const directoryService = { selectById: () => {} };\ndirectoryService[`selectById`](\"host-1\");\n",
+    },
+    {
+      name: "declaration destructuring",
+      code: "const directoryService = { selectById: () => {} };\nconst { selectById } = directoryService;\nvoid selectById;\n",
+    },
+    {
+      name: "template-key declaration destructuring",
+      code: "const directoryService = { selectById: () => {} };\nconst { [`selectById`]: pick } = directoryService;\nvoid pick;\n",
+    },
+  ] as const;
+
+  it.each(selectByIdBypassForms)(
+    "catches $name through the real config for a production file",
+    async ({ code }) => {
+      const messages = await lintSelectionBypassAt(
+        code,
+        SELECTION_PRODUCTION_FILE_PATH,
+      );
+      expect(
+        selectByIdRestrictedSyntaxMessages(messages).length,
+      ).toBeGreaterThanOrEqual(1);
+    },
+  );
+
+  it("CONTROL: the real config does not flag legitimate effective-host reads or type-only kernel imports", async () => {
+    const messages = await lintSelectionBypassAt(
+      [
+        'import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";',
+        'import type { SelectionEvidenceKernel } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";',
+        "function describeKernel(kernel: SelectionEvidenceKernel | null): string {",
+        "  const hostId = useEffectiveHostId();",
+        "  return `${hostId ?? \"none\"}:${kernel === null ? \"none\" : \"present\"}`;",
+        "}",
+        "void describeKernel;",
+        "",
+      ].join("\n"),
+      SELECTION_PRODUCTION_FILE_PATH,
+    );
+    expect(selectByIdRestrictedSyntaxMessages(messages)).toHaveLength(0);
+    expect(
+      messages.filter(
+        (message) => message.ruleId === "@typescript-eslint/no-restricted-imports",
+      ),
+    ).toHaveLength(0);
   });
 });
