@@ -8,8 +8,10 @@
  * pass - see the wave-2 live-pass evidence in the epic artifacts). Selected
  * chat bodies render once in the fixed surface plane and never remount on
  * structural canvas operations. A tab switch is no longer a remount either -
- * pane chat retention reversed decision #17 - so the only intentional remounts
- * left are eviction past a pane's chat retention cap, a close, and a reopen.
+ * pane chat retention reversed decision #17 - so the intentional remounts left
+ * are eviction past a pane's chat retention cap, eviction of the owning
+ * top-level surface, and a hosted-eligibility flip. (A close is not a remount
+ * of anything: it destroys the instance, and a reopen mints a new one.)
  *
  * This constant is also the ROLLBACK lever: setting it back to `false`
  * returns selected chats to the inline pane path in one line. The ticket-20

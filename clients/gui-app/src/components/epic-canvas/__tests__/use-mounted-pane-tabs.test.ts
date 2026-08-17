@@ -346,9 +346,11 @@ describe("useMountedPaneTabs", () => {
     // TRADEOFF, not a constraint - membership COULD observe pane visibility
     // (`computeRetainedTopLevelRefKeys` already derives the same active-ref set
     // `TopLevelTabHost` turns into `usePaneVisible()`). Collapsing is refused
-    // because the retained chat would be dropped while hidden, so the reader
-    // would watch it re-converge once per return from a background tab - the
-    // very churn this retention exists to remove. If you are here to revisit
+    // because the retained chat would be dropped while hidden and have to
+    // rebuild on the way back. Moving BOTH layers together would remount it
+    // hidden on top-level return, so it can often converge before it is ever
+    // selected - the exposure is a quick first switch, not every return. Still
+    // a reintroduced churn risk for no benefit here. If you are here to revisit
     // that call (the module doc prices it in unreclaimable `chat.subscribe`
     // sockets), this is the test that pins it, and membership must move with it.
     const tabs = [chatTab(1), chatTab(2), specTab(1), specTab(2)];
