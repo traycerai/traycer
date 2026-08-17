@@ -909,6 +909,48 @@ describe("WsStreamClient", () => {
     expect(observedCode).toBe("INCOMPATIBLE");
   });
 
+  describe("live-session evidence (invariant 5)", () => {
+    it("announces the local stream session once subscribed, and retracts it against the SAME host on teardown", async () => {
+      // `/stream` is a live session and the authority's strongest evidence
+      // class: it suppresses death accumulation entirely. Unannounced, a
+      // healthy long-lived stream counted for nothing, so unary dials refused
+      // during an accept-loop stall could reach the confirmed-death streak and
+      // fail the local host over while its stream was still carrying frames.
+      const { factory, sockets } = makeFactory();
+      const recorder = new RecordingTransportEvidence();
+      const client = makeClientWithEvidence({
+        factory,
+        authToken: "t",
+        evidence: recorder,
+        endpoint: () => mockLocalHostEntry,
+      });
+
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      expect(recorder.ofKind("sessionEstablished")).toHaveLength(0);
+
+      completeHandshake(sockets[0].socket);
+      await flush();
+
+      const announced = recorder.ofKind("sessionEstablished");
+      expect(announced).toHaveLength(1);
+      expect(announced[0].hostId).toBe(mockLocalHostEntry.hostId);
+      expect(announced[0].transportKind).toBe("local-ws");
+      expect(recorder.ofKind("sessionLost")).toHaveLength(0);
+
+      session.close();
+      await flush();
+
+      const retracted = recorder.ofKind("sessionLost");
+      expect(retracted).toHaveLength(1);
+      // Retracted against the host it was announced FOR, under the same id -
+      // an announcement that is never matched means the host can never be
+      // declared dead again.
+      expect(retracted[0].hostId).toBe(announced[0].hostId);
+      expect(retracted[0].sessionId).toBe(announced[0].sessionId);
+    });
+  });
+
   describe("restart tombstone forwarding (P1.4 / D5 / M1)", () => {
     it("a fatalError frame carrying restartIntent + retryable:true reports exactly one reportRestartIntent, and the session does not go terminal", async () => {
       const { factory, sockets } = makeFactory();

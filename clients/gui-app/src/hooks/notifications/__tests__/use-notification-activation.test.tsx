@@ -883,16 +883,59 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     ).toBe(false);
   });
 
-  // "selects an approval's origin host before routing to its exact tile" and
-  // both "fails closed before routing an approval ..." tests are deleted:
-  // their subject, `ensureOriginHostSelected` (and the origin-availability
-  // fail-closed gate built on it), no longer exists. Activation does not
-  // move the app-wide selection at all now (redesign P1.2, D7) - a
-  // notification click routes against whatever host the target surface
-  // already resolves through, and a foreign-origin row's routability is the
-  // caller's decision, not this hook's. The surviving tests in this block
-  // (the acknowledgment guard above, tile-targeting below) cover what is
-  // still this hook's job.
+  // "selects an approval's origin host before routing to its exact tile" is
+  // deleted: its subject, `ensureOriginHostSelected`, no longer exists.
+  // Activation does not move the app-wide selection at all now (redesign
+  // P1.2, D7) - a notification click routes against whatever host the target
+  // surface already resolves through.
+  //
+  // The fail-closed half of that guard came BACK, one limb narrower, and the
+  // pin below is it. Deleting the function took the refusal along with the
+  // selection write, and only the write was the D7 violation: an origin-
+  // required prompt that routed through the wrong host still reported
+  // SUCCESS, so the popover closed and marked it read. What is refused now is
+  // the acknowledgment, never the navigation, and only on positive evidence
+  // that the route went elsewhere - routability itself remains the caller's
+  // decision, not this hook's.
+
+  it("declines to ACKNOWLEDGE a cloud approval that routed through a host other than its origin", () => {
+    // Host A is effective, the approval was raised on host B, and no B-bound
+    // tile is open - so routing falls through to the hostless epic intent and
+    // resolves through A. The prompt is only answerable on B, and the feed is
+    // a CLOUD one, so `hostFeedStayedOnOrigin` (host feeds only) cannot catch
+    // it: without this, activation reported success and the row was marked
+    // read for a prompt that was never opened on its host.
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-origin",
+          chatId: "chat-elsewhere",
+          approvalId: "approval-host-b",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 105,
+        feedId: "cloud:approval-host-b",
+        originHostId: hostB.hostId,
+        onResult,
+      });
+    });
+
+    // Navigation still happened - opening the epic is useful either way.
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("failure");
+    // ...and the app-wide pointer did NOT move to satisfy the origin (D7).
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostA.hostId,
+    );
+  });
 
   it("does not reuse a host B tile for a host A approval", () => {
     const store = useEpicCanvasStore.getState();

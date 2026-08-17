@@ -23,7 +23,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 // settings seed a brand-new draft; the create path re-keys on the placement
 // host. A pinned landing composer's seed defaults may come from the effective
 // host - a nuance, not a placement leak.
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -883,15 +883,14 @@ function ensureSubmissionDraft(
   content: JsonContent,
 ): string {
   if (draftId !== null) return draftId;
-  const createdDraftId = useLandingDraftStore
-    .getState()
-    .createDraft(
-      useComposerRunSettingsStore
-        .getState()
-        .getGlobalRunSettings(
-          getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
-        ),
-    );
+  const createdDraftId = useLandingDraftStore.getState().createDraft(
+    useComposerRunSettingsStore
+      .getState()
+      // Through the shared reader - the spine carries no identity after
+      // P4.2, so asking it seeded every draft from the unresolved-host
+      // bucket instead of the effective host's saved run settings.
+      .getGlobalRunSettings(activeHostIdOrNull()),
+  );
   useLandingDraftStore
     .getState()
     .setDraftContent(createdDraftId, content, null);

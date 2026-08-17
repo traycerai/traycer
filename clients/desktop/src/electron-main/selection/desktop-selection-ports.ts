@@ -186,6 +186,26 @@ export class DesktopHostFleetSource implements HostFleetSource {
    */
   private refreshSeq = 0;
   private adoptedSeq = 0;
+  /**
+   * Monotonic LOCAL-IDENTITY sequence, and deliberately not the same counter
+   * as `refreshSeq`.
+   *
+   * `this.localHostId` has TWO writers - a full `refresh()`, which reads the
+   * id before its registry fetch and adopts it after, and
+   * `refreshLocalIdentity()`, which reads and adopts with no fetch in between.
+   * `refreshSeq` orders refreshes against each other only, so a local-identity
+   * change that landed DURING a refresh's fetch was published first and then
+   * overwritten by the id that refresh had read before the request: the
+   * authority classified the stale host as local and this machine as remote
+   * until the next host event or the 60s poll.
+   *
+   * Stamped at the moment each read STARTS, so the most recently OBSERVED disk
+   * state wins regardless of completion order, and adopted independently of
+   * the row projection - a refresh whose rows are current may still carry a
+   * superseded id, and only the id is declined.
+   */
+  private localIdentitySeq = 0;
+  private adoptedLocalIdentitySeq = 0;
   private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -281,10 +301,16 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const bearerToken = this.options.authSession.get().token;
     if (bearerToken === null) {
       // Signed out: the account fleet is empty, and the local host is not
-      // addressable without a credential context either.
-      this.applyFetched(generation, seq, null, []);
+      // addressable without a credential context either. Stamped like any
+      // other observation so it supersedes an identity read still in flight,
+      // rather than being overwritten by one that started before the sign-out.
+      this.localIdentitySeq += 1;
+      this.applyFetched(generation, seq, this.localIdentitySeq, null, []);
       return;
     }
+    // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
+    this.localIdentitySeq += 1;
+    const identitySeq = this.localIdentitySeq;
     const localHostId = await this.readLocalHostId();
     const result = await this.options.listRegisteredHosts(
       this.options.authnBaseUrl,
@@ -309,6 +335,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     this.applyFetched(
       generation,
       seq,
+      identitySeq,
       localHostId,
       result.response.hosts.map((row) => row.hostId),
     );
@@ -345,6 +372,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
     // signed-out branch decides here too, so the two can never disagree
     // about what a signed-out fleet contains.
     const eligible = this.options.authSession.get().token !== null;
+    // Stamped BEFORE the read, on the SAME counter a full refresh uses, so the
+    // two writers of `localHostId` order by what each one observed.
+    this.localIdentitySeq += 1;
+    const identitySeq = this.localIdentitySeq;
     const localHostId = eligible ? await this.readLocalHostId() : null;
     if (this.disposed) return;
     if (generation !== this.options.identity.current().generation) {
@@ -353,6 +384,20 @@ export class DesktopHostFleetSource implements HostFleetSource {
       });
       return;
     }
+    if (identitySeq < this.adoptedLocalIdentitySeq) {
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded identity",
+        {
+          identitySeq,
+          adopted: this.adoptedLocalIdentitySeq,
+        },
+      );
+      return;
+    }
+    // Recorded even when the value is unchanged: this read is still the newest
+    // observation, and saying so is what stops an older in-flight refresh from
+    // adopting the id it read before this one.
+    this.adoptedLocalIdentitySeq = identitySeq;
     if (localHostId === this.localHostId) return;
     this.localHostId = localHostId;
     this.publishAt(generation);
@@ -373,6 +418,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private applyFetched(
     generation: number,
     seq: number,
+    identitySeq: number,
     localHostId: string | null,
     rows: readonly string[],
   ): void {
@@ -400,8 +446,20 @@ export class DesktopHostFleetSource implements HostFleetSource {
       return;
     }
     this.adoptedSeq = seq;
-    this.localHostId = localHostId;
     this.rows = rows;
+    // The ID is fenced SEPARATELY from the rows: this refresh's row projection
+    // can be the current one while the id it read before the fetch has since
+    // been superseded by a local-identity change. Adopting the tuple wholesale
+    // is what let the stale id win.
+    if (identitySeq >= this.adoptedLocalIdentitySeq) {
+      this.adoptedLocalIdentitySeq = identitySeq;
+      this.localHostId = localHostId;
+    } else {
+      this.options.log.debug("[selection-fleet] kept a newer local identity", {
+        identitySeq,
+        adopted: this.adoptedLocalIdentitySeq,
+      });
+    }
     this.publishAt(generation);
   }
 

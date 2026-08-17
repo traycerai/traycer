@@ -71,7 +71,13 @@ vi.mock("@/lib/host", () => ({
 // seed a host bucket the code never reads. Pin it to the SAME host id
 // `landingMocks.getActiveHostId()` returns, so the two ways this suite's
 // production code resolves "the active host" agree.
+// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
+// settings bucket now: the spine accessor below answers `null` for every host
+// since P4.2/D17 deleted the active slot, so the id has to come from the
+// authority's projection instead. Both are driven by the SAME knob, so a test
+// that moves the host still moves it everywhere this suite reaches.
 vi.mock("@/lib/host/runtime", () => ({
+  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),

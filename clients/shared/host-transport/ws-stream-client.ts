@@ -191,6 +191,14 @@ function createInertStreamSession(closedReason: string): IStreamSession {
 /** Monotonic source for `WsStreamClient.instanceId` (log correlation only). */
 let nextStreamClientId = 1;
 
+/**
+ * Monotonic source for announced stream SESSION ids. Module-scoped rather than
+ * per-connection so the id names one connectivity episode uniquely across
+ * every stream in the process - the authority keys live sessions by id, and
+ * two connections reusing `s1` would let one's retraction clear the other's.
+ */
+let streamSessionSeq = 0;
+
 export class WsStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > implements IStreamClient<Registry> {
@@ -909,6 +917,25 @@ class StreamSession<
    * the one mistake this path must not make.
    */
   private openFrameHostId: string | null = null;
+  /**
+   * The live session this connection has announced to the selection authority,
+   * or `null` while it has none.
+   *
+   * `/stream` is a LIVE SESSION and the authority's strongest evidence class
+   * (invariant 5): it suppresses death accumulation entirely. Until this was
+   * announced, a healthy long-lived stream counted for nothing, so three fresh
+   * unary dials refused during an accept-loop or descriptor-pressure stall
+   * reached the confirmed-death streak and failed the local host over while
+   * its stream was still carrying frames.
+   *
+   * The hostId is stored ALONGSIDE the id rather than re-read at retraction
+   * time: `openFrameHostId` is cleared on the same paths that retract, and a
+   * session announced for host A must never be retracted against host B. An
+   * announcement that is never retracted means the host can never be declared
+   * dead again, so every path that drops the dialed identity retracts here
+   * first - which is exactly the two places that clear `openFrameHostId`.
+   */
+  private announcedSession: { hostId: string; sessionId: string } | null = null;
   // Whether the host advertised `credentialUpdate` support in the current
   // connection's openAck. Gates `pushCredentialUpdate`; reset on every
   // reconnect and re-read from the next openAck.
@@ -1461,6 +1488,10 @@ class StreamSession<
     // "open") is NOT recovery - nothing was stuck - so it stays silent.
     const recoveredFromUnavailable = this.status === "reconnecting";
     this.phase = "subscribed";
+    // The subscription is established: this is a live session, and the
+    // authority is told so before any outbound callback below can re-enter.
+    this.announceSession();
+
     // Deliberately NOT resetting `reconnectAttempt` /
     // `noProgressUnauthorizedReconnects` here. The subscribe-ack only proves
     // the transport handshake; resolver-side initialization failures land
@@ -1513,6 +1544,36 @@ class StreamSession<
    * (hostId, tombstoneId) and treats a repeat as inert, and that rule belongs
    * in the one place that can apply it across every window in the app.
    */
+  /**
+   * Announces this connection's live session once its subscription is
+   * established. Idempotent: a repeat while one is already announced is inert,
+   * so a re-entrant handshake callback cannot double-count.
+   */
+  private announceSession(): void {
+    if (this.announcedSession !== null) return;
+    const hostId = this.openFrameHostId;
+    if (hostId === null) return;
+    streamSessionSeq += 1;
+    const sessionId = `local-stream:s${streamSessionSeq}`;
+    this.announcedSession = { hostId, sessionId };
+    this.config.evidence.sessionEstablished(hostId, sessionId, "local-ws");
+  }
+
+  /**
+   * Retracts the announced session, against the host it was announced FOR.
+   * Idempotent, and called on every path that drops the dialed identity.
+   */
+  private retractSession(): void {
+    const announced = this.announcedSession;
+    if (announced === null) return;
+    this.announcedSession = null;
+    this.config.evidence.sessionLost(
+      announced.hostId,
+      announced.sessionId,
+      "local-ws",
+    );
+  }
+
   private reportRestartIntentIfPresent(details: FatalErrorDetails): void {
     const restartIntent = details.restartIntent;
     if (restartIntent === undefined) {
@@ -1883,6 +1944,9 @@ class StreamSession<
       this.dialTimer = null;
     }
     this.clearHealthyDwell();
+    // Before the dialed identity is dropped - the retraction needs the host it
+    // was announced for.
+    this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
     this.openFrameHostId = null;
@@ -1937,6 +2001,10 @@ class StreamSession<
 
   private teardownSocket(code: number, reason: string): void {
     const socket = this.activeSocket;
+    // Same ordering rule as the drop path: retract while the announced host is
+    // still known. `teardownSocket` is the caller-`close()` and fatal-error
+    // leg, so between the two of them no announced session outlives its socket.
+    this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
     this.openFrameHostId = null;

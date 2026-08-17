@@ -972,6 +972,67 @@ describe("DesktopHostFleetSource", () => {
     fleet.dispose();
   });
 
+  it("keeps a NEWER local identity when an older refresh completes after it", async () => {
+    // The two writers of `localHostId` race: `refresh()` reads the id BEFORE
+    // its registry fetch and adopts it AFTER, so a local-host change that
+    // lands during that fetch was published and then overwritten by the id the
+    // refresh had already read - the authority then called the stale host
+    // local and this machine remote until the next event or the 60s poll.
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-1" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    authSession.set(signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    // Initialized with a real no-op rather than `null`: a `(() => void) | null`
+    // is narrowed to `never` at the call below, because the only assignment
+    // control flow can see is the initializer.
+    let releaseFetch = (): void => undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = () => {
+        resolve();
+      };
+    });
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        await fetchGate;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+    });
+
+    // In flight, having already read `local-host-1`.
+    const refreshing = fleet.refresh();
+    await flushIo();
+
+    // The machine re-enrolls while that fetch is outstanding.
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-2" }),
+      "utf8",
+    );
+    host.emitChange();
+    await flushIo();
+    expect(fleet.snapshot().localHostId).toBe("local-host-2");
+
+    releaseFetch();
+    await refreshing;
+    await flushIo();
+
+    // The older refresh still adopts its ROWS; only its stale id is declined.
+    expect(fleet.snapshot().localHostId).toBe("local-host-2");
+    fleet.dispose();
+  });
+
   it("re-resolves the local identity and republishes on a local-host change; a no-op id change publishes nothing", async () => {
     const dir = await makeTempDir();
     const enrollmentFile = join(dir, "enrollment.json");

@@ -684,6 +684,51 @@ describe("armFirstInstallOnSignIn", () => {
     installedVersion: null,
   });
 
+  it("re-arms after an attempt that THREW, instead of retiring the only first-install actor", async () => {
+    // `settled` used to be set before the async work started, and the detached
+    // promise had no catch: one transient IPC failure retired first-install for
+    // the whole process, leaving a signed-in user in the unavailable-host flow
+    // until a manual retry or a relaunch.
+    const controller = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    let statusCalls = 0;
+    const throwsFirstTime: IpcHostController = {
+      ...controller,
+      getStatus: () => {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return Promise.reject(new Error("host ipc unavailable"));
+        }
+        return controller.getStatus();
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armFirstInstallOnSignIn(throwsFirstTime, gate);
+
+    await vi.waitFor(() => {
+      expect(statusCalls).toBe(1);
+    });
+    expect(controller.convergeReadyCalls).toEqual([]);
+    // The subscription is what the failure re-arms against, so it must still
+    // be there - the immediate-attempt path used to skip subscribing entirely.
+    expect(gate.listenerCount()).toBe(1);
+
+    gate.signIn();
+
+    await vi.waitFor(() => {
+      expect(controller.convergeReadyCalls).toEqual([false]);
+    });
+    // And the retry that succeeded settles it: no third attempt.
+    expect(gate.listenerCount()).toBe(0);
+  });
+
   it("installs once for a signed-in user on a machine that has never had a host", async () => {
     const controller = fakeHostController(
       neverInstalled(false),

@@ -125,13 +125,21 @@ export const useHostBinding = runtime.useHostBinding;
 export const getHostBindingSnapshot = runtime.getBindingSnapshot;
 
 /**
- * The app-wide active host id, imperatively, for callers outside React (the
- * command palette's actions, tab navigation). `null` when nothing is bound
- * yet - the same "follow the app-wide default, and there isn't one" case the
- * host-scoped stores treat as a no-op. Lives here so the binding-snapshot
- * guard has ONE home: the per-host stores are read from several non-hook
+ * The app-wide effective host id, imperatively, for callers outside React (the
+ * command palette's actions, tab navigation, the landing draft store). `null`
+ * when nothing is usable yet - the same "follow the app-wide default, and
+ * there isn't one" case the host-scoped stores treat as a no-op. Lives here so
+ * the read has ONE home: the per-host stores are read from several non-hook
  * call sites, and a later fix to this chain must not land in only some.
+ *
+ * Reads the AUTHORITY's projection, not the spine. Asking the spine was the
+ * original shape and it is now a permanent `null`: P4.2/D17 removed the active
+ * slot, so `getActiveHostId()` answers ∅ for every host by design (see
+ * `HostClient`). Every one of these callers keys a per-host bucket - global run
+ * settings, workspace folders - so a silent `null` did not fail loudly; it
+ * selected the UNRESOLVED-host bucket and quietly lost the real host's saved
+ * settings and folders. Same source as {@link getAppHostClientSnapshot}.
  */
 export function activeHostIdOrNull(): string | null {
-  return getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null;
+  return readEffectiveHostIdSnapshot();
 }

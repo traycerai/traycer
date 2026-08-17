@@ -202,35 +202,62 @@ export function armFirstInstallOnSignIn(
     }
   };
 
+  let inFlight = false;
   const attempt = (): void => {
-    if (settled) return;
-    settled = true;
-    dispose();
+    if (settled || inFlight) return;
+    inFlight = true;
     void (async () => {
-      const status = await hostController.getStatus();
-      if (status.removedByUser) {
-        log.info("[host-controller] first install skipped for removed host");
-        return;
+      try {
+        const status = await hostController.getStatus();
+        if (status.removedByUser) {
+          log.info("[host-controller] first install skipped for removed host");
+          settled = true;
+          dispose();
+          return;
+        }
+        if (status.installedVersion !== null) {
+          // Something installed it between arming and now - a concurrent
+          // recovery arm, or a previous launch that finished late. Nothing
+          // owed.
+          settled = true;
+          dispose();
+          return;
+        }
+        const outcome = await hostController.convergeReady(false);
+        settled = true;
+        dispose();
+        log.info("[host-controller] first install complete", {
+          kind: outcome.kind,
+        });
+      } catch (error: unknown) {
+        // A THROW is not an outcome. `settled` used to be set before this work
+        // began and the rejection had nowhere to land, so one transient IPC
+        // failure retired the only automatic first-install actor for the whole
+        // process: the signed-in user stayed in the unavailable-host flow until
+        // a manual retry or a relaunch. Only a terminal STATUS or a completed
+        // convergence settles the arm; a failure leaves it armed, so the next
+        // sign-in edge tries again.
+        log.warn("[host-controller] first install attempt failed", {
+          error: String(error),
+        });
+      } finally {
+        inFlight = false;
       }
-      if (status.installedVersion !== null) {
-        // Something installed it between arming and now - a concurrent
-        // recovery arm, or a previous launch that finished late. Nothing owed.
-        return;
-      }
-      const outcome = await hostController.convergeReady(false);
-      log.info("[host-controller] first install complete", {
-        kind: outcome.kind,
-      });
     })();
   };
 
-  if (identity.isSignedIn()) {
-    attempt();
-    return dispose;
-  }
+  // Subscribed even when already signed in, which the immediate-attempt path
+  // used to skip. The subscription is what a contained failure re-arms
+  // AGAINST: without it, a first attempt that threw at launch had no later
+  // edge to retry from at all. A successful or terminal attempt disposes it
+  // from inside, so the one-shot contract is unchanged for every path that
+  // actually reaches an outcome.
   unsubscribe = identity.onChanged((signedIn) => {
     if (signedIn) attempt();
   });
+  if (identity.isSignedIn()) {
+    attempt();
+  }
   return dispose;
 }
 

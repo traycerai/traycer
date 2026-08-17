@@ -204,7 +204,7 @@ function LaneProgressLine(props: {
   const { progress } = props;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2"
+      className="flex flex-col gap-2 rounded-md border border-border/60 bg-foreground/8 px-3 py-2"
       data-testid="window-host-modal-progress"
     >
       <div className="flex items-center gap-2">
@@ -252,7 +252,7 @@ function IncompatibleDetail(props: {
   const { detail } = props.variant;
   return (
     <div
-      className="flex flex-col gap-1 rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      className="flex flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       data-testid="window-host-modal-incompatible-detail"
     >
       {detail.hostVersion === null ? null : (

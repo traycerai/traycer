@@ -75,6 +75,11 @@ function hostFeedStayedOnOrigin(input: {
  * center / focus bridge) is what decides a foreign-origin row is not
  * routable at all.
  *
+ * What activation still owns is whether it may CLAIM the prompt was opened.
+ * An origin-required payload (approval / interview) that did not reach a
+ * target bound to its origin completes as `"failure"`, so the row stays
+ * unread instead of being credited to a host that never showed it.
+ *
  * The origin-host guard still applies to the acknowledgment: a host-scoped
  * feed id (`isHostFeedId`) only completes as `"success"` while the client's
  * CURRENT bound host still matches the host captured just before routing -
@@ -121,12 +126,47 @@ export function useNotificationActivationWithNavigate(
       // reported for a window that never moved. `null` when there is no host
       // runtime at all, which keeps the no-runtime case reporting success.
       const beforeRouteHostId = client === null ? null : effectiveHostId;
-      routeNotificationForHost(
+      // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
+      //
+      // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED
+      // the origin host (which D7 forbids - a notification click is not the
+      // app-wide selection's writer, and P1.2 removed it), and it REFUSED an
+      // activation it could not route to that host. Deleting the function took
+      // the refusal with the switch. An approval or interview raised on host B
+      // with host A effective and no B-bound tile open then routed anyway: the
+      // fallback builds a hostless epic-tab intent, so it resolved through A,
+      // and for cloud rows the activation still reported success - closing the
+      // popover and marking a prompt read that was never opened on its host.
+      //
+      // The refusal comes back WITHOUT the selection write, and it refuses the
+      // ACKNOWLEDGMENT rather than the navigation: opening the epic is useful
+      // either way, while marking the row read is the part that was wrong.
+      //
+      // Narrow on purpose. It fires only on POSITIVE evidence that the route
+      // landed somewhere else - an origin host that is known, an effective host
+      // that is known, and the two differing - because the alternative reads a
+      // missing effective pointer as "wrong host" and strands ordinary
+      // same-host prompts whose authority has simply not attached yet.
+      const requiresOriginHost = notificationPayloadRequiresOriginHost(
+        input.payload,
+      );
+      const originHostId = input.originHostId ?? null;
+      const routedToOriginBoundTarget = routeNotificationForHost(
         navigate,
         input.payload,
         input.receivedAt,
-        input.originHostId ?? null,
+        originHostId,
       );
+      if (
+        requiresOriginHost &&
+        !routedToOriginBoundTarget &&
+        originHostId !== null &&
+        effectiveHostId !== null &&
+        originHostId !== effectiveHostId
+      ) {
+        input.onResult?.("failure");
+        return;
+      }
       if (
         !hostFeedStayedOnOrigin({
           feedId: input.feedId,

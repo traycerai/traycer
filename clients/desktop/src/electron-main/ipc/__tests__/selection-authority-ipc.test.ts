@@ -976,6 +976,26 @@ describe("selection authority IPC binding", () => {
     const seqA = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
     await attachOk(attach, 101, seqA, []);
 
+    const revisionedChannels = new Set<string>([
+      RunnerHostEvent.selectionChanged,
+      RunnerHostEvent.selectionLeasesChanged,
+      RunnerHostEvent.selectionReattachRequired,
+    ]);
+    const revisionsSeenBy = (window: CapturingWindow): readonly number[] =>
+      window.sentMessages
+        .filter((message) => revisionedChannels.has(message.channel))
+        .map((message) => (message.payload as { revision: number }).revision);
+
+    // The registry fetch that puts seam-host in the fleet settles on its own
+    // schedule, and until it does there is nothing to fan out: window A holds
+    // ZERO revisioned messages and `Math.max()` over that empty list is
+    // -Infinity, which is what this compared against under CI load. Wait for
+    // the FACT that the fleet publish reached A before attaching late; the
+    // assertion below is unchanged and still reads both sides for real.
+    await vi.waitFor(() => {
+      expect(revisionsSeenBy(windowA).length).toBeGreaterThan(0);
+    });
+
     // Window B attaches LATE, carrying a live session for seam-host - this
     // itself may move the lease and produce one more event.
     const seqB = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 202);
@@ -983,15 +1003,19 @@ describe("selection authority IPC binding", () => {
       { hostId: "seam-host", sessionId: "sess-b", transportKind: "local-ws" },
     ]);
 
-    const revisionedChannels = new Set<string>([
-      RunnerHostEvent.selectionChanged,
-      RunnerHostEvent.selectionLeasesChanged,
-      RunnerHostEvent.selectionReattachRequired,
-    ]);
-    const revisions = windowA.sentMessages
-      .filter((message) => revisionedChannels.has(message.channel))
-      .map((message) => (message.payload as { revision: number }).revision);
-    const lastFannedOutRevision = Math.max(...revisions);
+    // ...and when it does, that event reaches A across a scheduling boundary
+    // too, so the snapshot would otherwise be compared against a fan-out that
+    // has not finished. Wait on the MONOTONIC fact (A caught up to at least
+    // the snapshot's revision) rather than on the equality itself - waiting on
+    // the equality would make the assertion below true by construction, and an
+    // overshooting fan-out would stop being observable.
+    await vi.waitFor(() => {
+      expect(Math.max(...revisionsSeenBy(windowA))).toBeGreaterThanOrEqual(
+        late.snapshot.revision,
+      );
+    });
+
+    const lastFannedOutRevision = Math.max(...revisionsSeenBy(windowA));
 
     expect(late.snapshot.revision).toBe(lastFannedOutRevision);
 
