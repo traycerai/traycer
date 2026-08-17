@@ -57,6 +57,8 @@ vi.mock(
     useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeldIsPending: () => false,
   }),
 );
 
@@ -177,6 +179,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               epicId="epic-1"
               chatId="chat-1"
               runningManagedCommandCount={0}
+              heldManagedCommandCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
@@ -242,6 +245,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               epicId="epic-1"
               chatId="chat-1"
               runningManagedCommandCount={0}
+              heldManagedCommandCount={0}
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}

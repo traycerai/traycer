@@ -1,7 +1,10 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { create, useStore } from "zustand";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   getChatSessionRegistry,
   useExistingChatSessionHandle,
@@ -31,13 +34,14 @@ import type {
 
 type ManagedCommandsChatSlice = Pick<
   ChatSessionState,
-  "managedCommands" | "connectionStatus" | "snapshotLoaded"
+  "managedCommands" | "heldUpdates" | "connectionStatus" | "snapshotLoaded"
 >;
 
 // Stable stand-in for a chat with no live session (its tile is not mounted, or
 // the snapshot has yet to land): no commands, and a stream still connecting.
 const emptyChatSlice = create<ManagedCommandsChatSlice>()(() => ({
   managedCommands: [],
+  heldUpdates: [],
   connectionStatus: "connecting",
   snapshotLoaded: false,
 }));
@@ -94,6 +98,35 @@ export function useRunningManagedCommandsForChat(options: {
   return useMemo(
     () => commands.filter((command) => command.status.state === "running"),
     [commands],
+  );
+}
+
+/**
+ * The shells whose last output a committed Stop fence is holding back.
+ *
+ * NOT a subset of {@link useRunningManagedCommandsForChat}, and that is the
+ * whole point of surfacing it separately: the hold that only a human can clear
+ * belongs to a shell that has already FINISHED. A running shell releases its
+ * own hold the moment it prints again, so the ones that linger here are
+ * precisely the ones the Background panel's running list will never show.
+ *
+ * Oldest first - a hold that has been waiting since the Stop outranks one
+ * installed a moment ago, which is the reverse of the running list's ordering
+ * and deliberately so: there is no "what is live" question here, only "what has
+ * been waiting on me longest".
+ */
+export function useHeldManagedCommandsForChat(options: {
+  epicId: string;
+  chatId: string;
+  hostId: string;
+}): readonly HeldManagedCommandUpdate[] {
+  const held = useStore(
+    useChatSliceStore(options.epicId, options.chatId, options.hostId),
+    (state) => state.heldUpdates,
+  );
+  return useMemo(
+    () => [...held].sort((a, b) => a.heldAtMs - b.heldAtMs),
+    [held],
   );
 }
 

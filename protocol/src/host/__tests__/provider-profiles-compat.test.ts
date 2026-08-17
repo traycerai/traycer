@@ -7,8 +7,8 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  providersListResponseSchemaV70,
   downgradeProviderCliStateToV10,
+  providersListResponseSchema,
   providerCliStateSchema,
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
@@ -337,7 +337,7 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
       hostRpcRegistry["providers.list"],
       7,
       2,
-      providersListResponseSchemaV70.parse({
+      providersListResponseSchema.parse({
         providers: [stateWithProfile],
         native: null,
       }),
@@ -397,7 +397,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
       hostRpcRegistry["providers.list"],
       7,
       3,
-      providersListResponseSchemaV70.parse({
+      providersListResponseSchema.parse({
         providers: [stateWithProfile],
         native: null,
       }),

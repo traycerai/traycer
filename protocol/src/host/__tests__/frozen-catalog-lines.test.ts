@@ -18,15 +18,15 @@ import {
   listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
+  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListRequestSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchema,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -68,12 +68,17 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@6.0": providersListResponseSchemaV60,
   // v7.0 is pinned here while it is still the head line, so this row fails on
   // the FIRST attempt to grow the live shape rather than on the release that
-  // ships the growth. The dump is deep, which is what covers the sub-schemas
-  // `providerCliStateBaseShapeV70` still references live - see the freeze
-  // comment on that shape for the list and for what to do when this goes red.
-  "providers.list@7.0": providersListResponseSchemaV70,
+  // ships the growth. It names the LIVE schema because that is what the v7.0
+  // contract binds - the head tracks live - and the dump is deep, so growth in
+  // any sub-schema it reaches goes red here too. When it does, hand-freeze this
+  // line and open v8.0 against live; do not regenerate to green. The freeze
+  // takes `V70` names, not `V80`, and the pre-image holding those names has to
+  // be renamed first - `host/registry.ts` (above `providersListV70`) is the
+  // canonical statement of the procedure; this is the third copy of it, so
+  // change it there and keep these in step.
+  "providers.list@7.0": providersListResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
-  "providers.list@7.0 request": providersListRequestSchemaV70,
+  "providers.list@7.0 request": providersListRequestSchema,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

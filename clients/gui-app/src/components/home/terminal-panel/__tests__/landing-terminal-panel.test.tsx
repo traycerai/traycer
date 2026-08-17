@@ -32,6 +32,8 @@ import {
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemTabModalApi } from "@/stores/tabs/use-system-tab-modal";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { StripItem, TabStripItem } from "@/stores/tabs/layout";
 
 type TerminalListFixture = {
   readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
@@ -329,6 +331,31 @@ function MobileHeaderSlotProbe() {
   return <>{rightActions}</>;
 }
 
+// The panel outlives its start page's activation, so several behaviors now
+// depend on which top-level surface owns the screen. Default layout = a start
+// page is active, which is what every other case in this file assumes.
+const PANEL_DRAFT_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-draft-a",
+  ref: { kind: "draft", id: TEST_LANDING_PAGE_ID },
+};
+const PANEL_EPIC_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-epic-a",
+  ref: { kind: "epic", id: "epic-a" },
+};
+const INITIAL_TABS_LAYOUT = {
+  items: useTabsStore.getState().items,
+  activeItemId: useTabsStore.getState().activeItemId,
+};
+
+function seedTabsLayout(
+  items: ReadonlyArray<StripItem>,
+  activeItemId: string,
+): void {
+  useTabsStore.setState({ items, activeItemId });
+}
+
 describe("<LandingTerminalPanel />", () => {
   const focusCleanups: Array<() => void> = [];
 
@@ -376,6 +403,7 @@ describe("<LandingTerminalPanel />", () => {
     resetPrimaryFocusCoordinatorForTests();
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
+    useTabsStore.setState(INITIAL_TABS_LAYOUT);
   });
 
   describe("at phone width", () => {
@@ -665,6 +693,46 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
+  });
+
+  it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    // Open the panel, then switch to the epic tab before `terminal.list`
+    // settles. The panel used to UNMOUNT here, which aborted the pass; now it
+    // survives, so the settlement has to gate itself - a terminal spawned into
+    // a `display:none` pane cannot be measured and lands at the 80x24 fallback,
+    // and the focus grab would pull the keyboard off the epic canvas.
+    seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // The fresh list is the last step before settlement, so waiting on it makes
+    // "nothing spawned" an ordering claim rather than a race the test won.
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+
+    // Returning must still open the terminal the user asked for: the
+    // reconciliation key is unchanged on the way back, so a settlement that was
+    // DROPPED rather than held would never be recomputed and the panel would
+    // sit empty forever.
+    await act(async () => {
+      seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
   });
 
   it("shows host update guidance when homeCwd is null and nothing is pinned", async () => {

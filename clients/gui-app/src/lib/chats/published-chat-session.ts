@@ -299,6 +299,11 @@ export function publishedChatSessionState(
     queue: { status: "idle", items: [] },
     // A copy has no live host stream, so no managed commands can ever arrive.
     managedCommands: [],
+    // And no holds either - a hold is released by an RPC to the host that owns
+    // it, which a published copy has no route to. Empty is the truth here, not
+    // a placeholder: rendering a Deliver affordance on a copy would offer an
+    // action that cannot be sent.
+    heldUpdates: [],
     runStatus: "idle",
     activeTurn: null,
     steerProtocolSupported: false,

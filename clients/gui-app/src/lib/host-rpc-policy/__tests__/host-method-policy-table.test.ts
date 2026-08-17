@@ -128,6 +128,33 @@ describe("host method poll policy table", () => {
     ).toBe("fifo");
   });
 
+  // fifo here is not the usual "it is a write, so serialize it". The
+  // coordinator keys queues by [hostId, userId, method, params], so two
+  // Delivers naming different subsets are already distinct jobs and `latest`
+  // would leave them alone - but the common press names no subset at all, and
+  // two of THOSE are byte-identical params on one queue. Under `latest` the
+  // second would coalesce into the first and vanish, while releasing a hold
+  // advances a DURABLE delivery cursor: the human is left looking at a list
+  // that may or may not still be held, with no way to tell which.
+  it("keeps deliverHeld on fifo, including the whole-chat press that names no ids", () => {
+    expect(HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].mode).toBe(
+      "fifo",
+    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("managedCommand.deliverHeld", {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        commandIds: null,
+      }),
+    ).toBe("fifo");
+    // A mutation, and the held set a poll would watch for arrives unprompted
+    // on `chat.subscribe` - so polling it would be a second, slower source of
+    // truth for something already pushed.
+    const neverPolled: null =
+      HOST_METHOD_POLL_TABLE["managedCommand.deliverHeld"].poll;
+    expect(neverPolled).toBeNull();
+  });
+
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
     expect(
       hostRpcSchedulingPolicy.modeFor("providers.list", { native: null }),
