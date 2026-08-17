@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  MockRunnerHost,
+  MockTraycerCli,
+} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -12,6 +16,7 @@ import {
   type HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const hostStatus = vi.hoisted(() => ({
   data: undefined as
@@ -130,6 +135,13 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
 function renderHost(
   presentation: DefaultHostReadinessPresentation,
   bypassed: boolean,
+  // Required, not optional (`fn(x?: T)` is banned): every call site states
+  // what it wants rather than inheriting a default that could drift. `undefined`
+  // preserves the prior no-CLI shell for every existing fixture; only the
+  // fixtures that specifically assert the bootstrap-log toggle pass a real one
+  // - see `local-host-loading.test.tsx`'s own positive/negative control pair
+  // for why a no-CLI shell can never prove that toggle's presence.
+  traycerCli: ITraycerCli | null | undefined,
 ) {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -138,7 +150,7 @@ function renderHost(
     hosts: [],
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
-    traycerCli: undefined,
+    traycerCli,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -172,15 +184,28 @@ const BOOTSTRAP_MARKERS = {
 beforeEach(() => {
   hostStatus.data = undefined;
   controllerStatus.data = undefined;
+  // `ReportIssueAction` gates on this store, defaulting to `false` - so every
+  // fixture that checks Report issue's PRESENCE needs it true first, or the
+  // absence would be satisfied by the store gate rather than by
+  // `showReportIssue`. Fixtures asserting Report issue's ABSENCE stay
+  // meaningful either way, since they are asserting the more restrictive of
+  // two independently-sufficient gates.
+  useDesktopDialogStore.getState().setReportIssueAvailable(true);
 });
 
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
+  useDesktopDialogStore.getState().setReportIssueAvailable(false);
 });
 
 describe("<WindowHostModalHost />", () => {
-  it("∅ + all leases dead(offline) + local lifecycle: modal visible with cause no-usable-host, local bootstrap body, bootstrap log path and attempt summary", async () => {
+  it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; spinner + progress heading absent; attempt panel + log toggle present", async () => {
+    // Previously asserted `local-host-loading-spinner` truthy on this arm -
+    // THAT was the reported defect (B4): a live "starting" spinner drawn over
+    // a state where nothing is starting, with Retry and Report issue beside
+    // it as if a real attempt were in flight. Kept only as the negative
+    // assertion below, with a comment recording why, so nobody restores it.
     hostStatus.data = BOOTSTRAP_MARKERS;
     applySnapshot({
       attached: true,
@@ -197,19 +222,47 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      // A real CLI, not the no-CLI default: `local-host-loading-toggle-details`
+      // structurally cannot render without one (see
+      // `local-host-loading.test.tsx`'s own positive/negative control pair),
+      // so proving it PRESENT needs the positive shell.
+      new MockTraycerCli(),
     );
 
+    // Existence before absence: a modal that failed to render at all would
+    // also satisfy every "absent" assertion below, and that exact shape has
+    // already bitten this branch three times.
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("no-usable-host");
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    const openSettings = screen.getByTestId(
+      "window-host-modal-open-settings",
+    );
+    expect(openSettings).toBeTruthy();
+
+    // Nothing is starting, so nothing narrates a start.
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByText("Starting local Traycer Host…")).toBeNull();
+
+    // The attempt panel is what explains this state, and it is present...
     expect(
       screen.getByTestId("local-host-bootstrap-log-path").textContent,
     ).toBe("/Users/me/.traycer/bootstrap.log");
     expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
+    // ...and the log disclosure toggle survives onto this arm - it is the one
+    // way to take a stuck startup elsewhere, and it is TRUE here.
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+
+    // This IS the settled failure: Retry, Report issue, and Open settings as
+    // an equal-weight button, all present.
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
   });
 
   it("a REMOTE-only fleet: no local bootstrap body, no bootstrap log path", async () => {
@@ -227,6 +280,7 @@ describe("<WindowHostModalHost />", () => {
         localBootIntent: false,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -236,7 +290,7 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
   });
 
-  it("cold-start cause: modal visible, no attempt summary (nothing failed yet)", async () => {
+  it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; spinner shown; no attempt summary", async () => {
     // The markers MUST be available for this assertion to mean anything. The
     // first version of this test left the status query empty, so the summary
     // was absent because there was nothing to summarise - it passed with the
@@ -259,6 +313,7 @@ describe("<WindowHostModalHost />", () => {
         localBootIntent: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -267,8 +322,102 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-cause"),
     ).toBe("cold-start");
+    const openSettings = screen.getByTestId(
+      "window-host-modal-open-settings",
+    );
+    expect(openSettings).toBeTruthy();
+
     expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
     expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
+
+    // This is the reported defect's own state: a start with no failure of any
+    // kind. Retry and Report issue must both be absent, and Open settings
+    // must be the quiet link rather than an equal-weight button.
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("link");
+  });
+
+  it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
+    // The row most likely to get this wrong later: Retry and Report issue sit
+    // adjacent in the same row and share the same underlying state, so it is
+    // easy for a change that means to unlock Retry to unlock both.
+    applySnapshot({
+      attached: true,
+      effectiveHostId: LOCAL_HOST_ID,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        stage: "slow",
+      },
+      false,
+      undefined,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    const openSettings = screen.getByTestId(
+      "window-host-modal-open-settings",
+    );
+    expect(openSettings).toBeTruthy();
+
+    // Slow promotes Retry (nothing has FAILED, but the wait has outrun the
+    // healthy band) without promoting Report issue - there is still no
+    // failure for a report to describe.
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+  });
+
+  it("cold-start, settled failure (provisioningError set): Retry, Report issue and Open settings(button) all present", async () => {
+    applySnapshot({
+      attached: true,
+      effectiveHostId: LOCAL_HOST_ID,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        provisioningError: new Error("bootstrap exited 1"),
+      },
+      false,
+      undefined,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    const openSettings = screen.getByTestId(
+      "window-host-modal-open-settings",
+    );
+    expect(openSettings).toBeTruthy();
+
+    expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+    expect(openSettings.getAttribute("data-emphasis")).toBe("button");
   });
 
   it("bypassed: true renders nothing at all", () => {
@@ -282,6 +431,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       true,
+      undefined,
     );
 
     expect(screen.queryByTestId("window-host-modal")).toBeNull();
@@ -298,7 +448,7 @@ describe("<WindowHostModalHost />", () => {
       ],
     });
 
-    renderHost(EMPTY_PRESENTATION, false);
+    renderHost(EMPTY_PRESENTATION, false, undefined);
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -320,6 +470,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -356,6 +507,7 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       false,
+      undefined,
     );
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -416,7 +568,7 @@ describe("<WindowHostModalHost />", () => {
       leases: [deadLease(REMOTE_HOST_ID, { reason: "offline" })],
     });
 
-    renderHost({ ...EMPTY_PRESENTATION, targetKind: "remote" }, false);
+    renderHost({ ...EMPTY_PRESENTATION, targetKind: "remote" }, false, undefined);
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
@@ -451,6 +603,7 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {
@@ -490,6 +643,7 @@ describe("<WindowHostModalHost />", () => {
         canManageHost: true,
       },
       false,
+      undefined,
     );
 
     await waitFor(() => {

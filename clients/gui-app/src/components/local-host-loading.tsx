@@ -16,6 +16,44 @@ import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-trayc
  */
 const BOOTSTRAP_TAIL_POLL_MS = 1500;
 
+export interface BootstrapLogDisclosureProps {
+  readonly onConfigureShell: () => void;
+}
+
+/**
+ * The bootstrap.log tail and the "Configure shell…" shortcut, behind one text
+ * toggle.
+ *
+ * Exported separately from {@link LocalHostLoadingContent} because the two are
+ * true in different states. The log affordance is the one thing that lets a
+ * user take a stuck startup somewhere else, so it belongs on the FAILED arm as
+ * well - while the spinner and the progress heading belong only to a start that
+ * is actually in progress. Composing it beside the failure diagnostics is how
+ * the failed arm gets the log without the "Starting local Traycer Host…" lie,
+ * and it keeps `LocalHostLoadingContent`'s one-purpose rule intact rather than
+ * regrowing the second face P3.4 deleted.
+ */
+export function BootstrapLogDisclosure(
+  props: BootstrapLogDisclosureProps,
+): ReactNode {
+  const runnerHost = useRunnerHost();
+  const [showDetails, setShowDetails] = useState<boolean>(false);
+  // Only poll while the disclosure is open. Cache stays warm if the user
+  // toggles closed-then-open quickly.
+  const status = useRunnerTraycerHostStatusQuery({
+    pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
+  });
+  if (runnerHost.traycerCli === null) return null;
+  return (
+    <DetailsDisclosure
+      open={showDetails}
+      onToggle={() => setShowDetails((v) => !v)}
+      tail={status.data?.bootstrapLogTail ?? ""}
+      onConfigureShell={props.onConfigureShell}
+    />
+  );
+}
+
 export interface LocalHostLoadingContentProps {
   /**
    * The shared host-progress view (F19's one copy table), not a raw lane
@@ -45,15 +83,6 @@ export interface LocalHostLoadingContentProps {
 export function LocalHostLoadingContent(
   props: LocalHostLoadingContentProps,
 ): ReactNode {
-  const runnerHost = useRunnerHost();
-  const hasCli = runnerHost.traycerCli !== null;
-  const [showDetails, setShowDetails] = useState<boolean>(false);
-  // Only poll while the disclosure is open. Cache stays warm if the user
-  // toggles closed-then-open quickly.
-  const status = useRunnerTraycerHostStatusQuery({
-    pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
-  });
-  const tail = status.data?.bootstrapLogTail ?? "";
   const progressView = props.progress;
 
   return (
@@ -67,14 +96,7 @@ export function LocalHostLoadingContent(
         {progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
       </p>
       <ProgressLines view={progressView} />
-      {hasCli ? (
-        <DetailsDisclosure
-          open={showDetails}
-          onToggle={() => setShowDetails((v) => !v)}
-          tail={tail}
-          onConfigureShell={props.onConfigureShell}
-        />
-      ) : null}
+      <BootstrapLogDisclosure onConfigureShell={props.onConfigureShell} />
     </>
   );
 }

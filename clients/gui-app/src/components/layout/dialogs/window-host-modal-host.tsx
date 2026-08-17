@@ -7,7 +7,10 @@ import {
 } from "@/components/layout/host-readiness-controller-context";
 import { BootstrapAttemptDetails } from "@/components/host/bootstrap-attempt-details";
 import { summariseBootstrapAttempts } from "@/components/host/bootstrap-attempt-summary";
-import { LocalHostLoadingContent } from "@/components/local-host-loading";
+import {
+  BootstrapLogDisclosure,
+  LocalHostLoadingContent,
+} from "@/components/local-host-loading";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
@@ -102,7 +105,13 @@ function NarratingWindowHostModal(props: {
   const progress = useHostProvisioningProgress();
   const presentation = useHostReadinessController().defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
-  const retry = resolveRetry(narration.variant, presentation, localLifecycle);
+  const settled = hasSettledFailure(narration.cause, presentation);
+  const retry = resolveRetry(
+    narration.variant,
+    presentation,
+    localLifecycle,
+    settled,
+  );
   return (
     <WindowHostModal
       cause={narration.cause}
@@ -119,8 +128,59 @@ function NarratingWindowHostModal(props: {
       retryPending={retry.pending}
       onUpdateHost={resolveUpdateHost(narration.variant, presentation)}
       onOpenSettings={presentation.openSettings}
+      // Report issue is offered only once something has actually failed. It is
+      // the affordance that converts a false impression of breakage into
+      // support load, and on a healthy first launch there is no failure for a
+      // report to be about. Not folded into `onRetry`'s gate: Retry is also
+      // right on the slow arm, where nothing has failed yet but the wait has
+      // outrun the healthy band, and a report there would still describe a
+      // start that is merely taking its time.
+      showReportIssue={settled.failed}
+      // With no Retry and no Report issue on a healthy start, `Open settings`
+      // is the only control on screen - and as an equal-weight button it still
+      // reads as "something is wrong, pick one". Quiet link while nothing has
+      // failed, button once something has. It is never REMOVED: it is the
+      // measured escape hatch for a host that cannot start, and gating it
+      // behind the failure it exists to fix is the lockout this surface exists
+      // to prevent.
+      settingsEmphasis={settled.failed || settled.slow ? "button" : "link"}
     />
   );
+}
+
+/**
+ * Whether this wait has produced anything a recovery action could be about.
+ *
+ * `failed` is a settled failure of the attempt being narrated; `slow` is the
+ * 10-second promotion `LOCAL_HOST_SLOW_START_THRESHOLD_MS` already computes and
+ * whose own doc promises a healthy bundled-host boot "never flashes the Retry
+ * UI" - a promise that had no reader left on this surface.
+ *
+ * Only the cold-start cause gets the healthy grace period. `no-usable-host`
+ * means nothing can serve this window right now, which IS the settled failure -
+ * there is no in-progress start to protect there, and withholding recovery on
+ * that arm would be the mirror defect.
+ */
+interface SettledFailure {
+  readonly failed: boolean;
+  readonly slow: boolean;
+}
+
+function hasSettledFailure(
+  cause: WindowNarrationCause,
+  presentation: DefaultHostReadinessPresentation,
+): SettledFailure {
+  if (cause === "no-usable-host") return { failed: true, slow: false };
+  return {
+    // `provisioningError` is read ONLY under this cause. Its own contract warns
+    // it outlives the attempt that produced it - a host that failed to install
+    // and then came up by another route leaves it set - so it may not be
+    // treated as ambient host state. Under `cold-start` the modal is on screen
+    // precisely because nothing has served this window yet, which is the scope
+    // that error still explains.
+    failed: presentation.provisioningError !== null,
+    slow: presentation.stage === "slow",
+  };
 }
 
 interface ResolvedRetry {
@@ -147,8 +207,17 @@ function resolveRetry(
   variant: WindowNarrationVariant,
   presentation: DefaultHostReadinessPresentation,
   localLifecycle: boolean,
+  settled: SettledFailure,
 ): ResolvedRetry {
   if (variant.kind !== "offline") return { onRetry: null, pending: false };
+  // A healthy start in progress has nothing to retry. `cause === "cold-start"`
+  // always resolves to `offline` by design, so before this gate every local
+  // boot rendered Retry from its first frame, with no failure of any kind - the
+  // reported defect. Retry is live there too, so the impression of breakage
+  // produced a real second converge.
+  if (!settled.failed && !settled.slow) {
+    return { onRetry: null, pending: false };
+  }
   if (localLifecycle && presentation.canManageHost) {
     return {
       onRetry: presentation.retryProvisioning,
@@ -200,17 +269,33 @@ function buildLocalBootstrapBody(args: {
 }): ReactNode | null {
   if (args.variant.kind !== "offline") return null;
   if (!args.localLifecycle) return null;
+  // Nothing can serve this window, and nothing is starting. The spinner and the
+  // progress heading are gated on the cause, not just placed beside it: this arm
+  // used to render `LocalHostLoadingContent` too, whose heading falls back to
+  // `HOST_PROGRESS_IDLE_HEADING` - "Starting local Traycer Host…" - exactly when
+  // no lane is running, which is precisely this state. A live spinner over a
+  // crash report tells a user to wait for a start that is not happening, and
+  // they report a hang instead of a crash.
+  //
+  // The log disclosure still renders: it is the one affordance that lets
+  // someone take a stuck startup somewhere else, and it is TRUE on this arm.
+  // The attempt panel comes first because it is what explains the state; the
+  // toggle is a footnote to it.
+  if (args.cause === "no-usable-host") {
+    return (
+      <>
+        <LocalBootstrapAttempts />
+        <BootstrapLogDisclosure
+          onConfigureShell={args.presentation.configureShell}
+        />
+      </>
+    );
+  }
   return (
-    <>
-      <LocalHostLoadingContent
-        progress={args.progress}
-        onConfigureShell={args.presentation.configureShell}
-      />
-      {/* Only once nothing can serve the window. Under a cold start that is
-          still progressing there is no failed attempt to explain, and shell
-          and exit-code detail beneath a healthy spinner reads as an error. */}
-      {args.cause === "no-usable-host" ? <LocalBootstrapAttempts /> : null}
-    </>
+    <LocalHostLoadingContent
+      progress={args.progress}
+      onConfigureShell={args.presentation.configureShell}
+    />
   );
 }
 

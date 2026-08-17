@@ -36,6 +36,11 @@ function baseProps(
     retryPending: false,
     onUpdateHost: null,
     onOpenSettings: () => undefined,
+    // The default mirrors this base's `cause: "no-usable-host"` - a settled
+    // failure - so existing fixtures keep describing the state they were
+    // written for. The healthy-start arm passes these explicitly.
+    showReportIssue: true,
+    settingsEmphasis: "button",
     ...overrides,
   };
 }
