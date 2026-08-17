@@ -182,43 +182,27 @@ describe("cloud notification indicator derivation", () => {
     resolvedAt: number | null,
     readAt: number | null,
   ): HostNotificationsCloudFeedRow {
-    return promptAt({
-      entryId,
-      kind,
-      resolvedAt,
-      readAt,
-      chatId: "chat-1",
-    });
-  }
-
-  function promptAt(input: {
-    readonly entryId: string;
-    readonly kind: "approval.requested" | "interview.requested";
-    readonly resolvedAt: number | null;
-    readonly readAt: number | null;
-    readonly chatId: string | null;
-  }): HostNotificationsCloudFeedRow {
     const shared = {
       epicId: "epic-1",
-      chatId: input.chatId,
+      chatId: "chat-1",
       chatTitle: "Chat",
       taskTitle: "Epic",
     };
-    return wrap(input.entryId, {
-      id: input.entryId,
+    return wrap(entryId, {
+      id: entryId,
       updatedAt: 1,
-      readAt: input.readAt,
-      kind: input.kind,
+      readAt,
+      kind,
       sourceRef: null,
       severity: "needs_action",
       outcome: null,
-      resolvedAt: input.resolvedAt,
+      resolvedAt,
       epicId: "epic-1",
-      chatId: input.chatId,
+      chatId: "chat-1",
       payload:
-        input.kind === "approval.requested"
-          ? { kind: "approval", ...shared, approvalId: input.entryId }
-          : { kind: "interview", ...shared, interviewBlockId: input.entryId },
+        kind === "approval.requested"
+          ? { kind: "approval", ...shared, approvalId: entryId }
+          : { kind: "interview", ...shared, interviewBlockId: entryId },
     });
   }
 
@@ -471,7 +455,7 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("does not roll a chat-scoped completion into an epic queried without that chat", () => {
+  it("rolls a retained unread chat completion into its epic without a chat projection", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
@@ -486,7 +470,7 @@ describe("cloud notification indicator derivation", () => {
       [],
     );
 
-    expect(result.epics["epic-1"]).toBeUndefined();
+    expect(result.epics["epic-1"].unreadDone).toBe(true);
     expect(result.chats).toEqual({});
   });
 
@@ -501,14 +485,14 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"].unreadDone).toBe(true);
   });
 
-  it("does not roll a chat-scoped prompt into an epic queried without that chat", () => {
+  it("rolls a retained unread prompt into its epic without a chat projection", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null, null)]),
       ["epic-1"],
       [],
     );
 
-    expect(result.epics["epic-1"]).toBeUndefined();
+    expect(result.epics["epic-1"].pendingApproval).toBe(true);
     expect(result.chats).toEqual({});
   });
 
@@ -586,37 +570,6 @@ describe("cloud notification indicator derivation", () => {
 
     expect(unresolvedButRead.chats["chat-1"].pendingInterview).toBe(true);
     expect(resolved.chats["chat-1"]).toBeUndefined();
-  });
-
-  it("ignores a chat-scoped prompt on the epic arm unless that chat was queried", () => {
-    const chatScoped = prompt("approval", "approval.requested", null, null);
-    const ignored = selectCloudNotificationIndicators(
-      rowsById([chatScoped]),
-      ["epic-1"],
-      ["chat-other"],
-    );
-    const counted = selectCloudNotificationIndicators(
-      rowsById([chatScoped]),
-      ["epic-1"],
-      ["chat-1"],
-    );
-    const epicLevel = selectCloudNotificationIndicators(
-      rowsById([
-        promptAt({
-          entryId: "epic-approval",
-          kind: "approval.requested",
-          resolvedAt: null,
-          readAt: null,
-          chatId: null,
-        }),
-      ]),
-      ["epic-1"],
-      [],
-    );
-
-    expect(ignored.epics["epic-1"]).toBeUndefined();
-    expect(counted.epics["epic-1"].pendingApproval).toBe(true);
-    expect(epicLevel.epics["epic-1"].pendingApproval).toBe(true);
   });
 
   it("pends an interview independently of the approval arm", () => {

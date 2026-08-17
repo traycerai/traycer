@@ -288,29 +288,19 @@ function collectCloudIndicatorEntry(
   const contribution = indicatorContribution(entry);
   const { epicId, chatId } = entry;
   if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
-    // Mirror the host SQL liveChatClause: a chat-scoped row rolls into the
-    // epic aggregate only when that chat is among the queried ids. Epic-level
-    // rows (chatId === null) always count.
-    const epicChatIsLive =
-      chatId === null || accumulator.wantedChatIds.has(chatId);
-    if (epicChatIsLive) {
-      if (contribution !== null) {
-        accumulator.epics[epicId] = mergeIndicatorFlags(
-          accumulator.epics[epicId],
-          contribution,
-        );
-      }
-      retainLatestTerminal({
-        winners: terminalWinnersForEpic(
-          accumulator.epicTerminalWinners,
-          epicId,
-        ),
-        entityId: chatId === null ? "epic" : `chat:${chatId}`,
-        originHostId,
-        coalesceKey: row.coalesceKey,
-        candidate: entry,
-      });
+    if (contribution !== null) {
+      accumulator.epics[epicId] = mergeIndicatorFlags(
+        accumulator.epics[epicId],
+        contribution,
+      );
     }
+    retainLatestTerminal({
+      winners: terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
+      entityId: chatId === null ? "epic" : `chat:${chatId}`,
+      originHostId,
+      coalesceKey: row.coalesceKey,
+      candidate: entry,
+    });
   }
   if (chatId !== null && accumulator.wantedChatIds.has(chatId)) {
     if (contribution !== null) {
